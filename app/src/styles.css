@@ -1,0 +1,523 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Geist";
+  src: url("./assets/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: block;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./assets/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: block;
+}
+
+/* ---------- tokens (same palette as the TUI) ---------- */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1014;
+  --panel: #14171e;
+  --raised: #1a1e27;
+  --border: #262b36;
+  --text: #e4e6eb;
+  --dim: #767c8c;
+  --accent: #7cf0c5;
+  --accent-2: #b48cff;
+  --busy: #ffcc66;
+  --error: #ff6b7a;
+  --claude: #e8956b;
+  --codex: #8ab4ff;
+  --shadow-card: none;
+  --shadow-pop: 0 24px 64px -12px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.02);
+  --backdrop: rgb(6 7 10 / 0.5);
+  --hover: color-mix(in oklab, var(--text) 5%, transparent);
+  --press: color-mix(in oklab, var(--text) 9%, transparent);
+  --faint: color-mix(in oklab, var(--dim) 62%, var(--bg));
+  --hairline: color-mix(in oklab, var(--border) 70%, transparent);
+  --accent-soft: color-mix(in oklab, var(--accent) 13%, transparent);
+  --accent-ink: #062b1f;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fafaf7;
+  --panel: #f0f0ea;
+  --raised: #ffffff;
+  --border: #d8d8d0;
+  --text: #1b1d22;
+  --dim: #6b7080;
+  --accent: #0b8f6a;
+  --accent-2: #7a4fd6;
+  --busy: #b7791f;
+  --error: #c53030;
+  --claude: #c2602c;
+  --codex: #2f6fd6;
+  --shadow-card: 0 1px 2px rgb(27 29 34 / 0.04), 0 2px 8px -2px rgb(27 29 34 / 0.05);
+  --shadow-pop: 0 24px 60px -16px rgb(27 29 34 / 0.22), 0 2px 8px rgb(27 29 34 / 0.06);
+  --backdrop: rgb(240 240 234 / 0.45);
+  --hover: color-mix(in oklab, var(--text) 4.5%, transparent);
+  --press: color-mix(in oklab, var(--text) 8%, transparent);
+  --faint: color-mix(in oklab, var(--dim) 58%, var(--bg));
+  --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  --accent-ink: #ffffff;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-line: var(--border);
+  --color-hairline: var(--hairline);
+  --color-fg: var(--text);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-busy: var(--busy);
+  --color-err: var(--error);
+  --color-claude: var(--claude);
+  --color-codex: var(--codex);
+  --color-hover: var(--hover);
+  --color-press: var(--press);
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --text-2xs: 10.5px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 17px;
+  --text-base: 13px;
+  --text-base--line-height: 19px;
+  --text-md: 14px;
+  --text-md--line-height: 21px;
+  --text-lg: 16px;
+  --text-lg--line-height: 23px;
+  --text-xl: 21px;
+  --text-xl--line-height: 28px;
+  --radius-card: 10px;
+  --radius-sheet: 14px;
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+}
+
+/* ---------- base ---------- */
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 19px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01" on;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+::selection {
+  background: color-mix(in oklab, var(--accent) 28%, transparent);
+}
+.selectable,
+.selectable * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+button {
+  cursor: default;
+}
+@layer base {
+  :focus-visible {
+    outline: 1.5px solid color-mix(in oklab, var(--accent) 70%, transparent);
+    outline-offset: 1px;
+  }
+  input:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
+}
+textarea,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+/* Theme cross-fade: applied for ~300ms around a switch only, so normal
+   hover transitions keep their own timing. */
+html.theme-fade *,
+html.theme-fade *::before,
+html.theme-fade *::after {
+  transition:
+    background-color 280ms ease,
+    border-color 280ms ease,
+    color 280ms ease,
+    fill 280ms ease,
+    stroke 280ms ease,
+    box-shadow 280ms ease !important;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+  animation-timing-function: ease;
+}
+
+/* ---------- scrollbars ----------
+   Overlay-style: invisible until the pointer is over the scroller or it is
+   scrolling (`.is-scrolling`, set by a tiny listener in main.tsx), like macOS.
+   Custom ::-webkit-scrollbar rules otherwise force an always-visible bar in WKWebView. */
+.scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s;
+}
+.scroll:hover,
+.scroll.is-scrolling {
+  scrollbar-color: color-mix(in oklab, var(--dim) 35%, transparent) transparent;
+}
+.scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+.scroll::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.scroll:hover::-webkit-scrollbar-thumb,
+.scroll.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--dim) 30%, transparent);
+}
+.scroll::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--dim) 50%, transparent);
+}
+.scroll::-webkit-scrollbar-track,
+.scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------- motion primitives ---------- */
+
+/* Shimmer sweep for "thinking" text and the active step. */
+.shimmer {
+  background-image: linear-gradient(
+    100deg,
+    var(--shimmer-base, var(--dim)) 0%,
+    var(--shimmer-base, var(--dim)) 35%,
+    var(--shimmer-hi, var(--text)) 50%,
+    var(--shimmer-base, var(--dim)) 65%,
+    var(--shimmer-base, var(--dim)) 100%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer 2.1s cubic-bezier(0.4, 0, 0.3, 1) infinite;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -50% 0;
+  }
+}
+
+/* Sweep of light across a surface (active step row, busy card edge). */
+.sweep {
+  position: relative;
+  overflow: hidden;
+}
+.sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--sweep, var(--busy)) 9%, transparent) 45%,
+    color-mix(in oklab, var(--sweep, var(--busy)) 14%, transparent) 50%,
+    color-mix(in oklab, var(--sweep, var(--busy)) 9%, transparent) 55%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: sweep 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  pointer-events: none;
+}
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* A light travelling along a 1px line: busy cards' top edge. */
+.edge-run {
+  background: linear-gradient(90deg, transparent, var(--busy), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: edge-run 2.6s cubic-bezier(0.5, 0, 0.3, 1) infinite;
+}
+@keyframes edge-run {
+  0% {
+    background-position: -40% 0;
+  }
+  100% {
+    background-position: 140% 0;
+  }
+}
+
+/* Soft pulse ring for working status dots. */
+.pulse-ring {
+  animation: pulse-ring 1.8s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  80%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+.breathe {
+  animation: breathe 1.8s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.dots span {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 9px;
+  background: currentColor;
+  margin-left: 2px;
+  animation: dot 1.2s ease-in-out infinite;
+}
+.dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* "Needs you": a slow accent ring, calmer than the working pulse. */
+.needs-ring {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--accent) 70%, transparent);
+  animation: needs-ring 2.4s ease-in-out infinite;
+}
+@keyframes needs-ring {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+.needs-badge {
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent);
+  animation: needs-glow 2.4s ease-in-out infinite;
+}
+@keyframes needs-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 18%, transparent);
+  }
+}
+
+/* Approval card: a soft light circling the border draws the eye without shouting. */
+.attn-card {
+  position: relative;
+  isolation: isolate;
+}
+.attn-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--attn-a, 0deg),
+    color-mix(in oklab, var(--accent) 70%, transparent),
+    color-mix(in oklab, var(--accent) 12%, transparent) 25%,
+    color-mix(in oklab, var(--accent) 12%, transparent) 75%,
+    color-mix(in oklab, var(--accent) 70%, transparent)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: attn-spin 4.5s linear infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+@property --attn-a {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes attn-spin {
+  to {
+    --attn-a: 360deg;
+  }
+}
+
+/* Streamed text: each new chunk fades up from transparent; no layout shift. */
+.stream-chunk {
+  animation: stream-in 0.32s ease-out both;
+}
+@keyframes stream-in {
+  from {
+    opacity: 0;
+    filter: blur(1.5px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: caret 1.05s steps(1) infinite;
+}
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Skeleton placeholders: a slow, soft opacity pulse (staggered per block via animation-delay). */
+.skel {
+  background: color-mix(in oklab, var(--text) 8%, transparent);
+  animation: skel 2.4s ease-in-out infinite both;
+}
+@keyframes skel {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
+}
+
+/* ---------- terminal ---------- */
+.term-host .xterm {
+  height: 100%;
+  padding: 0;
+}
+.term-host .xterm-viewport {
+  background: transparent !important;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--dim) 35%, transparent) transparent;
+}
+.term-host .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+.term-host .xterm-viewport::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--dim) 30%, transparent);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    animation: none;
+    color: var(--shimmer-hi, var(--text));
+    background: none;
+  }
+  .sweep::after,
+  .edge-run,
+  .pulse-ring,
+  .dots span {
+    animation: none;
+  }
+  .edge-run {
+    background: var(--busy);
+    opacity: 0.5;
+  }
+  .breathe {
+    animation-duration: 3s;
+  }
+  .skel {
+    animation: none;
+    opacity: 0.8;
+  }
+  .needs-ring,
+  .needs-badge,
+  .attn-card::before,
+  .stream-chunk {
+    animation: none;
+  }
+  .needs-ring {
+    opacity: 0.8;
+  }
+  .caret {
+    animation: none;
+    opacity: 0.7;
+  }
+}

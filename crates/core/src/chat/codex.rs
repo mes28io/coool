@@ -1,0 +1,989 @@
+//! Codex over `codex app-server` (JSON-RPC 2.0, one JSON object per line).
+//!
+//! Observed protocol (codex-cli 0.145; `codex app-server generate-ts` prints it):
+//! - client -> server: `initialize` (then the `initialized` notification),
+//!   `model/list`, `thread/start` | `thread/resume`, `turn/start` (per-turn
+//!   overrides for model / approval policy / sandbox stick for later turns),
+//!   `turn/steer` (add input to the running turn), `turn/interrupt`,
+//!   `thread/compact/start`, `review/start`.
+//! - server -> client notifications: `turn/started|completed`,
+//!   `item/started|completed` (agentMessage, reasoning, commandExecution,
+//!   fileChange, mcpToolCall, collabAgentToolCall, ...), `item/agentMessage/delta`,
+//!   `item/reasoning/*Delta`, `thread/tokenUsage/updated` (with the model's
+//!   context window), `error`, `warning`, ...
+//! - server -> client requests (need a response): `item/commandExecution/requestApproval`
+//!   and `item/fileChange/requestApproval` -> `{"decision": "accept" |
+//!   "acceptForSession" | "decline" | "cancel"}`; legacy `execCommandApproval` /
+//!   `applyPatchApproval` -> `{"decision": "approved" | "approved_for_session" | ...}`.
+//! - The app-server runs no TUI slash commands; `/compact` and `/review` map to
+//!   RPCs, `/model` and `/status` are answered here, the rest need the terminal.
+
+use super::*;
+use std::collections::{HashMap, HashSet};
+
+/// TUI commands with no app-server equivalent.
+const TERMINAL_COMMANDS: &[&str] = &[
+    "approvals",
+    "permissions",
+    "setup-default-sandbox",
+    "experimental",
+    "skills",
+    "rename",
+    "new",
+    "clear",
+    "resume",
+    "fork",
+    "init",
+    "plan",
+    "collab",
+    "agent",
+    "diff",
+    "mention",
+    "debug-config",
+    "statusline",
+    "theme",
+    "mcp",
+    "apps",
+    "logout",
+    "login",
+    "quit",
+    "exit",
+    "feedback",
+    "rollout",
+    "ps",
+    "clean",
+    "personality",
+    "realtime",
+    "settings",
+    "undo",
+];
+
+const APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "on-failure", "never"];
+const SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
+
+pub(crate) fn args() -> Vec<String> {
+    vec!["app-server".into()]
+}
+
+enum Req {
+    Init,
+    ModelList,
+    Thread,
+    Turn,
+    Other(&'static str),
+}
+
+#[derive(Clone)]
+enum PermKind {
+    /// v2 approvals: accept / acceptForSession / decline.
+    V2,
+    /// Legacy approvals: approved / approved_for_session / denied.
+    Legacy,
+    /// `item/tool/requestUserInput`: the question ids, in order.
+    Question(Vec<String>),
+}
+
+pub(crate) struct Codex {
+    cwd: String,
+    resume: Option<String>,
+    thread_id: Option<String>,
+    model: String,
+    approval: String,
+    sandbox: String,
+    /// Overrides for the next `turn/start` (they stick for later turns).
+    next_model: Option<String>,
+    next_approval: Option<String>,
+    next_sandbox: Option<String>,
+    models: Vec<ModelOption>,
+    context_window: Option<u64>,
+    last_ready: Option<ChatEventKind>,
+    next_id: u64,
+    pending: HashMap<u64, Req>,
+    /// Prompts sent before the thread exists.
+    queue: Vec<String>,
+    turn_id: Option<String>,
+    in_turn: bool,
+    perms: HashMap<String, (Value, PermKind)>,
+    /// Subagent thread -> the collab tool call that spawned it.
+    child_threads: HashMap<String, String>,
+    last_spawn: Option<String>,
+    started_tools: HashSet<String>,
+    /// fileChange item -> paths, for approval summaries.
+    file_changes: HashMap<String, Vec<String>>,
+    user_n: u64,
+}
+
+impl Codex {
+    pub fn new(opts: &ChatOptions) -> Self {
+        let mut c = Self {
+            cwd: opts.cwd.clone(),
+            resume: opts.resume.clone(),
+            thread_id: None,
+            model: opts.model.clone().unwrap_or_default(),
+            approval: String::new(),
+            sandbox: String::new(),
+            next_model: None,
+            next_approval: None,
+            next_sandbox: None,
+            models: Vec::new(),
+            context_window: None,
+            last_ready: None,
+            next_id: 0,
+            pending: HashMap::new(),
+            queue: Vec::new(),
+            turn_id: None,
+            in_turn: false,
+            perms: HashMap::new(),
+            child_threads: HashMap::new(),
+            last_spawn: None,
+            started_tools: HashSet::new(),
+            file_changes: HashMap::new(),
+            user_n: 0,
+        };
+        if let Some(m) = &opts.permission_mode {
+            if SANDBOX_MODES.contains(&m.as_str()) {
+                c.sandbox = m.clone();
+            } else {
+                c.approval = m.clone();
+            }
+        }
+        c
+    }
+
+    fn request(&mut self, method: &str, params: Value, kind: Req, o: &mut Out) {
+        self.next_id += 1;
+        o.write(&json!({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params}));
+        self.pending.insert(self.next_id, kind);
+    }
+
+    fn ready(&mut self, o: &mut Out) {
+        let Some(sid) = self.thread_id.clone() else { return };
+        let first = self.last_ready.is_none();
+        let r = ChatEventKind::Ready {
+            session_id: sid,
+            model: self.model.clone(),
+            cwd: self.cwd.clone(),
+            permission_mode: self.approval.clone(),
+            slash_commands: slash_commands(),
+            models: self.models.clone(),
+            agents: Vec::new(),
+            context_window: self.context_window,
+        };
+        if self.last_ready.as_ref() != Some(&r) {
+            self.last_ready = Some(r.clone());
+            o.ev(r);
+        }
+        if first {
+            o.ev(ChatEventKind::Commands { commands: command_infos() });
+        }
+    }
+
+    fn state(&self) -> ChatState {
+        if !self.perms.is_empty() {
+            ChatState::WaitingPermission
+        } else if self.in_turn || !self.queue.is_empty() {
+            ChatState::Working
+        } else {
+            ChatState::Idle
+        }
+    }
+
+    fn start_thread(&mut self, o: &mut Out) {
+        let mut p = json!({"cwd": self.cwd});
+        if !self.model.is_empty() {
+            p["model"] = json!(self.model);
+        }
+        if !self.approval.is_empty() {
+            p["approvalPolicy"] = json!(self.approval);
+        }
+        if !self.sandbox.is_empty() {
+            p["sandbox"] = json!(self.sandbox);
+        }
+        match self.resume.clone() {
+            Some(id) => {
+                p["threadId"] = json!(id);
+                self.request("thread/resume", p, Req::Thread, o);
+            }
+            None => self.request("thread/start", p, Req::Thread, o),
+        }
+    }
+
+    fn start_turn(&mut self, text: &str, o: &mut Out) {
+        let Some(tid) = self.thread_id.clone() else { return };
+        let input = json!([{"type": "text", "text": text, "text_elements": []}]);
+        if self.in_turn
+            && let Some(turn) = self.turn_id.clone()
+        {
+            self.request("turn/steer", json!({"threadId": tid, "input": input, "expectedTurnId": turn}), Req::Other("add to the turn"), o);
+            return;
+        }
+        let mut p = json!({"threadId": tid, "input": input});
+        if let Some(m) = self.next_model.take() {
+            p["model"] = json!(m);
+        }
+        if let Some(a) = self.next_approval.take() {
+            p["approvalPolicy"] = json!(a);
+        }
+        if let Some(s) = self.next_sandbox.take() {
+            p["sandboxPolicy"] = sandbox_policy(&s);
+        }
+        self.in_turn = true;
+        self.request("turn/start", p, Req::Turn, o);
+    }
+
+    fn parent_for(&self, thread: &Value) -> Option<String> {
+        let t = thread.as_str()?;
+        if Some(t) == self.thread_id.as_deref() {
+            return None;
+        }
+        self.child_threads.get(t).cloned().or_else(|| self.last_spawn.clone())
+    }
+
+    fn is_main(&self, thread: &Value) -> bool {
+        thread.as_str().is_none() || thread.as_str() == self.thread_id.as_deref()
+    }
+
+    fn on_response(&mut self, v: &Value, o: &mut Out) {
+        let Some(kind) = v["id"].as_u64().and_then(|id| self.pending.remove(&id)) else { return };
+        if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
+            let msg = err["message"].as_str().unwrap_or("unknown error");
+            let what = match kind {
+                Req::Init => "start Codex",
+                Req::ModelList => return,
+                Req::Thread => "open the thread",
+                Req::Turn => {
+                    self.in_turn = false;
+                    "start the turn"
+                }
+                Req::Other(w) => w,
+            };
+            o.ev(ChatEventKind::notice(NoticeLevel::Error, format!("Could not {what}: {msg}")));
+            o.ev(ChatEventKind::State { state: self.state() });
+            return;
+        }
+        let r = &v["result"];
+        match kind {
+            Req::Init => {
+                o.write(&json!({"jsonrpc": "2.0", "method": "initialized"}));
+                self.request("model/list", json!({}), Req::ModelList, o);
+                self.start_thread(o);
+            }
+            Req::ModelList => {
+                self.models = r["data"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter(|m| m["hidden"].as_bool() != Some(true))
+                            .filter_map(|m| {
+                                let id = m["id"].as_str().or(m["model"].as_str())?;
+                                Some(ModelOption { id: id.to_string(), label: m["displayName"].as_str().unwrap_or(id).to_string() })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.ready(o);
+            }
+            Req::Thread => {
+                self.thread_id = r["thread"]["id"].as_str().map(str::to_string);
+                if let Some(m) = r["model"].as_str() {
+                    self.model = m.to_string();
+                }
+                self.approval = approval_name(&r["approvalPolicy"]).unwrap_or(std::mem::take(&mut self.approval));
+                if let Some(s) = sandbox_name(&r["sandbox"]) {
+                    self.sandbox = s;
+                }
+                self.ready(o);
+                for text in std::mem::take(&mut self.queue) {
+                    self.start_turn(&text, o);
+                }
+                o.ev(ChatEventKind::State { state: self.state() });
+            }
+            Req::Turn => {
+                if let Some(t) = r["turn"]["id"].as_str() {
+                    self.turn_id = Some(t.to_string());
+                }
+            }
+            Req::Other(_) => {}
+        }
+    }
+
+    fn on_server_request(&mut self, v: &Value, o: &mut Out) {
+        let id = v["id"].clone();
+        let p = &v["params"];
+        let rid = match &id {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let perm = |tool: &str, summary: String, input: Value| ChatEventKind::PermissionRequest { request_id: rid.clone(), tool: tool.to_string(), summary, input };
+        let ev = match v["method"].as_str().unwrap_or("") {
+            "item/commandExecution/requestApproval" => {
+                let cmd = p["command"].as_str().map(unwrap_shell).unwrap_or_default();
+                self.perms.insert(rid.clone(), (id, PermKind::V2));
+                perm("shell", tool_line("shell", &cmd), json!({"command": cmd, "cwd": p["cwd"], "reason": p["reason"]}))
+            }
+            "item/fileChange/requestApproval" => {
+                let files = self.file_changes.get(p["itemId"].as_str().unwrap_or("")).cloned().unwrap_or_default();
+                self.perms.insert(rid.clone(), (id, PermKind::V2));
+                perm("apply_patch", tool_line("apply_patch", &files.join(", ")), json!({"files": files, "reason": p["reason"], "grantRoot": p["grantRoot"]}))
+            }
+            "execCommandApproval" => {
+                let cmd = p["command"].as_array().map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                self.perms.insert(rid.clone(), (id, PermKind::Legacy));
+                perm("shell", tool_line("shell", &cmd), json!({"command": cmd, "cwd": p["cwd"], "reason": p["reason"]}))
+            }
+            "applyPatchApproval" => {
+                let files: Vec<String> = p["fileChanges"].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default();
+                self.perms.insert(rid.clone(), (id, PermKind::Legacy));
+                perm("apply_patch", tool_line("apply_patch", &files.join(", ")), json!({"files": files, "reason": p["reason"]}))
+            }
+            "item/tool/requestUserInput" if p["questions"].as_array().is_some_and(|q| !q.is_empty()) => {
+                let questions = parse_questions(&p["questions"]);
+                self.perms.insert(rid.clone(), (id, PermKind::Question(questions.iter().map(|q| q.id.clone()).collect())));
+                ChatEventKind::Question { request_id: rid.clone(), questions }
+            }
+            m => {
+                // Elicitations, extra-permission grants, client tools:
+                // nothing here can answer them faithfully, so decline at once
+                // rather than leave the turn hanging.
+                o.write(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "not supported by coool"}}));
+                if matches!(m, "item/tool/requestUserInput" | "mcpServer/elicitation/request" | "item/permissions/requestApproval") {
+                    o.ev(ChatEventKind::needs_terminal(format!("Codex asked for input this chat can't give ({m}); continue in the terminal")));
+                }
+                return;
+            }
+        };
+        o.ev(ev);
+        o.ev(ChatEventKind::State { state: ChatState::WaitingPermission });
+    }
+
+    fn on_item(&mut self, started: bool, p: &Value, o: &mut Out) {
+        let item = &p["item"];
+        let parent = self.parent_for(&p["threadId"]);
+        let id = item["id"].as_str().unwrap_or("").to_string();
+        let ty = item["type"].as_str().unwrap_or("");
+        if ty == "collabAgentToolCall" {
+            for t in item["receiverThreadIds"].as_array().into_iter().flatten().filter_map(|t| t.as_str()) {
+                self.child_threads.insert(t.to_string(), id.clone());
+            }
+            if item["tool"] == "spawnAgent" {
+                self.last_spawn = Some(id.clone());
+            }
+        }
+        if ty == "fileChange" {
+            let paths = item["changes"].as_array().map(|a| a.iter().filter_map(|c| c["path"].as_str().map(crate::util::home_short)).collect()).unwrap_or_default();
+            self.file_changes.insert(id.clone(), paths);
+        }
+        match ty {
+            "agentMessage" if !started => {
+                let text = item["text"].as_str().unwrap_or("").to_string();
+                if !text.is_empty() {
+                    o.ev(ChatEventKind::AssistantMessage { id, text, model: self.model.clone(), parent_tool_id: parent });
+                }
+            }
+            "agentMessage" | "userMessage" | "reasoning" | "plan" | "hookPrompt" | "contextCompaction" | "enteredReviewMode" | "exitedReviewMode" => {}
+            _ => {
+                let Some((name, summary, input)) = tool_view(item) else { return };
+                if started || !self.started_tools.contains(&id) {
+                    self.started_tools.insert(id.clone());
+                    o.ev(ChatEventKind::ToolStart { id: id.clone(), name, summary, input, parent_tool_id: parent });
+                }
+                if !started {
+                    let (ok, output) = tool_result(item);
+                    o.ev(ChatEventKind::ToolEnd { id, ok, output: clip(&output, MAX_OUTPUT) });
+                }
+            }
+        }
+    }
+
+    fn on_notification(&mut self, v: &Value, o: &mut Out) {
+        let p = &v["params"];
+        match v["method"].as_str().unwrap_or("") {
+            "turn/started" if self.is_main(&p["threadId"]) => {
+                self.turn_id = p["turn"]["id"].as_str().map(str::to_string);
+                self.in_turn = true;
+                o.ev(ChatEventKind::State { state: self.state() });
+            }
+            "turn/completed" if self.is_main(&p["threadId"]) => {
+                let t = &p["turn"];
+                let status = t["status"].as_str().unwrap_or("");
+                if status == "failed" {
+                    let msg = t["error"]["message"].as_str().unwrap_or("The turn failed");
+                    o.ev(ChatEventKind::notice(NoticeLevel::Error, msg));
+                }
+                self.in_turn = false;
+                self.turn_id = None;
+                self.perms.clear();
+                o.ev(ChatEventKind::TurnEnd { duration_ms: t["durationMs"].as_u64().unwrap_or(0), ok: status == "completed" });
+                o.ev(ChatEventKind::State { state: self.state() });
+            }
+            "item/started" => self.on_item(true, p, o),
+            "item/completed" => self.on_item(false, p, o),
+            "item/agentMessage/delta" => {
+                let text = p["delta"].as_str().unwrap_or("").to_string();
+                if !text.is_empty() {
+                    o.ev(ChatEventKind::TextDelta { message_id: p["itemId"].as_str().unwrap_or("").to_string(), text, parent_tool_id: self.parent_for(&p["threadId"]) });
+                }
+            }
+            "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
+                let text = p["delta"].as_str().unwrap_or("").to_string();
+                if !text.is_empty() {
+                    o.ev(ChatEventKind::ThinkingDelta { message_id: p["itemId"].as_str().unwrap_or("").to_string(), text, parent_tool_id: self.parent_for(&p["threadId"]) });
+                }
+            }
+            "thread/tokenUsage/updated" if self.is_main(&p["threadId"]) => {
+                let u = &p["tokenUsage"];
+                let g = |o: &Value, k: &str| o[k].as_u64().unwrap_or(0);
+                let (tot, last) = (&u["total"], &u["last"]);
+                let cached = g(tot, "cachedInputTokens");
+                let tokens = Tokens {
+                    input: g(tot, "inputTokens").saturating_sub(cached),
+                    cached,
+                    output: g(tot, "outputTokens"),
+                    context: g(last, "inputTokens"),
+                };
+                if let Some(w) = u["modelContextWindow"].as_u64() {
+                    self.context_window = Some(w);
+                }
+                o.ev(ChatEventKind::Usage { model: self.model.clone(), tokens, context_window: self.context_window });
+                self.ready(o);
+            }
+            "thread/settings/updated" if self.is_main(&p["threadId"]) => {
+                let s = &p["threadSettings"];
+                if let Some(m) = s["model"].as_str() {
+                    self.model = m.to_string();
+                }
+                if let Some(a) = approval_name(&s["approvalPolicy"]) {
+                    self.approval = a;
+                }
+                if let Some(sb) = sandbox_name(&s["sandboxPolicy"]) {
+                    self.sandbox = sb;
+                }
+                self.ready(o);
+            }
+            "model/rerouted" if self.is_main(&p["threadId"]) => {
+                if let Some(m) = p["toModel"].as_str() {
+                    self.model = m.to_string();
+                    o.ev(ChatEventKind::notice(NoticeLevel::Info, format!("Switched to {m}")));
+                    self.ready(o);
+                }
+            }
+            "thread/compacted" => o.ev(ChatEventKind::notice(NoticeLevel::Info, "Conversation compacted")),
+            "error" => {
+                let msg = p["error"]["message"].as_str().unwrap_or("error").to_string();
+                if p["willRetry"].as_bool() == Some(true) {
+                    o.ev(ChatEventKind::notice(NoticeLevel::Warn, format!("{msg} (retrying)")));
+                } else {
+                    o.ev(ChatEventKind::notice(NoticeLevel::Error, msg));
+                }
+            }
+            "warning" | "configWarning" | "deprecationNotice" | "guardianWarning" => {
+                let msg = p["message"].as_str().or(p["summary"].as_str()).unwrap_or("");
+                if !msg.is_empty() {
+                    o.ev(ChatEventKind::notice(NoticeLevel::Warn, msg));
+                }
+            }
+            "serverRequest/resolved" => {
+                let rid = match &p["requestId"] {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                if self.perms.remove(&rid).is_some() {
+                    o.ev(ChatEventKind::State { state: self.state() });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn local_status(&self) -> String {
+        let mut s = format!("Model: {}\nApprovals: {}", self.model, if self.approval.is_empty() { "default" } else { &self.approval });
+        if !self.sandbox.is_empty() {
+            s.push_str(&format!("\nSandbox: {}", self.sandbox));
+        }
+        if let Some(w) = self.context_window {
+            s.push_str(&format!("\nContext window: {w}"));
+        }
+        if let Some(t) = &self.thread_id {
+            s.push_str(&format!("\nThread: {t}"));
+        }
+        s
+    }
+}
+
+fn slash_commands() -> Vec<SlashCommand> {
+    [
+        ("compact", "Summarize the conversation to free up context"),
+        ("review", "Review uncommitted changes (or pass instructions)"),
+        ("model", "Choose the model"),
+        ("status", "Show model, approvals and context"),
+    ]
+    .iter()
+    .map(|(n, d)| SlashCommand { name: n.to_string(), description: d.to_string() })
+    .collect()
+}
+
+/// The slash commands with their kind: the few the app-server runs, then the TUI's.
+fn command_infos() -> Vec<CommandInfo> {
+    let mut out: Vec<CommandInfo> = slash_commands()
+        .into_iter()
+        .map(|c| CommandInfo { name: c.name, description: c.description, argument_hint: String::new(), aliases: Vec::new(), kind: CommandKind::Command })
+        .collect();
+    out.extend(TERMINAL_COMMANDS.iter().filter(|n| !matches!(**n, "quit" | "exit")).map(|n| CommandInfo {
+        name: n.to_string(),
+        description: String::new(),
+        argument_hint: String::new(),
+        aliases: Vec::new(),
+        kind: CommandKind::Terminal,
+    }));
+    out
+}
+
+/// `ToolRequestUserInputQuestion[]` -> questions.
+fn parse_questions(v: &Value) -> Vec<Question> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(i, q)| {
+            let options: Vec<QuestionOption> = q["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|o| Some(QuestionOption { label: o["label"].as_str()?.to_string(), description: o["description"].as_str().unwrap_or("").to_string() }))
+                .collect();
+            Some(Question {
+                id: q["id"].as_str().map(str::to_string).unwrap_or_else(|| i.to_string()),
+                header: q["header"].as_str().unwrap_or("").to_string(),
+                question: q["question"].as_str()?.to_string(),
+                allow_other: q["isOther"].as_bool().unwrap_or(false) || options.is_empty(),
+                options,
+                multi_select: false,
+                secret: q["isSecret"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn approval_name(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Object(m) => m.keys().next().cloned(),
+        _ => None,
+    }
+}
+
+fn sandbox_name(v: &Value) -> Option<String> {
+    let s = v.as_str().or(v["type"].as_str())?;
+    Some(
+        match s {
+            "readOnly" => "read-only",
+            "workspaceWrite" => "workspace-write",
+            "dangerFullAccess" => "danger-full-access",
+            other => other,
+        }
+        .to_string(),
+    )
+}
+
+fn sandbox_policy(mode: &str) -> Value {
+    match mode {
+        "read-only" => json!({"type": "readOnly", "networkAccess": false}),
+        "workspace-write" => json!({"type": "workspaceWrite", "writableRoots": [], "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false}),
+        _ => json!({"type": "dangerFullAccess"}),
+    }
+}
+
+/// `/bin/zsh -lc 'touch b.txt'` -> `touch b.txt`.
+fn unwrap_shell(cmd: &str) -> String {
+    for pre in ["/bin/zsh -lc ", "/bin/bash -lc ", "bash -lc ", "zsh -lc ", "/bin/sh -c ", "sh -c "] {
+        if let Some(rest) = cmd.strip_prefix(pre) {
+            let r = rest.trim();
+            if r.len() >= 2 && ((r.starts_with('\'') && r.ends_with('\'')) || (r.starts_with('"') && r.ends_with('"'))) {
+                return r[1..r.len() - 1].to_string();
+            }
+            return r.to_string();
+        }
+    }
+    cmd.to_string()
+}
+
+fn tool_line(name: &str, detail: &str) -> String {
+    if detail.is_empty() { name.to_string() } else { format!("{name} · {}", crate::util::one_line(detail, 140)) }
+}
+
+/// (name, summary, input) for a tool-like thread item.
+fn tool_view(item: &Value) -> Option<(String, String, Value)> {
+    let s = |k: &str| item[k].as_str().unwrap_or("").to_string();
+    Some(match item["type"].as_str()? {
+        "commandExecution" => {
+            let cmd = unwrap_shell(&s("command"));
+            ("shell".into(), tool_line("shell", &cmd), json!({"command": cmd, "cwd": item["cwd"]}))
+        }
+        "fileChange" => {
+            let paths: Vec<String> = item["changes"].as_array().map(|a| a.iter().filter_map(|c| c["path"].as_str().map(crate::util::home_short)).collect()).unwrap_or_default();
+            ("apply_patch".into(), tool_line("apply_patch", &paths.join(", ")), json!({"changes": item["changes"]}))
+        }
+        "mcpToolCall" => {
+            let name = format!("{}.{}", s("server"), s("tool"));
+            (name.clone(), crate::util::tool_summary(&name, &item["arguments"]), item["arguments"].clone())
+        }
+        "dynamicToolCall" => {
+            let name = s("tool");
+            (name.clone(), crate::util::tool_summary(&name, &item["arguments"]), item["arguments"].clone())
+        }
+        "collabAgentToolCall" => {
+            let name = s("tool");
+            (name.clone(), tool_line(&name, &s("prompt")), json!({"prompt": item["prompt"], "model": item["model"], "receiverThreadIds": item["receiverThreadIds"]}))
+        }
+        "webSearch" => ("web_search".into(), tool_line("web_search", &s("query")), item.clone()),
+        "imageView" => ("view_image".into(), tool_line("view_image", &s("path")), item.clone()),
+        "imageGeneration" => ("image_generation".into(), "image_generation".into(), item.clone()),
+        "sleep" => ("sleep".into(), "sleep".into(), item.clone()),
+        other => (other.to_string(), other.to_string(), item.clone()),
+    })
+}
+
+fn tool_result(item: &Value) -> (bool, String) {
+    let status = item["status"].as_str().unwrap_or("completed");
+    match item["type"].as_str().unwrap_or("") {
+        "commandExecution" => {
+            let ok = status == "completed" && item["exitCode"].as_i64().unwrap_or(0) == 0;
+            let mut out = item["aggregatedOutput"].as_str().unwrap_or("").to_string();
+            if status == "declined" && out.is_empty() {
+                out = "declined".into();
+            } else if !ok && out.is_empty() {
+                out = format!("exit code {}", item["exitCode"].as_i64().map(|c| c.to_string()).unwrap_or_else(|| status.into()));
+            }
+            (ok, out)
+        }
+        "mcpToolCall" => match item["error"]["message"].as_str() {
+            Some(e) => (false, e.to_string()),
+            None => {
+                let text: Vec<&str> = item["result"]["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect();
+                (status != "failed", text.join("\n"))
+            }
+        },
+        "fileChange" => {
+            let paths: Vec<&str> = item["changes"].as_array().into_iter().flatten().filter_map(|c| c["path"].as_str()).collect();
+            (status == "completed", paths.join("\n"))
+        }
+        "dynamicToolCall" => {
+            let text: Vec<&str> = item["contentItems"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect();
+            (item["success"].as_bool().unwrap_or(status == "completed"), text.join("\n"))
+        }
+        _ => (!matches!(status, "failed" | "declined" | "errored"), String::new()),
+    }
+}
+
+impl Backend for Codex {
+    fn start(&mut self, o: &mut Out) {
+        let info = json!({"name": "coool", "title": "coool", "version": env!("CARGO_PKG_VERSION")});
+        self.request("initialize", json!({"clientInfo": info, "capabilities": null}), Req::Init, o);
+    }
+
+    fn on_line(&mut self, line: &str, o: &mut Out) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+        let has_id = v.get("id").is_some_and(|i| !i.is_null());
+        if has_id && v.get("method").is_some() {
+            self.on_server_request(&v, o);
+        } else if has_id {
+            self.on_response(&v, o);
+        } else if v.get("method").is_some() {
+            self.on_notification(&v, o);
+        }
+    }
+
+    fn send(&mut self, text: &str, o: &mut Out) -> Result<()> {
+        if let Some((name, args)) = slash_command(text) {
+            match name {
+                "compact" | "review" => {
+                    let Some(tid) = self.thread_id.clone() else { bail!("the chat is still starting") };
+                    if name == "compact" {
+                        self.request("thread/compact/start", json!({"threadId": tid}), Req::Other("compact"), o);
+                    } else {
+                        let target = if args.is_empty() { json!({"type": "uncommittedChanges"}) } else { json!({"type": "custom", "instructions": args}) };
+                        self.request("review/start", json!({"threadId": tid, "target": target}), Req::Other("start the review"), o);
+                    }
+                    self.user_n += 1;
+                    o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string() });
+                    return Ok(());
+                }
+                "model" if !args.is_empty() => {
+                    self.set_model(args, o)?;
+                    o.ev(ChatEventKind::notice(NoticeLevel::Info, format!("Model set to {args}")));
+                    return Ok(());
+                }
+                "model" | "status" => {
+                    o.ev(ChatEventKind::notice(NoticeLevel::Info, self.local_status()));
+                    return Ok(());
+                }
+                n if TERMINAL_COMMANDS.contains(&n) => {
+                    o.ev(ChatEventKind::needs_terminal(format!("/{n} only works in the terminal")));
+                    return Ok(());
+                }
+                // Anything else (e.g. a custom prompt name) goes to the model as typed.
+                _ => {}
+            }
+        }
+        self.user_n += 1;
+        o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string() });
+        if self.thread_id.is_none() {
+            self.queue.push(text.to_string());
+        } else {
+            self.start_turn(text, o);
+        }
+        o.ev(ChatEventKind::State { state: self.state() });
+        Ok(())
+    }
+
+    fn interrupt(&mut self, o: &mut Out) -> Result<()> {
+        self.queue.clear();
+        if let (Some(tid), Some(turn)) = (self.thread_id.clone(), self.turn_id.clone())
+            && self.in_turn
+        {
+            self.request("turn/interrupt", json!({"threadId": tid, "turnId": turn}), Req::Other("interrupt"), o);
+        }
+        o.ev(ChatEventKind::State { state: self.state() });
+        Ok(())
+    }
+
+    fn set_model(&mut self, model: &str, o: &mut Out) -> Result<()> {
+        if model.trim().is_empty() {
+            bail!("empty model");
+        }
+        if self.model != model {
+            // Known again after the next model response.
+            self.context_window = None;
+        }
+        self.model = model.to_string();
+        self.next_model = Some(model.to_string());
+        self.ready(o);
+        Ok(())
+    }
+
+    fn set_permission_mode(&mut self, mode: &str, o: &mut Out) -> Result<()> {
+        if SANDBOX_MODES.contains(&mode) {
+            self.sandbox = mode.to_string();
+            self.next_sandbox = Some(mode.to_string());
+        } else if APPROVAL_POLICIES.contains(&mode) {
+            self.approval = mode.to_string();
+            self.next_approval = Some(mode.to_string());
+        } else {
+            bail!("unknown Codex permission mode `{mode}` (approval: {}; sandbox: {})", APPROVAL_POLICIES.join(", "), SANDBOX_MODES.join(", "));
+        }
+        self.ready(o);
+        Ok(())
+    }
+
+    fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool, o: &mut Out) -> Result<()> {
+        let Some((id, kind)) = self.perms.remove(request_id) else { bail!("no pending permission request {request_id}") };
+        if let PermKind::Question(_) = kind {
+            // Declined: an empty answer set (the request has no "decline").
+            let _ = (allow, always);
+            o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"answers": {}}}));
+            o.ev(ChatEventKind::State { state: self.state() });
+            return Ok(());
+        }
+        let decision = match (kind, allow, always) {
+            (PermKind::V2, true, true) => json!("acceptForSession"),
+            (PermKind::V2, true, false) => json!("accept"),
+            (PermKind::V2, false, _) => json!("decline"),
+            (PermKind::Legacy, true, true) => json!("approved_for_session"),
+            (PermKind::Legacy, true, false) => json!("approved"),
+            (PermKind::Legacy, false, _) => json!({"denied": {"rejection": "The user denied this."}}),
+            (PermKind::Question(_), ..) => unreachable!("handled above"),
+        };
+        o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"decision": decision}}));
+        o.ev(ChatEventKind::State { state: self.state() });
+        Ok(())
+    }
+
+    fn respond_question(&mut self, request_id: &str, answers: &[Vec<String>], o: &mut Out) -> Result<()> {
+        let Some((_, PermKind::Question(ids))) = self.perms.get(request_id) else { bail!("no pending question {request_id}") };
+        // ToolRequestUserInputResponse: `{"answers": {<question id>: {"answers": [..]}}}`.
+        let mut map = serde_json::Map::new();
+        for (qid, a) in ids.iter().zip(answers) {
+            let picked: Vec<&str> = a.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if !picked.is_empty() {
+                map.insert(qid.clone(), json!({"answers": picked}));
+            }
+        }
+        if map.is_empty() {
+            bail!("answer at least one question, or decline");
+        }
+        let (id, _) = self.perms.remove(request_id).expect("checked");
+        o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"answers": map}}));
+        o.ev(ChatEventKind::State { state: self.state() });
+        Ok(())
+    }
+
+    fn on_exit(&mut self, o: &mut Out) {
+        self.perms.clear();
+        self.queue.clear();
+        if self.in_turn {
+            self.in_turn = false;
+            o.ev(ChatEventKind::TurnEnd { duration_ms: 0, ok: false });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat::testutil::{replay, replay_full};
+
+    fn opts() -> ChatOptions {
+        ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()) }
+    }
+
+    /// Real run: approval of a shell command, an interrupted turn, then a turn
+    /// on another model.
+    #[test]
+    fn fixture_approval_interrupt_model_switch() {
+        let mut c = Codex::new(&opts());
+        let (evs, writes) = replay_full(&mut c, include_str!("fixtures/codex_approval_interrupt_model.jsonl"));
+        let ChatEventKind::Ready { session_id, model, permission_mode, models, .. } = evs.iter().find(|e| matches!(e, ChatEventKind::Ready { .. })).unwrap() else { panic!() };
+        assert!(!session_id.is_empty());
+        assert_eq!((model.as_str(), permission_mode.as_str()), ("gpt-5.6-luna", "untrusted"));
+        let _ = models;
+        let perm = evs.iter().find_map(|e| if let ChatEventKind::PermissionRequest { tool, summary, .. } = e { Some((tool.clone(), summary.clone())) } else { None });
+        assert_eq!(perm, Some(("shell".into(), "shell · touch b.txt".into())));
+        // Both answers (accept, then decline) went back as JSON-RPC responses.
+        let answered: Vec<String> = writes
+            .iter()
+            .map(|w| serde_json::from_str::<Value>(w).unwrap())
+            .filter_map(|w| w["result"]["decision"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(answered, vec!["accept", "decline"]);
+        let ends: Vec<(bool, String)> = evs.iter().filter_map(|e| if let ChatEventKind::ToolEnd { ok, output, .. } = e { Some((*ok, output.clone())) } else { None }).collect();
+        assert!(ends.iter().any(|e| e.0));
+        assert!(ends.iter().any(|e| !e.0 && e.1 == "declined"), "{ends:?}");
+        // turn/start carried the new model; the last answer is attributed to it.
+        assert!(writes.iter().any(|w| w.contains("\"turn/start\"") && w.contains("gpt-5.6-terra")));
+        assert!(writes.iter().any(|w| w.contains("\"turn/interrupt\"")));
+        let ends: Vec<bool> = evs.iter().filter_map(|e| if let ChatEventKind::TurnEnd { ok, .. } = e { Some(*ok) } else { None }).collect();
+        assert_eq!(ends, vec![true, true, false, true]);
+        let last = evs.iter().rev().find_map(|e| if let ChatEventKind::AssistantMessage { text, model, .. } = e { Some((text.clone(), model.clone())) } else { None });
+        assert_eq!(last, Some(("ok".into(), "gpt-5.6-terra".into())));
+        let u = evs.iter().rev().find_map(|e| if let ChatEventKind::Usage { tokens, context_window, .. } = e { Some((tokens.clone(), *context_window)) } else { None }).unwrap();
+        assert!(u.0.output > 0 && u.0.context > 0);
+        assert!(u.1.is_some());
+        assert_eq!(c.state(), ChatState::Idle);
+    }
+
+    #[test]
+    fn prompts_before_thread_are_queued_then_sent() {
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.send("hi", &mut o).unwrap();
+        assert_eq!(o.writes.len(), 1, "only initialize so far");
+        c.on_line(r#"{"id":1,"result":{}}"#, &mut o);
+        c.on_line(r#"{"id":3,"result":{"thread":{"id":"t1"},"model":"m","approvalPolicy":"on-request","sandbox":{"type":"workspaceWrite"}}}"#, &mut o);
+        let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!(last["method"], "turn/start");
+        assert_eq!(last["params"]["input"][0]["text"], "hi");
+        assert_eq!(c.sandbox, "workspace-write");
+        // A second prompt mid-turn steers the running turn.
+        c.on_line(r#"{"method":"turn/started","params":{"threadId":"t1","turn":{"id":"turn1"}}}"#, &mut o);
+        c.send("also this", &mut o).unwrap();
+        let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!((last["method"].as_str(), last["params"]["expectedTurnId"].as_str()), (Some("turn/steer"), Some("turn1")));
+    }
+
+    #[test]
+    fn slash_commands_map_to_rpcs_or_the_terminal() {
+        let mut c = Codex::new(&opts());
+        c.thread_id = Some("t1".into());
+        let mut o = Out::default();
+        c.send("/compact", &mut o).unwrap();
+        c.send("/review focus on errors", &mut o).unwrap();
+        c.send("/diff", &mut o).unwrap();
+        c.send("/model gpt-x", &mut o).unwrap();
+        let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
+        assert_eq!(w[0]["method"], "thread/compact/start");
+        assert_eq!(w[1]["params"]["target"]["instructions"], "focus on errors");
+        assert_eq!(w.len(), 2);
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::Notice { needs_terminal: true, text, .. } if text.starts_with("/diff"))));
+        assert_eq!(c.next_model.as_deref(), Some("gpt-x"));
+        assert!(c.set_permission_mode("bogus", &mut o).is_err());
+        c.set_permission_mode("never", &mut o).unwrap();
+        c.set_permission_mode("danger-full-access", &mut o).unwrap();
+        c.start_turn("go", &mut o);
+        let t: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!((t["params"]["approvalPolicy"].as_str(), t["params"]["sandboxPolicy"]["type"].as_str(), t["params"]["model"].as_str()), (Some("never"), Some("dangerFullAccess"), Some("gpt-x")));
+    }
+
+    #[test]
+    fn subagent_items_nest_under_the_spawning_call() {
+        let mut c = Codex::new(&opts());
+        c.thread_id = Some("main".into());
+        let evs = replay(
+            &mut c,
+            &[
+                r#"{"method":"item/completed","params":{"threadId":"main","turnId":"x","item":{"type":"collabAgentToolCall","id":"call1","tool":"spawnAgent","status":"completed","senderThreadId":"main","receiverThreadIds":["kid"],"prompt":"look around","model":null,"agentsStates":{}}}}"#,
+                r#"{"method":"item/started","params":{"threadId":"kid","turnId":"y","item":{"type":"commandExecution","id":"e1","command":"/bin/zsh -lc ls","cwd":"/w","status":"inProgress"}}}"#,
+                r#"{"method":"item/agentMessage/delta","params":{"threadId":"kid","itemId":"m1","delta":"hi"}}"#,
+                r#"{"method":"turn/completed","params":{"threadId":"kid","turn":{"id":"y","status":"completed"}}}"#,
+            ]
+            .iter()
+            .map(|l| json!({"dir": "out", "line": l}).to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        );
+        let parents: Vec<Option<String>> = evs
+            .iter()
+            .filter_map(|e| match e {
+                ChatEventKind::ToolStart { parent_tool_id, .. } | ChatEventKind::TextDelta { parent_tool_id, .. } => Some(parent_tool_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(parents, vec![None, Some("call1".into()), Some("call1".into())]);
+        // A subagent's turn ending is not the chat's turn ending.
+        assert!(!evs.iter().any(|e| matches!(e, ChatEventKind::TurnEnd { .. })));
+    }
+
+    /// Shapes from `codex app-server generate-ts` (ToolRequestUserInputParams /
+    /// ToolRequestUserInputResponse, marked experimental in 0.145).
+    #[test]
+    fn request_user_input_is_a_question() {
+        let mut c = Codex::new(&opts());
+        c.thread_id = Some("t1".into());
+        let mut o = Out::default();
+        c.on_line(
+            r#"{"id":12,"method":"item/tool/requestUserInput","params":{"threadId":"t1","turnId":"x","itemId":"i","autoResolutionMs":null,"questions":[{"id":"color","header":"Color","question":"Which color?","isOther":true,"isSecret":false,"options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"}]},{"id":"name","header":"Name","question":"Your name?","isOther":false,"isSecret":false,"options":null}]}}"#,
+            &mut o,
+        );
+        let ChatEventKind::Question { request_id, questions } = &o.events[0] else { panic!("{:?}", o.events) };
+        assert_eq!(request_id, "12");
+        assert_eq!((questions[0].id.as_str(), questions[0].options.len(), questions[0].allow_other), ("color", 2, true));
+        assert!(questions[1].options.is_empty() && questions[1].allow_other);
+        assert_eq!(c.state(), ChatState::WaitingPermission);
+        let mut o = Out::default();
+        c.respond_question("12", &[vec!["Blue".into()], vec!["Ada".into()]], &mut o).unwrap();
+        let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
+        assert_eq!(w, json!({"jsonrpc": "2.0", "id": 12, "result": {"answers": {"color": {"answers": ["Blue"]}, "name": {"answers": ["Ada"]}}}}));
+        assert_eq!(c.state(), ChatState::Idle);
+        // Declined: an empty answer set.
+        c.on_line(r#"{"id":13,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"a","header":"","question":"?","isOther":true,"isSecret":false,"options":null}]}}"#, &mut o);
+        c.respond_permission("13", false, false, &mut o).unwrap();
+        let w: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!(w["result"], json!({"answers": {}}));
+    }
+
+    #[test]
+    fn unsupported_server_requests_are_declined() {
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        c.on_line(r#"{"id":9,"method":"mcpServer/elicitation/request","params":{}}"#, &mut o);
+        let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
+        assert_eq!((w["id"].as_u64(), w["error"]["code"].as_i64()), (Some(9), Some(-32601)));
+        assert!(matches!(o.events[0], ChatEventKind::Notice { needs_terminal: true, .. }));
+    }
+
+    #[test]
+    fn shell_wrapper_is_unwrapped() {
+        assert_eq!(unwrap_shell("/bin/zsh -lc 'touch b.txt'"), "touch b.txt");
+        assert_eq!(unwrap_shell("ls -la"), "ls -la");
+    }
+}

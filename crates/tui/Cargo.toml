@@ -1,0 +1,19 @@
+[package]
+name = "coool"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal cockpit for coding agents: monitor and control Claude Code and Codex sessions"
+license = "MIT"
+homepage = "https://coool.sh"
+readme = "../../README.md"
+keywords = ["tui", "claude", "codex", "agents", "terminal"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+coool-core = { path = "../core" }
+anyhow = "1"
+crossterm = "0.29"
+dirs = "7"
+libc = "0.2"
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
+tui-term = "0.3.4"

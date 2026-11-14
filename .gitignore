@@ -1,0 +1,9 @@
+/target
+
+# local agent config and skills
+.claude/
+
+# full screenshot sets are regenerated locally; a curated few live in docs/media
+app/docs/screenshots/
+
+.DS_Store
