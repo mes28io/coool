@@ -117,7 +117,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
                 </div>
               )}
               {b.type === "error" && (
-                <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-sm text-err bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
+                <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-sm text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
                   <IAlert size={14} className="mt-[2px] shrink-0" />
                   <span className="selectable min-w-0 break-words">{b.a.text}</span>
                 </div>
@@ -156,7 +156,7 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
             </div>
           )}
           {b.type === "error" && (
-            <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-sm text-err">
+            <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-sm text-err-text">
               <IAlert size={14} className="mt-[2px] shrink-0" />
               <span className="selectable min-w-0 break-words">{b.a.text}</span>
             </div>
@@ -187,7 +187,7 @@ export function ThinkingRow({ since, approx, label = "Thinking" }: { since: numb
   return (
     <div className="flex items-center gap-2.5 py-1 text-sm">
       <span className="relative flex size-[18px] items-center justify-center">
-        <ISpark size={14} className="text-accent2 breathe" />
+        <ISpark size={14} className="text-dim breathe" />
       </span>
       <span className="shimmer font-medium" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
         {label}
@@ -342,7 +342,7 @@ export function StepLine({
       <span
         className={cx(
           "relative z-[1] flex size-[15px] shrink-0 items-center justify-center rounded-full bg-bg",
-          waiting ? "text-accent" : active ? "text-busy" : failed ? "text-err" : "text-faint",
+          waiting ? "text-accent-text" : active ? "text-busy-text" : failed ? "text-err-text" : "text-faint",
         )}
       >
         {waiting ? (
@@ -359,22 +359,22 @@ export function StepLine({
         )}
       </span>
       <span
-        className={cx("shrink-0 text-sm font-medium", active && !waiting ? "shimmer" : waiting ? "text-accent" : failed ? "text-err/90" : "text-fg/80")}
+        className={cx("shrink-0 text-sm font-medium", active && !waiting ? "shimmer" : waiting ? "text-accent-text" : failed ? "text-err-text/90" : "text-fg/80")}
         style={active && !waiting ? { ["--shimmer-base" as string]: "var(--text)", ["--shimmer-hi" as string]: tone } : undefined}
       >
         {name}
       </span>
       {detail && (
-        <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-xs", failed ? "text-err/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
+        <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-xs", failed ? "text-err-text/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
           {/* A struck-through path is read at a glance: short, like the rest of the timeline. */}
           {failed ? shortDetail(homeShort(detail)) : detail}
         </span>
       )}
       {!detail && <span className="flex-1" />}
       {waiting ? (
-        <span className="shrink-0 text-2xs font-medium text-accent">waiting for you</span>
+        <span className="shrink-0 text-2xs font-medium text-accent-text">waiting for you</span>
       ) : active ? (
-        <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-2xs text-busy" />
+        <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-2xs text-busy-text" />
       ) : (
         stamp && <span className="shrink-0 font-mono text-2xs text-faint opacity-0 transition-opacity duration-150 group-hover:opacity-100 tnum">{stamp}</span>
       )}
@@ -389,17 +389,17 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   const steps = agent?.activity.filter((x) => x.kind === "tool" || x.kind === "agent").slice(-5) ?? [];
   return (
     <div className="-ml-[19px] flex gap-2.5 py-1">
-      <span className="relative z-[1] mt-[7px] flex size-[15px] shrink-0 items-center justify-center rounded-full bg-bg text-accent2">
+      <span className="relative z-[1] mt-[7px] flex size-[15px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
         <ISpark size={12} />
       </span>
       <div
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card",
-          running ? "border-[color-mix(in_oklab,var(--accent-2)_35%,var(--border))]" : "border-hairline",
+          running ? "border-[color-mix(in_oklab,var(--busy)_40%,var(--border))]" : "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
-          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-2xs font-semibold uppercase leading-[18px] tracking-[0.04em] text-accent2">
+          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-2xs font-semibold uppercase leading-[18px] tracking-[0.04em] text-dim">
             {agent?.kind || "subagent"}
           </span>
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{detail || agent?.description}</span>
@@ -408,7 +408,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
             <StatusDot status="busy" size={6} />
           ) : (
             <span className="flex items-center gap-1 text-2xs text-dim">
-              <ICheck size={12} className="text-accent" /> done
+              <ICheck size={12} className="text-accent-text" /> done
             </span>
           )}
         </div>

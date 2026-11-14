@@ -89,6 +89,60 @@ export function ChatTimeline({
     return () => ro.disconnect();
   }, []);
 
+  // Keep a newly arrived approval / question card fully visible above the composer (or, when
+  // it is taller than the viewport, with its top just under the header). Only on arrival and
+  // while the card grows; once the reader scrolls themselves we leave the position alone.
+  const revealed = useRef<string | null>(null);
+  const userMoved = useRef(false);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const mark = () => {
+      userMoved.current = true;
+    };
+    el.addEventListener("wheel", mark, { passive: true });
+    el.addEventListener("touchmove", mark, { passive: true });
+    el.addEventListener("keydown", mark);
+    return () => {
+      el.removeEventListener("wheel", mark);
+      el.removeEventListener("touchmove", mark);
+      el.removeEventListener("keydown", mark);
+    };
+  }, []);
+  const askKey = chat.pendingPermission ? `p:${chat.pendingPermission}` : chat.pendingQuestion ? `q:${chat.pendingQuestion}` : null;
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !askKey) {
+      revealed.current = null;
+      return;
+    }
+    const card = el.querySelector<HTMLElement>("[data-approval], [data-question]");
+    if (!card) return;
+    const reveal = (smooth: boolean) => {
+      const margin = 12;
+      const sr = el.getBoundingClientRect();
+      const cr = card.getBoundingClientRect();
+      let delta = 0;
+      if (cr.height + margin * 2 > sr.height) delta = cr.top - sr.top - margin;
+      else if (cr.bottom > sr.bottom - margin) delta = cr.bottom - sr.bottom + margin;
+      else if (cr.top < sr.top + margin) delta = cr.top - sr.top - margin;
+      if (Math.abs(delta) < 1) return;
+      if (cr.height + margin * 2 > sr.height) stick.current = false; // keep the top in view
+      el.scrollTo({ top: el.scrollTop + delta, behavior: smooth && !reduced() ? "smooth" : "auto" });
+    };
+    if (revealed.current !== askKey) {
+      revealed.current = askKey;
+      userMoved.current = false;
+      reveal(true);
+    }
+    // The card can still grow (options render, remember list); follow it until the reader scrolls.
+    const ro = new ResizeObserver(() => {
+      if (!userMoved.current) reveal(true);
+    });
+    ro.observe(card);
+    return () => ro.disconnect();
+  }, [askKey, chat.items]);
+
   const last = blocks[blocks.length - 1];
   const lastItem = last?.type === "item" ? last.item : null;
   const runningTool = chat.items.some((i) => i.kind === "tool" && !i.parent && i.endTs === null);
@@ -310,7 +364,7 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
         <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[18px] items-center justify-center text-faint">
           <IChevron size={12} />
         </motion.span>
-        <ISpark size={12} className="text-accent2/80" />
+        <ISpark size={12} className="text-dim/80" />
         <span className="text-dim group-hover:text-fg/85">Thought for {fmtElapsed((item.endTs ?? item.ts) - item.ts)}</span>
       </button>
       <AnimatePresence initial={false}>
@@ -387,7 +441,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
               {n > 1 && <span className="tnum text-faint">{n}</span>}
             </span>
           ))}
-          {failed > 0 && <span className="inline-flex h-[18px] shrink-0 items-center rounded-[5px] bg-[color-mix(in_oklab,var(--error)_10%,transparent)] px-1.5 text-2xs font-medium text-err">{failed} failed</span>}
+          {failed > 0 && <span className="inline-flex h-[18px] shrink-0 items-center rounded-[5px] bg-[color-mix(in_oklab,var(--error)_10%,transparent)] px-1.5 text-2xs font-medium text-err-text">{failed} failed</span>}
         </span>
         {!active && span > 0 && <span className="shrink-0 font-mono text-2xs text-faint tnum">{fmtElapsed(span)}</span>}
       </button>
@@ -439,7 +493,7 @@ function ToolStep({ t, cwd, dense, waiting }: { t: Tool; cwd: string; dense?: bo
             <pre
               className={cx(
                 "selectable mb-1.5 ml-[6px] mt-0.5 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-[8px] border border-hairline px-3 py-2 font-mono text-2xs leading-[16px]",
-                t.ok === false ? "bg-[color-mix(in_oklab,var(--error)_6%,transparent)] text-err/90" : "bg-[color-mix(in_oklab,var(--dim)_6%,transparent)] text-dim",
+                t.ok === false ? "bg-[color-mix(in_oklab,var(--error)_6%,transparent)] text-err-text/90" : "bg-[color-mix(in_oklab,var(--dim)_6%,transparent)] text-dim",
               )}
             >
               {t.output}
@@ -464,17 +518,17 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const modelIds = models.length ? models : fromText;
   return (
     <div className="-ml-[19px] flex gap-2.5 py-1">
-      <span className="relative z-[1] mt-[7px] flex size-[15px] shrink-0 items-center justify-center rounded-full bg-bg text-accent2">
+      <span className="relative z-[1] mt-[7px] flex size-[15px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
         <ISpark size={12} />
       </span>
       <div
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-300",
-          running ? "border-[color-mix(in_oklab,var(--accent-2)_35%,var(--border))]" : "border-hairline",
+          running ? "border-[color-mix(in_oklab,var(--busy)_40%,var(--border))]" : "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pb-1.5 pt-2">
-          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-2xs font-semibold uppercase leading-[18px] tracking-[0.04em] text-accent2">{kind}</span>
+          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-2xs font-semibold uppercase leading-[18px] tracking-[0.04em] text-dim">{kind}</span>
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{stripToolName(tool.name, tool.summary)}</span>
           {modelIds.map((m) => (
             <ModelTag key={m} model={m} />
@@ -482,12 +536,12 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
           {running ? (
             <StatusDot status="busy" size={6} />
           ) : tool.ok === false ? (
-            <span className="flex items-center gap-1 text-2xs text-err">
+            <span className="flex items-center gap-1 text-2xs text-err-text">
               <IAlert size={12} /> stopped
             </span>
           ) : (
             <span className="flex items-center gap-1 text-2xs text-dim">
-              <ICheck size={12} className="text-accent" /> {fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)}
+              <ICheck size={12} className="text-accent-text" /> {fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)}
             </span>
           )}
         </div>
@@ -571,7 +625,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
           : "border-line hover:border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] hover:bg-hover",
       )}
     >
-      <span className={cx("mt-[3px] flex size-[16px] shrink-0 items-center justify-center rounded-[5px]", saved ? "bg-[color-mix(in_oklab,var(--busy)_16%,transparent)] text-busy" : "bg-accent-soft text-accent")}>
+      <span className={cx("mt-[3px] flex size-[16px] shrink-0 items-center justify-center rounded-[5px]", saved ? "bg-[color-mix(in_oklab,var(--busy)_16%,transparent)] text-busy-text" : "bg-accent-soft text-accent-text")}>
         {saved ? <IFile size={11} /> : <ICheck size={11} />}
       </span>
       <span className="min-w-0 flex-1">
@@ -580,7 +634,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
             <Ticks text={option.label} />
           </span>
           {quick && <Kbd className="ml-auto shrink-0">⇧⌘↵</Kbd>}
-          {saved && <span className="ml-auto shrink-0 rounded-[5px] bg-[color-mix(in_oklab,var(--busy)_14%,transparent)] px-1.5 text-2xs font-medium leading-[18px] text-busy">{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
+          {saved && <span className="ml-auto shrink-0 rounded-[5px] bg-[color-mix(in_oklab,var(--busy)_14%,transparent)] px-1.5 text-2xs font-medium leading-[18px] text-busy-text">{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
         </span>
         <span className="mt-0.5 block text-xs leading-[17px] text-dim">{option.detail}</span>
       </span>
@@ -605,7 +659,7 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
           data-approval={item.requestId}
         >
           <div className="flex items-center gap-2 px-3.5 pb-2 pt-3">
-            <span className="flex size-[20px] items-center justify-center rounded-[6px] bg-accent-soft text-accent">
+            <span className="flex size-[20px] items-center justify-center rounded-[6px] bg-accent-soft text-accent-text">
               <ITerminal size={13} />
             </span>
             <span className="text-sm font-semibold text-fg">
@@ -620,9 +674,9 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
           <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3 pt-3">
             <Button variant="primary" onClick={() => answerPermission(chat.id, item.requestId, "allow")} title="Allow this once (⌘↵)" data-allow-once>
               Allow once
-              <Kbd className="ml-0.5 border-transparent bg-[color-mix(in_oklab,var(--accent-ink)_16%,transparent)] text-current">⌘↵</Kbd>
+              <Kbd className="ml-0.5 border-transparent bg-[color-mix(in_oklab,var(--bg)_16%,transparent)] text-current">⌘↵</Kbd>
             </Button>
-            <Button variant="ghost" onClick={() => answerPermission(chat.id, item.requestId, "deny")} className="hover:text-err" title="Deny (⌘⌫)" data-deny>
+            <Button variant="ghost" onClick={() => answerPermission(chat.id, item.requestId, "deny")} className="hover:text-err-text" title="Deny (⌘⌫)" data-deny>
               Deny
             </Button>
             <span className="ml-auto text-2xs text-faint">The turn is paused until you answer</span>
@@ -640,8 +694,8 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
         </motion.div>
       ) : (
         <motion.div key="done" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, ease }} className="flex min-w-0 items-center gap-2 px-1 text-xs" data-approval-done={item.answer ?? ""}>
-          {item.answer === "deny" ? <IClose size={12} className="shrink-0 text-err" /> : <ICheck size={12} className={cx("shrink-0", item.answer === "answered" || !item.answer ? "text-faint" : "text-accent")} />}
-          <span className={cx("shrink-0 font-medium", item.answer === "deny" ? "text-err/90" : item.answer === "answered" || !item.answer ? "text-dim" : "text-accent")}>
+          {item.answer === "deny" ? <IClose size={12} className="shrink-0 text-err-text" /> : <ICheck size={12} className={cx("shrink-0", item.answer === "answered" || !item.answer ? "text-faint" : "text-accent-text")} />}
+          <span className={cx("shrink-0 font-medium", item.answer === "deny" ? "text-err-text/90" : item.answer === "answered" || !item.answer ? "text-dim" : "text-accent-text")}>
             {item.answer === "allow" ? "Allowed once" : item.answer === "always" ? "Allowed" : item.answer === "deny" ? "Denied" : "Permission answered"}
           </span>
           {item.answer === "always" && item.remembered ? (
@@ -695,7 +749,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
           data-question={item.requestId}
         >
           <div className="flex items-center gap-2 px-3.5 pb-1 pt-3">
-            <span className="flex size-[20px] items-center justify-center rounded-[6px] bg-accent-soft text-[12px] font-bold text-accent">?</span>
+            <span className="flex size-[20px] items-center justify-center rounded-[6px] bg-accent-soft text-[12px] font-bold text-accent-text">?</span>
             <span className="text-sm font-semibold text-fg">
               {who} has {item.questions.length === 1 ? "a question" : `${item.questions.length} questions`}
             </span>
@@ -778,7 +832,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
                 Answer
               </Button>
             )}
-            <Button variant="ghost" onClick={() => answerQuestion(chat.id, item.requestId, null)} className="hover:text-err" data-decline-question>
+            <Button variant="ghost" onClick={() => answerQuestion(chat.id, item.requestId, null)} className="hover:text-err-text" data-decline-question>
               Decline
             </Button>
             <span className="ml-auto text-2xs text-faint">{single ? "Pick one to answer" : "The turn is paused until you answer"}</span>
@@ -789,15 +843,15 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
           {Array.isArray(item.answer) ? (
             item.questions.map((q, i) => (
               <div key={q.id || i} className="flex min-w-0 items-center gap-2">
-                <ICheck size={12} className="shrink-0 text-accent" />
+                <ICheck size={12} className="shrink-0 text-accent-text" />
                 <span className="min-w-0 truncate text-dim">{q.header || q.question}</span>
-                <span className="min-w-0 truncate font-medium text-accent">{(item.answer as string[][])[i]?.join(", ") || "no answer"}</span>
+                <span className="min-w-0 truncate font-medium text-accent-text">{(item.answer as string[][])[i]?.join(", ") || "no answer"}</span>
               </div>
             ))
           ) : (
             <div className="flex items-center gap-2">
-              {item.answer === "declined" ? <IClose size={12} className="text-err" /> : <ICheck size={12} className="text-faint" />}
-              <span className={cx("font-medium", item.answer === "declined" ? "text-err/90" : "text-dim")}>{item.answer === "declined" ? "Declined to answer" : "Question answered"}</span>
+              {item.answer === "declined" ? <IClose size={12} className="text-err-text" /> : <ICheck size={12} className="text-faint" />}
+              <span className={cx("font-medium", item.answer === "declined" ? "text-err-text/90" : "text-dim")}>{item.answer === "declined" ? "Declined to answer" : "Question answered"}</span>
               <span className="min-w-0 truncate text-faint">{item.questions[0]?.question}</span>
             </div>
           )}
@@ -822,7 +876,7 @@ function Notice({ item, onOpenTerminal }: { item: Extract<ChatItem, { kind: "not
     );
   if (item.level === "error")
     return (
-      <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-sm text-err">
+      <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-sm text-err-text">
         <IAlert size={14} className="mt-[2px] shrink-0" />
         <span className="selectable min-w-0 break-words">{item.text}</span>
       </div>
@@ -831,7 +885,7 @@ function Notice({ item, onOpenTerminal }: { item: Extract<ChatItem, { kind: "not
   const lines = item.text.split("\n");
   if (lines.length > 2) return <NoticeBlock item={item} lines={lines} />;
   return (
-    <div className={cx("flex items-start gap-2 px-1 text-xs", item.level === "warn" ? "text-busy" : "text-dim")}>
+    <div className={cx("flex items-start gap-2 px-1 text-xs", item.level === "warn" ? "text-busy-text" : "text-dim")}>
       <span className={cx("mt-[6px] size-[5px] shrink-0 rounded-full", item.level === "warn" ? "bg-busy" : "bg-faint")} />
       <span className="selectable min-w-0 whitespace-pre-wrap break-words">{item.text}</span>
     </div>
@@ -852,7 +906,7 @@ function NoticeBlock({ item, lines }: { item: Extract<ChatItem, { kind: "notice"
       <AnimatePresence initial={false}>
         {open && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease }} className="overflow-hidden">
-            <pre className={cx("selectable max-h-[320px] overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 font-mono text-2xs leading-[16px]", item.level === "warn" ? "text-busy" : "text-dim")}>
+            <pre className={cx("selectable max-h-[320px] overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 font-mono text-2xs leading-[16px]", item.level === "warn" ? "text-busy-text" : "text-dim")}>
               {lines.slice(1).join("\n")}
             </pre>
           </motion.div>
@@ -876,7 +930,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
   }
   return (
     <div className="-mt-1 flex items-center gap-1.5 px-1 text-2xs text-faint">
-      {item.ok ? <ICheck size={11} className="text-accent/80" /> : <IReturn size={11} />}
+      {item.ok ? <ICheck size={11} className="text-accent-text/80" /> : <IReturn size={11} />}
       <span>{item.ok ? "Done" : "Stopped"}</span>
       <span className="tnum font-mono">{fmtElapsed(item.durationMs)}</span>
       {model && (
@@ -892,7 +946,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
 function Exited({ item, onResume }: { item: Extract<ChatItem, { kind: "exited" }>; onResume?: () => void }) {
   const bad = item.code !== null && item.code !== 0;
   return (
-    <div className={cx("flex items-center gap-2 rounded-[10px] border border-dashed px-3.5 py-2 text-sm", bad ? "border-[color-mix(in_oklab,var(--error)_35%,var(--border))] text-err/90" : "border-line text-dim")}>
+    <div className={cx("flex items-center gap-2 rounded-[10px] border border-dashed px-3.5 py-2 text-sm", bad ? "border-[color-mix(in_oklab,var(--error)_35%,var(--border))] text-err-text/90" : "border-line text-dim")}>
       <StatusDot status="ended" size={7} />
       {bad ? `The CLI exited with code ${item.code}.` : "This chat's process has ended."}
       <span className="ml-auto font-mono text-2xs text-faint tnum">{clockTime(item.ts)}</span>

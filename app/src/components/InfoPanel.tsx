@@ -125,7 +125,7 @@ function StatusTab({ chat }: { chat: Chat }) {
         k="Process"
         v={
           chat.running ? (
-            <span className="text-accent">running · {chat.state === "idle" ? "idle" : chat.state === "working" ? "working" : "waiting for permission"}</span>
+            <span className="text-accent-text">running · {chat.state === "idle" ? "idle" : chat.state === "working" ? "working" : "waiting for permission"}</span>
           ) : (
             <span className="text-dim">exited{chat.exitCode !== null ? ` (code ${chat.exitCode})` : ""}</span>
           )

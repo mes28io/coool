@@ -58,20 +58,20 @@ export function modelFamily(id: string | null | undefined): string {
   return "other";
 }
 
-/** Stable colour per family, from the existing palette tokens. */
+/** Stable colour per family, from the neutral and accent tokens. */
 export function modelColor(id: string | null | undefined): string {
   switch (modelFamily(id)) {
     case "fable":
     case "mythos":
-      return "var(--accent-2)";
+      return "var(--dim)";
     case "opus":
-      return "var(--claude)";
+      return "var(--text)";
     case "sonnet":
       return "var(--accent)";
     case "haiku":
       return "var(--busy)";
     case "gpt":
-      return "var(--codex)";
+      return "var(--faint)";
     default:
       return "var(--dim)";
   }

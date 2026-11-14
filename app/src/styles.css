@@ -17,50 +17,58 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0e1014;
-  --panel: #14171e;
-  --raised: #1a1e27;
-  --border: #262b36;
-  --text: #e4e6eb;
-  --dim: #767c8c;
-  --accent: #7cf0c5;
-  --accent-2: #b48cff;
-  --busy: #ffcc66;
-  --error: #ff6b7a;
-  --claude: #e8956b;
-  --codex: #8ab4ff;
+  --bg: #212121;
+  --panel: #171717;
+  --raised: #2f2f2f;
+  --border: #383838;
+  --text: #ececec;
+  --dim: #b4b4b4; /* secondary text */
+  --faint: #8e8e8e; /* dim text */
+  /* the three macOS window-button colours are the only accents */
+  --accent: #28c840; /* green: waiting / ok / focus / selected */
+  --accent-2: var(--dim); /* retired purple: neutral */
+  --busy: #febc2e; /* yellow: working */
+  --error: #ff5f57; /* red: errors, destructive */
+  --accent-text: #28c840;
+  --busy-text: #febc2e;
+  --error-text: #ff5f57;
+  --claude: #d97757; /* logo only */
+  --codex: var(--text);
   --shadow-card: none;
-  --shadow-pop: 0 24px 64px -12px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.02);
-  --backdrop: rgb(6 7 10 / 0.5);
-  --hover: color-mix(in oklab, var(--text) 5%, transparent);
-  --press: color-mix(in oklab, var(--text) 9%, transparent);
-  --faint: color-mix(in oklab, var(--dim) 62%, var(--bg));
+  --shadow-pop: 0 24px 64px -12px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --backdrop: rgb(0 0 0 / 0.5);
+  --hover: color-mix(in oklab, var(--text) 8%, transparent);
+  --press: color-mix(in oklab, var(--text) 12%, transparent);
   --hairline: color-mix(in oklab, var(--border) 70%, transparent);
-  --accent-soft: color-mix(in oklab, var(--accent) 13%, transparent);
-  --accent-ink: #062b1f;
+  --accent-soft: color-mix(in oklab, var(--accent) 14%, transparent);
+  --accent-ink: #0a2e12; /* text on green fills */
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #fafaf7;
-  --panel: #f0f0ea;
-  --raised: #ffffff;
-  --border: #d8d8d0;
-  --text: #1b1d22;
-  --dim: #6b7080;
-  --accent: #0b8f6a;
-  --accent-2: #7a4fd6;
-  --busy: #b7791f;
-  --error: #c53030;
-  --claude: #c2602c;
-  --codex: #2f6fd6;
-  --shadow-card: 0 1px 2px rgb(27 29 34 / 0.04), 0 2px 8px -2px rgb(27 29 34 / 0.05);
-  --shadow-pop: 0 24px 60px -16px rgb(27 29 34 / 0.22), 0 2px 8px rgb(27 29 34 / 0.06);
-  --backdrop: rgb(240 240 234 / 0.45);
-  --hover: color-mix(in oklab, var(--text) 4.5%, transparent);
-  --press: color-mix(in oklab, var(--text) 8%, transparent);
-  --faint: color-mix(in oklab, var(--dim) 58%, var(--bg));
-  --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
-  --accent-ink: #ffffff;
+  --bg: #ffffff;
+  --panel: #f9f9f9;
+  --raised: #f4f4f4;
+  --border: #e5e5e5;
+  --text: #0d0d0d;
+  --dim: #5d5d5d;
+  --faint: #8f8f8f;
+  --accent: #28c840;
+  --accent-2: var(--dim);
+  --busy: #febc2e;
+  --error: #ff5f57;
+  --accent-text: #1a7f37;
+  --busy-text: #9a6700;
+  --error-text: #d92d20;
+  --claude: #d97757;
+  --codex: var(--text);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-pop: 0 24px 60px -16px rgb(0 0 0 / 0.22), 0 2px 8px rgb(0 0 0 / 0.06);
+  --backdrop: rgb(255 255 255 / 0.55);
+  --hover: color-mix(in oklab, var(--text) 7%, transparent);
+  --press: color-mix(in oklab, var(--text) 11%, transparent);
+  --hairline: color-mix(in oklab, var(--border) 70%, transparent);
+  --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
+  --accent-ink: #0a2e12;
 }
 
 @theme inline {
@@ -73,6 +81,9 @@
   --color-dim: var(--dim);
   --color-faint: var(--faint);
   --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-busy-text: var(--busy-text);
+  --color-err-text: var(--error-text);
   --color-accent2: var(--accent-2);
   --color-accent-soft: var(--accent-soft);
   --color-accent-ink: var(--accent-ink);
@@ -82,7 +93,7 @@
   --color-codex: var(--codex);
   --color-hover: var(--hover);
   --color-press: var(--press);
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: "Pally", "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --text-2xs: 10.5px;
   --text-2xs--line-height: 14px;
@@ -134,6 +145,7 @@ body {
   -webkit-user-select: text;
 }
 .tnum {
+  font-family: var(--font-mono); /* Pally has no tabular figures */
   font-variant-numeric: tabular-nums;
 }
 button {

@@ -73,7 +73,7 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
             whileTap={can ? { scale: 0.92 } : undefined}
             className={cx(
               "flex size-[28px] items-center justify-center rounded-[8px] transition-[background-color,color] duration-150",
-              can ? "bg-accent text-accent-ink" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
+              can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
             )}
             title="Send (Enter)"
           >

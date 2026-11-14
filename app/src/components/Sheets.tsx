@@ -135,7 +135,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
                   <ProviderMark provider={p} size={18} />
                   <span className="flex flex-col">
                     <span className="text-sm font-semibold">{p === "claude" ? "Claude Code" : "Codex"}</span>
-                    <span className={cx("text-2xs", found ? "text-faint" : "text-err")}>{found ? `${p} CLI` : "not installed"}</span>
+                    <span className={cx("text-2xs", found ? "text-faint" : "text-err-text")}>{found ? `${p} CLI` : "not installed"}</span>
                   </span>
                   {on && (
                     <motion.span layoutId="prov-check" className="ml-auto size-[8px] rounded-full bg-accent" transition={{ type: "spring", stiffness: 500, damping: 35 }} />
@@ -193,7 +193,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
       </div>
       <div className="flex items-center gap-2 border-t border-hairline bg-panel/60 px-5 py-3">
         {missing ? (
-          <span className="text-xs text-err">Install the {provider} CLI first.</span>
+          <span className="text-xs text-err-text">Install the {provider} CLI first.</span>
         ) : (
           <button
             type="button"
@@ -212,8 +212,8 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
         <Button variant="primary" type="submit" disabled={!cwd.trim() || busy || missing}>
           {busy ? "Starting…" : terminal ? "Start in terminal" : "Start chat"}
           <span className="ml-1 flex gap-0.5 opacity-80">
-            <Kbd className="border-transparent bg-[color-mix(in_oklab,var(--accent-ink)_16%,transparent)] text-current">⌘</Kbd>
-            <Kbd className="border-transparent bg-[color-mix(in_oklab,var(--accent-ink)_16%,transparent)] text-current">↵</Kbd>
+            <Kbd className="border-transparent bg-[color-mix(in_oklab,var(--bg)_16%,transparent)] text-current">⌘</Kbd>
+            <Kbd className="border-transparent bg-[color-mix(in_oklab,var(--bg)_16%,transparent)] text-current">↵</Kbd>
           </span>
         </Button>
       </div>
@@ -373,7 +373,7 @@ function Settings({ close }: { close: () => void }) {
 
         <div className="flex flex-col gap-3 rounded-[12px] border border-line p-4">
           <div className="flex items-start gap-3">
-            <span className="mt-[1px] flex size-[26px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-accent2">
+            <span className="mt-[1px] flex size-[26px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-dim">
               <ISpark size={14} />
             </span>
             <div className="min-w-0 flex-1">
@@ -394,20 +394,20 @@ function Settings({ close }: { close: () => void }) {
           </div>
           {!avail ? (
             <div className="flex items-center gap-2 text-xs text-dim">
-              <IAlert size={13} className="text-busy" />
+              <IAlert size={13} className="text-busy-text" />
               Insights aren't available in this build of coool yet.
             </div>
           ) : st?.has_key && !replacing ? (
             <div className="flex items-center gap-2">
               <span className="flex h-[32px] flex-1 items-center gap-2 rounded-[10px] border border-line bg-bg px-3 text-sm">
-                <ICheck size={13} className="text-accent" />
+                <ICheck size={13} className="text-accent-text" />
                 <span className="text-fg/90">Key saved in your Keychain</span>
                 <span className="ml-auto font-mono text-xs tracking-[0.2em] text-faint">••••••••</span>
               </span>
               <Button variant="outline" className="h-[32px]" onClick={() => setReplacing(true)}>
                 Replace
               </Button>
-              <Button variant="ghost" className="h-[32px] hover:text-err" onClick={() => void run(() => api().insightsClearKey(), { has_key: false })}>
+              <Button variant="ghost" className="h-[32px] hover:text-err-text" onClick={() => void run(() => api().insightsClearKey(), { has_key: false })}>
                 Remove
               </Button>
             </div>
@@ -439,7 +439,7 @@ function Settings({ close }: { close: () => void }) {
               )}
             </form>
           )}
-          {err && <div className="text-xs text-err">{err}</div>}
+          {err && <div className="text-xs text-err-text">{err}</div>}
           {avail && st && !st.has_key && <div className="text-2xs text-faint">Stored in the macOS Keychain. coool can't show it again; you can only replace or remove it.</div>}
         </div>
       </div>

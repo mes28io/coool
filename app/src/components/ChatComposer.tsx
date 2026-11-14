@@ -417,7 +417,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                           <span className="block text-sm font-medium text-fg">{m.label}</span>
                           <span className="block text-xs text-dim">{m.description}</span>
                         </span>
-                        {m.id === chat.permissionMode && <ICheck size={13} className="mt-[3px] text-accent" />}
+                        {m.id === chat.permissionMode && <ICheck size={13} className="mt-[3px] text-accent-text" />}
                       </button>
                     ))}
                     {(SANDBOX_MODES[chat.provider] ?? []).length > 0 && (
@@ -478,7 +478,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   transition={{ duration: 0.16, ease }}
                   onClick={interrupt}
                   title="Stop this turn (Esc)"
-                  className="flex h-[28px] items-center gap-1.5 rounded-[8px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-xs font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err"
+                  className="flex h-[28px] items-center gap-1.5 rounded-[8px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-xs font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err-text"
                 >
                   <IStop size={12} />
                   Stop
@@ -497,7 +497,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   whileTap={can ? { scale: 0.92 } : undefined}
                   className={cx(
                     "flex size-[28px] items-center justify-center rounded-[8px] transition-[background-color,color] duration-150",
-                    can ? "bg-accent text-accent-ink" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
+                    can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
                   )}
                   title={working ? "Queue for after this turn" : "Send (Enter)"}
                 >
@@ -513,10 +513,10 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
 }
 
 function KindTag({ group }: { group: Group }) {
-  if (group === "app") return <span className="relative shrink-0 rounded-[4px] bg-accent-soft px-1.5 text-[10px] font-semibold leading-[16px] text-accent" title="Handled by coool, never sent">in app</span>;
+  if (group === "app") return <span className="relative shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1.5 text-[10px] font-semibold leading-[16px] text-dim" title="Handled by coool, never sent">in app</span>;
   if (group === "skill")
     return (
-      <span className="relative shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-[10px] font-semibold leading-[16px] text-accent2" title="A skill: sent to the model">
+      <span className="relative shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-[10px] font-semibold leading-[16px] text-dim" title="A skill: sent to the model">
         skill
       </span>
     );
@@ -545,14 +545,14 @@ function Hi({ text, q }: { text: string; q: string }) {
   return (
     <>
       {text.slice(0, i)}
-      <span className="text-accent">{text.slice(i, i + q.length)}</span>
+      <span className="text-accent-text">{text.slice(i, i + q.length)}</span>
       {text.slice(i + q.length)}
     </>
   );
 }
 
 function ModeGlyph({ id }: { id: string | null }) {
-  const c = id === "bypassPermissions" || id === "never" ? "var(--error)" : id === "plan" ? "var(--accent-2)" : id === "acceptEdits" || id === "on-failure" ? "var(--busy)" : "var(--accent)";
+  const c = id === "bypassPermissions" || id === "never" ? "var(--error)" : id === "plan" ? "var(--dim)" : id === "acceptEdits" || id === "on-failure" ? "var(--busy)" : "var(--accent)";
   return <span className="inline-block size-[7px] rounded-[2px]" style={{ background: c }} />;
 }
 
@@ -598,7 +598,7 @@ function ModelPicker({ chat, current, onPick }: { chat: Chat; current: string | 
             <span className="text-sm font-medium text-fg">{o.label}</span>
             <span className="min-w-0 flex-1 truncate font-mono text-2xs text-faint">{o.id !== o.label ? o.id : ""}</span>
             {u && total > 0 && <span className="shrink-0 font-mono text-2xs text-dim tnum">{Math.round((tokTotal(u) / total) * 100)}% used</span>}
-            {o.id === current && <ICheck size={13} className="shrink-0 text-accent" />}
+            {o.id === current && <ICheck size={13} className="shrink-0 text-accent-text" />}
           </button>
         );
       })}

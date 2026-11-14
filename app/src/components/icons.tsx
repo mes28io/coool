@@ -113,23 +113,3 @@ export function toolIcon(name: string) {
   if (/agent|task/.test(n)) return ISpark;
   return IStack;
 }
-
-/** coool's own mark: three rings, the last one lit. */
-export function Logo({ size = 18 }: { size?: number }) {
-  return (
-    <svg width={size * 1.9} height={size} viewBox="0 0 38 20" fill="none">
-      <defs>
-        <linearGradient id="lg" x1="0" x2="1">
-          <stop offset="0" stopColor="var(--accent)" />
-          <stop offset="1" stopColor="var(--accent-2)" />
-        </linearGradient>
-      </defs>
-      <g stroke="url(#lg)" strokeWidth="2.6">
-        <circle cx="7" cy="10" r="4.6" />
-        <circle cx="19" cy="10" r="4.6" />
-        <circle cx="31" cy="10" r="4.6" />
-      </g>
-      <circle cx="31" cy="10" r="1.6" fill="var(--accent-2)" />
-    </svg>
-  );
-}

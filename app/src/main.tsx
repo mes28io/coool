@@ -1,6 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+// Pally is fetched at install time (licence forbids committing it); absent => Geist fallback.
+import.meta.glob("./assets/fonts/pally/pally.css", { eager: true });
 import App from "./App";
 import { initBackend } from "./lib/backend";
 
@@ -8,6 +10,7 @@ import { initBackend } from "./lib/backend";
 Promise.all([
   initBackend(),
   document.fonts.load('12.5px "Geist Mono"').catch(() => {}),
+  document.fonts.load('13px "Pally"').catch(() => {}),
   document.fonts.load('13px "Geist"').catch(() => {}),
 ]).then(() => {
   createRoot(document.getElementById("root")!).render(

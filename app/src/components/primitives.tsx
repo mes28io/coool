@@ -46,9 +46,9 @@ export function StatusPill({ status }: { status: UiStatus }) {
   if (status === "needs") return <NeedsBadge />;
   const tone =
     status === "busy" || status === "starting"
-      ? "text-busy bg-[color-mix(in_oklab,var(--busy)_12%,transparent)]"
+      ? "text-busy-text bg-[color-mix(in_oklab,var(--busy)_12%,transparent)]"
       : status === "idle"
-        ? "text-accent bg-accent-soft"
+        ? "text-accent-text bg-accent-soft"
         : "text-dim bg-hover";
   return (
     <span className={cx("inline-flex h-[20px] shrink-0 items-center gap-1.5 rounded-full pl-[7px] pr-2 text-xs font-medium", tone)} data-status-pill={status}>
@@ -408,7 +408,7 @@ export function Button({
       onClick={onClick}
       className={cx(
         "inline-flex h-[28px] shrink-0 items-center justify-center gap-1.5 rounded-[8px] px-2.5 text-sm font-medium transition-[background-color,color,border-color,opacity,transform] duration-150 active:scale-[0.98] disabled:opacity-45 disabled:active:scale-100",
-        variant === "primary" && "bg-accent text-accent-ink hover:brightness-[1.06]",
+        variant === "primary" && "bg-fg text-bg hover:opacity-85",
         variant === "ghost" && "text-dim hover:bg-hover hover:text-fg",
         variant === "outline" && "border border-line bg-raised text-fg shadow-card hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))]",
         variant === "danger" && "bg-err text-white hover:brightness-110",

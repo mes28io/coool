@@ -9,7 +9,8 @@ import type { Activity, ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { useStore, type Since } from "../store";
-import { IPlay, IPlus, ISpark, toolIcon, Logo } from "./icons";
+import { IPlay, IPlus, ISpark, toolIcon } from "./icons";
+import { Wordmark } from "./Wordmark";
 import { Button, ContextMeter, cx, Elapsed, ease, Kbd, NeedsBadge, PathText, ProviderMark, softSpring, StatusPill, Ticker } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { CardSkeleton, RecentSkeleton, Skel } from "./Skeletons";
@@ -72,11 +73,11 @@ export function MissionControl() {
                 <>
                   {needs > 0 && (
                     <>
-                      <span className="font-medium text-accent tnum">{needs}</span> <span className="font-medium text-accent">{needs === 1 ? "needs" : "need"} you</span>{" "}
+                      <span className="font-medium text-accent-text tnum">{needs}</span> <span className="font-medium text-accent-text">{needs === 1 ? "needs" : "need"} you</span>{" "}
                       <span className="text-faint">·</span>{" "}
                     </>
                   )}
-                  <span className="text-busy tnum">{busy + starting.length + startingChats.length}</span> working <span className="text-faint">·</span>{" "}
+                  <span className="text-busy-text tnum">{busy + starting.length + startingChats.length}</span> working <span className="text-faint">·</span>{" "}
                   <span className="tnum">{live.length - busy - needs}</span> waiting <span className="text-faint">·</span>{" "}
                   <span className="tnum">{projects}</span> {projects === 1 ? "project" : "projects"}
                 </>
@@ -143,8 +144,8 @@ function lastLines(a: Activity[], n = 2): Activity[] {
 }
 
 function LineGlyph({ a }: { a: Activity }) {
-  if (a.kind === "prompt") return <span className="w-[13px] shrink-0 text-center font-mono text-2xs font-semibold text-accent">›</span>;
-  if (a.kind === "error") return <span className="w-[13px] shrink-0 text-center text-2xs text-err">!</span>;
+  if (a.kind === "prompt") return <span className="w-[13px] shrink-0 text-center font-mono text-2xs font-semibold text-accent-text">›</span>;
+  if (a.kind === "error") return <span className="w-[13px] shrink-0 text-center text-2xs text-err-text">!</span>;
   if (a.kind === "text") return <span className="mx-[4.5px] mt-[1px] size-[4px] shrink-0 rounded-full bg-faint" />;
   const I = a.kind === "agent" ? ISpark : toolIcon(splitTool(a.text).name);
   return <I size={12} className="w-[13px] shrink-0 text-faint" />;
@@ -217,7 +218,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       <div className={cx("mt-2 text-md font-semibold leading-[20px] tracking-[-0.01em] text-fg", headline ? "line-clamp-1" : "line-clamp-2")}>{displayTitle(s)}</div>
       {headline && (
         <div className="mt-0.5 flex items-start gap-1.5 text-xs leading-[16px] text-dim" title="AI insight">
-          <ISpark size={10} className="mt-[3px] shrink-0 text-accent2" />
+          <ISpark size={10} className="mt-[3px] shrink-0 text-dim" />
           <span className="line-clamp-2">{headline}</span>
         </div>
       )}
@@ -231,14 +232,14 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
         {needs ? (
           <>
             <span className="size-[6px] shrink-0 rounded-full bg-accent breathe" />
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-accent" title={needs}>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-accent-text" title={needs}>
               {needs}
             </span>
-            <span className="shrink-0 text-xs font-medium text-accent/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review →" : "Open →"}</span>
+            <span className="shrink-0 text-xs font-medium text-accent-text/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review →" : "Open →"}</span>
           </>
         ) : busy ? (
           <>
-            <CurIcon size={13} className="shrink-0 text-busy" />
+            <CurIcon size={13} className="shrink-0 text-busy-text" />
             <span className="min-w-0 flex-1 truncate text-sm">
               {cur ? (
                 <>
@@ -250,7 +251,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
                 <span className="shimmer font-medium">Thinking</span>
               )}
             </span>
-            {!pending && <Elapsed since={since.at} approx={since.approx} className="shrink-0 text-xs text-busy" />}
+            {!pending && <Elapsed since={since.at} approx={since.approx} className="shrink-0 text-xs text-busy-text" />}
           </>
         ) : (
           <>
@@ -281,7 +282,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.28, ease }}
-              className={cx("flex items-center gap-1.5 text-xs", a.kind === "error" ? "text-err/85" : "text-dim")}
+              className={cx("flex items-center gap-1.5 text-xs", a.kind === "error" ? "text-err-text/85" : "text-dim")}
             >
               <LineGlyph a={a} />
               <span className="truncate">{a.kind === "tool" || a.kind === "agent" ? `${splitTool(a.text).name}  ${shortDetail(splitTool(a.text).detail)}` : a.text}</span>
@@ -308,7 +309,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
         <span className="ml-auto flex min-w-0 items-center gap-2">
           <CardModel s={s} />
           {agents > 0 && (
-            <span className="flex shrink-0 items-center gap-1 rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_13%,transparent)] px-1.5 text-2xs font-medium leading-[18px] text-accent2">
+            <span className="flex shrink-0 items-center gap-1 rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_13%,transparent)] px-1.5 text-2xs font-medium leading-[18px] text-dim">
               <ISpark size={10} /> {agents}
             </span>
           )}
@@ -403,9 +404,7 @@ function EmptyState() {
       className="relative flex flex-col items-center overflow-hidden rounded-[14px] border border-dashed border-line px-6 py-16 text-center"
     >
       <div className="pointer-events-none absolute -top-24 h-[220px] w-[420px] rounded-full bg-[radial-gradient(closest-side,color-mix(in_oklab,var(--accent)_10%,transparent),transparent)]" />
-      <motion.div animate={{ y: [0, -3, 0] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}>
-        <Logo size={26} />
-      </motion.div>
+      <Wordmark size={34} />
       <div className="mt-5 text-lg font-semibold tracking-[-0.01em]">No agents running</div>
       <p className="mt-1 max-w-[360px] text-sm text-dim">
         Start Claude Code or Codex in any project. Sessions you run in a terminal show up here too, live.

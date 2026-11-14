@@ -81,8 +81,8 @@ export function ModelsBreakdown({ data, current }: { data: ModelsData; current?:
                 <span className="min-w-0 truncate font-medium text-fg/90" title={r.model}>
                   {modelLabel(r.model)}
                 </span>
-                {r.via_agent && <span className="shrink-0 text-2xs text-accent2">subagents</span>}
-                {current && r.model === current && !r.via_agent && <span className="shrink-0 rounded-[4px] bg-accent-soft px-1 text-[9.5px] font-semibold uppercase leading-[14px] tracking-wide text-accent">now</span>}
+                {r.via_agent && <span className="shrink-0 text-2xs text-dim">subagents</span>}
+                {current && r.model === current && !r.via_agent && <span className="shrink-0 rounded-[4px] bg-accent-soft px-1 text-[9.5px] font-semibold uppercase leading-[14px] tracking-wide text-accent-text">now</span>}
                 <span className="ml-auto shrink-0 font-mono text-2xs text-faint tnum" title={`in ${fmtTokens(r.input)} · cached ${fmtTokens(r.cached)} · out ${fmtTokens(r.output)}`}>
                   {fmtTokens(t)}
                 </span>
@@ -101,7 +101,7 @@ export function ModelsBreakdown({ data, current }: { data: ModelsData; current?:
               const ids = a.models.length ? a.models.map((m) => m.model) : [a.model!];
               return (
                 <div key={a.key} className="flex items-center gap-2 text-xs">
-                  <ISpark size={11} className="shrink-0 text-accent2" />
+                  <ISpark size={11} className="shrink-0 text-dim" />
                   <span className="min-w-0 flex-1 truncate text-fg/85">{a.label}</span>
                   {ids.map((m) => (
                     <ModelTag key={m} model={m} />

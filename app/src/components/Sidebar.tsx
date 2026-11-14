@@ -9,7 +9,8 @@ import type { Agent, ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { leaves, resolveTarget, useStore } from "../store";
-import { IChevron, IGear, IMoon, IPlus, ISearch, ISun, Logo } from "./icons";
+import { IChevron, IGear, IMoon, IPlus, ISearch, ISun } from "./icons";
+import { Wordmark } from "./Wordmark";
 import { cx, ease, IconButton, Kbd, NeedsBadge, ProviderMark, spring, StatusDot } from "./primitives";
 import { Skel, SidebarSkeleton } from "./Skeletons";
 
@@ -127,10 +128,7 @@ export function Sidebar() {
     <aside className="relative flex h-full shrink-0 flex-col border-r border-hairline bg-panel" style={{ width }}>
       <div data-tauri-drag-region className={cx("flex h-[52px] shrink-0 items-center gap-2 pr-2.5", traffic ? "pl-[84px]" : "pl-4")}>
         <div data-tauri-drag-region className="flex flex-1 items-center gap-2">
-          <Logo size={11} />
-          <span data-tauri-drag-region className="text-[13px] font-semibold tracking-[-0.01em] text-fg/90">
-            coool
-          </span>
+          <Wordmark size={17} intro />
         </div>
         <IconButton title={`Switch to ${theme === "dark" ? "light" : "dark"} theme (⌘⇧L)`} onClick={toggleTheme}>
           <AnimatePresence mode="popLayout" initial={false}>
@@ -154,7 +152,7 @@ export function Sidebar() {
           onClick={() => setSheet({ kind: "new" })}
           className="group flex h-[32px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 text-sm font-medium text-fg shadow-card transition-[border-color,transform] duration-150 hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] active:scale-[0.99]"
         >
-          <span className="flex size-[18px] items-center justify-center rounded-[5px] bg-accent text-accent-ink">
+          <span className="flex size-[18px] items-center justify-center rounded-[5px] bg-fg text-bg">
             <IPlus size={12} strokeWidth={2} />
           </span>
           New session
@@ -189,7 +187,7 @@ export function Sidebar() {
           <div className="mx-2 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-sm text-dim">
             No sessions in the last day.
             <br />
-            <button className="mt-1 font-medium text-accent hover:underline" onClick={() => setSheet({ kind: "new" })}>
+            <button className="mt-1 font-medium text-accent-text hover:underline" onClick={() => setSheet({ kind: "new" })}>
               Start one
             </button>
           </div>
@@ -205,7 +203,7 @@ export function Sidebar() {
 
       <div className="flex h-[36px] shrink-0 items-center gap-2.5 whitespace-nowrap border-t border-hairline pl-4 pr-2 text-xs text-dim">
         {counts.needs > 0 && (
-          <span className="flex items-center gap-1.5 font-medium text-accent" title="Sessions blocked on you">
+          <span className="flex items-center gap-1.5 font-medium text-accent-text" title="Sessions blocked on you">
             <StatusDot status="needs" size={6} />
             <span className="tnum">{counts.needs}</span> need{counts.needs === 1 ? "s" : ""} you
           </span>
@@ -420,7 +418,7 @@ const SessionRow = memo(function SessionRow({ s, att, selected }: { s: Session; 
             title={sub.title ?? sub.text}
             className={cx(
               "block truncate text-xs",
-              sub.tone === "live" ? "text-busy/85" : sub.tone === "needs" ? "font-medium text-accent" : sub.tone === "insight" ? "text-dim" : "text-faint",
+              sub.tone === "live" ? "text-busy-text/85" : sub.tone === "needs" ? "font-medium text-accent-text" : sub.tone === "insight" ? "text-dim" : "text-faint",
             )}
           >
             {sub.text}

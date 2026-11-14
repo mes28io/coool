@@ -3,3 +3,6 @@ dist
 src-tauri/target
 src-tauri/gen
 *.tsbuildinfo
+
+# Pally is licensed for embedding, not redistribution; fetched by scripts/fetch-fonts.mjs
+src/assets/fonts/pally/
