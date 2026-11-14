@@ -48,18 +48,18 @@ function TabBar() {
   const ids = useMemo(() => tabs.map((t) => t.id), [tabs]);
 
   return (
-    <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-1 border-b border-hairline pl-2.5 pr-2.5">
+    <div data-tauri-drag-region className="flex h-[56px] shrink-0 items-center gap-1 border-b border-hairline pl-2.5 pr-2.5">
       <button
         type="button"
         title="Mission control"
         onClick={() => activate(null)}
         className={cx(
-          "relative flex h-[32px] shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-sm font-medium transition-colors duration-150",
+          "relative flex h-[38px] shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-base font-medium transition-colors duration-150",
           activeTab === null ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
         {activeTab === null && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 -z-0 rounded-[8px] border border-line bg-raised shadow-card" />}
-        <IGrid size={14} className="relative" />
+        <IGrid size={16} className="relative" />
         {tabs.length === 0 && <span className="relative">Mission control</span>}
       </button>
       {tabs.length > 0 && <span className="mx-1 h-4 w-px shrink-0 bg-line" />}
@@ -72,13 +72,13 @@ function TabBar() {
       </Reorder.Group>
       <div className="ml-1 flex shrink-0 items-center gap-0.5">
         <IconButton title="Split right (⌘\)" onClick={() => split("row")} disabled={!activeTab}>
-          <ISplitRight size={15} />
+          <ISplitRight size={17} />
         </IconButton>
         <IconButton title="Split down (⌘⇧\)" onClick={() => split("col")} disabled={!activeTab}>
-          <ISplitDown size={15} />
+          <ISplitDown size={17} />
         </IconButton>
         <IconButton title="Command palette (⌘K)" onClick={() => setPalette(true)}>
-          <ISearch size={15} />
+          <ISearch size={17} />
         </IconButton>
       </div>
     </div>
@@ -143,27 +143,27 @@ function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: num
       <div
         title={`${title}${index < 9 ? `  (⌘${index + 1})` : ""}`}
         className={cx(
-          "group relative flex h-[32px] max-w-[230px] items-center gap-2 rounded-[8px] pl-2.5 pr-1 text-sm transition-colors duration-150",
+          "group relative flex h-[38px] max-w-[230px] items-center gap-2 rounded-[8px] pl-2.5 pr-1 text-base transition-colors duration-150",
           active ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
         {active && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 rounded-[8px] border border-line bg-raised shadow-card" />}
-        <StatusDot status={status} size={6} className="relative" />
+        <StatusDot status={status} size={7} className="relative" />
         {needs && !active && <span className="absolute inset-x-2 bottom-[3px] h-[2px] rounded-full bg-accent/70" />}
-        {provider && <ProviderMark provider={provider} size={11} className="relative" />}
+        {provider && <ProviderMark provider={provider} size={13} className="relative" />}
         <span className="relative truncate font-medium">{title}</span>
-        {panes.length > 1 && <span className="relative shrink-0 rounded-[4px] bg-hover px-1 text-2xs text-dim tnum">{panes.length}</span>}
+        {panes.length > 1 && <span className="relative shrink-0 rounded-[4px] bg-hover px-1 text-small text-dim tnum">{panes.length}</span>}
         <button
           type="button"
           title="Close tab (⌘W)"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => closeTab(tab.id)}
           className={cx(
-            "relative flex size-[20px] shrink-0 items-center justify-center rounded-[5px] text-faint transition-[opacity,background-color,color] duration-150 hover:bg-press hover:text-fg",
+            "relative flex size-[24px] shrink-0 items-center justify-center rounded-[5px] text-faint transition-[opacity,background-color,color] duration-150 hover:bg-press hover:text-fg",
             active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
           )}
         >
-          <IClose size={11} />
+          <IClose size={13} />
         </button>
       </div>
     </Reorder.Item>
@@ -240,7 +240,7 @@ function Pane({ tab, leaf }: { tab: Tab; leaf: Leaf }) {
           />
           {!leaf.target && (
             <IconButton title="Close pane" onClick={() => closePane(leaf.id)} className="absolute right-2 top-2 z-30">
-              <IClose size={12} />
+              <IClose size={14} />
             </IconButton>
           )}
         </>
@@ -263,17 +263,17 @@ function PanePicker({ leaf }: { leaf: Leaf }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
       <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.22, ease }} className="w-full max-w-[360px]">
-        <div className="mb-2 text-center text-md font-semibold">Open in this pane</div>
+        <div className="mb-2 text-center text-title font-semibold tracking-[-0.01em]">Open in this pane</div>
         <div className="overflow-hidden rounded-[12px] border border-line bg-raised shadow-card">
           <div className="flex items-center gap-2 border-b border-hairline px-3">
-            <ISearch size={13} className="text-faint" />
+            <ISearch size={15} className="text-faint" />
             <input
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && list[0] && pick(list[0])}
               placeholder="Find a session…"
-              className="h-[36px] flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
+              className="h-[42px] flex-1 bg-transparent text-base outline-none placeholder:text-faint"
             />
           </div>
           <div className="max-h-[300px] overflow-auto p-1">
@@ -284,18 +284,18 @@ function PanePicker({ leaf }: { leaf: Leaf }) {
                 onClick={() => pick(s)}
                 className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover"
               >
-                <StatusDot status={s.status} size={6} />
-                <ProviderMark provider={s.provider} size={11} />
-                <span className="min-w-0 flex-1 truncate text-sm">{displayTitle(s)}</span>
-                <span className="shrink-0 text-xs text-faint">{folderName(s.cwd)}</span>
+                <StatusDot status={s.status} size={7} />
+                <ProviderMark provider={s.provider} size={13} />
+                <span className="min-w-0 flex-1 truncate text-base">{displayTitle(s)}</span>
+                <span className="shrink-0 text-small text-faint">{folderName(s.cwd)}</span>
               </button>
             ))}
-            {list.length === 0 && <div className="px-2 py-3 text-center text-sm text-dim">No matches</div>}
+            {list.length === 0 && <div className="px-2 py-3 text-center text-base text-dim">No matches</div>}
           </div>
           <button
             type="button"
             onClick={() => setSheet({ kind: "new" })}
-            className="flex w-full items-center gap-2 border-t border-hairline px-3 py-2 text-left text-sm text-dim transition-colors duration-150 hover:bg-hover hover:text-fg"
+            className="flex w-full items-center gap-2 border-t border-hairline px-3 py-2 text-left text-base text-dim transition-colors duration-150 hover:bg-hover hover:text-fg"
           >
             New session
             <span className="ml-auto flex gap-0.5">

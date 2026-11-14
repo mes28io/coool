@@ -163,7 +163,7 @@ function Toasts() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, x: 16, transition: { duration: 0.16 } }}
             transition={{ type: "spring", stiffness: 480, damping: 36 }}
-            className="pointer-events-auto flex max-w-[420px] items-start gap-2 rounded-[10px] border border-line bg-raised py-2 pl-3 pr-1.5 text-sm shadow-pop"
+            className="pointer-events-auto flex max-w-[420px] items-start gap-2 rounded-[10px] border border-line bg-raised py-2 pl-3 pr-1.5 text-base shadow-pop"
           >
             {t.tone === "error" && <IAlert size={14} className="mt-[2px] shrink-0 text-err" />}
             <span className="selectable min-w-0 flex-1 break-words py-[1px]">{t.text}</span>

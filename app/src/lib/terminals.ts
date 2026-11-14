@@ -129,7 +129,7 @@ export function getTerminal(id: number): Entry {
   if (e) return e;
   const term = new Terminal({
     fontFamily: '"Geist Mono", ui-monospace, Menlo, monospace',
-    fontSize: 12.5,
+    fontSize: 14,
     lineHeight: 1.22,
     letterSpacing: 0,
     cursorBlink: true,

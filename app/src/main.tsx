@@ -9,7 +9,7 @@ import { initBackend } from "./lib/backend";
 // Wait for the bundled fonts so xterm measures Geist Mono, not a fallback.
 Promise.all([
   initBackend(),
-  document.fonts.load('12.5px "Geist Mono"').catch(() => {}),
+  document.fonts.load('14px "Geist Mono"').catch(() => {}),
   document.fonts.load('13px "Pally"').catch(() => {}),
   document.fonts.load('13px "Geist"').catch(() => {}),
 ]).then(() => {

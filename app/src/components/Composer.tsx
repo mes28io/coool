@@ -38,7 +38,7 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
     <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
       <div
         className={cx(
-          "mx-auto flex max-w-[780px] items-end gap-2 rounded-[12px] border bg-raised py-2 pl-3.5 pr-2 shadow-card transition-[border-color,box-shadow] duration-200",
+          "mx-auto flex max-w-[700px] items-end gap-2 rounded-[12px] border bg-raised py-2 pl-3.5 pr-2 shadow-card transition-[border-color,box-shadow] duration-200",
           "border-line focus-within:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]",
           disabled && "opacity-60",
         )}
@@ -56,11 +56,11 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
               send();
             }
           }}
-          className="selectable max-h-[180px] min-h-[22px] flex-1 resize-none bg-transparent py-[3px] text-md leading-[21px] outline-none placeholder:text-faint"
+          className="selectable max-h-[180px] min-h-[22px] flex-1 resize-none bg-transparent py-[3px] text-prose outline-none placeholder:text-faint"
         />
         <div className="flex items-center gap-2 pb-[1px]">
           {!compact && (
-            <span className="hidden items-center gap-1 text-2xs text-faint sm:flex">
+            <span className="hidden items-center gap-1 text-small text-faint sm:flex">
               <Kbd>⇧</Kbd>
               <Kbd>↵</Kbd>
               <span>newline</span>
@@ -72,12 +72,12 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
             disabled={!can}
             whileTap={can ? { scale: 0.92 } : undefined}
             className={cx(
-              "flex size-[28px] items-center justify-center rounded-[8px] transition-[background-color,color] duration-150",
+              "flex size-[32px] items-center justify-center rounded-[8px] transition-[background-color,color] duration-150",
               can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
             )}
             title="Send (Enter)"
           >
-            <IArrowUp size={15} strokeWidth={1.9} />
+            <IArrowUp size={17} strokeWidth={1.9} />
           </motion.button>
         </div>
       </div>

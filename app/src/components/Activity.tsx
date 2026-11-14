@@ -39,7 +39,7 @@ export function Prose({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         p.startsWith("`") && p.endsWith("`") && p.length > 2 ? (
-          <code key={i} className="rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-[5px] py-[1px] font-mono text-[0.9em] text-fg">
+          <code key={i} className="rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-[5px] py-[1px] font-mono text-[0.88em] text-fg">
             {p.slice(1, -1)}
           </code>
         ) : (
@@ -83,8 +83,8 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   if (!blocks.length) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-        <div className="text-md font-medium text-fg/90">No activity yet</div>
-        <div className="max-w-[280px] text-sm text-dim">Prompts, tool calls and replies appear here as the session transcript grows.</div>
+        <div className="text-title font-semibold tracking-[-0.01em] text-fg/90">No activity yet</div>
+        <div className="max-w-[280px] text-base text-dim">Prompts, tool calls and replies appear here as the session transcript grows.</div>
       </div>
     );
   }
@@ -98,7 +98,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }}
     >
-      <div className={cx("mx-auto flex max-w-[780px] flex-col pb-10 pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
+      <div className={cx("mx-auto flex max-w-[700px] flex-col pb-10 pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
         {blocks.map((b, i) => {
           const fresh = !initial.current!.has(b.key);
           const last = i === blocks.length - 1;
@@ -112,13 +112,13 @@ export function Timeline({ session, compact, live }: { session: Session; compact
             >
               {b.type === "prompt" && <PromptBlock a={b.a} />}
               {b.type === "text" && (
-                <div className="selectable text-md leading-[23px] text-fg/90">
+                <div className="selectable text-prose text-fg/90">
                   <Prose text={b.a.text} />
                 </div>
               )}
               {b.type === "error" && (
-                <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-sm text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
-                  <IAlert size={14} className="mt-[2px] shrink-0" />
+                <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-base text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
+                  <IAlert size={16} className="mt-[2px] shrink-0" />
                   <span className="selectable min-w-0 break-words">{b.a.text}</span>
                 </div>
               )}
@@ -151,13 +151,13 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
         <div key={b.key}>
           {b.type === "prompt" && <PromptBlock a={b.a} />}
           {b.type === "text" && (
-            <div className="selectable text-md leading-[23px] text-fg/90">
+            <div className="selectable text-prose text-fg/90">
               <Prose text={b.a.text} />
             </div>
           )}
           {b.type === "error" && (
-            <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-sm text-err-text">
-              <IAlert size={14} className="mt-[2px] shrink-0" />
+            <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
+              <IAlert size={16} className="mt-[2px] shrink-0" />
               <span className="selectable min-w-0 break-words">{b.a.text}</span>
             </div>
           )}
@@ -175,24 +175,24 @@ function PromptBlock({ a }: { a: Activity }) {
 export function PromptBubble({ text, stamp }: { text: string; stamp?: string }) {
   return (
     <div className="flex flex-col items-end gap-1 pt-1">
-      <div className="selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[12px] rounded-br-[4px] border border-hairline bg-raised px-3.5 py-2.5 text-md leading-[22px] text-fg shadow-card">
+      <div className="selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[12px] rounded-br-[4px] border border-hairline bg-raised px-4 py-3 text-prose text-fg shadow-card">
         {text}
       </div>
-      {stamp && <span className="pr-1 font-mono text-2xs text-faint tnum">{stamp}</span>}
+      {stamp && <span className="pr-1 font-mono text-mono-small text-faint tnum">{stamp}</span>}
     </div>
   );
 }
 
 export function ThinkingRow({ since, approx, label = "Thinking" }: { since: number | null; approx?: boolean; label?: string }) {
   return (
-    <div className="flex items-center gap-2.5 py-1 text-sm">
-      <span className="relative flex size-[18px] items-center justify-center">
-        <ISpark size={14} className="text-dim breathe" />
+    <div className="flex items-center gap-2.5 py-1 text-base">
+      <span className="relative flex size-[22px] items-center justify-center">
+        <ISpark size={16} className="text-dim breathe" />
       </span>
       <span className="shimmer font-medium" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
         {label}
       </span>
-      <Elapsed since={since} approx={approx} className="text-xs text-faint" />
+      <Elapsed since={since} approx={approx} className="text-small text-faint" />
     </div>
   );
 }
@@ -236,10 +236,10 @@ const StepGroup = memo(function StepGroup({
           opened.current = false;
           setOpen(!isOpen);
         }}
-        className="group flex w-full items-center gap-2 rounded-[8px] py-1 pl-0.5 pr-2 text-left text-sm transition-colors duration-150 hover:bg-hover"
+        className="group flex w-full items-center gap-2 rounded-[8px] py-1 pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
       >
-        <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[18px] items-center justify-center text-faint group-hover:text-dim">
-          <IChevron size={12} />
+        <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint group-hover:text-dim">
+          <IChevron size={14} />
         </motion.span>
         {active ? (
           <span className="shimmer font-medium">Running {items.length === 1 ? "a step" : `${items.length} steps`}</span>
@@ -248,13 +248,13 @@ const StepGroup = memo(function StepGroup({
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           {chips.map((c) => (
-            <span key={c.name} className="inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-2xs font-medium text-dim">
+            <span key={c.name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">
               {c.name}
               {c.n > 1 && <span className="tnum text-faint">{c.n}</span>}
             </span>
           ))}
         </span>
-        {!active && span > 0 && <span className="shrink-0 font-mono text-2xs text-faint tnum">{fmtElapsed(span)}</span>}
+        {!active && span > 0 && <span className="shrink-0 text-small text-faint tnum">{fmtElapsed(span)}</span>}
       </button>
       <AnimatePresence initial={false}>
         {isOpen && (
@@ -332,7 +332,7 @@ export function StepLine({
       onClick={onClick}
       className={cx(
         "group relative -ml-[19px] flex items-center gap-2.5 rounded-[7px] pr-2",
-        dense ? "h-[24px]" : "h-[28px]",
+        dense ? "h-[28px]" : "h-[34px]",
         active && !waiting && "sweep",
         onClick && "hover:bg-hover",
         open && "bg-hover",
@@ -341,7 +341,7 @@ export function StepLine({
     >
       <span
         className={cx(
-          "relative z-[1] flex size-[15px] shrink-0 items-center justify-center rounded-full bg-bg",
+          "relative z-[1] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg",
           waiting ? "text-accent-text" : active ? "text-busy-text" : failed ? "text-err-text" : "text-faint",
         )}
       >
@@ -353,30 +353,30 @@ export function StepLine({
             <path d="M8 2a6 6 0 016 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         ) : failed ? (
-          <IAlert size={12} />
+          <IAlert size={14} />
         ) : (
           <Icon size={12} />
         )}
       </span>
       <span
-        className={cx("shrink-0 text-sm font-medium", active && !waiting ? "shimmer" : waiting ? "text-accent-text" : failed ? "text-err-text/90" : "text-fg/80")}
+        className={cx("shrink-0 text-base font-medium", active && !waiting ? "shimmer" : waiting ? "text-accent-text" : failed ? "text-err-text/90" : "text-fg/80")}
         style={active && !waiting ? { ["--shimmer-base" as string]: "var(--text)", ["--shimmer-hi" as string]: tone } : undefined}
       >
         {name}
       </span>
       {detail && (
-        <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-xs", failed ? "text-err-text/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
+        <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-mono-small", failed ? "text-err-text/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
           {/* A struck-through path is read at a glance: short, like the rest of the timeline. */}
           {failed ? shortDetail(homeShort(detail)) : detail}
         </span>
       )}
       {!detail && <span className="flex-1" />}
       {waiting ? (
-        <span className="shrink-0 text-2xs font-medium text-accent-text">waiting for you</span>
+        <span className="shrink-0 text-small font-medium text-accent-text">waiting for you</span>
       ) : active ? (
-        <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-2xs text-busy-text" />
+        <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-small text-busy-text" />
       ) : (
-        stamp && <span className="shrink-0 font-mono text-2xs text-faint opacity-0 transition-opacity duration-150 group-hover:opacity-100 tnum">{stamp}</span>
+        stamp && <span className="shrink-0 font-mono text-mono-small text-faint opacity-0 transition-opacity duration-150 group-hover:opacity-100 tnum">{stamp}</span>
       )}
     </div>
   );
@@ -389,8 +389,8 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   const steps = agent?.activity.filter((x) => x.kind === "tool" || x.kind === "agent").slice(-5) ?? [];
   return (
     <div className="-ml-[19px] flex gap-2.5 py-1">
-      <span className="relative z-[1] mt-[7px] flex size-[15px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
-        <ISpark size={12} />
+      <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
+        <ISpark size={14} />
       </span>
       <div
         className={cx(
@@ -399,16 +399,16 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
         )}
       >
         <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
-          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-2xs font-semibold uppercase leading-[18px] tracking-[0.04em] text-dim">
+          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">
             {agent?.kind || "subagent"}
           </span>
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{detail || agent?.description}</span>
+          <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{detail || agent?.description}</span>
           {agent && <AgentModels agent={agent} />}
           {running ? (
-            <StatusDot status="busy" size={6} />
+            <StatusDot status="busy" size={7} />
           ) : (
-            <span className="flex items-center gap-1 text-2xs text-dim">
-              <ICheck size={12} className="text-accent-text" /> done
+            <span className="flex items-center gap-1 text-small text-dim">
+              <ICheck size={14} className="text-accent-text" /> done
             </span>
           )}
         </div>
@@ -434,7 +434,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
 }
 
 export function Section({ children }: { children: ReactNode }) {
-  return <div className="text-2xs font-semibold uppercase tracking-[0.08em] text-faint">{children}</div>;
+  return <div className="font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">{children}</div>;
 }
 
 function AgentModels({ agent }: { agent: Agent }) {

@@ -99,8 +99,8 @@ export function SessionView({
     if (scanning) return <SessionSkeleton compact={compact} />;
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1.5 text-center">
-        <div className="text-md font-medium">This session is no longer listed</div>
-        <div className="text-sm text-dim">It ended more than a day ago or its transcript moved.</div>
+        <div className="text-title font-semibold tracking-[-0.01em]">This session is no longer listed</div>
+        <div className="text-base text-dim">It ended more than a day ago or its transcript moved.</div>
       </div>
     );
   }
@@ -125,15 +125,15 @@ export function SessionView({
   return (
     <div className="flex h-full min-w-0 flex-col">
       {/* header */}
-      <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[50px] px-3" : "h-[56px] px-5")}>
-        <ProviderMark provider={provider} size={15} />
+      <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[56px] px-3" : "h-[64px] px-5")}>
+        <ProviderMark provider={provider} size={17} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <h2 className="truncate text-[13.5px] font-semibold tracking-[-0.005em] text-fg">{title}</h2>
+            <h2 className="truncate text-title font-semibold tracking-[-0.01em] text-fg">{title}</h2>
             <StatusPill status={status} />
           </div>
-          <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-xs text-dim">
-            <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-2xs" />
+          <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
+            <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />
             {models && (models.main.length > 0 || model) && (
               <>
                 <span className="text-faint">·</span>
@@ -143,7 +143,7 @@ export function SessionView({
           </div>
         </div>
         {session?.loaded === false && !chat && !compact && (
-          <div className="hidden items-center gap-4 lg:flex" title="Reading this session's transcript…">
+          <div className="hidden items-center gap-4 xl:flex" title="Reading this session's transcript…">
             <span className="flex items-center gap-2">
               <Skel w={80} h={4} />
               <Skel w={56} h={9} />
@@ -155,9 +155,9 @@ export function SessionView({
           </div>
         )}
         {showTokens && !compact && !(session?.loaded === false && !chat) && (
-          <div className="hidden items-center gap-4 lg:flex">
+          <div className="hidden items-center gap-4 xl:flex">
             <ContextMeter context={context} model={model} window={chat?.contextWindow} />
-            <div className="flex items-center gap-2.5 text-xs text-dim" title="Tokens in / out">
+            <div className="flex items-center gap-2.5 text-small text-dim" title="Tokens in / out">
               <span>
                 <span className="text-faint">in </span>
                 <Ticker value={tokIn} className="text-fg/80" />
@@ -172,25 +172,25 @@ export function SessionView({
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
         {isChat && !hasTerm && (chatLive || session) && (
           <Button variant="ghost" onClick={openTerm} title="Continue this session in the real CLI, in a terminal" className={compact ? "px-2" : ""}>
-            <ITerminal size={14} />
+            <ITerminal size={16} />
             {!compact && "Open in terminal"}
           </Button>
         )}
         {canStop && (
           <Button variant="ghost" onClick={() => askStop(session, running ? pty : null, title, chatLive ? r.chat : null)} title="Stop session" className={compact ? "px-2" : ""}>
-            <IStop size={13} />
+            <IStop size={15} />
             {!compact && "Stop"}
           </Button>
         )}
         {canResume && (
           <Button variant="outline" onClick={() => resumeSession(session!, leaf)} title="Resume this session inside coool">
-            <IPlay size={12} />
+            <IPlay size={14} />
             Resume
           </Button>
         )}
         {onClosePane && (
           <IconButton title="Close pane" onClick={onClosePane} className="-mr-1">
-            <IClose size={12} />
+            <IClose size={14} />
           </IconButton>
         )}
       </div>
@@ -247,7 +247,7 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
     { v: "terminal", icon: ITerminal, label: "Terminal" },
   ];
   return (
-    <div className="relative inline-flex h-[28px] rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]">
+    <div className="relative inline-flex h-[34px] rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]">
       {opts.map((o) => {
         const on = o.v === mode;
         const I = o.icon;
@@ -257,7 +257,7 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
             type="button"
             onClick={() => onChange(o.v)}
             title={o.label}
-            className={cx("relative z-0 flex items-center gap-1.5 rounded-[6px] px-2 text-xs font-medium transition-colors duration-150", on ? "text-fg" : "text-dim hover:text-fg")}
+            className={cx("relative z-0 flex items-center gap-1.5 rounded-[6px] px-2 text-small font-medium transition-colors duration-150", on ? "text-fg" : "text-dim hover:text-fg")}
           >
             {on && (
               <motion.span
@@ -279,18 +279,18 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
   const ended = session.status === "ended";
   return (
     <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
-      <div className="mx-auto flex max-w-[780px] items-center gap-3 rounded-[12px] border border-dashed border-line px-4 py-2.5">
-        <span className="min-w-0 flex-1 text-sm text-dim">
+      <div className="mx-auto flex max-w-[700px] items-center gap-3 rounded-[12px] border border-dashed border-line px-4 py-2.5">
+        <span className="min-w-0 flex-1 text-base text-dim">
           {ended ? <>This session has ended. Resume it here to keep going in a chat.</> : <>Running outside coool. Stop it and resume here to take control.</>}
         </span>
         {ended && session.id && (
           <>
             <Button variant="ghost" onClick={() => resumeSession(session, leaf, { terminal: true })} title="Resume in the CLI's own terminal UI">
-              <ITerminal size={13} />
+              <ITerminal size={15} />
               In terminal
             </Button>
             <Button variant="primary" onClick={() => resumeSession(session, leaf)}>
-              <IPlay size={12} />
+              <IPlay size={14} />
               Resume here
             </Button>
           </>

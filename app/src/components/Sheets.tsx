@@ -52,7 +52,7 @@ function Field({ label, children, aside }: { label: string; children: ReactNode;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-dim">{label}</span>
+        <span className="text-small font-medium text-dim">{label}</span>
         {aside}
       </div>
       {children}
@@ -61,7 +61,7 @@ function Field({ label, children, aside }: { label: string; children: ReactNode;
 }
 
 const inputCls =
-  "w-full rounded-[10px] border border-line bg-bg px-3 text-sm outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
+  "w-full rounded-[10px] border border-line bg-bg px-3 text-base outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
 
 function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: string; initialProvider?: Provider; close: () => void }) {
   const sessions = useStore((s) => s.sessions);
@@ -113,8 +113,8 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
       }}
     >
       <div className="px-5 pb-4 pt-5">
-        <div className="text-lg font-semibold tracking-[-0.01em]">New session</div>
-        <div className="mt-0.5 text-sm text-dim">Runs the official CLI as a chat coool drives. Your own login, your own subscription.</div>
+        <div className="text-title font-semibold tracking-[-0.01em]">New session</div>
+        <div className="mt-0.5 text-base text-dim">Runs the official CLI as a chat coool drives. Your own login, your own subscription.</div>
       </div>
       <div className="flex flex-col gap-4 px-5 pb-5">
         <Field label="Agent">
@@ -128,14 +128,14 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
                   type="button"
                   onClick={() => setProvider(p)}
                   className={cx(
-                    "relative flex h-[52px] items-center gap-2.5 rounded-[10px] border px-3 text-left transition-[border-color,background-color] duration-150",
+                    "relative flex h-[56px] items-center gap-2.5 rounded-[10px] border px-3 text-left transition-[border-color,background-color] duration-150",
                     on ? "border-[color-mix(in_oklab,var(--accent)_55%,var(--border))] bg-accent-soft" : "border-line hover:bg-hover",
                   )}
                 >
                   <ProviderMark provider={p} size={18} />
                   <span className="flex flex-col">
-                    <span className="text-sm font-semibold">{p === "claude" ? "Claude Code" : "Codex"}</span>
-                    <span className={cx("text-2xs", found ? "text-faint" : "text-err-text")}>{found ? `${p} CLI` : "not installed"}</span>
+                    <span className="text-base font-semibold">{p === "claude" ? "Claude Code" : "Codex"}</span>
+                    <span className={cx("text-small", found ? "text-faint" : "text-err-text")}>{found ? `${p} CLI` : "not installed"}</span>
                   </span>
                   {on && (
                     <motion.span layoutId="prov-check" className="ml-auto size-[8px] rounded-full bg-accent" transition={{ type: "spring", stiffness: 500, damping: 35 }} />
@@ -147,16 +147,16 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
         </Field>
         <Field label="Folder">
           <div className="flex gap-2">
-            <input autoFocus className={cx(inputCls, "h-[34px] font-mono text-xs")} value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="~/code/project" spellCheck={false} />
+            <input autoFocus className={cx(inputCls, "h-[40px] font-mono text-mono-small")} value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="~/code/project" spellCheck={false} />
             <Button
               variant="outline"
-              className="h-[34px]"
+              className="h-[40px]"
               onClick={async () => {
                 const p = await api().pickFolder();
                 if (p) setCwd(homeShort(p));
               }}
             >
-              <IFolder size={13} />
+              <IFolder size={15} />
               Choose…
             </Button>
           </div>
@@ -171,7 +171,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
                     title={homeShort(r)}
                     onClick={() => setCwd(homeShort(r))}
                     className={cx(
-                      "h-[24px] rounded-[7px] border px-2 text-xs transition-colors duration-150",
+                      "h-[28px] rounded-[7px] border px-2 text-small transition-colors duration-150",
                       on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
                     )}
                   >
@@ -182,7 +182,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
             </div>
           )}
         </Field>
-        <Field label="First prompt" aside={<span className="text-2xs text-faint">optional</span>}>
+        <Field label="First prompt" aside={<span className="text-small text-faint">optional</span>}>
           <textarea
             className={cx(inputCls, "selectable min-h-[72px] resize-none py-2 leading-[19px]")}
             value={prompt}
@@ -193,15 +193,15 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
       </div>
       <div className="flex items-center gap-2 border-t border-hairline bg-panel/60 px-5 py-3">
         {missing ? (
-          <span className="text-xs text-err-text">Install the {provider} CLI first.</span>
+          <span className="text-small text-err-text">Install the {provider} CLI first.</span>
         ) : (
           <button
             type="button"
             onClick={() => setTerminal(!terminal)}
             title="Open the CLI's own terminal UI instead of a chat"
-            className={cx("flex h-[26px] items-center gap-1.5 rounded-[7px] px-2 text-xs transition-colors duration-150", terminal ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg")}
+            className={cx("flex h-[30px] items-center gap-1.5 rounded-[7px] px-2 text-small transition-colors duration-150", terminal ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg")}
           >
-            <ITerminal size={13} />
+            <ITerminal size={15} />
             {terminal ? "In a terminal" : "Use terminal instead"}
           </button>
         )}
@@ -235,8 +235,8 @@ function Confirm({ title, body, action, danger, onConfirm, close }: { title: str
   return (
     <div>
       <div className="px-5 pb-4 pt-5">
-        <div className="text-lg font-semibold tracking-[-0.01em]">{title}</div>
-        <div className="mt-1 text-sm text-dim">{body}</div>
+        <div className="text-title font-semibold tracking-[-0.01em]">{title}</div>
+        <div className="mt-1 text-base text-dim">{body}</div>
       </div>
       <div className="flex justify-end gap-2 border-t border-hairline bg-panel/60 px-5 py-3">
         <Button variant="ghost" onClick={close}>
@@ -303,10 +303,10 @@ function Switch({ on, onChange, disabled, label }: { on: boolean; onChange: (v: 
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!on)}
-      className={cx("relative h-[20px] w-[34px] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-40", on ? "bg-accent" : "bg-[color-mix(in_oklab,var(--dim)_35%,transparent)]")}
+      className={cx("relative h-[24px] w-[34px] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-40", on ? "bg-accent" : "bg-[color-mix(in_oklab,var(--dim)_35%,transparent)]")}
     >
       <motion.span
-        className="absolute top-[2px] size-[16px] rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.25)]"
+        className="absolute top-[2px] size-[20px] rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.25)]"
         initial={false}
         animate={{ left: on ? 16 : 2 }}
         transition={{ type: "spring", stiffness: 700, damping: 38 }}
@@ -356,7 +356,7 @@ function Settings({ close }: { close: () => void }) {
   return (
     <div>
       <div className="px-5 pb-3 pt-5">
-        <div className="text-lg font-semibold tracking-[-0.01em]">Settings</div>
+        <div className="text-title font-semibold tracking-[-0.01em]">Settings</div>
       </div>
       <div className="flex flex-col gap-5 px-5 pb-5">
         <Field label="Theme">
@@ -373,12 +373,12 @@ function Settings({ close }: { close: () => void }) {
 
         <div className="flex flex-col gap-3 rounded-[12px] border border-line p-4">
           <div className="flex items-start gap-3">
-            <span className="mt-[1px] flex size-[26px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-dim">
-              <ISpark size={14} />
+            <span className="mt-[1px] flex size-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-dim">
+              <ISpark size={16} />
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-md font-semibold">AI insights</div>
-              <div className="mt-0.5 text-sm text-dim">A one-line headline for each live session, and a “Needs you” flag with the reason when an agent is blocked on you.</div>
+              <div className="text-base font-semibold">AI insights</div>
+              <div className="mt-0.5 text-base text-dim">A one-line headline for each live session, and a “Needs you” flag with the reason when an agent is blocked on you.</div>
             </div>
             <Switch
               label="AI insights"
@@ -387,27 +387,27 @@ function Settings({ close }: { close: () => void }) {
               onChange={(v) => void run(() => api().insightsSetEnabled(v), { enabled: v })}
             />
           </div>
-          <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_8%,transparent)] px-3 py-2 text-xs leading-[17px] text-dim">
+          <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_8%,transparent)] px-3 py-2 text-small text-dim">
             Uses <span className="font-medium text-fg/85">your own Anthropic API key</span>, billed to you, never your Claude Code or Codex login. A small model (Claude Haiku 5.5) runs only for
             live sessions whose activity changed, at most once per session every 45s, with an hourly cap. That is roughly $0.03 per hour of nonstop agent work per session, and
             usually far less.
           </div>
           {!avail ? (
-            <div className="flex items-center gap-2 text-xs text-dim">
-              <IAlert size={13} className="text-busy-text" />
+            <div className="flex items-center gap-2 text-small text-dim">
+              <IAlert size={15} className="text-busy-text" />
               Insights aren't available in this build of coool yet.
             </div>
           ) : st?.has_key && !replacing ? (
             <div className="flex items-center gap-2">
-              <span className="flex h-[32px] flex-1 items-center gap-2 rounded-[10px] border border-line bg-bg px-3 text-sm">
-                <ICheck size={13} className="text-accent-text" />
+              <span className="flex h-[38px] flex-1 items-center gap-2 rounded-[10px] border border-line bg-bg px-3 text-base">
+                <ICheck size={15} className="text-accent-text" />
                 <span className="text-fg/90">Key saved in your Keychain</span>
-                <span className="ml-auto font-mono text-xs tracking-[0.2em] text-faint">••••••••</span>
+                <span className="ml-auto font-mono text-mono-small tracking-[0.2em] text-faint">••••••••</span>
               </span>
-              <Button variant="outline" className="h-[32px]" onClick={() => setReplacing(true)}>
+              <Button variant="outline" className="h-[38px]" onClick={() => setReplacing(true)}>
                 Replace
               </Button>
-              <Button variant="ghost" className="h-[32px] hover:text-err-text" onClick={() => void run(() => api().insightsClearKey(), { has_key: false })}>
+              <Button variant="ghost" className="h-[38px] hover:text-err-text" onClick={() => void run(() => api().insightsClearKey(), { has_key: false })}>
                 Remove
               </Button>
             </div>
@@ -423,24 +423,24 @@ function Settings({ close }: { close: () => void }) {
                 type="password"
                 autoComplete="off"
                 spellCheck={false}
-                className={cx(inputCls, "h-[32px] font-mono text-xs")}
+                className={cx(inputCls, "h-[38px] font-mono text-mono-small")}
                 placeholder="sk-ant-…"
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
                 aria-label="Anthropic API key"
               />
-              <Button variant="primary" type="submit" className="h-[32px]" disabled={!key.trim() || saving}>
+              <Button variant="primary" type="submit" className="h-[38px]" disabled={!key.trim() || saving}>
                 {saving ? "Saving…" : "Save key"}
               </Button>
               {replacing && (
-                <Button variant="ghost" className="h-[32px]" onClick={() => setReplacing(false)}>
+                <Button variant="ghost" className="h-[38px]" onClick={() => setReplacing(false)}>
                   Cancel
                 </Button>
               )}
             </form>
           )}
-          {err && <div className="text-xs text-err-text">{err}</div>}
-          {avail && st && !st.has_key && <div className="text-2xs text-faint">Stored in the macOS Keychain. coool can't show it again; you can only replace or remove it.</div>}
+          {err && <div className="text-small text-err-text">{err}</div>}
+          {avail && st && !st.has_key && <div className="text-small text-faint">Stored in the macOS Keychain. coool can't show it again; you can only replace or remove it.</div>}
         </div>
       </div>
       <div className="flex justify-end border-t border-hairline bg-panel/60 px-5 py-3">

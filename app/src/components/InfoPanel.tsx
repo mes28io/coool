@@ -28,7 +28,7 @@ export function InfoPanel({ chat, tab, onTab }: { chat: Chat; tab: InfoTab; onTa
             { value: "usage", label: "Usage" },
           ]}
         />
-        <span className="font-mono text-2xs text-faint">/{tab}</span>
+        <span className="font-mono text-mono-small text-faint">/{tab}</span>
       </div>
       <motion.div key={tab} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease }}>
         {tab === "context" ? <ContextTab chat={chat} /> : tab === "status" ? <StatusTab chat={chat} /> : <UsageTab chat={chat} />}
@@ -46,19 +46,19 @@ function ContextTab({ chat }: { chat: Chat }) {
   return (
     <div className="flex flex-col gap-3 p-3.5">
       <div className="flex items-baseline gap-2">
-        <span className="font-mono text-xl font-semibold tracking-[-0.02em] text-fg tnum">{fmtTokens(chat.context)}</span>
-        <span className="text-sm text-dim">
+        <span className=" text-display font-semibold tracking-[-0.02em] text-fg tnum">{fmtTokens(chat.context)}</span>
+        <span className="text-base text-dim">
           of {exact ? "" : "~"}
           {fmtTokens(w.tokens)} tokens
         </span>
-        <span className="ml-auto font-mono text-sm tnum" style={{ color }}>
+        <span className="ml-auto text-base tnum" style={{ color }}>
           {pct < 0.01 && chat.context > 0 ? "<1" : Math.round(pct * 100)}%
         </span>
       </div>
       <div className="relative h-[8px] overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--dim)_18%,transparent)]">
         <motion.div className="absolute inset-y-0 left-0 rounded-full" initial={false} animate={{ width: `${Math.max(1, Math.min(1, pct) * 100)}%`, backgroundColor: color }} transition={{ duration: 0.6, ease }} />
       </div>
-      <div className="text-xs text-dim">
+      <div className="text-small text-dim">
         {w.source === "reported" ? (
           <>Window reported by the CLI for {modelLabel(chat.model)}.</>
         ) : w.source === "family" ? (
@@ -72,7 +72,7 @@ function ContextTab({ chat }: { chat: Chat }) {
         <button
           type="button"
           onClick={() => void chatCall(chat.id, () => api().chatSend(chat.id, "/compact"))}
-          className="self-start rounded-[7px] border border-line px-2 py-1 text-xs text-dim hover:bg-hover hover:text-fg"
+          className="self-start rounded-[7px] border border-line px-2 py-1 text-small text-dim hover:bg-hover hover:text-fg"
         >
           Run /compact to summarize earlier turns
         </button>
@@ -90,11 +90,11 @@ function Spark({ points, max, color }: { points: number[]; max: number; color: s
   const d = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
   return (
     <div>
-      <div className="mb-1 flex justify-between text-2xs text-faint">
+      <div className="mb-1 flex justify-between text-small text-faint">
         <span>Context over this chat</span>
-        <span className="font-mono tnum">{points.length} replies</span>
+        <span className=" tnum">{points.length} replies</span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-[46px] w-full overflow-visible" preserveAspectRatio="none">
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-[52px] w-full overflow-visible" preserveAspectRatio="none">
         <path d={`${d}L${W},${H}L0,${H}Z`} fill={color} opacity="0.1" />
         <path d={d} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
       </svg>
@@ -105,8 +105,8 @@ function Spark({ points, max, color }: { points: number[]; max: number; color: s
 function Row({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
   return (
     <div className="flex items-baseline gap-3 py-[3px]">
-      <span className="w-[104px] shrink-0 text-xs text-faint">{k}</span>
-      <span className={cx("selectable min-w-0 flex-1 break-all text-sm text-fg/90", mono && "font-mono text-xs")}>{v}</span>
+      <span className="w-[104px] shrink-0 text-small text-faint">{k}</span>
+      <span className={cx("selectable min-w-0 flex-1 break-all text-base text-fg/90", mono && "font-mono text-mono-small")}>{v}</span>
     </div>
   );
 }
@@ -155,14 +155,14 @@ function UsageTab({ chat }: { chat: Chat }) {
           ["Turns", turns],
         ].map(([k, v]) => (
           <div key={k as string} className="bg-raised px-3 py-2.5">
-            <div className="text-2xs text-faint">{k}</div>
-            <div className="font-mono text-md font-semibold text-fg tnum">{k === "Turns" ? v : fmtTokens(v as number)}</div>
+            <div className="text-small text-faint">{k}</div>
+            <div className=" text-base font-semibold text-fg tnum">{k === "Turns" ? v : fmtTokens(v as number)}</div>
           </div>
         ))}
       </div>
       <ModelsBreakdown data={data} current={chat.model} />
       {(
-        <div className="border-t border-hairline px-3.5 py-2 text-2xs text-faint">Token counts come straight from the CLI. coool doesn't estimate dollar cost or plan limits.</div>
+        <div className="border-t border-hairline px-3.5 py-2 text-small text-faint">Token counts come straight from the CLI. coool doesn't estimate dollar cost or plan limits.</div>
       )}
     </div>
   );

@@ -20,7 +20,7 @@ export function TerminalView({ pty, focused }: { pty: number; focused: boolean }
       <div ref={host} className="term-host absolute inset-0 left-4 right-1 top-3 bottom-2" onMouseDown={() => focusTerminal(pty)} />
       {exited && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-          <span className="rounded-full border border-line bg-raised/90 px-3 py-1 text-xs text-dim shadow-card backdrop-blur">Process exited</span>
+          <span className="rounded-full border border-line bg-raised/90 px-3 py-1 text-small text-dim shadow-card backdrop-blur">Process exited</span>
         </div>
       )}
     </div>

@@ -51,8 +51,8 @@ export function StatusPill({ status }: { status: UiStatus }) {
         ? "text-accent-text bg-accent-soft"
         : "text-dim bg-hover";
   return (
-    <span className={cx("inline-flex h-[20px] shrink-0 items-center gap-1.5 rounded-full pl-[7px] pr-2 text-xs font-medium", tone)} data-status-pill={status}>
-      <StatusDot status={status} size={6} />
+    <span className={cx("inline-flex h-[24px] shrink-0 items-center gap-1.5 rounded-full pl-[7px] pr-2 text-small font-medium", tone)} data-status-pill={status}>
+      <StatusDot status={status} size={7} />
       {statusLabel(status)}
     </span>
   );
@@ -101,7 +101,7 @@ export function Ticker({ value, format = fmtTokens, className }: { value: number
     const c = animate(mv, value, { duration: 0.7, ease: [0.16, 1, 0.3, 1] });
     return () => c.stop();
   }, [value, mv]);
-  return <motion.span className={cx("tnum font-mono", className)}>{text}</motion.span>;
+  return <motion.span className={cx("tnum", className)}>{text}</motion.span>;
 }
 
 /**
@@ -113,11 +113,11 @@ export function Elapsed({ since, approx, className }: { since: number | null; ap
   if (since === null) return null;
   if (approx)
     return (
-      <span className={cx("tnum font-mono", className)} title="Approximate: started before coool was watching">
+      <span className={cx("tnum", className)} title="Approximate: started before coool was watching">
         {fmtApprox(now - since)}
       </span>
     );
-  return <span className={cx("tnum font-mono", className)}>{fmtElapsed(now - since)}</span>;
+  return <span className={cx("tnum", className)}>{fmtElapsed(now - since)}</span>;
 }
 
 /**
@@ -157,7 +157,7 @@ export function ContextMeter({
         />
         {!exact && <span className="absolute inset-y-0 right-0 w-[3px] bg-[repeating-linear-gradient(90deg,var(--dim)_0_1px,transparent_1px_2px)] opacity-60" />}
       </div>
-      <span className="text-xs text-dim">
+      <span className="text-small text-dim">
         <Ticker value={context} className="text-fg/80" />
         {!compact && (
           <span className="text-faint">
@@ -177,7 +177,7 @@ export function NeedsBadge({ small, className }: { small?: boolean; className?: 
     <span
       className={cx(
         "needs-badge inline-flex shrink-0 items-center gap-1 rounded-full bg-accent font-semibold text-accent-ink",
-        small ? "h-[15px] px-1.5 text-[9.5px] uppercase tracking-[0.04em]" : "h-[20px] pl-[6px] pr-2 text-xs",
+        small ? "h-[15px] px-1.5 font-mono text-micro uppercase tracking-[0.06em]" : "h-[24px] pl-[6px] pr-2 text-small",
         className,
       )}
     >
@@ -278,7 +278,7 @@ export function Chip({
       title={title}
       onClick={onClick}
       className={cx(
-        "inline-flex h-[24px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[7px] px-2 text-xs font-medium transition-[background-color,color] duration-150",
+        "inline-flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[7px] px-2 text-small font-medium transition-[background-color,color] duration-150",
         active ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
         className,
       )}
@@ -292,7 +292,7 @@ export function Kbd({ children, className }: { children: ReactNode; className?: 
   return (
     <kbd
       className={cx(
-        "inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[5px] border border-line bg-raised px-1 font-sans text-2xs font-medium text-dim",
+        "inline-flex h-[24px] min-w-[20px] items-center justify-center rounded-[5px] border border-line bg-raised px-1 font-mono text-micro font-medium text-dim",
         className,
       )}
     >
@@ -348,7 +348,7 @@ export function Segmented<T extends string>({
 }) {
   const id = useId();
   return (
-    <div className={cx("relative inline-flex rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]", size === "sm" ? "h-[26px]" : "h-[30px]")}>
+    <div className={cx("relative inline-flex rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]", size === "sm" ? "h-[30px]" : "h-[36px]")}>
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -360,7 +360,7 @@ export function Segmented<T extends string>({
             onClick={() => onChange(o.value)}
             className={cx(
               "relative z-0 flex items-center gap-1.5 rounded-[6px] font-medium transition-colors duration-150 disabled:opacity-40",
-              size === "sm" ? "px-2 text-xs" : "px-2.5 text-sm",
+              size === "sm" ? "px-2 text-small" : "px-2.5 text-base",
               on ? "text-fg" : "text-dim hover:text-fg",
             )}
           >
@@ -407,7 +407,7 @@ export function Button({
       disabled={disabled}
       onClick={onClick}
       className={cx(
-        "inline-flex h-[28px] shrink-0 items-center justify-center gap-1.5 rounded-[8px] px-2.5 text-sm font-medium transition-[background-color,color,border-color,opacity,transform] duration-150 active:scale-[0.98] disabled:opacity-45 disabled:active:scale-100",
+        "inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[8px] px-2.5 text-base font-medium transition-[background-color,color,border-color,opacity,transform] duration-150 active:scale-[0.98] disabled:opacity-45 disabled:active:scale-100",
         variant === "primary" && "bg-fg text-bg hover:opacity-85",
         variant === "ghost" && "text-dim hover:bg-hover hover:text-fg",
         variant === "outline" && "border border-line bg-raised text-fg shadow-card hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))]",

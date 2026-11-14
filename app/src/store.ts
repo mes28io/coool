@@ -184,7 +184,7 @@ export const useStore = create<State>((set, get) => ({
   palette: false,
   sheet: null,
   toasts: [],
-  sidebarWidth: readNum("coool.sidebar", 272),
+  sidebarWidth: readNum("coool.sidebar", 320),
 
   setSnapshot(snap) {
     const st = get();

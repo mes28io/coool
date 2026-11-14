@@ -126,9 +126,9 @@ export function Sidebar() {
 
   return (
     <aside className="relative flex h-full shrink-0 flex-col border-r border-hairline bg-panel" style={{ width }}>
-      <div data-tauri-drag-region className={cx("flex h-[52px] shrink-0 items-center gap-2 pr-2.5", traffic ? "pl-[84px]" : "pl-4")}>
+      <div data-tauri-drag-region className={cx("flex h-[56px] shrink-0 items-center gap-2 pr-2.5", traffic ? "pl-[84px]" : "pl-4")}>
         <div data-tauri-drag-region className="flex flex-1 items-center gap-2">
-          <Wordmark size={17} intro />
+          <Wordmark size={21} intro />
         </div>
         <IconButton title={`Switch to ${theme === "dark" ? "light" : "dark"} theme (⌘⇧L)`} onClick={toggleTheme}>
           <AnimatePresence mode="popLayout" initial={false}>
@@ -140,7 +140,7 @@ export function Sidebar() {
               transition={{ duration: 0.22, ease }}
               className="flex"
             >
-              {theme === "dark" ? <IMoon size={15} /> : <ISun size={15} />}
+              {theme === "dark" ? <IMoon size={17} /> : <ISun size={17} />}
             </motion.span>
           </AnimatePresence>
         </IconButton>
@@ -150,10 +150,10 @@ export function Sidebar() {
         <button
           type="button"
           onClick={() => setSheet({ kind: "new" })}
-          className="group flex h-[32px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 text-sm font-medium text-fg shadow-card transition-[border-color,transform] duration-150 hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] active:scale-[0.99]"
+          className="group flex h-[38px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 text-base font-medium text-fg shadow-card transition-[border-color,transform] duration-150 hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] active:scale-[0.99]"
         >
-          <span className="flex size-[18px] items-center justify-center rounded-[5px] bg-fg text-bg">
-            <IPlus size={12} strokeWidth={2} />
+          <span className="flex size-[22px] items-center justify-center rounded-[5px] bg-fg text-bg">
+            <IPlus size={14} strokeWidth={2} />
           </span>
           New session
           <span className="ml-auto flex gap-0.5">
@@ -164,9 +164,9 @@ export function Sidebar() {
         <button
           type="button"
           onClick={() => setPalette(true)}
-          className="flex h-[30px] items-center gap-2 rounded-[9px] px-2.5 text-sm text-dim transition-colors duration-150 hover:bg-hover hover:text-fg"
+          className="flex h-[36px] items-center gap-2 rounded-[9px] px-2.5 text-base text-dim transition-colors duration-150 hover:bg-hover hover:text-fg"
         >
-          <ISearch size={14} />
+          <ISearch size={16} />
           Jump to…
           <span className="ml-auto flex gap-0.5">
             <Kbd>⌘</Kbd>
@@ -176,15 +176,15 @@ export function Sidebar() {
       </div>
 
       <div className="flex items-center justify-between px-4 pb-1.5">
-        <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-faint">Projects</span>
-        <span className="text-2xs text-faint tnum">{ready && !loading ? projects.length || "" : ""}</span>
+        <span className="font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Projects</span>
+        <span className="text-small text-faint tnum">{ready && !loading ? projects.length || "" : ""}</span>
       </div>
 
       <motion.div layoutScroll className="scroll min-h-0 flex-1 px-1.5 pb-3" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
         {!ready || (loading && projects.length === 0) ? (
           <SidebarSkeleton />
         ) : projects.length === 0 ? (
-          <div className="mx-2 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-sm text-dim">
+          <div className="mx-2 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-base text-dim">
             No sessions in the last day.
             <br />
             <button className="mt-1 font-medium text-accent-text hover:underline" onClick={() => setSheet({ kind: "new" })}>
@@ -201,27 +201,27 @@ export function Sidebar() {
         )}
       </motion.div>
 
-      <div className="flex h-[36px] shrink-0 items-center gap-2.5 whitespace-nowrap border-t border-hairline pl-4 pr-2 text-xs text-dim">
+      <div className="flex h-[42px] shrink-0 items-center gap-2.5 whitespace-nowrap border-t border-hairline pl-4 pr-2 text-small text-dim">
         {counts.needs > 0 && (
           <span className="flex items-center gap-1.5 font-medium text-accent-text" title="Sessions blocked on you">
-            <StatusDot status="needs" size={6} />
+            <StatusDot status="needs" size={7} />
             <span className="tnum">{counts.needs}</span> need{counts.needs === 1 ? "s" : ""} you
           </span>
         )}
         {ready && !(loading && projects.length === 0) && (
         <>
         <span className="flex items-center gap-1.5">
-          <StatusDot status={counts.busy ? "busy" : "ended"} size={6} />
+          <StatusDot status={counts.busy ? "busy" : "ended"} size={7} />
           <span className="tnum">{counts.busy}</span> working
         </span>
         <span className="flex items-center gap-1.5">
-          <StatusDot status={counts.idle ? "idle" : "ended"} size={6} />
+          <StatusDot status={counts.idle ? "idle" : "ended"} size={7} />
           <span className="tnum">{counts.idle}</span> waiting
         </span>
         </>
         )}
         <IconButton title="Settings (⌘,)" className="ml-auto" onClick={() => setSheet({ kind: "settings" })}>
-          <IGear size={14} />
+          <IGear size={16} />
         </IconButton>
       </div>
 
@@ -258,15 +258,15 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
 
   return (
     <motion.div layout="position" transition={spring} className="mb-1.5">
-      <div className="group flex h-[28px] items-center gap-1.5 rounded-[7px] pl-1.5 pr-1 hover:bg-hover">
+      <div className="group flex h-[34px] items-center gap-1.5 rounded-[7px] pl-1.5 pr-1 hover:bg-hover">
         <button type="button" onClick={() => setCollapsed(!collapsed)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" title={homeShort(p.cwd)}>
           <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="flex text-faint">
-            <IChevron size={11} />
+            <IChevron size={13} />
           </motion.span>
-          <span className={cx("truncate text-sm font-semibold", onlyEnded ? "text-dim" : "text-fg/90")}>{p.name}</span>
+          <span className={cx("truncate text-base font-semibold", onlyEnded ? "text-dim" : "text-fg/90")}>{p.name}</span>
           {liveCount > 0 && (
-            <span className="flex items-center gap-1 rounded-full bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] py-[1px] pl-[5px] pr-1.5 text-2xs font-medium text-dim">
-              <StatusDot status={p.needs ? "needs" : p.status} size={5} />
+            <span className="flex items-center gap-1 rounded-full bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] py-[1px] pl-[5px] pr-1.5 text-small font-medium text-dim">
+              <StatusDot status={p.needs ? "needs" : p.status} size={6} />
               <span className="tnum">{liveCount}</span>
             </span>
           )}
@@ -275,9 +275,9 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
           type="button"
           onClick={() => setSheet({ kind: "new", cwd: p.cwd })}
           title={`New session in ${p.name}`}
-          className="flex size-[22px] items-center justify-center rounded-[6px] text-dim opacity-0 transition-[opacity,background-color] duration-150 hover:bg-press hover:text-fg group-hover:opacity-100"
+          className="flex size-[26px] items-center justify-center rounded-[6px] text-dim opacity-0 transition-[opacity,background-color] duration-150 hover:bg-press hover:text-fg group-hover:opacity-100"
         >
-          <IPlus size={13} />
+          <IPlus size={15} />
         </button>
       </div>
       <AnimatePresence initial={false}>
@@ -307,7 +307,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
                 <button
                   type="button"
                   onClick={() => setShowEnded(true)}
-                  className="ml-[22px] flex h-[24px] items-center gap-1 rounded-[6px] px-1.5 text-xs text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
+                  className="ml-[22px] flex h-[28px] items-center gap-1 rounded-[6px] px-1.5 text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
                 >
                   {p.ended.length} earlier
                 </button>
@@ -316,7 +316,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
                 <button
                   type="button"
                   onClick={() => setShowEnded(false)}
-                  className="ml-[22px] flex h-[24px] items-center rounded-[6px] px-1.5 text-xs text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
+                  className="ml-[22px] flex h-[28px] items-center rounded-[6px] px-1.5 text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
                 >
                   Hide earlier
                 </button>
@@ -396,28 +396,28 @@ const SessionRow = memo(function SessionRow({ s, att, selected }: { s: Session; 
   return (
     <>
       <Row selected={selected} onClick={() => open({ kind: "session", key: sessionKey(s) })} data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined }}>
-        <span className="flex h-[18px] w-[8px] items-center justify-center">
-          <StatusDot status={status} size={7} />
+        <span className="flex h-[22px] w-[8px] items-center justify-center">
+          <StatusDot status={status} size={8} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <ProviderMark provider={s.provider} size={11} />
-            <span className={cx("truncate text-sm", att.status === "ended" ? "text-dim" : "text-fg", selected && "font-medium")}>{displayTitle(s)}</span>
+            <ProviderMark provider={s.provider} size={13} />
+            <span className={cx("truncate text-base", att.status === "ended" ? "text-dim" : "text-fg", selected && "font-medium")}>{displayTitle(s)}</span>
             {att.needs ? (
               <NeedsBadge small className="ml-auto" />
             ) : (
-              s.managed !== null && <span className="ml-auto shrink-0 rounded-[4px] border border-line px-1 text-[9.5px] font-medium uppercase leading-[13px] tracking-wide text-faint">pty</span>
+              s.managed !== null && <span className="ml-auto shrink-0 rounded-[4px] border border-line px-1 text-small font-medium text-faint">pty</span>
             )}
           </span>
           {sub.tone === "loading" ? (
-            <span className="flex h-[16px] items-center" title={sub.title}>
+            <span className="flex h-[18px] items-center" title={sub.title}>
               <Skel w="55%" h={8} className="opacity-70" />
             </span>
           ) : (
           <span
             title={sub.title ?? sub.text}
             className={cx(
-              "block truncate text-xs",
+              "block truncate text-small",
               sub.tone === "live" ? "text-busy-text/85" : sub.tone === "needs" ? "font-medium text-accent-text" : sub.tone === "insight" ? "text-dim" : "text-faint",
             )}
           >
@@ -440,11 +440,11 @@ function AgentRow({ a, onClick }: { a: Agent; onClick: () => void }) {
       <span className="mt-[3px] h-[12px] w-[9px] shrink-0 rounded-bl-[5px] border-b border-l border-line" />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
-          <StatusDot status="busy" size={5} />
-          <span className="truncate text-xs text-fg/85">{a.description || a.kind}</span>
-          {a.model && <span className="ml-auto shrink-0 text-[10px] text-faint">{modelLabel(a.model)}</span>}
+          <StatusDot status="busy" size={6} />
+          <span className="truncate text-small text-fg/85">{a.description || a.kind}</span>
+          {a.model && <span className="ml-auto shrink-0 text-small text-faint">{modelLabel(a.model)}</span>}
         </span>
-        <span className="block truncate text-2xs text-faint">{cur ? `${cur.name} ${shortDetail(cur.detail)}` : "Thinking…"}</span>
+        <span className="block truncate text-small text-faint">{cur ? `${cur.name} ${shortDetail(cur.detail)}` : "Thinking…"}</span>
       </span>
     </Row>
   );
@@ -454,15 +454,15 @@ function StartingRow({ info, selected }: { info: PtyInfo; selected: boolean }) {
   const open = useStore((st) => st.open);
   return (
     <Row selected={selected} onClick={() => open({ kind: "pty", id: info.id })}>
-      <span className="flex h-[18px] w-[8px] items-center justify-center">
-        <StatusDot status="starting" size={7} />
+      <span className="flex h-[22px] w-[8px] items-center justify-center">
+        <StatusDot status="starting" size={8} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
-          <ProviderMark provider={info.provider} size={11} />
-          <span className="truncate text-sm text-fg">New {info.provider} session</span>
+          <ProviderMark provider={info.provider} size={13} />
+          <span className="truncate text-base text-fg">New {info.provider} session</span>
         </span>
-        <span className="shimmer block truncate text-xs">Starting…</span>
+        <span className="shimmer block truncate text-small">Starting…</span>
       </span>
     </Row>
   );
@@ -472,15 +472,15 @@ function StartingChatRow({ info, selected }: { info: ChatInfo; selected: boolean
   const open = useStore((st) => st.open);
   return (
     <Row selected={selected} onClick={() => open({ kind: "chat", id: info.id })}>
-      <span className="flex h-[18px] w-[8px] items-center justify-center">
-        <StatusDot status={info.state === "idle" ? "idle" : "starting"} size={7} />
+      <span className="flex h-[22px] w-[8px] items-center justify-center">
+        <StatusDot status={info.state === "idle" ? "idle" : "starting"} size={8} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
-          <ProviderMark provider={info.provider} size={11} />
-          <span className="truncate text-sm text-fg">New {info.provider === "claude" ? "Claude Code" : "Codex"} chat</span>
+          <ProviderMark provider={info.provider} size={13} />
+          <span className="truncate text-base text-fg">New {info.provider === "claude" ? "Claude Code" : "Codex"} chat</span>
         </span>
-        <span className="block truncate text-xs text-faint">{info.state === "idle" ? "Ready for a prompt" : "Starting…"}</span>
+        <span className="block truncate text-small text-faint">{info.state === "idle" ? "Ready for a prompt" : "Starting…"}</span>
       </span>
     </Row>
   );

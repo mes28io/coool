@@ -2,12 +2,8 @@ import { AnimatePresence, motion, useAnimationControls, useReducedMotion } from 
 import { useEffect, useRef, useState } from "react";
 import { cx } from "./primitives";
 
-const RED = "#FF5F57";
-const YELLOW = "#FEBC2E";
-const GREEN = "#28C840";
-
 /**
- * The name "coool" in Pally. It reads "cool", then a third "o" (the yellow one) pops in with a
+ * The name "coool" in Pally. It reads "cool", then a third "o" pops in with a
  * bounce. `intro` plays that once after first paint; hovering replays it (once per hover, never
  * while playing). The final width is reserved from the start so nothing shifts.
  */
@@ -50,20 +46,19 @@ export function Wordmark({ size = 20, intro = false, className }: { size?: numbe
       aria-label="coool"
       role="img"
       onPointerEnter={replay}
-      className={cx("relative inline-block select-none font-bold tracking-[-0.01em] text-fg", className)}
+      className={cx("font-wordmark relative inline-block select-none font-bold tracking-[-0.01em] text-fg", className)}
       style={{ fontSize: size, lineHeight: 1.1 }}
     >
       <span aria-hidden className="invisible whitespace-pre">coool</span>
       <motion.span aria-hidden animate={squash} style={{ transformOrigin: "50% 85%" }} className="absolute inset-0 flex items-baseline whitespace-pre">
         <motion.span layout="position" className={letter}>c</motion.span>
-        <motion.span layout="position" className={letter} style={{ color: RED }}>o</motion.span>
+        <motion.span layout="position" className={letter}>o</motion.span>
         <AnimatePresence initial={false}>
           {full && (
             <motion.span
               key="pop"
               layout="position"
               className={letter}
-              style={{ color: YELLOW }}
               initial={reduced ? false : { scale: 0, y: 0 }}
               animate={{ scale: 1, y: 0, transition: { scale: { type: "spring", stiffness: 500, damping: 14 }, y: { duration: 0.34, times: [0, 0.4, 1], ease: "easeOut" } } }}
               exit={{ scale: 0, opacity: 0, transition: { duration: 0.1 } }}
@@ -72,7 +67,7 @@ export function Wordmark({ size = 20, intro = false, className }: { size?: numbe
             </motion.span>
           )}
         </AnimatePresence>
-        <motion.span layout="position" className={letter} style={{ color: GREEN }}>o</motion.span>
+        <motion.span layout="position" className={letter}>o</motion.span>
         <motion.span layout="position" className={letter}>l</motion.span>
       </motion.span>
     </span>
