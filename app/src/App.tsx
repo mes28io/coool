@@ -10,7 +10,7 @@ import { IAlert, IClose, ISidebar } from "./components/icons";
 import { Sheets } from "./components/Sheets";
 import { Rail } from "./components/Rail";
 import { Sidebar } from "./components/Sidebar";
-import { Workspace } from "./components/Workspace";
+import { TabBar, Workspace } from "./components/Workspace";
 import { useStore } from "./store";
 
 function applyTheme(t: "dark" | "light", animate: boolean) {
@@ -148,7 +148,7 @@ export default function App() {
     <MotionConfig reducedMotion="user">
       <div className="flex h-full w-full flex-col bg-panel">
         {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}
-        <div data-tauri-drag-region className="flex h-[40px] shrink-0 items-center pl-[84px] pr-3">
+        <div data-tauri-drag-region className="flex h-[44px] shrink-0 items-center pl-[84px] pr-2">
           <button
             type="button"
             title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
@@ -158,6 +158,7 @@ export default function App() {
           >
             <ISidebar size={17} />
           </button>
+          <TabBar />
         </div>
         <div className="flex min-h-0 flex-1">
           <Rail />

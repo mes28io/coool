@@ -19,7 +19,6 @@ export function Workspace() {
 
   return (
     <main data-main className="flex min-w-0 flex-1 flex-col bg-bg">
-      <TabBar />
       <div className="relative min-h-0 flex-1">
         <AnimatePresence initial={false} mode="popLayout">
           <motion.div
@@ -38,7 +37,8 @@ export function Workspace() {
   );
 }
 
-function TabBar() {
+/** Rendered in the window title bar (see App.tsx). */
+export function TabBar() {
   const tabs = useStore((s) => s.tabs);
   const activeTab = useStore((s) => s.activeTab);
   const activate = useStore((s) => s.activate);
@@ -47,7 +47,7 @@ function TabBar() {
   const ids = useMemo(() => tabs.map((t) => t.id), [tabs]);
 
   return (
-    <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center gap-1 border-b border-hairline pl-2.5 pr-2.5">
+    <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-1 pl-2">
       <button
         type="button"
         title="Home"
