@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, Session } from "../lib/types";
-import { fmtElapsed, isThinking, splitTool, tsToMs } from "../lib/format";
+import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
 import type { Since } from "../store";
 import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
 import { Elapsed, cx, ease, StatusDot } from "./primitives";
@@ -364,7 +364,12 @@ export function StepLine({
       >
         {name}
       </span>
-      {detail && <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-xs", failed ? "text-err/70 line-through decoration-err/40" : "text-dim")}>{detail}</span>}
+      {detail && (
+        <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-xs", failed ? "text-err/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
+          {/* A struck-through path is read at a glance: short, like the rest of the timeline. */}
+          {failed ? shortDetail(homeShort(detail)) : detail}
+        </span>
+      )}
       {!detail && <span className="flex-1" />}
       {waiting ? (
         <span className="shrink-0 text-2xs font-medium text-accent">waiting for you</span>

@@ -121,6 +121,49 @@ pub struct Question {
     pub secret: bool,
 }
 
+/// How long a [`RememberOption`] keeps allowing things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RememberScope {
+    /// This chat only; nothing is written anywhere.
+    Chat,
+    /// Saved to a settings file of this folder: future sessions here too,
+    /// including ones outside coool.
+    Project,
+    /// Saved to a settings file of the person: every project.
+    User,
+}
+
+/// One "don't ask again" choice the CLI offers on a permission request, in
+/// plain words. Chosen with [`Chat::respond_permission_remember`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RememberOption {
+    /// Stable within its request.
+    pub id: String,
+    /// Button text, e.g. "Allow all edits in this chat",
+    /// "Always allow `npm test` commands in this project".
+    pub label: String,
+    /// One line saying exactly what changes and where it is kept.
+    pub detail: String,
+    pub scope: RememberScope,
+    /// The settings file it is saved to (folder-relative for `project`,
+    /// `~`-relative for `user`); `None` for `chat`.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Set when choosing it switches the chat's permission mode (the new mode).
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// The rules it adds, in the CLI's own syntax (e.g. `Bash(npm test *)`).
+    #[serde(default)]
+    pub rules: Vec<String>,
+}
+
+impl RememberOption {
+    pub fn persistent(&self) -> bool {
+        self.scope != RememberScope::Chat
+    }
+}
+
 /// One event of a chat, exactly as the app receives it: `{"seq", "ts", "type", ...}`.
 #[derive(Clone, Debug, Serialize)]
 pub struct ChatEvent {
@@ -181,6 +224,9 @@ pub enum ChatEventKind {
         tool: String,
         summary: String,
         input: Value,
+        /// The "don't ask again" choices the CLI offers for this request,
+        /// this-chat-only ones first. Empty: nothing can be remembered.
+        remember: Vec<RememberOption>,
     },
     Usage {
         model: String,
@@ -269,6 +315,10 @@ pub(crate) trait Backend: Send {
     fn set_model(&mut self, model: &str, o: &mut Out) -> Result<()>;
     fn set_permission_mode(&mut self, mode: &str, o: &mut Out) -> Result<()>;
     fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool, o: &mut Out) -> Result<()>;
+    /// Allow, and apply one of the request's [`RememberOption`]s.
+    fn respond_permission_remember(&mut self, request_id: &str, _remember: &str, _o: &mut Out) -> Result<()> {
+        bail!("no pending permission request {request_id}")
+    }
     /// Answers to a `question` request, one list per question, in order.
     fn respond_question(&mut self, request_id: &str, _answers: &[Vec<String>], _o: &mut Out) -> Result<()> {
         bail!("no pending question {request_id}")
@@ -568,9 +618,21 @@ impl Chat {
         self.with_backend(json!({"call": "set_permission_mode", "mode": mode}), |b, o| b.set_permission_mode(mode, o))
     }
 
+    /// Allow once, deny, or (`always`) allow and apply the request's first
+    /// remember option *only if it is for this chat alone*; a rule that would
+    /// be saved to a settings file is never applied this way (use
+    /// [`Chat::respond_permission_remember`]). With no such option, `always`
+    /// allows once.
     pub fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool) -> Result<()> {
         let call = json!({"call": "respond_permission", "request_id": request_id, "allow": allow, "always": always});
         self.with_backend(call, |b, o| b.respond_permission(request_id, allow, always, o))
+    }
+
+    /// Allow, and apply the [`RememberOption`] with id `remember` from the
+    /// request's `permission_request.remember`.
+    pub fn respond_permission_remember(&mut self, request_id: &str, remember: &str) -> Result<()> {
+        let call = json!({"call": "respond_permission", "request_id": request_id, "allow": true, "remember": remember});
+        self.with_backend(call, |b, o| b.respond_permission_remember(request_id, remember, o))
     }
 
     /// Answer a [`ChatEventKind::Question`]: for each question, in order, the
@@ -757,6 +819,7 @@ pub(crate) mod testutil {
                         "interrupt" => b.interrupt(&mut o),
                         "set_model" => b.set_model(&s("model"), &mut o),
                         "set_permission_mode" => b.set_permission_mode(&s("mode"), &mut o),
+                        "respond_permission" if line["remember"].is_string() => b.respond_permission_remember(&s("request_id"), &s("remember"), &mut o),
                         "respond_permission" => b.respond_permission(&s("request_id"), line["allow"] == true, line["always"] == true, &mut o),
                         "respond_question" => {
                             let answers: Vec<Vec<String>> = serde_json::from_value(line["answers"].clone()).unwrap();

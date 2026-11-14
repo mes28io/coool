@@ -100,10 +100,16 @@ impl Hub {
 
         self.reap();
 
+        // Sessions handed from an ended chat to a terminal ("Open in terminal"):
+        // the terminal owns them now, so the row stays one continuous session.
+        let handed: Vec<&String> = self.links.iter().filter(|(mi, _)| self.get(**mi).is_some_and(|m| m.is_running())).map(|(_, id)| id).collect();
         // Chats know their provider session id exactly; link those first.
         for (ci, c) in self.chats.iter().enumerate() {
             let Some(c) = c else { continue };
             let Some(sid) = c.session_id() else { continue };
+            if !c.is_running() && handed.contains(&&sid) {
+                continue;
+            }
             let Some(s) = all.iter_mut().find(|s| s.provider == c.provider && s.id == sid && s.chat.is_none()) else { continue };
             s.chat = Some(ci);
             if c.is_running() {
@@ -126,8 +132,11 @@ impl Hub {
         for mi in order {
             let Some(m) = self.managed[mi].as_ref() else { continue };
             let free = |s: &Session| s.provider == m.provider && s.managed.is_none() && s.chat.is_none();
+            let linked = self.links.get(&mi).and_then(|id| all.iter().position(|s| free(s) && s.id == *id));
             // `sticky`: confident enough to remember the link for later refreshes.
             let (hit, sticky) = match m.provider {
+                // A known link (a chat handed to the terminal), else the pid registry.
+                Provider::Claude if linked.is_some() => (linked, true),
                 Provider::Claude => (all.iter().position(|s| free(s) && s.pid.is_some() && s.pid == m.pid), false),
                 // Codex has no pid registry: a link made earlier, else the session
                 // being resumed, else the first session started in that folder after
@@ -258,10 +267,14 @@ impl Hub {
             std::thread::sleep(Duration::from_millis(25));
         }
         let args = match provider {
-            Provider::Claude => vec!["--resume".to_string(), sid],
-            Provider::Codex => vec!["resume".to_string(), sid],
+            Provider::Claude => vec!["--resume".to_string(), sid.clone()],
+            Provider::Codex => vec!["resume".to_string(), sid.clone()],
         };
-        self.spawn(provider, &args, &cwd, rows, cols)
+        let pty = self.spawn(provider, &args, &cwd, rows, cols)?;
+        // The session id is known exactly: link the terminal to it now instead
+        // of waiting for the CLI to register (the row never reads "Ended").
+        self.links.insert(pty, sid);
+        Ok(pty)
     }
 
     /// Managed PTYs that are running but not yet matched to a transcript.

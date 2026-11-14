@@ -10,7 +10,7 @@
 //   "ask" / "choose" / "which"        -> a question card (AskUserQuestion), then a reply using the answer
 // Slash commands that only work in the TUI emit `notice` with needs_terminal.
 
-import type { Activity, Agent, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, Session, SlashCommand, Tokens } from "./types";
+import type { Activity, Agent, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, Session, SlashCommand, Tokens } from "./types";
 
 type DistOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
 type Draft = DistOmit<ChatEvent, "seq" | "ts">;
@@ -111,7 +111,7 @@ export class MockChat {
   /** Virtual clock while pre-seeding history; null = real time. */
   vt: number | null = null;
   gen = 0;
-  waiting: { requestId: string; resolve: (a: "allow" | "always" | "deny") => void } | null = null;
+  waiting: { requestId: string; remember: RememberOption[]; resolve: (a: "allow" | "always" | "deny") => void } | null = null;
   asking: { requestId: string; resolve: (a: string[][] | null) => void } | null = null;
   always = new Set<string>();
   queue: string[] = [];
@@ -347,12 +347,42 @@ export class MockChat {
     this.mode = m;
     this.ready();
   }
-  respond(requestId: string, allow: boolean, always: boolean) {
+  respond(requestId: string, allow: boolean, always: boolean, remember?: string | null) {
     if (this.asking?.requestId === requestId && !allow) return this.answer(requestId, null);
     if (!this.waiting || this.waiting.requestId !== requestId) return;
     const w = this.waiting;
+    // Like the core: `always` alone only takes a this-chat-only option.
+    const opt = allow ? (remember != null ? w.remember.find((o) => o.id === remember) : always && w.remember[0]?.scope === "chat" ? w.remember[0] : undefined) : undefined;
+    if (remember != null && allow && !opt) throw new Error(`request ${requestId} has no remember option ${remember}`);
     this.waiting = null;
-    w.resolve(!allow ? "deny" : always ? "always" : "allow");
+    if (opt?.mode) this.setMode(opt.mode);
+    else if (opt) this.always.add(this.waitingTool);
+    w.resolve(!allow ? "deny" : opt ? "always" : "allow");
+  }
+  private waitingTool = "";
+
+  /** What the real CLIs offer to remember (see CHAT_SPEC "Remember options"). */
+  private rememberFor(tool: string, input: unknown): RememberOption[] {
+    const i = (input ?? {}) as Record<string, unknown>;
+    const cmd = typeof i.command === "string" ? i.command : "";
+    const first = cmd.split(/\s+/).slice(0, 2).join(" ");
+    const o = (id: string, scope: RememberOption["scope"], label: string, detail: string, extra: Partial<RememberOption> = {}): RememberOption => ({ id, scope, label, detail, file: null, mode: null, rules: [], ...extra });
+    if (this.provider === "claude") {
+      if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool))
+        return [o("0", "chat", "Allow all edits in this chat", "Switches this chat to Accept edits mode: later file edits, and file commands such as mkdir, mv or rm, run without asking. Nothing is saved.", { mode: "acceptEdits" })];
+      if (tool === "Bash" && first) {
+        const rule = `Bash(${first} *)`;
+        return [
+          o("0", "chat", `Allow \`${first}\` commands in this chat`, "For this chat only; nothing is saved.", { rules: [rule] }),
+          o("1", "project", `Always allow \`${first}\` commands in this project`, "Saved to .claude/settings.local.json in this folder: applies to future sessions here too, including ones outside coool.", { file: ".claude/settings.local.json", rules: [rule] }),
+        ];
+      }
+      return [];
+    }
+    if (tool === "shell" && first)
+      return [o("0", "user", `Always allow commands starting with \`${first}\``, "Saved as a rule in ~/.codex/rules/default.rules: applies in every project and future Codex session, including ones outside coool.", { file: "~/.codex/rules/default.rules" })];
+    if (tool === "apply_patch") return [o("0", "chat", "Allow more edits to these files in this chat", "Codex won't ask again for changes to the same files until the chat ends. Nothing is saved.")];
+    return [];
   }
   answer(requestId: string, answers: string[][] | null) {
     if (!this.asking || this.asking.requestId !== requestId) throw new Error(`no pending question ${requestId}`);
@@ -440,10 +470,6 @@ export class MockChat {
         this.emit({ type: "tool_end", id, ok: false, output: "The user denied this tool call." });
         return false;
       }
-      if (answer === "always") {
-        this.always.add(name);
-        this.emit({ type: "notice", level: "info", text: `${name} is now allowed without asking for the rest of this session.`, needs_terminal: false });
-      }
     }
     try {
       await this.sleep(ms, gen);
@@ -459,16 +485,20 @@ export class MockChat {
     if (this.vt !== null) return false;
     if (this.always.has(name)) return false;
     if (this.mode === "bypassPermissions" || this.mode === "never") return false;
+    if (this.mode === "acceptEdits" && /^(Write|Edit|MultiEdit)$/.test(name)) return false;
     return true;
   }
 
   private ask(tool: string, summary: string, input: unknown, gen: number): Promise<"allow" | "always" | "deny"> {
     const requestId = `perm_${rid()}`;
-    this.emit({ type: "permission_request", request_id: requestId, tool, summary, input });
+    const remember = this.rememberFor(tool, input);
+    this.emit({ type: "permission_request", request_id: requestId, tool, summary, input, remember });
     this.setState("waiting_permission");
+    this.waitingTool = tool;
     return new Promise((resolve) => {
       this.waiting = {
         requestId,
+        remember,
         resolve: (a) => {
           if (gen === this.gen) this.setState("working");
           resolve(a);

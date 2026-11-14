@@ -7,11 +7,12 @@ import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { answerPermission, answerQuestion } from "../lib/actions";
 import { type Chat, type ChatItem, useChats } from "../lib/chat";
-import { clockTime, fmtElapsed, folderName, shortDetail, stripToolName } from "../lib/format";
+import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { modelLabel } from "../lib/models";
-import type { Activity } from "../lib/types";
+import type { Activity, RememberOption } from "../lib/types";
 import { HistoryBlocks, PromptBubble, Prose, StepLine, ThinkingRow } from "./Activity";
-import { IAlert, IChevron, ICheck, IClose, IReturn, ISpark, ITerminal } from "./icons";
+import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ISpark, ITerminal } from "./icons";
+import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
 import { Button, cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
 
@@ -325,7 +326,19 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
 
 // ---------- steps ----------
 
-function toolSummary(t: Tool): string {
+/** A path as the reader thinks of it: relative to the chat's folder when inside it, else with `~`. */
+function relPath(p: string, cwd: string): string {
+  const norm = (x: string) => x.replace(/^\/private(?=\/(tmp|var)\/)/, "").replace(/\/+$/, "");
+  const [a, base] = [norm(p), norm(cwd)];
+  if (base && a.startsWith(base + "/")) return a.slice(base.length + 1);
+  return homeShort(p);
+}
+
+function toolSummary(t: Tool, cwd: string): string {
+  // From the input when it names a file: the core's one-line summary may have clipped a long path.
+  const i = (t.input ?? {}) as Record<string, unknown>;
+  const file = typeof i.file_path === "string" ? i.file_path : typeof i.notebook_path === "string" ? i.notebook_path : null;
+  if (file && cwd) return relPath(file, cwd);
   return stripToolName(t.name, t.summary || "");
 }
 
@@ -390,7 +403,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
                     {t.agent ? (
                       <AgentCard tool={t} chat={chat} kids={nested.get(t.id) ?? []} />
                     ) : (
-                      <ToolStep t={t} waiting={t.endTs === null && pendingTool === t.name} />
+                      <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} />
                     )}
                   </motion.li>
                 );
@@ -403,14 +416,14 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
   );
 });
 
-function ToolStep({ t, dense, waiting }: { t: Tool; dense?: boolean; waiting?: boolean }) {
+function ToolStep({ t, cwd, dense, waiting }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean }) {
   const [open, setOpen] = useState(false);
   const hasOut = !!t.output && t.endTs !== null;
   return (
     <div>
       <StepLine
         name={t.name}
-        detail={dense ? shortDetail(toolSummary(t)) : toolSummary(t)}
+        detail={dense ? shortDetail(toolSummary(t, cwd)) : toolSummary(t, cwd)}
         active={t.endTs === null}
         waiting={waiting}
         failed={t.ok === false}
@@ -484,7 +497,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
             <AnimatePresence initial={false}>
               {shownSteps.map((s) => (
                 <motion.li key={s.key} layout="position" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24, ease }}>
-                  <ToolStep t={s} dense />
+                  <ToolStep t={s} cwd={chat.cwd} dense />
                 </motion.li>
               ))}
             </AnimatePresence>
@@ -515,10 +528,70 @@ function permDetail(p: Perm): { lead: string; body: string; note?: string } {
   return { lead: `use ${p.tool}`, body: p.summary };
 }
 
+/** "Allow `npm test` commands" -> text with `code` spans. */
+function Ticks({ text }: { text: string }) {
+  const parts = text.split("`");
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 ? (
+          <code key={i} className="rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] px-1 py-px font-mono text-[0.92em]">
+            {p}
+          </code>
+        ) : (
+          p
+        ),
+      )}
+    </>
+  );
+}
+
+const modeName = (provider: string, id: string) => PERMISSION_MODES[provider]?.find((m) => m.id === id)?.label ?? id;
+
+/** The timeline note once a remember option was applied: what changed, and where it is kept. */
+export function rememberedNote(r: RememberOption, provider: string): string {
+  if (r.mode && r.scope === "chat") return `this chat is now in ${modeName(provider, r.mode)} mode`;
+  const what = r.label.replace(/^Always allow /, "always allowing ").replace(/^Allow /, "allowing ").replace(/^Switch /, "switched ");
+  return r.file ? `${what}, saved to ${r.file}` : what;
+}
+
+function RememberRow({ option, quick, onPick }: { option: RememberOption; quick: boolean; onPick: () => void }) {
+  const saved = option.scope !== "chat";
+  return (
+    <button
+      type="button"
+      data-remember={option.id}
+      data-remember-scope={option.scope}
+      onClick={onPick}
+      title={option.rules.length ? option.rules.join("\n") : undefined}
+      className={cx(
+        "group flex w-full items-start gap-2.5 rounded-[9px] border px-3 py-2 text-left transition-[background-color,border-color] duration-150 active:scale-[0.995]",
+        saved
+          ? "border-[color-mix(in_oklab,var(--busy)_28%,var(--border))] hover:bg-[color-mix(in_oklab,var(--busy)_7%,transparent)]"
+          : "border-line hover:border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] hover:bg-hover",
+      )}
+    >
+      <span className={cx("mt-[3px] flex size-[16px] shrink-0 items-center justify-center rounded-[5px]", saved ? "bg-[color-mix(in_oklab,var(--busy)_16%,transparent)] text-busy" : "bg-accent-soft text-accent")}>
+        {saved ? <IFile size={11} /> : <ICheck size={11} />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="min-w-0 text-sm font-medium leading-[20px] text-fg">
+            <Ticks text={option.label} />
+          </span>
+          {quick && <Kbd className="ml-auto shrink-0">⇧⌘↵</Kbd>}
+          {saved && <span className="ml-auto shrink-0 rounded-[5px] bg-[color-mix(in_oklab,var(--busy)_14%,transparent)] px-1.5 text-2xs font-medium leading-[18px] text-busy">{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
+        </span>
+        <span className="mt-0.5 block text-xs leading-[17px] text-dim">{option.detail}</span>
+      </span>
+    </button>
+  );
+}
+
 function Approval({ item, chat }: { item: Perm; chat: Chat }) {
   const d = permDetail(item);
   const who = chat.provider === "claude" ? "Claude" : "Codex";
-  const respond = (a: "allow" | "always" | "deny") => answerPermission(chat.id, item.requestId, a);
+  const quick = item.remember[0]?.scope === "chat" ? item.remember[0] : null;
   return (
     <AnimatePresence mode="wait" initial={false}>
       {item.answer === null && chat.running ? (
@@ -541,30 +614,43 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
             <span className="ml-auto rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-2xs font-medium leading-[18px] text-dim">{item.tool}</span>
           </div>
           <div className="px-3.5">
-            <pre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-xs leading-[18px] text-fg/90">{d.body}</pre>
+            <pre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-xs leading-[18px] text-fg/90">{homeShort(d.body)}</pre>
             {d.note && <div className="mt-1.5 text-xs text-dim">{d.note}</div>}
           </div>
           <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3 pt-3">
-            <Button variant="primary" onClick={() => respond("allow")} title="Allow once (⌘↵)">
+            <Button variant="primary" onClick={() => answerPermission(chat.id, item.requestId, "allow")} title="Allow this once (⌘↵)" data-allow-once>
               Allow once
               <Kbd className="ml-0.5 border-transparent bg-[color-mix(in_oklab,var(--accent-ink)_16%,transparent)] text-current">⌘↵</Kbd>
             </Button>
-            <Button variant="outline" onClick={() => respond("always")} title={`Don't ask again for ${item.tool} in this session`}>
-              Always allow {item.tool}
-            </Button>
-            <Button variant="ghost" onClick={() => respond("deny")} className="hover:text-err" title="Deny (⌘⌫)">
+            <Button variant="ghost" onClick={() => answerPermission(chat.id, item.requestId, "deny")} className="hover:text-err" title="Deny (⌘⌫)" data-deny>
               Deny
             </Button>
             <span className="ml-auto text-2xs text-faint">The turn is paused until you answer</span>
           </div>
+          {item.remember.length > 0 && (
+            <div className="border-t border-hairline px-3.5 pb-3 pt-2.5" data-remember-options>
+              <div className="mb-1.5 text-2xs font-medium uppercase tracking-[0.06em] text-faint">Allow and don't ask again</div>
+              <div className="flex flex-col gap-1.5">
+                {item.remember.map((o) => (
+                  <RememberRow key={o.id} option={o} quick={o === quick} onPick={() => answerPermission(chat.id, item.requestId, "always", o)} />
+                ))}
+              </div>
+            </div>
+          )}
         </motion.div>
       ) : (
-        <motion.div key="done" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, ease }} className="flex items-center gap-2 px-1 text-xs">
-          {item.answer === "deny" ? <IClose size={12} className="text-err" /> : <ICheck size={12} className={item.answer === "answered" || !item.answer ? "text-faint" : "text-accent"} />}
-          <span className={cx("font-medium", item.answer === "deny" ? "text-err/90" : item.answer === "answered" || !item.answer ? "text-dim" : "text-accent")}>
-            {item.answer === "allow" ? "Allowed once" : item.answer === "always" ? `Always allowing ${item.tool}` : item.answer === "deny" ? "Denied" : "Permission answered"}
+        <motion.div key="done" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, ease }} className="flex min-w-0 items-center gap-2 px-1 text-xs" data-approval-done={item.answer ?? ""}>
+          {item.answer === "deny" ? <IClose size={12} className="shrink-0 text-err" /> : <ICheck size={12} className={cx("shrink-0", item.answer === "answered" || !item.answer ? "text-faint" : "text-accent")} />}
+          <span className={cx("shrink-0 font-medium", item.answer === "deny" ? "text-err/90" : item.answer === "answered" || !item.answer ? "text-dim" : "text-accent")}>
+            {item.answer === "allow" ? "Allowed once" : item.answer === "always" ? "Allowed" : item.answer === "deny" ? "Denied" : "Permission answered"}
           </span>
-          <span className="min-w-0 truncate font-mono text-2xs text-faint">{shortDetail(d.body.split("\n")[0])}</span>
+          {item.answer === "always" && item.remembered ? (
+            <span className="min-w-0 truncate text-dim" data-remembered={item.remembered.scope} title={item.remembered.detail}>
+              · <Ticks text={rememberedNote(item.remembered, chat.provider)} />
+            </span>
+          ) : (
+            <span className="min-w-0 truncate font-mono text-2xs text-faint">{shortDetail(homeShort(d.body.split("\n")[0]))}</span>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

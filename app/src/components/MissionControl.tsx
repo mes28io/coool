@@ -2,7 +2,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
 import { useNow } from "../lib/clock";
 import { useChats } from "../lib/chat";
-import { ago, displayTitle, folderName, homeShort, isThinking, shortDetail, splitTool } from "../lib/format";
+import { ago, displayTitle, folderName, headlineIsTitle, isThinking, shortDetail, splitTool } from "../lib/format";
 import { attention, useChatDigest, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { Activity, ChatInfo, PtyInfo, Session } from "../lib/types";
@@ -10,7 +10,7 @@ import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { useStore, type Since } from "../store";
 import { IPlay, IPlus, ISpark, toolIcon, Logo } from "./icons";
-import { Button, ContextMeter, cx, Elapsed, ease, Kbd, NeedsBadge, ProviderMark, softSpring, StatusPill, Ticker } from "./primitives";
+import { Button, ContextMeter, cx, Elapsed, ease, Kbd, NeedsBadge, PathText, ProviderMark, softSpring, StatusPill, Ticker } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { CardSkeleton, RecentSkeleton, Skel } from "./Skeletons";
 
@@ -192,7 +192,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
   const CurIcon = cur ? toolIcon(cur.name) : ISpark;
   const since = useCardSince(s);
   const agents = s.agents.filter((a) => !a.finished).length;
-  const headline = s.insight?.headline && s.insight.headline !== displayTitle(s) ? s.insight.headline : null;
+  const headline = s.insight?.headline && !headlineIsTitle(s) ? s.insight.headline : null;
   const pending = s.loaded === false;
 
   return (
@@ -341,7 +341,7 @@ function StartingCard({ p, chat, i, stagger }: { p?: PtyInfo; chat?: ChatInfo; i
       <div className="mt-2 text-md font-semibold text-fg">
         New {info.provider === "claude" ? "Claude Code" : "Codex"} {chat ? "chat" : "session"}
       </div>
-      <div className="mt-1 font-mono text-2xs text-faint">{homeShort(info.cwd)}</div>
+      <PathText path={info.cwd} className="mt-1 text-2xs text-faint" />
       <div className="mt-auto flex items-center gap-2 text-sm">
         {ready ? (
           <span className="text-dim">Ready for a first prompt</span>

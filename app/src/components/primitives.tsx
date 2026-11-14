@@ -1,9 +1,11 @@
 import { animate, AnimatePresence, motion, useMotionValue, useTransform } from "motion/react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import type { Provider, Status } from "../lib/types";
-import { fmtApprox, fmtElapsed, fmtTokens } from "../lib/format";
+import { homeShort, fmtApprox, fmtElapsed, fmtTokens } from "../lib/format";
 import { useNow } from "../lib/clock";
 import { contextWindow } from "../lib/models";
+import claudeSvg from "../assets/brands/claude.svg?raw";
+import openaiSvg from "../assets/brands/openai.svg?raw";
 
 export type UiStatus = Status | "starting" | "needs";
 
@@ -49,33 +51,45 @@ export function StatusPill({ status }: { status: UiStatus }) {
         ? "text-accent bg-accent-soft"
         : "text-dim bg-hover";
   return (
-    <span className={cx("inline-flex h-[20px] shrink-0 items-center gap-1.5 rounded-full pl-[7px] pr-2 text-xs font-medium", tone)}>
+    <span className={cx("inline-flex h-[20px] shrink-0 items-center gap-1.5 rounded-full pl-[7px] pr-2 text-xs font-medium", tone)} data-status-pill={status}>
       <StatusDot status={status} size={6} />
       {statusLabel(status)}
     </span>
   );
 }
 
-export function ProviderMark({ provider, size = 13, className }: { provider: Provider; size?: number; className?: string }) {
-  if (provider === "claude") {
-    const rays = [0, 45, 90, 135, 180, 225, 270, 315];
-    return (
-      <svg width={size} height={size} viewBox="0 0 16 16" className={cx("shrink-0", className)} aria-label="claude">
-        <g stroke="var(--claude)" strokeWidth="1.9" strokeLinecap="round">
-          {rays.map((a, i) => {
-            const r = (a * Math.PI) / 180;
-            const len = i % 2 ? 5.2 : 6.3;
-            return <line key={a} x1={8 + Math.cos(r) * 1.6} y1={8 + Math.sin(r) * 1.6} x2={8 + Math.cos(r) * len} y2={8 + Math.sin(r) * len} />;
-          })}
-        </g>
-      </svg>
-    );
-  }
+/**
+ * A folder path that shortens from the middle: home as `~`, and when space
+ * runs out the parent part ellipsizes while the last folder stays whole
+ * ("~/Desktop/clients/acm…/coool").
+ */
+export function PathText({ path, className }: { path: string; className?: string }) {
+  const p = homeShort(path);
+  const i = p.lastIndexOf("/");
+  const head = i > 0 ? p.slice(0, i) : "";
+  const tail = i > 0 ? p.slice(i) : p;
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" className={cx("shrink-0", className)} aria-label="codex">
-      <path d="M8 1.9l5.3 3.05v6.1L8 14.1l-5.3-3.05v-6.1z" fill="none" stroke="var(--codex)" strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M6 6.6l1.7 1.4L6 9.4M8.6 9.6h1.6" fill="none" stroke="var(--codex)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
+    <span className={cx("flex min-w-0 font-mono", className)} title={path} data-path>
+      {head && <span className="min-w-[2ch] shrink-[100] truncate">{head}</span>}
+      {/* Never shrinks while the parent part can (even 1px would ellipsize it), within reason. */}
+      <span className="max-w-[70%] shrink-0 truncate">{tail}</span>
+    </span>
+  );
+}
+
+/**
+ * The provider's own mark (first-party artwork, see assets/brands/README.md):
+ * Claude in its orange, the monochrome OpenAI mark in the current text colour.
+ */
+export function ProviderMark({ provider, size = 13, className }: { provider: Provider; size?: number; className?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={provider === "claude" ? "Claude" : "Codex (OpenAI)"}
+      className={cx("inline-flex shrink-0 [&>svg]:block [&>svg]:size-full", provider === "codex" && "text-fg", className)}
+      style={{ width: size, height: size }}
+      dangerouslySetInnerHTML={{ __html: provider === "claude" ? claudeSvg : openaiSvg }}
+    />
   );
 }
 
@@ -264,7 +278,7 @@ export function Chip({
       title={title}
       onClick={onClick}
       className={cx(
-        "inline-flex h-[24px] shrink-0 items-center gap-1.5 rounded-[7px] px-2 text-xs font-medium transition-[background-color,color] duration-150",
+        "inline-flex h-[24px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[7px] px-2 text-xs font-medium transition-[background-color,color] duration-150",
         active ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
         className,
       )}

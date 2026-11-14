@@ -2,7 +2,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
 import { isMac, isTauri } from "../lib/backend";
 import { useNow } from "../lib/clock";
-import { ago, displayTitle, folderName, homeShort, isThinking, shortDetail, splitTool } from "../lib/format";
+import { ago, displayTitle, folderName, headlineIsTitle, homeShort, isThinking, shortDetail, splitTool } from "../lib/format";
 import { attention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
 import { modelLabel } from "../lib/models";
 import type { Agent, ChatInfo, PtyInfo, Session, Status } from "../lib/types";
@@ -360,10 +360,12 @@ function Row({
       {...rowMotion}
       onClick={onClick}
       className={cx(
-        "relative flex w-full items-start gap-2 rounded-[8px] py-[5px] pr-2 text-left transition-colors duration-150",
-        selected ? "bg-[color-mix(in_oklab,var(--text)_7%,transparent)]" : "hover:bg-hover",
+        "relative flex w-full items-start gap-2 rounded-[8px] py-[5px] pr-2 text-left",
+        selected ? "[--row-tint:color-mix(in_oklab,var(--text)_7%,transparent)]" : "[--row-tint:transparent] hover:[--row-tint:var(--hover)]",
       )}
-      style={{ paddingLeft: 10 + indent }}
+      // Opaque (tint over the panel colour): rows that trade places slide past
+      // each other instead of drawing their text on top of one another.
+      style={{ paddingLeft: 10 + indent, background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--panel)" }}
     >
       {selected && <motion.span layoutId="sb-sel" transition={spring} className="absolute inset-y-[6px] left-0 w-[2.5px] rounded-full bg-accent" />}
       {children}
@@ -376,7 +378,7 @@ function subline(s: Session, a: Attention, now: number): { text: string; tone: T
   if (a.needs) return { text: a.needs, tone: "needs" };
   // Details not parsed yet: don't guess what it's doing.
   if (s.loaded === false && a.status === "busy" && !s.current) return { text: "", tone: "loading", title: "Reading transcript…" };
-  const headline = s.insight?.headline;
+  const headline = headlineIsTitle(s) ? undefined : s.insight?.headline;
   if (a.status === "busy") {
     if (!s.current || isThinking(s.current)) return headline ? { text: headline, tone: "insight", title: "Thinking…" } : { text: "Thinking…", tone: "live" };
     const { name, detail } = splitTool(s.current);

@@ -140,6 +140,20 @@ export interface Question {
   allow_other: boolean;
   secret: boolean;
 }
+/** A "don't ask again" choice the CLI offers on a permission request. */
+export interface RememberOption {
+  id: string;
+  /** Button text, e.g. "Allow all edits in this chat". */
+  label: string;
+  /** Exactly what changes and where it is kept. */
+  detail: string;
+  /** chat: this chat only; project / user: saved to `file`. */
+  scope: "chat" | "project" | "user";
+  file: string | null;
+  /** Set when choosing it switches the chat's permission mode. */
+  mode: string | null;
+  rules: string[];
+}
 interface Ev {
   seq: number;
   ts: number;
@@ -163,7 +177,7 @@ export type ChatEvent = Ev &
     | { type: "assistant_message"; id: string; text: string; model: string | null; parent_tool_id: string | null }
     | { type: "tool_start"; id: string; name: string; summary: string; input: unknown; parent_tool_id: string | null }
     | { type: "tool_end"; id: string; ok: boolean; output: string }
-    | { type: "permission_request"; request_id: string; tool: string; summary: string; input: unknown }
+    | { type: "permission_request"; request_id: string; tool: string; summary: string; input: unknown; remember?: RememberOption[] }
     | { type: "usage"; model: string | null; tokens: Tokens; context_window: number | null }
     | { type: "state"; state: ChatRunState }
     | { type: "turn_end"; duration_ms: number; ok: boolean }

@@ -390,8 +390,12 @@ fn chat_set_permission_mode(core: State<'_, Arc<Core>>, id: usize, mode: String)
 }
 
 #[tauri::command(async)]
-fn chat_respond_permission(core: State<'_, Arc<Core>>, id: usize, request_id: String, allow: bool, always: bool) -> Res<()> {
-    core.with_chat(id, |c| c.respond_permission(&request_id, allow, always))
+fn chat_respond_permission(core: State<'_, Arc<Core>>, id: usize, request_id: String, allow: bool, always: bool, remember: Option<String>) -> Res<()> {
+    // `remember`: one of the request's `remember` option ids (allow and apply it).
+    match remember.filter(|_| allow) {
+        Some(r) => core.with_chat(id, |c| c.respond_permission_remember(&request_id, &r)),
+        None => core.with_chat(id, |c| c.respond_permission(&request_id, allow, always)),
+    }
 }
 
 #[tauri::command(async)]

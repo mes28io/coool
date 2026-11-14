@@ -38,12 +38,45 @@ export function stripToolName(name: string, summary: string): string {
   return summary.startsWith(name + " · ") ? summary.slice(name.length + 3) : summary;
 }
 
-export function displayTitle(s: Pick<Session, "title" | "last_prompt" | "cwd">): string {
-  if (s.title && !(s.last_prompt && generic(s.title, s.cwd))) return s.title;
-  if (s.last_prompt) {
-    const one = s.last_prompt.split(/\s+/).join(" ");
-    return one.length > 60 ? one.slice(0, 59) + "…" : one;
-  }
+const TITLE_MAX = 56;
+
+/**
+ * A prompt -> a short title: its first sentence (or line), cut at a clause
+ * break or a word boundary when still long. "Fix the login bug. Then add
+ * tests for it" -> "Fix the login bug".
+ */
+export function shortTitle(text: string, max = TITLE_MAX): string {
+  const firstLine = text.trim().split(/\n/).find((l) => l.trim()) ?? "";
+  let t = firstLine.replace(/\s+/g, " ").trim();
+  // First sentence: a period/!/? followed by a space (not "e.g. " or "v2.1").
+  const m = /^(.{8,}?[^\s.]{2}[.!?])\s/.exec(t + " ");
+  if (m) t = m[1].replace(/[.]$/, "");
+  if (t.length <= max) return t;
+  // A clause break in the second half of the budget reads better than a word cut.
+  const head = t.slice(0, max);
+  const clause = Math.max(head.lastIndexOf(", "), head.lastIndexOf("; "), head.lastIndexOf(": "), head.lastIndexOf(" - "), head.lastIndexOf(" — "));
+  if (clause >= max * 0.45) return head.slice(0, clause).trimEnd() + "…";
+  const word = head.lastIndexOf(" ");
+  return (word >= max * 0.5 ? head.slice(0, word) : head.slice(0, max - 1)).replace(/[\s,;:.-]+$/, "") + "…";
+}
+
+/** The insight headline is already the title (so don't show it twice). */
+export function headlineIsTitle(s: Pick<Session, "title" | "last_prompt" | "cwd"> & { insight?: Session["insight"] }): boolean {
+  const h = s.insight?.headline?.trim();
+  return !!h && displayTitle(s) === shortTitle(h, 72);
+}
+
+/** A name the CLI gave from the prompt itself rather than a real title. */
+const promptLike = (title: string) => title.length > TITLE_MAX || title.includes("\n");
+
+export function displayTitle(s: Pick<Session, "title" | "last_prompt" | "cwd"> & { insight?: Session["insight"] }): string {
+  const real = s.title && !(s.last_prompt && generic(s.title, s.cwd)) ? s.title : "";
+  if (real && !promptLike(real)) return real;
+  // No real name yet: the AI headline when insights are on, else a short form of the prompt.
+  const headline = s.insight?.headline?.trim();
+  if (headline) return shortTitle(headline, 72);
+  if (real) return shortTitle(real);
+  if (s.last_prompt) return shortTitle(s.last_prompt);
   return folderName(s.cwd) || "untitled";
 }
 

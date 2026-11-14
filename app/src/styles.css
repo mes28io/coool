@@ -376,6 +376,17 @@ html.theme-fade *::after {
   }
 }
 
+/* The permission-mode chip when the mode changed from elsewhere (e.g. "Allow all edits"). */
+@keyframes mode-flash {
+  0%,
+  45% {
+    color: var(--accent);
+  }
+}
+.mode-flash {
+  animation: mode-flash 1.8s ease-out;
+}
+
 /* Approval card: a soft light circling the border draws the eye without shouting. */
 .attn-card {
   position: relative;

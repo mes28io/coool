@@ -17,7 +17,9 @@ export function useChatDigest(): ChatDigest {
     let out = "";
     for (const c of Object.values(st.chats)) {
       if (!c.ready && !c.items.length) continue;
-      out += `${c.id}\u0001${chatStatus(c)}\u0001${chatNeeds(c) ?? ""}\u0002`;
+      // Handed to a terminal: the CLI moves processes, the session goes on.
+      const status = !c.running && st.handoff[c.id] ? "idle" : chatStatus(c);
+      out += `${c.id}\u0001${status}\u0001${chatNeeds(c) ?? ""}\u0002`;
     }
     return out;
   });

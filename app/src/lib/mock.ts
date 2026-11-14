@@ -784,9 +784,9 @@ export function mockBackend(): Backend {
     async chatSetPermissionMode(id, mode) {
       chats[id]?.setMode(mode);
     },
-    async chatRespondPermission(id, requestId, allow, always) {
+    async chatRespondPermission(id, requestId, allow, always, remember) {
       await delay(60);
-      chats[id]?.respond(requestId, allow, always);
+      chats[id]?.respond(requestId, allow, always, remember);
     },
     async chatRespondQuestion(id, requestId, answers) {
       await delay(60);

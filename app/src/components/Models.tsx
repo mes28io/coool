@@ -128,14 +128,15 @@ export function ModelsChip({ data, current }: { data: ModelsData; current: strin
   if (!current && !ids.size) return null;
   const shown = current ?? [...ids][0];
   return (
-    <div className="relative">
+    <div className="relative shrink-0">
       <button
         type="button"
         data-pop-anchor
+        data-models-chip
         onClick={() => setOpen(!open)}
         title="Models used in this session"
         className={cx(
-          "flex h-[22px] items-center gap-1.5 rounded-[6px] px-1.5 text-xs transition-colors duration-150",
+          "flex h-[22px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[6px] px-1.5 text-xs transition-colors duration-150",
           open ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >

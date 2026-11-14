@@ -104,6 +104,8 @@ pub(crate) struct Codex {
     turn_id: Option<String>,
     in_turn: bool,
     perms: HashMap<String, (Value, PermKind)>,
+    /// Remember options per pending approval, with the decision each sends.
+    remember: HashMap<String, Vec<(RememberOption, Value)>>,
     /// Subagent thread -> the collab tool call that spawned it.
     child_threads: HashMap<String, String>,
     last_spawn: Option<String>,
@@ -134,6 +136,7 @@ impl Codex {
             turn_id: None,
             in_turn: false,
             perms: HashMap::new(),
+            remember: HashMap::new(),
             child_threads: HashMap::new(),
             last_spawn: None,
             started_tools: HashSet::new(),
@@ -314,26 +317,33 @@ impl Codex {
             Value::String(s) => s.clone(),
             other => other.to_string(),
         };
-        let perm = |tool: &str, summary: String, input: Value| ChatEventKind::PermissionRequest { request_id: rid.clone(), tool: tool.to_string(), summary, input };
-        let ev = match v["method"].as_str().unwrap_or("") {
+        let method = v["method"].as_str().unwrap_or("");
+        let remember = approval_options(method, p);
+        let options: Vec<RememberOption> = remember.iter().map(|(o, _)| o.clone()).collect();
+        let perm = |tool: &str, summary: String, input: Value| ChatEventKind::PermissionRequest { request_id: rid.clone(), tool: tool.to_string(), summary, input, remember: options.clone() };
+        let ev = match method {
             "item/commandExecution/requestApproval" => {
                 let cmd = p["command"].as_str().map(unwrap_shell).unwrap_or_default();
                 self.perms.insert(rid.clone(), (id, PermKind::V2));
+                self.remember.insert(rid.clone(), remember);
                 perm("shell", tool_line("shell", &cmd), json!({"command": cmd, "cwd": p["cwd"], "reason": p["reason"]}))
             }
             "item/fileChange/requestApproval" => {
                 let files = self.file_changes.get(p["itemId"].as_str().unwrap_or("")).cloned().unwrap_or_default();
                 self.perms.insert(rid.clone(), (id, PermKind::V2));
+                self.remember.insert(rid.clone(), remember);
                 perm("apply_patch", tool_line("apply_patch", &files.join(", ")), json!({"files": files, "reason": p["reason"], "grantRoot": p["grantRoot"]}))
             }
             "execCommandApproval" => {
                 let cmd = p["command"].as_array().map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
                 self.perms.insert(rid.clone(), (id, PermKind::Legacy));
+                self.remember.insert(rid.clone(), remember);
                 perm("shell", tool_line("shell", &cmd), json!({"command": cmd, "cwd": p["cwd"], "reason": p["reason"]}))
             }
             "applyPatchApproval" => {
                 let files: Vec<String> = p["fileChanges"].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default();
                 self.perms.insert(rid.clone(), (id, PermKind::Legacy));
+                self.remember.insert(rid.clone(), remember);
                 perm("apply_patch", tool_line("apply_patch", &files.join(", ")), json!({"files": files, "reason": p["reason"]}))
             }
             "item/tool/requestUserInput" if p["questions"].as_array().is_some_and(|q| !q.is_empty()) => {
@@ -413,6 +423,7 @@ impl Codex {
                 self.in_turn = false;
                 self.turn_id = None;
                 self.perms.clear();
+                self.remember.clear();
                 o.ev(ChatEventKind::TurnEnd { duration_ms: t["durationMs"].as_u64().unwrap_or(0), ok: status == "completed" });
                 o.ev(ChatEventKind::State { state: self.state() });
             }
@@ -594,6 +605,95 @@ fn sandbox_policy(mode: &str) -> Value {
 }
 
 /// `/bin/zsh -lc 'touch b.txt'` -> `touch b.txt`.
+/// Where Codex keeps the exec-policy rules an approval can add.
+fn codex_rules_file() -> String {
+    let home = std::env::var("CODEX_HOME").ok().filter(|h| !h.is_empty()).map(std::path::PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
+    home.map(|h| crate::util::home_short(&h.join("rules").join("default.rules").to_string_lossy())).unwrap_or_else(|| "~/.codex/rules/default.rules".into())
+}
+
+/// The "don't ask again" decisions an approval request offers, in plain words
+/// (chat-only first). v2 command approvals list them in `availableDecisions`;
+/// file changes and the legacy requests have a fixed set.
+fn approval_options(method: &str, p: &Value) -> Vec<(RememberOption, Value)> {
+    let command = method.contains("ommand") || method == "execCommandApproval";
+    let legacy = matches!(method, "execCommandApproval" | "applyPatchApproval");
+    let cmd = match p["command"].as_str() {
+        Some(c) => unwrap_shell(c),
+        None => p["command"].as_array().map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+    };
+    let proposed = p.get("proposedExecpolicyAmendment").or(p.get("proposed_execpolicy_amendment")).filter(|a| a.as_array().is_some_and(|a| !a.is_empty())).cloned();
+    let decisions: Vec<Value> = match p["availableDecisions"].as_array() {
+        Some(d) => d.clone(),
+        None if legacy => {
+            let mut d = vec![json!("approved_for_session")];
+            if let Some(a) = &proposed {
+                d.push(json!({"approved_execpolicy_amendment": {"proposed_execpolicy_amendment": a}}));
+            }
+            d
+        }
+        None => {
+            let mut d = vec![json!("acceptForSession")];
+            if let (true, Some(a)) = (command, &proposed) {
+                d.push(json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": a}}));
+            }
+            d
+        }
+    };
+    let words = |a: &Value| a.as_array().map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+    let mut chat = Vec::new();
+    let mut saved = Vec::new();
+    for d in decisions {
+        let opt = |label: String, detail: String, scope: RememberScope, file: Option<String>, rules: Vec<String>| RememberOption { id: String::new(), label, detail, scope, file, mode: None, rules };
+        match &d {
+            Value::String(s) if s == "acceptForSession" || s == "approved_for_session" => {
+                let o = if command {
+                    let what = if cmd.is_empty() { "this command".to_string() } else { format!("`{}`", crate::util::truncate(&cmd, 60)) };
+                    opt(format!("Allow {what} for the rest of this chat"), "Codex won't ask again for this command until the chat ends. Nothing is saved.".into(), RememberScope::Chat, None, Vec::new())
+                } else {
+                    opt("Allow more edits to these files in this chat".into(), "Codex won't ask again for changes to the same files until the chat ends. Nothing is saved.".into(), RememberScope::Chat, None, Vec::new())
+                };
+                chat.push((o, d.clone()));
+            }
+            Value::Object(m) => {
+                let amend = m.get("acceptWithExecpolicyAmendment").map(|x| &x["execpolicy_amendment"]).or(m.get("approved_execpolicy_amendment").map(|x| &x["proposed_execpolicy_amendment"]));
+                if let Some(a) = amend {
+                    let prefix = words(a);
+                    if prefix.is_empty() {
+                        continue;
+                    }
+                    let file = codex_rules_file();
+                    let parts: Vec<String> = a.as_array().into_iter().flatten().filter_map(|s| s.as_str()).map(|s| format!("{s:?}")).collect();
+                    saved.push((
+                        opt(
+                            format!("Always allow commands starting with `{}`", crate::util::truncate(&prefix, 60)),
+                            format!("Saved as a rule in {file}: applies in every project and future Codex session, including ones outside coool."),
+                            RememberScope::User,
+                            Some(file),
+                            vec![format!("prefix_rule(pattern=[{}], decision=\"allow\")", parts.join(", "))],
+                        ),
+                        d.clone(),
+                    ));
+                } else if let Some(n) = m.get("applyNetworkPolicyAmendment").map(|x| &x["network_policy_amendment"]).or(m.get("network_policy_amendment").map(|x| &x["network_policy_amendment"])) {
+                    let host = n["host"].as_str().unwrap_or("");
+                    if n["action"] != "allow" || host.is_empty() {
+                        continue;
+                    }
+                    saved.push((
+                        opt(format!("Always allow network access to {host}"), "Saved to Codex's network policy: applies to future Codex sessions, including ones outside coool.".into(), RememberScope::User, None, vec![format!("allow {host}")]),
+                        d.clone(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out: Vec<(RememberOption, Value)> = chat.into_iter().chain(saved).collect();
+    for (i, (o, _)) in out.iter_mut().enumerate() {
+        o.id = i.to_string();
+    }
+    out
+}
+
 fn unwrap_shell(cmd: &str) -> String {
     for pre in ["/bin/zsh -lc ", "/bin/bash -lc ", "bash -lc ", "zsh -lc ", "/bin/sh -c ", "sh -c "] {
         if let Some(rest) = cmd.strip_prefix(pre) {
@@ -775,23 +875,37 @@ impl Backend for Codex {
         Ok(())
     }
 
+    fn respond_permission_remember(&mut self, request_id: &str, remember: &str, o: &mut Out) -> Result<()> {
+        let Some(decision) = self.remember.get(request_id).and_then(|r| r.iter().find(|(o, _)| o.id == remember)).map(|(_, d)| d.clone()) else {
+            bail!("no remember option {remember} for request {request_id}")
+        };
+        let Some((id, _)) = self.perms.remove(request_id) else { bail!("no pending permission request {request_id}") };
+        self.remember.remove(request_id);
+        o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"decision": decision}}));
+        o.ev(ChatEventKind::State { state: self.state() });
+        Ok(())
+    }
+
     fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool, o: &mut Out) -> Result<()> {
+        // `always`: only an option that stays inside this chat (never a saved rule).
+        let chat_only = self.remember.get(request_id).and_then(|r| r.first()).filter(|(r, _)| !r.persistent()).map(|(r, _)| r.id.clone());
+        if let (true, true, Some(rid)) = (allow, always, chat_only) {
+            return self.respond_permission_remember(request_id, &rid, o);
+        }
         let Some((id, kind)) = self.perms.remove(request_id) else { bail!("no pending permission request {request_id}") };
+        self.remember.remove(request_id);
         if let PermKind::Question(_) = kind {
             // Declined: an empty answer set (the request has no "decline").
-            let _ = (allow, always);
             o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"answers": {}}}));
             o.ev(ChatEventKind::State { state: self.state() });
             return Ok(());
         }
-        let decision = match (kind, allow, always) {
-            (PermKind::V2, true, true) => json!("acceptForSession"),
-            (PermKind::V2, true, false) => json!("accept"),
-            (PermKind::V2, false, _) => json!("decline"),
-            (PermKind::Legacy, true, true) => json!("approved_for_session"),
-            (PermKind::Legacy, true, false) => json!("approved"),
-            (PermKind::Legacy, false, _) => json!({"denied": {"rejection": "The user denied this."}}),
-            (PermKind::Question(_), ..) => unreachable!("handled above"),
+        let decision = match (kind, allow) {
+            (PermKind::V2, true) => json!("accept"),
+            (PermKind::V2, false) => json!("decline"),
+            (PermKind::Legacy, true) => json!("approved"),
+            (PermKind::Legacy, false) => json!({"denied": {"rejection": "The user denied this."}}),
+            (PermKind::Question(_), _) => unreachable!("handled above"),
         };
         o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"decision": decision}}));
         o.ev(ChatEventKind::State { state: self.state() });
@@ -819,6 +933,7 @@ impl Backend for Codex {
 
     fn on_exit(&mut self, o: &mut Out) {
         self.perms.clear();
+        self.remember.clear();
         self.queue.clear();
         if self.in_turn {
             self.in_turn = false;
@@ -834,6 +949,50 @@ mod tests {
 
     fn opts() -> ChatOptions {
         ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()) }
+    }
+
+    /// `availableDecisions` exactly as Codex 0.145 sent them (untrusted mode):
+    /// no session option, only a prefix rule saved for every project.
+    #[test]
+    fn approval_options_say_what_they_save() {
+        let p: Value = serde_json::from_str(r#"{"command":"/bin/zsh -lc 'touch b.txt'","proposedExecpolicyAmendment":["touch","b.txt"],"availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["touch","b.txt"]}},"cancel"]}"#).unwrap();
+        let o = approval_options("item/commandExecution/requestApproval", &p);
+        assert_eq!(o.len(), 1);
+        assert_eq!((o[0].0.label.as_str(), o[0].0.scope), ("Always allow commands starting with `touch b.txt`", RememberScope::User));
+        assert!(o[0].0.file.as_deref().unwrap().ends_with("rules/default.rules"));
+        assert!(o[0].0.detail.contains("every project"));
+        assert_eq!(o[0].1, json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["touch", "b.txt"]}}));
+        // With a session option offered, it comes first.
+        let p: Value = serde_json::from_str(r#"{"command":"npm test","availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["npm","test"]}},"acceptForSession","decline"]}"#).unwrap();
+        let o = approval_options("item/commandExecution/requestApproval", &p);
+        assert_eq!(o.iter().map(|x| x.0.scope).collect::<Vec<_>>(), [RememberScope::Chat, RememberScope::User]);
+        assert_eq!(o[0].0.label, "Allow `npm test` for the rest of this chat");
+        assert_eq!((o[0].0.id.as_str(), o[1].0.id.as_str()), ("0", "1"));
+        // Only accept/decline: nothing to remember.
+        let p: Value = serde_json::from_str(r#"{"command":"ls","availableDecisions":["accept","decline"]}"#).unwrap();
+        assert!(approval_options("item/commandExecution/requestApproval", &p).is_empty());
+        // File changes: the fixed set includes a session option.
+        let o = approval_options("item/fileChange/requestApproval", &json!({}));
+        assert_eq!((o.len(), o[0].0.scope, o[0].1.clone()), (1, RememberScope::Chat, json!("acceptForSession")));
+    }
+
+    #[test]
+    fn always_never_applies_a_saved_rule() {
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        let req = |id: u64, dec: &str| format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"item/commandExecution/requestApproval","params":{{"command":"touch b.txt","availableDecisions":{dec}}}}}"#);
+        c.on_line(&req(1, r#"["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["touch","b.txt"]}},"cancel"]"#), &mut o);
+        c.on_line(&req(2, r#"["accept","acceptForSession","decline"]"#), &mut o);
+        c.on_line(&req(3, r#"["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["touch","b.txt"]}},"cancel"]"#), &mut o);
+        let ChatEventKind::PermissionRequest { remember, .. } = o.events.iter().find(|e| matches!(e, ChatEventKind::PermissionRequest { .. })).unwrap() else { panic!() };
+        assert_eq!(remember.len(), 1);
+        let mut o = Out::default();
+        c.respond_permission("1", true, true, &mut o).unwrap();
+        c.respond_permission("2", true, true, &mut o).unwrap();
+        c.respond_permission_remember("3", "0", &mut o).unwrap();
+        let d: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str::<Value>(w).unwrap()["result"]["decision"].clone()).collect();
+        assert_eq!(d, [json!("accept"), json!("acceptForSession"), json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["touch", "b.txt"]}})]);
+        assert_eq!(c.state(), ChatState::Idle);
     }
 
     /// Real run: approval of a shell command, an interrupted turn, then a turn

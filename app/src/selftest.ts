@@ -21,6 +21,7 @@ interface Config {
   shots: string;
 }
 
+const PROMPT_BLUE = "Write three short sentences about the colour blue. Plain text, no lists, and keep every sentence under twelve words so the whole reply stays brief.";
 const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "insights", "quit"];
 const CLAUDE_MODEL = "haiku";
 const CODEX_MODEL = "gpt-5.6-luna";
@@ -166,7 +167,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       useStore.getState().setSheet(null);
       await sleep(300);
       const ptysBefore = Object.keys(useStore.getState().ptys).length;
-      const id = await startClaude(ctx, "Write three short sentences about the colour blue. Plain text, no lists.");
+      const id = await startClaude(ctx, PROMPT_BLUE);
       ctx.main = id;
       const tab = useStore.getState().tabs.find((t) => t.id === useStore.getState().activeTab);
       const leaf = tab && (tab.root.type === "leaf" ? tab.root : null);
@@ -194,6 +195,31 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       return `${deltas} deltas in ${deltaBatches.length} batches over ${Math.round(finalAt - firstDelta)}ms; ${order}; model ${t.model}`;
     });
     await shot("chat-streamed");
+    await step("the first chat after launch knows its skills before its first turn ends", async () => {
+      const first = evs(id).find((e) => e.type === "commands");
+      const end = evs(id).findIndex((e) => e.type === "turn_end");
+      const at = evs(id).findIndex((e) => e.type === "commands");
+      if (!first || first.type !== "commands") throw new Fail("no commands event");
+      const skills = first.commands.filter((c) => c.kind === "skill").map((c) => c.name);
+      if (!skills.length) throw new Fail("the first commands event tags no skills");
+      if (end >= 0 && at > end) throw new Fail("commands came after the first turn");
+      return `${skills.length} skills in the first commands event (e.g. ${skills.slice(0, 3).join(", ")})`;
+    });
+    await step("title is short, path shortens, chips stay on one line", async () => {
+      const h2 = await waitFor("the header title", () => $("[data-main] h2"), 5_000);
+      const title = h2.textContent ?? "";
+      if (title === PROMPT_BLUE || title.length > 60) throw new Fail(`title "${title}"`);
+      const path = $("[data-main] [data-path]");
+      const tail = path?.lastElementChild as HTMLElement | null;
+      if (!path || !tail || path.textContent?.startsWith("/Users/")) throw new Fail(`path "${path?.textContent}"`);
+      if (tail.scrollWidth > tail.clientWidth + 1) throw new Fail(`the last folder is clipped: "${tail.textContent}"`);
+      const head = path.firstElementChild as HTMLElement;
+      const clipped = head !== tail && head.scrollWidth > head.clientWidth + 1;
+      const chip = $("[data-main] [data-models-chip]");
+      if (!chip || chip.getBoundingClientRect().height > 24) throw new Fail(`models chip is ${chip?.getBoundingClientRect().height}px tall`);
+      const row = $all("[data-session-row]").find((r) => r.textContent?.includes(title.replace(/…$/, "")));
+      return `title "${title}"; path ends "${tail.textContent}"${clipped ? " (parent part middle-truncated)" : ""}; sidebar row ${row ? "matches" : "differs"}`;
+    });
     await step("the chat is linked to its discovered session (one sidebar row)", async () => {
       const sid = await waitFor("session id", () => chat(id)?.sessionId, 10_000);
       const s = await waitFor("the session linked to the chat", () => useStore.getState().sessions.find((x) => x.chat === id), 20_000);
@@ -216,41 +242,81 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       return { n, from };
     };
     const card = () => $("[data-approval]");
-    await step("tool call asks for approval; Allow once runs it", async () => {
+    const remembers = (c: HTMLElement) => [...c.querySelectorAll("[data-remember]")] as HTMLElement[];
+    await step("tool call asks for approval; the card says what remembering would do; Allow once runs it", async () => {
       const { n, from } = await ask("a.txt");
       const c = await waitFor("the approval card", card, 90_000);
       if (!chatNeeds(chat(id))) throw new Fail("chat does not report Needs you");
       if (!$all("[data-needs]").length && !document.body.textContent?.includes("Needs you")) throw new Fail("no Needs you badge on screen");
+      // Write: the CLI offers acceptEdits for this session only.
+      const opts = remembers(c);
+      const labels = opts.map((o) => `${o.dataset.rememberScope}: ${o.textContent?.trim()}`);
+      if (!opts.length || opts[0].dataset.rememberScope !== "chat" || !/Allow all edits in this chat/.test(opts[0].textContent ?? "")) throw new Fail(`unexpected options: ${labels.join(" | ")}`);
+      if (button("Always allow", c)) throw new Fail("an unlabelled Always allow button is still there");
       await shot("approval");
       button("Allow once", c)!.click();
       await nextTurn(id, n);
       const tool = after(id, from).find((i) => i.kind === "tool" && i.name === "Write") as Extract<ChatItem, { kind: "tool" }> | undefined;
       if (!tool?.ok) throw new Fail(`Write did not succeed: ${tool?.output}`);
-      return "Write a.txt ran";
+      if (chat(id)?.permissionMode !== "default") throw new Fail(`Allow once changed the mode to ${chat(id)?.permissionMode}`);
+      return `Write a.txt ran; offered ${labels.join(" | ")}`;
     });
-    await step("Deny stops the tool", async () => {
+    await step("Deny stops the tool; the struck-through path is short", async () => {
       const { n, from } = await ask("b.txt");
       const c = await waitFor("the approval card", card, 90_000);
       button("Deny", c)!.click();
       await nextTurn(id, n);
       const tool = after(id, from).find((i) => i.kind === "tool" && i.name === "Write") as Extract<ChatItem, { kind: "tool" }> | undefined;
       if (!tool || tool.ok !== false) throw new Fail("the denied Write did not fail");
-      return "Write b.txt denied";
+      await sleep(400);
+      const struck = $all("[data-chat-timeline] .line-through").map((e) => e.textContent ?? "");
+      const last = struck[struck.length - 1] ?? "";
+      if (!last.includes("b.txt") || last.startsWith("/") || last.length > 40) throw new Fail(`struck-through detail reads "${last}"`);
+      return `Write b.txt denied; shows "${last}"`;
     });
-    await step("Always allow stops later prompts for the same kind of call", async () => {
+    await step("a command's saved rule comes second; the this-chat option applies a session rule only", async () => {
+      const n = turnEnds(id).length;
+      await say("Use the Bash tool to run exactly this command: touch e.txt  Then reply with one word.");
+      const c = await waitFor("the approval card", card, 90_000);
+      const opts = remembers(c);
+      const labels = opts.map((o) => `${o.dataset.rememberScope}: ${o.textContent?.trim()}`);
+      const saved = opts.find((o) => o.dataset.rememberScope !== "chat");
+      if (opts[0]?.dataset.rememberScope !== "chat") throw new Fail(`first option is not this-chat-only: ${labels.join(" | ")}`);
+      if (saved && !/settings\.local\.json/.test(saved.textContent ?? "")) throw new Fail(`the saved option doesn't name its file: ${saved.textContent}`);
+      await shot("approval-command");
+      opts[0].click();
+      await nextTurn(id, n);
+      const note = await waitFor("the applied note", () => $("[data-remembered]"), 5_000);
+      if (note.dataset.remembered !== "chat" || !/in this chat/.test(note.textContent ?? "")) throw new Fail(`note: ${note.textContent}`);
+      // The same command again runs without asking (the session rule), and the mode didn't change.
+      const before = items(id).filter((i) => i.kind === "permission").length;
+      const n2 = turnEnds(id).length;
+      await say("Run exactly the same Bash command again: touch e.txt  Then reply with one word.");
+      await nextTurn(id, n2);
+      const asked = items(id).filter((i) => i.kind === "permission").length - before;
+      if (asked) throw new Fail(`asked again ${asked}x after the session rule`);
+      if (chat(id)?.permissionMode !== "default") throw new Fail(`mode changed to ${chat(id)?.permissionMode}`);
+      return `offered ${labels.join(" | ")}; note "${note.textContent?.trim()}"`;
+    });
+    await step("Allow all edits switches this chat to Accept edits: note and mode chip say so; later edits don't ask", async () => {
       const { n } = await ask("c.txt");
       const c = await waitFor("the approval card", card, 90_000);
-      button("Always allow", c)!.click();
+      const opt = remembers(c).find((o) => /Allow all edits/.test(o.textContent ?? ""));
+      if (!opt) throw new Fail("no Allow all edits option");
+      opt.click();
       await nextTurn(id, n);
-      const mode = chat(id)?.permissionMode;
+      const chip = await waitFor("the mode chip to read Accept edits", () => $all("[data-mode-chip]").find((e) => e.dataset.modeChip === "acceptEdits" && /Accept edits/.test(e.textContent ?? "")), 10_000);
+      const note = $all("[data-remembered]").pop();
+      if (!note || !/Accept edits mode/.test(note.textContent ?? "")) throw new Fail(`note: ${note?.textContent}`);
+      await shot("approval-mode-switched");
       const before = items(id).filter((i) => i.kind === "permission").length;
       const r = await ask("d.txt");
       await nextTurn(id, r.n);
       const asked = items(id).filter((i) => i.kind === "permission").length - before;
       const tool = after(id, r.from).find((i) => i.kind === "tool" && i.name === "Write") as Extract<ChatItem, { kind: "tool" }> | undefined;
-      if (asked) throw new Fail(`asked again ${asked}x after Always`);
+      if (asked) throw new Fail(`asked again ${asked}x after Allow all edits`);
       if (!tool?.ok) throw new Fail("Write d.txt did not run");
-      return `mode is now ${mode}; d.txt written without asking`;
+      return `chip "${chip.textContent}", note "${note.textContent?.trim()}"; d.txt written without asking`;
     });
     await shot("approvals-done");
   },
@@ -356,16 +422,27 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await waitFor("the needs-terminal notice", () => after(id, from).find((i) => i.kind === "notice" && i.needsTerminal), 10_000);
       await shot("needs-terminal");
       const b = await waitFor("Open in terminal", () => button("Open in terminal"), 5_000);
+      // Watch the handoff: the header must never read "Ended", and no separate "Starting…" row may appear.
+      const seen = new Set<string>();
+      let pendingRow = false;
+      const watch = setInterval(() => {
+        const pill = $("[data-main] [data-status-pill]");
+        if (pill) seen.add(pill.dataset.statusPill!);
+        if (useStore.getState().pending.length) pendingRow = true;
+      }, 50);
       b.click();
       const pty = await waitFor("a PTY", () => Object.values(useStore.getState().ptys).find((p) => p.running) ?? null, 15_000);
       await waitFor("the terminal view", () => $("[data-main] .xterm"), 15_000);
       await sleep(4_000); // the TUI draws
+      clearInterval(watch);
       await shot("open-in-terminal");
+      if (seen.has("ended")) throw new Fail(`the header read Ended during the handoff (${[...seen].join(",")})`);
+      if (pendingRow) throw new Fail("a separate Starting… row appeared during the handoff");
       await waitFor("the chat to hand over", () => !chat(id)?.running, 10_000);
       await api().stopSession({ managed: pty.id });
       await waitFor("the PTY to exit", () => !useStore.getState().ptys[pty.id]?.running || useStore.getState().exited[pty.id], 15_000);
       ctx.main = null;
-      return `PTY ${pty.id} ran the CLI's TUI for the same session, then stopped`;
+      return `PTY ${pty.id} ran the CLI's TUI for the same session (header: ${[...seen].join(" → ")}), then stopped`;
     });
   },
 
@@ -444,13 +521,18 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (!ok) throw new Fail("could not start");
       const id = (await waitFor("the chat", () => newId(before), 10_000)).id;
       const card = await waitFor("the approval card", () => $("[data-approval]"), 120_000);
+      const opts = [...card.querySelectorAll("[data-remember]")] as HTMLElement[];
+      const labels = opts.map((o) => `${o.dataset.rememberScope}: ${o.textContent?.trim()}`);
+      // A saved rule must say where it goes.
+      const bad = opts.find((o) => o.dataset.rememberScope !== "chat" && !/default\.rules/.test(o.textContent ?? ""));
+      if (bad) throw new Fail(`saved option without its file: ${bad.textContent}`);
       await shot("codex-approval");
       button("Allow once", card)!.click();
       await nextTurn(id, 0, 180_000);
       const tool = items(id).find((i) => i.kind === "tool" && i.name === "shell") as Extract<ChatItem, { kind: "tool" }> | undefined;
       await shot("codex-done");
       if (!tool?.ok) throw new Fail(`shell: ${tool?.ok} ${tool?.output}`);
-      return `model ${chat(id)?.model}, mode ${chat(id)?.permissionMode}`;
+      return `model ${chat(id)?.model}, mode ${chat(id)?.permissionMode}; offered ${labels.join(" | ") || "nothing to remember"}`;
     });
   },
 

@@ -92,3 +92,5 @@ Sessions are discovered from `~/.claude` and `~/.codex`. Chats started in coool 
 ## License
 
 MIT
+
+The Claude and OpenAI marks in `app/src/assets/brands/` are trademarks of Anthropic and OpenAI, used only to identify the services coool connects to; they are not covered by the MIT licence (see the README there). coool is not affiliated with or endorsed by Anthropic or OpenAI.

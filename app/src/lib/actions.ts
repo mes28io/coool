@@ -6,7 +6,7 @@ import { useStore } from "../store";
 import { api, isNotAvailable } from "./backend";
 import { useChats, type PermissionAnswer } from "./chat";
 import { estimateSize } from "./termlite";
-import type { Provider, Session } from "./types";
+import type { Provider, RememberOption, Session } from "./types";
 import { sessionKey } from "./types";
 
 const toast = (t: string, tone: "info" | "error" = "info") => useStore.getState().toast(t, tone);
@@ -67,8 +67,13 @@ export async function resumeSession(s: Session, leaf?: string, opts?: { terminal
 /** Secondary action: continue a chat's session in the real CLI. */
 export async function openChatInTerminal(chat: number, s: Session | null) {
   const st = useStore.getState();
+  const handoff = useChats.getState().setHandoff;
+  handoff(chat, true);
   try {
     const pty = await api().openInTerminal(chat);
+    // The backend links the terminal to the session before answering; keep
+    // the handoff a moment longer so the linked snapshot lands first.
+    setTimeout(() => handoff(chat, false), 3000);
     if (s) {
       st.notePty(sessionKey(s), pty);
       st.setMode({ kind: "session", key: sessionKey(s) }, "terminal");
@@ -77,6 +82,7 @@ export async function openChatInTerminal(chat: number, s: Session | null) {
       st.open({ kind: "pty", id: pty });
     }
   } catch (e) {
+    handoff(chat, false);
     if (isNotAvailable(e)) {
       useChats.getState().local(chat, { level: "warn", text: "Open in terminal isn't available in this build yet." });
       if (s?.status === "ended") return resumeSession(s, undefined, { terminal: true });
@@ -107,7 +113,11 @@ export function answerQuestion(chat: number, requestId: string, answers: string[
   });
 }
 
-export function answerPermission(chat: number, requestId: string, a: Exclude<PermissionAnswer, "answered">) {
-  useChats.getState().answer(chat, requestId, a);
-  void chatCall(chat, () => api().chatRespondPermission(chat, requestId, a !== "deny", a === "always"));
+/** Allow once, deny, or allow and apply one of the request's remember options. */
+export function answerPermission(chat: number, requestId: string, a: Exclude<PermissionAnswer, "answered" | "always">, remember?: never): void;
+export function answerPermission(chat: number, requestId: string, a: "always", remember: RememberOption): void;
+export function answerPermission(chat: number, requestId: string, a: Exclude<PermissionAnswer, "answered">, remember?: RememberOption) {
+  if (a === "always" && !remember) return;
+  useChats.getState().answer(chat, requestId, a, remember);
+  void chatCall(chat, () => api().chatRespondPermission(chat, requestId, a !== "deny", false, a === "always" ? remember!.id : null));
 }

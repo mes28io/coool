@@ -3,8 +3,10 @@
 // Mission control can show "Needs you" without the chat view being mounted.
 
 import { create } from "zustand";
-import type { Activity, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, SlashCommand, Tokens } from "./types";
+import type { Activity, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
+import { shortTitle } from "./format";
 
+/** "always": allowed and one of the request's remember options applied (`remembered`). */
 export type PermissionAnswer = "allow" | "always" | "deny" | "answered";
 /** Picked labels / typed text per question; "declined"; or "answered" when settled elsewhere. */
 export type QuestionAnswer = string[][] | "declined" | "answered";
@@ -27,7 +29,21 @@ export type ChatItem =
       parent: string | null;
       agent: boolean;
     }
-  | { kind: "permission"; key: string; requestId: string; tool: string; summary: string; input: unknown; ts: number; answer: PermissionAnswer | null; answeredTs: number | null }
+  | {
+      kind: "permission";
+      key: string;
+      requestId: string;
+      tool: string;
+      summary: string;
+      input: unknown;
+      ts: number;
+      answer: PermissionAnswer | null;
+      answeredTs: number | null;
+      /** What the CLI offers to remember (chat-only first). */
+      remember: RememberOption[];
+      /** The option applied, when answer is "always". */
+      remembered: RememberOption | null;
+    }
   | { kind: "question"; key: string; requestId: string; questions: Question[]; ts: number; answer: QuestionAnswer | null; answeredTs: number | null }
   | { kind: "notice"; key: string; level: "info" | "warn" | "error"; text: string; needsTerminal: boolean; ts: number }
   | { kind: "turn"; key: string; ts: number; durationMs: number; ok: boolean }
@@ -242,7 +258,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         c = { ...c, pendingQuestion: e.request_id };
         break;
       case "permission_request":
-        its().push({ kind: "permission", key, requestId: e.request_id, tool: e.tool, summary: e.summary, input: e.input, ts: e.ts, answer: null, answeredTs: null });
+        its().push({ kind: "permission", key, requestId: e.request_id, tool: e.tool, summary: e.summary, input: e.input, ts: e.ts, answer: null, answeredTs: null, remember: e.remember ?? [], remembered: null });
         c = { ...c, pendingPermission: e.request_id };
         break;
       case "usage": {
@@ -357,6 +373,9 @@ interface ChatStore {
   /** Transcript rows from before a resumed chat started (read-only history). */
   earlier: Record<number, Activity[]>;
   setEarlier(id: number, a: Activity[]): void;
+  /** Chats being handed to a terminal ("Open in terminal"): their exit is not an end. */
+  handoff: Record<number, boolean>;
+  setHandoff(id: number, on: boolean): void;
   ensure(info: ChatInfo): void;
   apply(id: number, events: ChatEvent[]): void;
   /**
@@ -366,7 +385,7 @@ interface ChatStore {
   replace(id: number, info: ChatInfo | undefined, events: ChatEvent[], seq: number): void;
   markReplayed(id: number): void;
   /** Optimistic local answer so the card responds instantly. */
-  answer(id: number, requestId: string, a: PermissionAnswer): void;
+  answer(id: number, requestId: string, a: PermissionAnswer, remembered?: RememberOption | null): void;
   answerQuestion(id: number, requestId: string, a: QuestionAnswer): void;
   /** Local-only row (e.g. "not available yet"), never sent to the backend. */
   local(id: number, item: { level: "info" | "warn" | "error"; text: string; needsTerminal?: boolean }): void;
@@ -391,6 +410,15 @@ function loadEarlier(): Record<number, Activity[]> {
 export const useChats = create<ChatStore>((set) => ({
   chats: {},
   earlier: loadEarlier(),
+  handoff: {},
+  setHandoff: (id, on) =>
+    set((s) => {
+      if (!!s.handoff[id] === on) return s;
+      const handoff = { ...s.handoff };
+      if (on) handoff[id] = true;
+      else delete handoff[id];
+      return { handoff };
+    }),
   setEarlier: (id, a) => {
     try {
       sessionStorage.setItem(EARLIER_KEY + id, JSON.stringify(a));
@@ -429,11 +457,11 @@ export const useChats = create<ChatStore>((set) => ({
       return { chats: { ...s.chats, [id]: { ...next, replayed: true } } };
     }),
   markReplayed: (id) => set((s) => (s.chats[id] ? { chats: { ...s.chats, [id]: { ...s.chats[id], replayed: true } } } : s)),
-  answer: (id, requestId, a) =>
+  answer: (id, requestId, a, remembered) =>
     set((s) => {
       const c = s.chats[id];
       if (!c) return s;
-      const items = c.items.map((it) => (it.kind === "permission" && it.requestId === requestId ? { ...it, answer: a, answeredTs: Date.now() } : it));
+      const items = c.items.map((it) => (it.kind === "permission" && it.requestId === requestId ? { ...it, answer: a, answeredTs: Date.now(), remembered: remembered ?? null } : it));
       return { chats: { ...s.chats, [id]: { ...c, items, pendingPermission: c.pendingPermission === requestId ? null : c.pendingPermission } } };
     }),
   answerQuestion: (id, requestId, a) =>
@@ -504,8 +532,7 @@ export function chatStatus(c: Chat): "busy" | "idle" | "ended" {
 export function chatTitle(c: Chat): string | null {
   const p = c.items.find((i) => i.kind === "prompt") as Extract<ChatItem, { kind: "prompt" }> | undefined;
   if (!p) return null;
-  const one = p.text.split(/\s+/).join(" ");
-  return one.length > 60 ? one.slice(0, 59) + "…" : one;
+  return shortTitle(p.text) || null;
 }
 
 export function chatModels(c: Chat): { main: ModelUse[]; agents: { tool: string; label: string; models: ModelUse[] }[] } {

@@ -50,7 +50,8 @@ export interface Backend {
   chatInterrupt(id: number): Promise<void>;
   chatSetModel(id: number, model: string): Promise<void>;
   chatSetPermissionMode(id: number, mode: string): Promise<void>;
-  chatRespondPermission(id: number, requestId: string, allow: boolean, always: boolean): Promise<void>;
+  /** `remember`: a `permission_request.remember` option id to apply (allows). */
+  chatRespondPermission(id: number, requestId: string, allow: boolean, always: boolean, remember?: string | null): Promise<void>;
   /** Answers to a `question` event: per question, in order, the picked labels and/or typed text. */
   chatRespondQuestion(id: number, requestId: string, answers: string[][]): Promise<void>;
   chatStop(id: number): Promise<void>;
@@ -115,7 +116,7 @@ async function tauriBackend(): Promise<Backend> {
     chatInterrupt: (id) => soft("chat_interrupt", { id }),
     chatSetModel: (id, model) => soft("chat_set_model", { id, model }),
     chatSetPermissionMode: (id, mode) => soft("chat_set_permission_mode", { id, mode }),
-    chatRespondPermission: (id, requestId, allow, always) => soft("chat_respond_permission", { id, requestId, allow, always }),
+    chatRespondPermission: (id, requestId, allow, always, remember) => soft("chat_respond_permission", { id, requestId, allow, always, remember: remember ?? null }),
     chatRespondQuestion: (id, requestId, answers) => soft("chat_respond_question", { id, requestId, answers }),
     chatStop: (id) => soft("chat_stop", { id }),
     chatReplay: (id) => soft("chat_replay", { id }),

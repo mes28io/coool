@@ -259,6 +259,10 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const model = pendingModel ?? chat.model;
   const modes = PERMISSION_MODES[chat.provider] ?? [];
   const mode = modes.find((m) => m.id === chat.permissionMode);
+  const seenMode = useRef<string | null>(null);
+  useEffect(() => {
+    if (seenMode.current === null) seenMode.current = chat.permissionMode;
+  }, [chat.permissionMode]);
   const placeholder = disabled
     ? "This chat has ended"
     : chat.pendingPermission || chat.pendingQuestion
@@ -379,7 +383,18 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
               <div className="relative">
                 <Chip active={pop === "mode"} onClick={() => openPop(pop === "mode" ? null : "mode")} title="Permission mode">
                   <ModeGlyph id={chat.permissionMode} />
-                  {mode?.label ?? chat.permissionMode ?? "Mode"}
+                  {/* A mode switched from elsewhere (an approval's "Allow all edits") flashes in, so it's noticed. */}
+                  <motion.span
+                    key={chat.permissionMode ?? ""}
+                    data-mode-chip={chat.permissionMode ?? ""}
+                    className={seenMode.current !== null && seenMode.current !== chat.permissionMode ? "mode-flash" : undefined}
+                    initial={seenMode.current === null || seenMode.current === chat.permissionMode ? false : { opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, ease }}
+                    onAnimationComplete={() => (seenMode.current = chat.permissionMode)}
+                  >
+                    {mode?.label ?? chat.permissionMode ?? "Mode"}
+                  </motion.span>
                   <Caret />
                 </Chip>
                 <Popover open={pop === "mode"} onClose={() => setPop(null)} side="top" width={300}>

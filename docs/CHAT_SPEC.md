@@ -36,13 +36,14 @@ impl Chat {
     pub fn set_model(&mut self, model: &str) -> Result<()>;
     pub fn set_permission_mode(&mut self, mode: &str) -> Result<()>;
     pub fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool) -> Result<()>;
+    pub fn respond_permission_remember(&mut self, request_id: &str, remember: &str) -> Result<()>; // allow + apply one remember option
     pub fn stop(&mut self);                                   // end the process
     pub fn events_since(&self, seq: u64) -> (Vec<ChatEvent>, u64); // full history is kept (bounded), so a late UI can replay
     pub fn info(&self) -> ChatInfo;                           // provider, cwd, session_id, model, state, running
 }
 ```
 
-`Hub::refresh` links a chat to its discovered `Session` the way it links PTYs (new additive field `Session.chat: Option<usize>`), so the sidebar shows one row per chat, not two.
+`Hub::refresh` links a chat to its discovered `Session` the way it links PTYs (new additive field `Session.chat: Option<usize>`), so the sidebar shows one row per chat, not two. "Open in terminal" links the new PTY to the chat's session id at once, and an ended chat yields its session to that PTY, so the row reads as one continuous session.
 
 ### Events (serde, `#[serde(tag = "type", rename_all = "snake_case")]`)
 
@@ -57,7 +58,7 @@ Every event also carries `seq: u64` and `ts: u64` (epoch ms). This JSON is exact
 | `assistant_message` | `id`, `text`, `model`, `parent_tool_id` | a completed text block (authoritative; replaces deltas) |
 | `tool_start` | `id`, `name`, `summary`, `input` (json), `parent_tool_id` | `parent_tool_id` set means it belongs to a subagent launched by that tool call |
 | `tool_end` | `id`, `ok: bool`, `output: string` (truncated to ~4k) | |
-| `permission_request` | `request_id`, `tool`, `summary`, `input` | UI must answer with `respond_permission` |
+| `permission_request` | `request_id`, `tool`, `summary`, `input`, `remember: [RememberOption]` | UI must answer with `respond_permission` / `respond_permission_remember`; see "Remember options" |
 | `usage` | `model`, `tokens: {input, cached, output, context}`, `context_window: number \| null` | after each model response |
 | `state` | `state: "idle" \| "working" \| "waiting_permission"` | |
 | `turn_end` | `duration_ms`, `ok: bool` | |
@@ -65,6 +66,25 @@ Every event also carries `seq: u64` and `ts: u64` (epoch ms). This JSON is exact
 | `exited` | `code: number \| null` | process ended |
 | `question` | `request_id`, `questions: [Question]` | the agent asks the person something; see "Questions" |
 | `commands` | `commands: [{name, description, argument_hint, aliases, kind}]` | the slash commands with `kind`: `command` (runs in the chat), `skill` (sent to the model) or `terminal` (TUI only). Sent right after `ready` whenever it changes; `ready.slash_commands` stays as it was |
+
+### Remember options ("don't ask again")
+
+coool never invents a rule: what can be remembered is exactly what the CLI offers for that request, put into plain words. `permission_request.remember` lists them, this-chat-only ones first; empty means nothing can be remembered (the UI shows no such action).
+
+```ts
+RememberOption = { id: string,            // pass to respond_permission_remember
+                   label: string,         // button text: "Allow all edits in this chat", "Always allow `npm test` commands in this project"
+                   detail: string,        // what changes and where it is kept
+                   scope: "chat" | "project" | "user",   // chat: nothing saved; project/user: written to `file`
+                   file: string | null,   // ".claude/settings.local.json" (folder-relative), "~/.codex/rules/default.rules", ...
+                   mode: string | null,   // set when it switches the chat's permission mode
+                   rules: string[] }      // the CLI's own rule syntax, e.g. "Bash(npm test *)"
+```
+
+- **Claude** (`can_use_tool.permission_suggestions`, observed with Claude Code 2.1.325 in a throwaway folder): Write -> `setMode acceptEdits` for the session; Bash `npm test` -> `addRules Bash(npm test *)` to `localSettings`; a compound command -> one rule per part, together; Read outside the folder -> two session rules (the path and its realpath); WebFetch -> `addRules WebFetch(domain:…)` to `localSettings`. Entries with the same destination become one option (they are applied together, as in the CLI's own prompt). Destinations: `session`/`cliArg` = chat, `localSettings` = `.claude/settings.local.json`, `projectSettings` = `.claude/settings.json`, `userSettings` = `~/.claude/settings.json`. For every saved rule the driver adds a this-chat twin first (the same rules with destination `session`), so remembering never requires writing a file. Applying one sends its entries as `updatedPermissions`; a mode switch comes back as a new `ready.permission_mode`.
+- **Codex** (`item/commandExecution/requestApproval.availableDecisions`, 0.145): `acceptForSession` = chat; `acceptWithExecpolicyAmendment` = a prefix rule saved to `$CODEX_HOME/rules/default.rules` (every project); `applyNetworkPolicyAmendment` (allow) = a saved network rule. In `untrusted` mode a command offers only the saved prefix rule. File changes (and the legacy requests) have the fixed set `acceptForSession` (+ the amendment when proposed).
+- `respond_permission(id, true, true)` (the old "always") applies the first option only if it is this-chat-only, else allows once: a saved rule is applied only through `respond_permission_remember`, from a control that says so.
+- UI: the card's second action is the list of options (label + detail; saved ones marked with their file); after one is applied, the timeline note says what changed ("this chat is now in Accept edits mode", "allowing `touch e.txt` in this chat", "… saved to .claude/settings.local.json") and a mode switch flashes the mode chip. ⇧⌘↵ applies the first option when it is this-chat-only.
 
 ### Questions
 
@@ -101,14 +121,15 @@ pub struct ModelUse { pub model: String, pub input: u64, pub cached: u64, pub ou
 ## App behaviour
 
 - **New session** opens a chat, not a terminal. Resuming an ended session opens a chat too. "Open in terminal" is a secondary action on any coool-run session.
-- **Session view for a chat:** the Activity timeline rendered from chat events (live, streamed), not from the transcript poll. Text streams with a caret; tool calls form the animated step list; subagent work nests under its launching step; permission requests appear as an inline approval card (Allow once / Always allow / Deny) and the session shows "Needs you" everywhere (sidebar, tab, Mission control).
+- **Session view for a chat:** the Activity timeline rendered from chat events (live, streamed), not from the transcript poll. Text streams with a caret; tool calls form the animated step list; subagent work nests under its launching step; permission requests appear as an inline approval card (Allow once / Deny, and the CLI's remember options spelled out; see "Remember options") and the session shows "Needs you" everywhere (sidebar, tab, Mission control).
 - **Composer:** multi-line; Enter sends; `/` opens the command menu (fuzzy, keyboard-driven, descriptions shown); a model chip opens the model picker; a permission-mode chip; Stop while working (calls `interrupt`). Up-arrow recalls previous prompts.
 - **Header / inspector:** model in use, context meter against the real `context_window` when known (fall back per model family, never a blanket 200k), tokens, and a "Models" breakdown listing each model used by the session and by each subagent.
+- Titles: a session without a real title shows a short form of its prompt (first sentence, cut at a clause or word, ~56 characters), or the AI insight headline when insights are on; never the whole prompt.
 - Sessions running outside coool are unchanged: read-only Activity from the transcript, with Stop and (once ended) Resume here.
 
 ## Tauri contract additions
 
-Commands: `start_chat({opts}) -> number`, `chat_send({id, text})`, `chat_interrupt({id})`, `chat_set_model({id, model})`, `chat_set_permission_mode({id, mode})`, `chat_respond_permission({id, requestId, allow, always})`, `chat_respond_question({id, requestId, answers: string[][]})`, `chat_stop({id})`, `chat_replay({id}) -> {events, seq}`, `open_in_terminal({id}) -> number` (PTY id).
+Commands: `start_chat({opts}) -> number`, `chat_send({id, text})`, `chat_interrupt({id})`, `chat_set_model({id, model})`, `chat_set_permission_mode({id, mode})`, `chat_respond_permission({id, requestId, allow, always, remember?})` (`remember`: a remember option id; allows and applies it), `chat_respond_question({id, requestId, answers: string[][]})`, `chat_stop({id})`, `chat_replay({id}) -> {events, seq}`, `open_in_terminal({id}) -> number` (PTY id).
 
 `chat_set_permission_mode` for Codex takes an approval policy (`untrusted`, `on-request`, `on-failure`, `never`) or a sandbox mode (`read-only`, `workspace-write`, `danger-full-access`); both apply from the next turn. `ready.permission_mode` reports the approval policy.
 
@@ -135,7 +156,7 @@ Uses the Anthropic API with a key the person supplies (never bundled, never the 
 
 ## Dev self-test (debug builds only)
 
-`app/src-tauri/src/selftest.rs` + `app/src/selftest.ts`: with `COOOL_SELFTEST=<scenario|all>` and `COOOL_SELFTEST_DIR=<throwaway folder>` set on a **debug** build, the app runs scripted scenarios through the real client, store and DOM against the real backend and CLIs, writes a PASS/FAIL log, and saves screenshots of its own window (by window id, so nothing else on screen is captured). The sidebar lists only sessions under that folder. Release builds ignore the variables. Scenarios: `stream, approval, interrupt, model, slash, question, resume, codex, insights, quit` (Claude Haiku, `gpt-5.6-luna`; tiny prompts).
+`app/src-tauri/src/selftest.rs` + `app/src/selftest.ts`: with `COOOL_SELFTEST=<scenario|all>` and `COOOL_SELFTEST_DIR=<throwaway folder>` set on a **debug** build, the app runs scripted scenarios through the real client, store and DOM against the real backend and CLIs, writes a PASS/FAIL log, and saves screenshots of its own window (by window id, so nothing else on screen is captured). The sidebar lists only sessions under that folder. Release builds ignore the variables. Scenarios: `stream, approval, interrupt, model, slash, question, resume, codex, insights, quit` (Claude Haiku, `gpt-5.6-luna`; tiny prompts). `stream` also checks the short title, the shortened header path, one-line chips and that the first chat knows its skills before its first turn ends; `approval` checks the remember options (Write -> "Allow all edits in this chat"; a Bash command -> this-chat rule first, the saved rule naming its file), applies the this-chat ones and checks the note, the mode chip and that nothing asks again; `slash` checks that "Open in terminal" never shows "Ended" or a separate "Starting…" row; `codex` checks that a saved rule names its file.
 
 ```sh
 pnpm -C app build && cargo build -p coool-app --features tauri/custom-protocol

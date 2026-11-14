@@ -35,11 +35,173 @@ enum Pending {
 }
 
 struct Perm {
-    tool: String,
     input: Value,
-    suggestions: Value,
+    /// Remember options with the `updatedPermissions` each one sends.
+    remember: Vec<(RememberOption, Value)>,
     /// An `AskUserQuestion` call, answered with `respond_question`.
     question: bool,
+}
+
+/// Human names of Claude Code's permission modes.
+pub(crate) fn mode_label(mode: &str) -> String {
+    match mode {
+        "default" => "Ask".into(),
+        "acceptEdits" => "Accept edits".into(),
+        "plan" => "Plan".into(),
+        "bypassPermissions" => "Bypass".into(),
+        "dontAsk" => "Don't ask".into(),
+        "auto" => "Auto".into(),
+        m => m.to_string(),
+    }
+}
+
+/// `Tool(content)` rule -> plain words ("`npm test` commands", "reading /etc").
+fn rule_phrase(tool: &str, content: Option<&str>) -> String {
+    let Some(c) = content.filter(|c| !c.is_empty()) else { return format!("every {tool} call") };
+    // `//abs`, `~/home` and `/relative-to-settings` path patterns.
+    let path = |p: &str| {
+        let p = p.strip_suffix("/**").or_else(|| p.strip_suffix("**")).unwrap_or(p);
+        let p = if let Some(abs) = p.strip_prefix("//") { format!("/{abs}") } else { p.to_string() };
+        if p.is_empty() { "/".to_string() } else { p }
+    };
+    match tool {
+        "Bash" => {
+            let prefix = c.strip_suffix(" *").or_else(|| c.strip_suffix(":*")).or_else(|| c.strip_suffix('*').map(str::trim_end));
+            match prefix {
+                Some(p) => format!("`{p}` commands"),
+                None => format!("`{c}`"),
+            }
+        }
+        "Read" | "Glob" | "Grep" => format!("reading {}", path(c)),
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => format!("editing {}", path(c)),
+        "WebFetch" => format!("fetching from {}", c.strip_prefix("domain:").unwrap_or(c)),
+        _ => format!("{tool}({c})"),
+    }
+}
+
+/// Settings file a destination writes to, with how far it reaches.
+fn destination(dest: &str) -> (RememberScope, Option<&'static str>) {
+    match dest {
+        "localSettings" => (RememberScope::Project, Some(".claude/settings.local.json")),
+        "projectSettings" => (RememberScope::Project, Some(".claude/settings.json")),
+        "userSettings" => (RememberScope::User, Some("~/.claude/settings.json")),
+        // `session`, `cliArg`: this process only.
+        _ => (RememberScope::Chat, None),
+    }
+}
+
+/// The CLI's `permission_suggestions` -> remember options: one per
+/// destination (entries for one destination are applied together, as the
+/// CLI's own prompt does), and a this-chat-only twin before any persistent
+/// rule, so remembering never has to mean writing a settings file.
+fn remember_options(suggestions: &Value, cwd: &str) -> Vec<(RememberOption, Value)> {
+    let mut groups: Vec<(String, Vec<Value>)> = Vec::new();
+    for s in suggestions.as_array().into_iter().flatten() {
+        let ok = match s["type"].as_str() {
+            Some("addRules") | Some("replaceRules") => s["behavior"] == "allow" && s["rules"].as_array().is_some_and(|r| !r.is_empty()),
+            Some("setMode") => s["mode"].is_string(),
+            Some("addDirectories") => s["directories"].as_array().is_some_and(|d| !d.is_empty()),
+            _ => false,
+        };
+        if !ok {
+            continue;
+        }
+        let dest = s["destination"].as_str().unwrap_or("session").to_string();
+        match groups.iter_mut().find(|g| g.0 == dest) {
+            Some(g) => g.1.push(s.clone()),
+            None => groups.push((dest, vec![s.clone()])),
+        }
+    }
+    let mut out: Vec<(RememberOption, Value)> = Vec::new();
+    let add = |dest: &str, entries: &[Value], out: &mut Vec<(RememberOption, Value)>| {
+        let (scope, file) = destination(dest);
+        let mut phrases: Vec<String> = Vec::new();
+        let mut rules: Vec<String> = Vec::new();
+        let mut mode = None;
+        for e in entries {
+            match e["type"].as_str() {
+                Some("setMode") => mode = e["mode"].as_str().map(str::to_string),
+                Some("addDirectories") => {
+                    // The chat's own folder (often its realpath, /private/tmp for /tmp) reads as "this folder".
+                    let norm = |p: &str| p.trim_end_matches('/').trim_start_matches("/private").to_string();
+                    let d: Vec<String> = names(&e["directories"]).iter().map(|d| if norm(d) == norm(cwd) { "this folder".to_string() } else { crate::util::home_short(d) }).collect();
+                    phrases.push(format!("working in {}", d.join(", ")));
+                }
+                _ => {
+                    for r in e["rules"].as_array().into_iter().flatten() {
+                        let tool = r["toolName"].as_str().unwrap_or("tool");
+                        let content = r["ruleContent"].as_str();
+                        phrases.push(rule_phrase(tool, content));
+                        rules.push(match content {
+                            Some(c) if !c.is_empty() => format!("{tool}({c})"),
+                            _ => tool.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        let where_ = match (scope, dest) {
+            (RememberScope::Chat, _) => "in this chat",
+            (RememberScope::User, _) => "in every project",
+            _ => "in this project",
+        };
+        let saved = file.map(|f| match scope {
+            RememberScope::User => format!("Saved to {f}: applies to every future session in any folder, including ones outside coool."),
+            _ => format!("Saved to {f} in this folder: applies to future sessions here too, including ones outside coool."),
+        });
+        let (label, detail) = match (&mode, phrases.is_empty()) {
+            // A mode switch (alone, or bundled with rules/folders) is named by the mode: it's the bigger change.
+            (Some(m), _) if scope == RememberScope::Chat => {
+                let label = match m.as_str() {
+                    "acceptEdits" => "Allow all edits in this chat".to_string(),
+                    "bypassPermissions" => "Allow everything in this chat".to_string(),
+                    m => format!("Switch this chat to {}", mode_label(m)),
+                };
+                let what = if m == "acceptEdits" { ": later file edits, and file commands such as mkdir, mv or rm, run without asking" } else { "" };
+                let also = if phrases.is_empty() { String::new() } else { format!(" Also allows {}.", phrases.join(" and ")) };
+                (label, format!("Switches this chat to {} mode{what}.{also} Nothing is saved.", mode_label(m)))
+            }
+            (Some(m), true) => (format!("Always start in {} mode {where_}", mode_label(m)), saved.clone().unwrap_or_default()),
+            _ => {
+                let verb = if scope == RememberScope::Chat { "Allow" } else { "Always allow" };
+                let also = mode.as_deref().map(|m| format!("Also switches to {} mode. ", mode_label(m))).unwrap_or_default();
+                let detail = saved.clone().unwrap_or_else(|| "For this chat only; nothing is saved.".to_string());
+                (format!("{verb} {} {where_}", phrases.join(" and ")), format!("{also}{detail}"))
+            }
+        };
+        let updated: Vec<Value> = entries
+            .iter()
+            .map(|e| {
+                let mut e = e.clone();
+                e["destination"] = json!(dest);
+                e
+            })
+            .collect();
+        let option = RememberOption { id: out.len().to_string(), label, detail, scope, file: file.map(str::to_string), mode, rules };
+        if !out.iter().any(|(o, _)| o.label == option.label) {
+            out.push((option, Value::Array(updated)));
+        }
+    };
+    let persistent = |d: &str| destination(d).0 != RememberScope::Chat;
+    for (dest, entries) in groups.iter().filter(|g| !persistent(&g.0)) {
+        add(dest, entries, &mut out);
+    }
+    for (_, entries) in groups.iter().filter(|g| persistent(&g.0)) {
+        // Rules and directories can live in the session instead; a saved mode can't.
+        let twin: Vec<Value> = entries.iter().filter(|e| e["type"] != "setMode").cloned().collect();
+        if !twin.is_empty() {
+            add("session", &twin, &mut out);
+        }
+    }
+    for (dest, entries) in groups.iter().filter(|g| persistent(&g.0)) {
+        add(dest, entries, &mut out);
+    }
+    // Narrowest first: this-chat rules before a this-chat mode switch, then saved rules.
+    out.sort_by_key(|(o, _)| (o.persistent(), o.mode.is_some()));
+    for (i, (o, _)) in out.iter_mut().enumerate() {
+        o.id = i.to_string();
+    }
+    out
 }
 
 /// What the CLI said about a command in the `initialize` answer.
@@ -298,6 +460,17 @@ impl Claude {
                     self.model = m.to_string();
                 }
                 self.context_max = res["rawMaxTokens"].as_u64().or(res["maxTokens"].as_u64());
+                // The skills, known here before any turn (system/init only comes with the first one).
+                if let Some(fm) = res["skills"]["skillFrontmatter"].as_array() {
+                    let skills: Vec<String> = fm.iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect();
+                    if !skills.is_empty() {
+                        self.skills = skills;
+                        if let Ok(mut k) = KNOWN_KINDS.lock() {
+                            let terminal = k.as_ref().map(|k| k.1.clone()).unwrap_or_else(|| self.terminal_commands.clone());
+                            *k = Some((self.skills.clone(), terminal));
+                        }
+                    }
+                }
                 self.context_done = true;
                 self.ready(o);
             }
@@ -538,12 +711,14 @@ impl Backend for Claude {
                     let input = req["input"].clone();
                     let questions = if tool == "AskUserQuestion" { parse_questions(&input) } else { Vec::new() };
                     let question = !questions.is_empty();
-                    self.perms.insert(rid.clone(), Perm { tool: tool.clone(), input: input.clone(), suggestions: req["permission_suggestions"].clone(), question });
+                    let remember = if question { Vec::new() } else { remember_options(&req["permission_suggestions"], &self.cwd) };
+                    let options: Vec<RememberOption> = remember.iter().map(|(o, _)| o.clone()).collect();
+                    self.perms.insert(rid.clone(), Perm { input: input.clone(), remember, question });
                     if question {
                         o.ev(ChatEventKind::Question { request_id: rid, questions });
                     } else {
                         let summary = tool_summary(&tool, &input);
-                        o.ev(ChatEventKind::PermissionRequest { request_id: rid, tool, summary, input });
+                        o.ev(ChatEventKind::PermissionRequest { request_id: rid, tool, summary, input, remember: options });
                     }
                     o.ev(ChatEventKind::State { state: ChatState::WaitingPermission });
                 } else {
@@ -662,20 +837,25 @@ impl Backend for Claude {
         Ok(())
     }
 
+    fn respond_permission_remember(&mut self, request_id: &str, remember: &str, o: &mut Out) -> Result<()> {
+        let Some(p) = self.perms.get(request_id).filter(|p| !p.question) else { bail!("no pending permission request {request_id}") };
+        let Some((_, updated)) = p.remember.iter().find(|(r, _)| r.id == remember) else { bail!("request {request_id} has no remember option {remember}") };
+        let answer = json!({"behavior": "allow", "updatedInput": p.input, "updatedPermissions": updated});
+        self.perms.remove(request_id);
+        o.write(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": answer}}));
+        o.ev(ChatEventKind::State { state: self.working_or_idle() });
+        Ok(())
+    }
+
     fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool, o: &mut Out) -> Result<()> {
+        // `always`: only an option that stays inside this chat (never a saved rule).
+        let chat_only = self.perms.get(request_id).and_then(|p| p.remember.first()).filter(|(r, _)| !r.persistent()).map(|(r, _)| r.id.clone());
+        if let (true, true, Some(id)) = (allow, always, chat_only) {
+            return self.respond_permission_remember(request_id, &id, o);
+        }
         let Some(p) = self.perms.remove(request_id) else { bail!("no pending permission request {request_id}") };
         let answer = if allow {
-            let mut a = json!({"behavior": "allow", "updatedInput": p.input});
-            if always {
-                // The CLI's own "don't ask again" options (e.g. a rule for this
-                // command, or acceptEdits for the session); else a session rule for the tool.
-                let rules = match p.suggestions.as_array() {
-                    Some(s) if !s.is_empty() => p.suggestions.clone(),
-                    _ => json!([{"type": "addRules", "rules": [{"toolName": p.tool}], "behavior": "allow", "destination": "session"}]),
-                };
-                a["updatedPermissions"] = rules;
-            }
-            a
+            json!({"behavior": "allow", "updatedInput": p.input})
         } else if p.question {
             json!({"behavior": "deny", "message": "The user declined to answer."})
         } else {
@@ -770,7 +950,7 @@ mod tests {
 
         // Permission request for Write, with a usable summary and input.
         let perm = evs.iter().find_map(|e| match e {
-            ChatEventKind::PermissionRequest { request_id, tool, summary, input } => Some((request_id.clone(), tool.clone(), summary.clone(), input.clone())),
+            ChatEventKind::PermissionRequest { request_id, tool, summary, input, .. } => Some((request_id.clone(), tool.clone(), summary.clone(), input.clone())),
             _ => None,
         });
         let (rid, tool, summary, input) = perm.expect("permission_request");
@@ -881,19 +1061,77 @@ mod tests {
         c.on_line(&req("p1", r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"rm x"}],"behavior":"allow","destination":"localSettings"}]"#), &mut o);
         c.on_line(&req("p2", "[]"), &mut o);
         c.on_line(&req("p3", "null"), &mut o);
+        c.on_line(&req("p4", r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"rm x"}],"behavior":"allow","destination":"localSettings"}]"#), &mut o);
         assert!(matches!(o.events.last(), Some(ChatEventKind::State { state: ChatState::WaitingPermission })));
         let mut o = Out::default();
+        // Legacy `always` takes the this-chat twin, never the saved rule.
         c.respond_permission("p1", true, true, &mut o).unwrap();
+        // Nothing to remember: `always` allows once.
         c.respond_permission("p2", true, true, &mut o).unwrap();
         c.respond_permission("p3", false, false, &mut o).unwrap();
         assert!(c.respond_permission("p3", true, false, &mut o).is_err());
+        assert!(c.respond_permission_remember("p4", "9", &mut o).is_err(), "unknown option");
+        c.respond_permission_remember("p4", "1", &mut o).unwrap();
         let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
         assert_eq!(w[0]["response"]["request_id"], "p1");
-        assert_eq!(w[0]["response"]["response"]["updatedPermissions"][0]["rules"][0]["ruleContent"], "rm x");
+        let up = &w[0]["response"]["response"]["updatedPermissions"];
+        assert_eq!(up[0]["rules"][0]["ruleContent"], "rm x");
+        assert_eq!(up[0]["destination"], "session");
         assert_eq!(w[0]["response"]["response"]["updatedInput"]["command"], "rm x");
-        assert_eq!(w[1]["response"]["response"]["updatedPermissions"][0]["destination"], "session");
+        assert!(w[1]["response"]["response"]["updatedPermissions"].is_null());
+        assert_eq!(w[1]["response"]["response"]["behavior"], "allow");
         assert_eq!(w[2]["response"]["response"]["behavior"], "deny");
         assert!(w[2]["response"]["response"]["updatedPermissions"].is_null());
+        assert_eq!(w[3]["response"]["response"]["updatedPermissions"][0]["destination"], "localSettings");
+    }
+
+    /// `permission_suggestions` exactly as Claude Code 2.1.325 sent them (haiku, a
+    /// throwaway folder), and the options they become.
+    #[test]
+    fn remember_options_from_observed_suggestions() {
+        let opts = |s: &str| remember_options(&serde_json::from_str(s).unwrap(), "/tmp/demo");
+        // Write -> acceptEdits for the session: one chat-only mode switch.
+        let w = opts(r#"[{"type":"setMode","mode":"acceptEdits","destination":"session"}]"#);
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0].0.label.as_str(), w[0].0.scope, w[0].0.mode.as_deref(), w[0].0.file.as_deref()), ("Allow all edits in this chat", RememberScope::Chat, Some("acceptEdits"), None));
+        assert!(w[0].0.detail.contains("Accept edits"), "{}", w[0].0.detail);
+        // Bash `npm test` -> a rule saved to localSettings: chat twin first.
+        let b = opts(r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test *"}],"behavior":"allow","destination":"localSettings"}]"#);
+        let labels: Vec<&str> = b.iter().map(|o| o.0.label.as_str()).collect();
+        assert_eq!(labels, ["Allow `npm test` commands in this chat", "Always allow `npm test` commands in this project"]);
+        assert_eq!((b[0].0.scope, b[1].0.scope), (RememberScope::Chat, RememberScope::Project));
+        assert_eq!(b[1].0.file.as_deref(), Some(".claude/settings.local.json"));
+        assert!(b[1].0.detail.contains(".claude/settings.local.json") && b[1].0.detail.contains("outside coool"));
+        assert_eq!(b[0].0.rules, ["Bash(npm test *)"]);
+        assert_eq!(b[0].1[0]["destination"], "session");
+        assert_eq!(b[1].1[0]["destination"], "localSettings");
+        assert_eq!((b[0].0.id.as_str(), b[1].0.id.as_str()), ("0", "1"));
+        // Read outside the folder: two session rules (path and its realpath) -> one option.
+        let r = opts(r#"[{"type":"addRules","rules":[{"toolName":"Read","ruleContent":"//etc/**"}],"behavior":"allow","destination":"session"},{"type":"addRules","rules":[{"toolName":"Read","ruleContent":"//private/etc/**"}],"behavior":"allow","destination":"session"}]"#);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].0.label, "Allow reading /etc and reading /private/etc in this chat");
+        assert_eq!(r[0].1.as_array().unwrap().len(), 2);
+        // WebFetch -> a domain rule saved to localSettings.
+        let f = opts(r#"[{"type":"addRules","destination":"localSettings","rules":[{"toolName":"WebFetch","ruleContent":"domain:example.com"}],"behavior":"allow"}]"#);
+        assert_eq!(f[1].0.label, "Always allow fetching from example.com in this project");
+        // A compound command: one rule per part, applied together.
+        let m = opts(r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"mkdir sub *"},{"toolName":"Bash","ruleContent":"touch sub/a"}],"behavior":"allow","destination":"localSettings"}]"#);
+        assert_eq!(m[0].0.label, "Allow `mkdir sub` commands and `touch sub/a` in this chat");
+        // Nothing offered, or nothing that allows: no options.
+        assert!(opts("[]").is_empty() && opts("null").is_empty());
+        assert!(opts(r#"[{"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"deny","destination":"session"}]"#).is_empty());
+        // Bash `touch e.txt` in a /tmp folder (observed): a session bundle of the
+        // folder's realpath + acceptEdits, and the saved rule. The exact-command
+        // twin comes first, then the mode switch, then the saved rule.
+        let t = opts(r#"[{"type":"addDirectories","directories":["/private/tmp/demo"],"destination":"session"},{"type":"setMode","mode":"acceptEdits","destination":"session"},{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"touch e.txt"}],"behavior":"allow","destination":"localSettings"}]"#);
+        let labels: Vec<&str> = t.iter().map(|o| o.0.label.as_str()).collect();
+        assert_eq!(labels, ["Allow `touch e.txt` in this chat", "Allow all edits in this chat", "Always allow `touch e.txt` in this project"]);
+        assert!(t[1].0.detail.contains("Also allows working in this folder"), "{}", t[1].0.detail);
+        assert_eq!(t[1].1.as_array().unwrap().len(), 2);
+        assert_eq!(t.iter().map(|o| o.0.id.as_str()).collect::<Vec<_>>(), ["0", "1", "2"]);
+        // User settings say so.
+        let u = opts(r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"ls"}],"behavior":"allow","destination":"userSettings"}]"#);
+        assert_eq!((u[1].0.scope, u[1].0.label.as_str()), (RememberScope::User, "Always allow `ls` in every project"));
     }
 
     #[test]
@@ -971,6 +1209,29 @@ mod tests {
         // `ready` stays first; the commands follow it.
         assert!(matches!(evs[0], ChatEventKind::Ready { .. }));
         assert!(matches!(evs[1], ChatEventKind::Commands { .. }));
+    }
+
+    /// Skills are tagged in the very first `commands`, before any turn (from
+    /// the startup `get_context_usage` answer, not `system/init`).
+    #[test]
+    fn skills_are_known_before_the_first_turn() {
+        let mut c = Claude::new(&opts());
+        c.skills.clear();
+        let mut o = Out::default();
+        c.start(&mut o);
+        for l in include_str!("fixtures/claude_slash_commands.jsonl").lines() {
+            let v: Value = serde_json::from_str(l).unwrap();
+            if v["dir"] == "api" {
+                break;
+            }
+            if v["dir"] == "out" {
+                c.on_line(v["line"].as_str().unwrap(), &mut o);
+            }
+        }
+        let cmds = o.events.iter().find_map(|e| if let ChatEventKind::Commands { commands } = e { Some(commands.clone()) } else { None }).expect("commands before the first turn");
+        let kind = |n: &str| cmds.iter().find(|c| c.name == n).map(|c| c.kind);
+        assert_eq!(kind("dataviz"), Some(CommandKind::Skill));
+        assert_eq!(kind("compact"), Some(CommandKind::Command));
     }
 
     #[test]

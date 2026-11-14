@@ -4,7 +4,7 @@ import { lazy, Suspense, useEffect, useId, useMemo } from "react";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { api } from "../lib/backend";
 import { chatModels, chatTitle, needsAnswer, pendingPermission, useChats } from "../lib/chat";
-import { displayTitle, folderName, homeShort } from "../lib/format";
+import { displayTitle, folderName } from "../lib/format";
 import { useAttention } from "../lib/live";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -16,7 +16,7 @@ import { Composer } from "./Composer";
 import { IActivity, IClose, IPlay, IStop, ITerminal } from "./icons";
 import { ModelsChip, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
-import { Button, ContextMeter, cx, ease, IconButton, ProviderMark, StatusPill, Ticker, type UiStatus } from "./primitives";
+import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark, StatusPill, Ticker, type UiStatus } from "./primitives";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -73,7 +73,11 @@ export function SessionView({
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       const inText = (e.target as HTMLElement)?.tagName === "TEXTAREA" && !!(e.target as HTMLTextAreaElement).value;
-      if (e.key === "Enter") answerPermission(chat.id, p.requestId, e.shiftKey ? "always" : "allow");
+      // ⇧⌘↵ only for a this-chat-only option, the one the card marks with it.
+      const quick = p.remember[0]?.scope === "chat" ? p.remember[0] : null;
+      if (e.key === "Enter" && e.shiftKey) {
+        if (quick) answerPermission(chat.id, p.requestId, "always", quick);
+      } else if (e.key === "Enter") answerPermission(chat.id, p.requestId, "allow");
       else if (e.key === "Backspace" && !inText) answerPermission(chat.id, p.requestId, "deny");
       else return;
       e.preventDefault();
@@ -129,9 +133,7 @@ export function SessionView({
             <StatusPill status={status} />
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-xs text-dim">
-            <span className="truncate pl-1.5 font-mono text-2xs" title={cwd}>
-              {homeShort(cwd)}
-            </span>
+            <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-2xs" />
             {models && (models.main.length > 0 || model) && (
               <>
                 <span className="text-faint">·</span>
