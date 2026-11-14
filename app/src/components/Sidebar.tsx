@@ -145,7 +145,7 @@ export function Sidebar() {
             type="button"
             title="New session (⌘T)"
             onClick={() => setSheet({ kind: "new" })}
-            className="flex h-[40px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-base text-fg transition-colors duration-150 hover:bg-hover"
+            className="flex h-[34px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-base text-fg transition-colors duration-150 hover:bg-hover"
           >
             <ICompose size={18} className="text-dim" />
             New session
@@ -211,7 +211,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
   const Folder = collapsed ? IFolder : IFolderOpen;
 
   return (
-    <motion.div layout="position" transition={spring} className="mb-2">
+    <motion.div layout="position" transition={spring} className="mb-1">
       <div className="group/proj relative">
         <button
           type="button"
@@ -219,7 +219,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
           onClick={() => setCollapsed(!collapsed)}
           title={homeShort(p.cwd)}
           aria-expanded={!collapsed}
-          className="flex h-[40px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left transition-colors duration-150 hover:bg-hover"
+          className="flex h-[34px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left transition-colors duration-150 hover:bg-hover"
         >
           <Folder size={18} className="shrink-0 text-dim" />
           <span className={cx("min-w-0 flex-1 truncate text-base font-medium", onlyEnded ? "text-dim" : "text-fg")}>{p.name}</span>
@@ -264,7 +264,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
                   type="button"
                   data-nav
                   onClick={() => setShowAll(!showAll)}
-                  className="flex h-[32px] w-full items-center rounded-[10px] pl-[38px] text-left text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
+                  className="flex h-[28px] w-full items-center rounded-[10px] pl-[38px] text-left text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
                 >
                   {showAll ? "Show less" : "Show more"}
                 </button>
@@ -320,7 +320,7 @@ function Row({
       onClick={onClick}
       title={title}
       className={cx(
-        "group relative flex h-[36px] w-full items-center rounded-[10px] pl-[38px] pr-3 text-left text-base",
+        "group relative flex h-[30px] w-full items-center rounded-[10px] pl-[38px] pr-3 text-left text-base",
         selected ? "[--row-tint:var(--hover)] text-fg" : cx("[--row-tint:transparent] hover:[--row-tint:var(--hover)] hover:text-fg", dim ? "text-faint" : "text-dim"),
       )}
       style={{ background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--bg)" }}

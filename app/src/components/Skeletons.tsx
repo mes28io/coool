@@ -30,14 +30,14 @@ export function SidebarSkeleton({ groups = 4 }: { groups?: number }) {
   return (
     <motion.div {...fade} aria-label="Loading sessions">
       {plan.slice(0, groups).map((g, gi) => (
-        <div key={gi} className="mb-2">
-          <div className="flex h-[40px] items-center gap-2.5 px-2.5">
+        <div key={gi} className="mb-1">
+          <div className="flex h-[34px] items-center gap-2.5 px-2.5">
             <Skel w={18} h={14} r={4} i={k++} />
             <Skel w={g.name} h={11} i={k++} />
           </div>
           <div className="flex flex-col gap-px pt-px">
             {g.rows.map((w, ri) => (
-              <div key={ri} className="flex h-[36px] items-center pl-[38px] pr-3">
+              <div key={ri} className="flex h-[30px] items-center pl-[38px] pr-3">
                 <Skel w={w} h={10} i={k++} className="opacity-70" />
               </div>
             ))}
