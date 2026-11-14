@@ -44,11 +44,10 @@ function TabBar() {
   const activate = useStore((s) => s.activate);
   const reorder = useStore((s) => s.reorder);
   const split = useStore((s) => s.split);
-  const setPalette = useStore((s) => s.setPalette);
   const ids = useMemo(() => tabs.map((t) => t.id), [tabs]);
 
   return (
-    <div data-tauri-drag-region className="flex h-[56px] shrink-0 items-center gap-1 border-b border-hairline pl-2.5 pr-2.5">
+    <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center gap-1 border-b border-hairline pl-2.5 pr-2.5">
       <button
         type="button"
         title="Mission control"
@@ -76,9 +75,6 @@ function TabBar() {
         </IconButton>
         <IconButton title="Split down (⌘⇧\)" onClick={() => split("col")} disabled={!activeTab}>
           <ISplitDown size={17} />
-        </IconButton>
-        <IconButton title="Command palette (⌘K)" onClick={() => setPalette(true)}>
-          <ISearch size={17} />
         </IconButton>
       </div>
     </div>

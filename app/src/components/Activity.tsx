@@ -326,8 +326,7 @@ export function StepLine({
   open?: boolean;
 }) {
   const Icon = toolIcon(name);
-  const tone = waiting ? "var(--accent)" : "var(--busy)";
-  return (
+    return (
     <div
       onClick={onClick}
       className={cx(
@@ -337,7 +336,7 @@ export function StepLine({
         onClick && "hover:bg-hover",
         open && "bg-hover",
       )}
-      style={active ? { ["--sweep" as string]: tone } : undefined}
+      style={active ? { ["--sweep" as string]: "var(--text)" } : undefined}
     >
       <span
         className={cx(
@@ -359,8 +358,8 @@ export function StepLine({
         )}
       </span>
       <span
-        className={cx("shrink-0 text-base font-medium", active && !waiting ? "shimmer" : waiting ? "text-accent-text" : failed ? "text-err-text/90" : "text-fg/80")}
-        style={active && !waiting ? { ["--shimmer-base" as string]: "var(--text)", ["--shimmer-hi" as string]: tone } : undefined}
+        className={cx("shrink-0 text-base font-medium", active && !waiting ? "shimmer" : waiting ? "text-fg/85" : failed ? "text-err-text/90" : "text-fg/80")}
+        style={active && !waiting ? { ["--shimmer-base" as string]: "var(--text)", ["--shimmer-hi" as string]: "var(--dim)" } : undefined}
       >
         {name}
       </span>
@@ -372,9 +371,9 @@ export function StepLine({
       )}
       {!detail && <span className="flex-1" />}
       {waiting ? (
-        <span className="shrink-0 text-small font-medium text-accent-text">waiting for you</span>
+        <span className="shrink-0 text-small text-dim">waiting for you</span>
       ) : active ? (
-        <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-small text-busy-text" />
+        <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-small text-faint" />
       ) : (
         stamp && <span className="shrink-0 font-mono text-mono-small text-faint opacity-0 transition-opacity duration-150 group-hover:opacity-100 tnum">{stamp}</span>
       )}
@@ -395,7 +394,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
       <div
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card",
-          running ? "border-[color-mix(in_oklab,var(--busy)_40%,var(--border))]" : "border-hairline",
+          "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
@@ -408,7 +407,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
             <StatusDot status="busy" size={7} />
           ) : (
             <span className="flex items-center gap-1 text-small text-dim">
-              <ICheck size={14} className="text-accent-text" /> done
+              <ICheck size={14} className="text-faint" /> done
             </span>
           )}
         </div>

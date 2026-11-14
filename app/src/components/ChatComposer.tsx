@@ -552,14 +552,13 @@ function Hi({ text, q }: { text: string; q: string }) {
 }
 
 function ModeGlyph({ id }: { id: string | null }) {
-  const c = id === "bypassPermissions" || id === "never" ? "var(--error)" : id === "plan" ? "var(--dim)" : id === "acceptEdits" || id === "on-failure" ? "var(--busy)" : "var(--accent)";
+  const c = id === "bypassPermissions" || id === "never" ? "var(--error)" : id === "plan" ? "var(--dim)" : id === "acceptEdits" || id === "on-failure" ? "var(--busy)" : "var(--dim)";
   return <span className="inline-block size-[7px] rounded-[2px]" style={{ background: c }} />;
 }
 
 function ContextRing({ chat }: { chat: Chat }) {
   const w = contextWindow(chat.model, chat.contextWindow);
   const pct = Math.min(1, chat.context / w.tokens);
-  const exact = w.source === "reported";
   const r = 5;
   const c = 2 * Math.PI * r;
   return (
@@ -570,7 +569,7 @@ function ContextRing({ chat }: { chat: Chat }) {
         cy="7"
         r={r}
         fill="none"
-        stroke={exact && pct > 0.85 ? "var(--error)" : pct > 0.65 ? "var(--busy)" : "var(--accent)"}
+        stroke={w.source !== "assumed" && pct >= 1 ? "var(--error)" : w.source !== "assumed" && pct >= 0.75 ? "var(--busy)" : "var(--dim)"}
         strokeWidth="2"
         strokeLinecap="round"
         strokeDasharray={c}

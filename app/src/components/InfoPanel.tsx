@@ -41,7 +41,8 @@ function ContextTab({ chat }: { chat: Chat }) {
   const w = contextWindow(chat.model, chat.contextWindow);
   const pct = chat.context / w.tokens;
   const exact = w.source === "reported";
-  const color = exact && pct > 0.85 ? "var(--error)" : pct > 0.65 ? "var(--busy)" : "var(--accent)";
+  const known = w.source !== "assumed";
+  const color = known && pct > 1 ? "var(--error)" : known && pct >= 0.75 ? "var(--busy)" : "var(--dim)";
   const hist = chat.usageHistory.filter((p) => p.context > 0);
   return (
     <div className="flex flex-col gap-3 p-3.5">
@@ -125,7 +126,7 @@ function StatusTab({ chat }: { chat: Chat }) {
         k="Process"
         v={
           chat.running ? (
-            <span className="text-accent-text">running · {chat.state === "idle" ? "idle" : chat.state === "working" ? "working" : "waiting for permission"}</span>
+            <span className="text-dim">running · {chat.state === "idle" ? "idle" : chat.state === "working" ? "working" : "waiting for permission"}</span>
           ) : (
             <span className="text-dim">exited{chat.exitCode !== null ? ` (code ${chat.exitCode})` : ""}</span>
           )

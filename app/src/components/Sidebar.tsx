@@ -1,18 +1,17 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
-import { isMac, isTauri } from "../lib/backend";
 import { useNow } from "../lib/clock";
-import { ago, displayTitle, folderName, headlineIsTitle, homeShort, isThinking, shortDetail, splitTool } from "../lib/format";
+import { ago, displayTitle, folderName, homeShort } from "../lib/format";
 import { attention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
-import { modelLabel } from "../lib/models";
-import type { Agent, ChatInfo, PtyInfo, Session, Status } from "../lib/types";
+import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
+import type { UiStatus } from "./primitives";
 import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { leaves, resolveTarget, useStore } from "../store";
-import { IChevron, IGear, IMoon, IPlus, ISearch, ISun } from "./icons";
+import { ICompose, IFolder, IFolderOpen, IPlus, ISidebar } from "./icons";
 import { Wordmark } from "./Wordmark";
-import { cx, ease, IconButton, Kbd, NeedsBadge, ProviderMark, spring, StatusDot } from "./primitives";
-import { Skel, SidebarSkeleton } from "./Skeletons";
+import { cx, ease, IconButton, ProviderMark, spring, StatusDot } from "./primitives";
+import { SidebarSkeleton } from "./Skeletons";
 
 export interface Project {
   cwd: string;
@@ -96,153 +95,108 @@ function useSelectedKey(): string | null {
   });
 }
 
+const ENDED_CAP = 4;
+
 export function Sidebar() {
   const { projects, digest } = useProjects();
   const width = useStore((s) => s.sidebarWidth);
+  const open = useStore((s) => s.sidebarOpen);
   const setWidth = useStore((s) => s.setSidebarWidth);
+  const toggle = useStore((s) => s.toggleSidebar);
   const setSheet = useStore((s) => s.setSheet);
-  const setPalette = useStore((s) => s.setPalette);
-  const theme = useStore((s) => s.theme);
-  const toggleTheme = useStore((s) => s.toggleTheme);
   const ready = useStore((s) => s.ready);
   const loading = useStore((s) => s.loading);
   const [hover, setHover] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const shownProjects = useStableOrder(projects, (p) => p.cwd, hover);
   const selected = useSelectedKey();
-  const counts = useMemo(() => {
-    let busy = 0;
-    let idle = 0;
-    let needs = 0;
-    for (const p of projects)
-      for (const s of p.live) {
-        const a = attention(s, digest);
-        if (a.needs) needs++;
-        else if (a.status === "busy") busy++;
-        else idle++;
-      }
-    return { busy, idle, needs };
-  }, [projects, digest]);
-  const traffic = isTauri && isMac;
+
+  // Arrow keys move through the rows (every row is a real button).
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("button[data-nav]")];
+    const i = rows.indexOf(document.activeElement as HTMLElement);
+    const next = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
+    if (next) {
+      e.preventDefault();
+      next.focus();
+    }
+  };
 
   return (
-    <aside className="relative flex h-full shrink-0 flex-col border-r border-hairline bg-panel" style={{ width }}>
-      <div data-tauri-drag-region className={cx("flex h-[56px] shrink-0 items-center gap-2 pr-2.5", traffic ? "pl-[84px]" : "pl-4")}>
-        <div data-tauri-drag-region className="flex flex-1 items-center gap-2">
-          <Wordmark size={21} intro />
+    <motion.aside
+      initial={false}
+      animate={{ width: open ? width : 0 }}
+      transition={dragging ? { duration: 0 } : spring}
+      className="relative h-full shrink-0 overflow-hidden"
+      aria-hidden={!open}
+      inert={!open}
+    >
+      <div className="absolute inset-y-0 left-0 flex flex-col overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
+        <div className="flex h-[52px] shrink-0 items-center justify-between pl-4 pr-2">
+          <Wordmark size={24} intro />
+          <IconButton title="Hide sidebar (⌘B)" onClick={toggle} className="text-faint">
+            <ISidebar size={18} />
+          </IconButton>
         </div>
-        <IconButton title={`Switch to ${theme === "dark" ? "light" : "dark"} theme (⌘⇧L)`} onClick={toggleTheme}>
-          <AnimatePresence mode="popLayout" initial={false}>
-            <motion.span
-              key={theme}
-              initial={{ opacity: 0, rotate: -40, scale: 0.7 }}
-              animate={{ opacity: 1, rotate: 0, scale: 1 }}
-              exit={{ opacity: 0, rotate: 40, scale: 0.7 }}
-              transition={{ duration: 0.22, ease }}
-              className="flex"
-            >
-              {theme === "dark" ? <IMoon size={17} /> : <ISun size={17} />}
-            </motion.span>
-          </AnimatePresence>
-        </IconButton>
+
+        <div className="px-2 pb-1">
+          <button
+            type="button"
+            title="New session (⌘T)"
+            onClick={() => setSheet({ kind: "new" })}
+            className="flex h-[40px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-base text-fg transition-colors duration-150 hover:bg-hover"
+          >
+            <ICompose size={18} className="text-dim" />
+            New session
+          </button>
+        </div>
+
+        <div className="px-4 pb-1 pt-3 text-small text-dim">Projects</div>
+
+        <motion.div layoutScroll className="scroll min-h-0 flex-1 px-2 pb-4" onKeyDown={onKeyDown} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
+          {!ready || (loading && projects.length === 0) ? (
+            <SidebarSkeleton />
+          ) : projects.length === 0 ? (
+            <div className="mx-1 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-base text-dim">
+              No sessions in the last day.
+              <br />
+              <button className="mt-1 font-medium text-fg hover:underline" onClick={() => setSheet({ kind: "new" })}>
+                Start one
+              </button>
+            </div>
+          ) : (
+            <LayoutGroup>
+              {shownProjects.map((p) => (
+                <ProjectGroup key={p.cwd} p={p} selected={selected} digest={digest} frozen={hover} />
+              ))}
+              {loading && <SidebarSkeleton groups={1} />}
+            </LayoutGroup>
+          )}
+        </motion.div>
+        <ResizeHandle width={width} onChange={setWidth} onDragging={setDragging} />
       </div>
-
-      <div className="flex flex-col gap-1.5 px-2.5 pb-3">
-        <button
-          type="button"
-          onClick={() => setSheet({ kind: "new" })}
-          className="group flex h-[38px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 text-base font-medium text-fg shadow-card transition-[border-color,transform] duration-150 hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] active:scale-[0.99]"
-        >
-          <span className="flex size-[22px] items-center justify-center rounded-[5px] bg-fg text-bg">
-            <IPlus size={14} strokeWidth={2} />
-          </span>
-          New session
-          <span className="ml-auto flex gap-0.5">
-            <Kbd>⌘</Kbd>
-            <Kbd>T</Kbd>
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setPalette(true)}
-          className="flex h-[36px] items-center gap-2 rounded-[9px] px-2.5 text-base text-dim transition-colors duration-150 hover:bg-hover hover:text-fg"
-        >
-          <ISearch size={16} />
-          Jump to…
-          <span className="ml-auto flex gap-0.5">
-            <Kbd>⌘</Kbd>
-            <Kbd>K</Kbd>
-          </span>
-        </button>
-      </div>
-
-      <div className="flex items-center justify-between px-4 pb-1.5">
-        <span className="font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Projects</span>
-        <span className="text-small text-faint tnum">{ready && !loading ? projects.length || "" : ""}</span>
-      </div>
-
-      <motion.div layoutScroll className="scroll min-h-0 flex-1 px-1.5 pb-3" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
-        {!ready || (loading && projects.length === 0) ? (
-          <SidebarSkeleton />
-        ) : projects.length === 0 ? (
-          <div className="mx-2 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-base text-dim">
-            No sessions in the last day.
-            <br />
-            <button className="mt-1 font-medium text-accent-text hover:underline" onClick={() => setSheet({ kind: "new" })}>
-              Start one
-            </button>
-          </div>
-        ) : (
-          <LayoutGroup>
-            {shownProjects.map((p) => (
-              <ProjectGroup key={p.cwd} p={p} selected={selected} digest={digest} frozen={hover} />
-            ))}
-            {loading && <SidebarSkeleton groups={1} />}
-          </LayoutGroup>
-        )}
-      </motion.div>
-
-      <div className="flex h-[42px] shrink-0 items-center gap-2.5 whitespace-nowrap border-t border-hairline pl-4 pr-2 text-small text-dim">
-        {counts.needs > 0 && (
-          <span className="flex items-center gap-1.5 font-medium text-accent-text" title="Sessions blocked on you">
-            <StatusDot status="needs" size={7} />
-            <span className="tnum">{counts.needs}</span> need{counts.needs === 1 ? "s" : ""} you
-          </span>
-        )}
-        {ready && !(loading && projects.length === 0) && (
-        <>
-        <span className="flex items-center gap-1.5">
-          <StatusDot status={counts.busy ? "busy" : "ended"} size={7} />
-          <span className="tnum">{counts.busy}</span> working
-        </span>
-        <span className="flex items-center gap-1.5">
-          <StatusDot status={counts.idle ? "idle" : "ended"} size={7} />
-          <span className="tnum">{counts.idle}</span> waiting
-        </span>
-        </>
-        )}
-        <IconButton title="Settings (⌘,)" className="ml-auto" onClick={() => setSheet({ kind: "settings" })}>
-          <IGear size={16} />
-        </IconButton>
-      </div>
-
-      <ResizeHandle width={width} onChange={setWidth} />
-    </aside>
+    </motion.aside>
   );
 }
 
-function ResizeHandle({ width, onChange }: { width: number; onChange: (w: number) => void }) {
+function ResizeHandle({ width, onChange, onDragging }: { width: number; onChange: (w: number) => void; onDragging: (d: boolean) => void }) {
   const start = useRef<{ x: number; w: number } | null>(null);
   return (
     <div
-      className="group absolute inset-y-0 -right-[3px] z-10 w-[6px] cursor-col-resize"
+      className="group absolute inset-y-0 right-0 z-10 w-[6px] cursor-col-resize"
       onPointerDown={(e) => {
         start.current = { x: e.clientX, w: width };
+        onDragging(true);
         (e.target as HTMLElement).setPointerCapture(e.pointerId);
       }}
       onPointerMove={(e) => start.current && onChange(start.current.w + e.clientX - start.current.x)}
-      onPointerUp={() => (start.current = null)}
+      onPointerUp={() => {
+        start.current = null;
+        onDragging(false);
+      }}
     >
-      <div className="mx-auto h-full w-[2px] bg-accent opacity-0 transition-opacity duration-150 group-hover:opacity-40" />
+      <div className="mx-auto h-full w-[2px] bg-fg opacity-0 transition-opacity duration-150 group-hover:opacity-40" />
     </div>
   );
 }
@@ -250,34 +204,34 @@ function ResizeHandle({ width, onChange }: { width: number; onChange: (w: number
 const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }: { p: Project; selected: string | null; digest: ChatDigest; frozen: boolean }) {
   const live = useStableOrder(p.live, sessionKey, frozen);
   const [collapsed, setCollapsed] = useState(false);
-  const [showEnded, setShowEnded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const setSheet = useStore((s) => s.setSheet);
-  const liveCount = p.live.length + p.starting.length + p.startingChats.length;
-  const onlyEnded = liveCount === 0;
-  const endedVisible = showEnded || (onlyEnded && p.ended.length <= 1);
+  const ended = showAll ? p.ended : p.ended.slice(0, ENDED_CAP);
+  const onlyEnded = p.live.length + p.starting.length + p.startingChats.length === 0;
+  const Folder = collapsed ? IFolder : IFolderOpen;
 
   return (
-    <motion.div layout="position" transition={spring} className="mb-1.5">
-      <div className="group flex h-[34px] items-center gap-1.5 rounded-[7px] pl-1.5 pr-1 hover:bg-hover">
-        <button type="button" onClick={() => setCollapsed(!collapsed)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" title={homeShort(p.cwd)}>
-          <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="flex text-faint">
-            <IChevron size={13} />
-          </motion.span>
-          <span className={cx("truncate text-base font-semibold", onlyEnded ? "text-dim" : "text-fg/90")}>{p.name}</span>
-          {liveCount > 0 && (
-            <span className="flex items-center gap-1 rounded-full bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] py-[1px] pl-[5px] pr-1.5 text-small font-medium text-dim">
-              <StatusDot status={p.needs ? "needs" : p.status} size={6} />
-              <span className="tnum">{liveCount}</span>
-            </span>
-          )}
+    <motion.div layout="position" transition={spring} className="mb-2">
+      <div className="group/proj relative">
+        <button
+          type="button"
+          data-nav
+          onClick={() => setCollapsed(!collapsed)}
+          title={homeShort(p.cwd)}
+          aria-expanded={!collapsed}
+          className="flex h-[40px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left transition-colors duration-150 hover:bg-hover"
+        >
+          <Folder size={18} className="shrink-0 text-dim" />
+          <span className={cx("min-w-0 flex-1 truncate text-base font-medium", onlyEnded ? "text-dim" : "text-fg")}>{p.name}</span>
         </button>
         <button
           type="button"
           onClick={() => setSheet({ kind: "new", cwd: p.cwd })}
           title={`New session in ${p.name}`}
-          className="flex size-[26px] items-center justify-center rounded-[6px] text-dim opacity-0 transition-[opacity,background-color] duration-150 hover:bg-press hover:text-fg group-hover:opacity-100"
+          aria-label={`New session in ${p.name}`}
+          className="absolute right-1.5 top-1/2 flex size-[28px] -translate-y-1/2 items-center justify-center rounded-[8px] text-dim opacity-0 transition-[opacity,background-color] duration-150 hover:bg-press hover:text-fg focus-visible:opacity-100 group-hover/proj:opacity-100"
         >
-          <IPlus size={15} />
+          <IPlus size={16} />
         </button>
       </div>
       <AnimatePresence initial={false}>
@@ -293,32 +247,26 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
             <div className="flex flex-col gap-px pt-px">
               <AnimatePresence initial={false}>
                 {p.startingChats.map((c) => (
-                  <StartingChatRow key={`chat:${c.id}`} info={c} selected={selected === `chat:${c.id}`} />
+                  <Row key={`chat:${c.id}`} selected={selected === `chat:${c.id}`} onClick={() => useStore.getState().open({ kind: "chat", id: c.id })} title={`New ${c.provider === "claude" ? "Claude Code" : "Codex"} chat`} status={c.state === "idle" ? "idle" : "starting"} provider={c.provider} meta="now" />
                 ))}
                 {p.starting.map((s) => (
-                  <StartingRow key={`pty:${s.id}`} info={s} selected={selected === `pty:${s.id}`} />
+                  <Row key={`pty:${s.id}`} selected={selected === `pty:${s.id}`} onClick={() => useStore.getState().open({ kind: "pty", id: s.id })} title={`New ${s.provider} session`} status="starting" provider={s.provider} meta="now" />
                 ))}
                 {live.map((s) => (
                   <SessionRow key={sessionKey(s)} s={s} att={attention(s, digest)} selected={selected === sessionKey(s)} />
                 ))}
-                {endedVisible && p.ended.map((s) => <SessionRow key={sessionKey(s)} s={s} att={attention(s, digest)} selected={selected === sessionKey(s)} />)}
+                {ended.map((s) => (
+                  <SessionRow key={sessionKey(s)} s={s} att={attention(s, digest)} selected={selected === sessionKey(s)} />
+                ))}
               </AnimatePresence>
-              {p.ended.length > 0 && !endedVisible && (
+              {p.ended.length > ENDED_CAP && (
                 <button
                   type="button"
-                  onClick={() => setShowEnded(true)}
-                  className="ml-[22px] flex h-[28px] items-center gap-1 rounded-[6px] px-1.5 text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
+                  data-nav
+                  onClick={() => setShowAll(!showAll)}
+                  className="flex h-[32px] w-full items-center rounded-[10px] pl-[38px] text-left text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
                 >
-                  {p.ended.length} earlier
-                </button>
-              )}
-              {showEnded && !(onlyEnded && p.ended.length <= 1) && (
-                <button
-                  type="button"
-                  onClick={() => setShowEnded(false)}
-                  className="ml-[22px] flex h-[28px] items-center rounded-[6px] px-1.5 text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
-                >
-                  Hide earlier
+                  {showAll ? "Show less" : "Show more"}
                 </button>
               )}
             </div>
@@ -337,151 +285,77 @@ const rowMotion = {
   transition: { ...spring, opacity: { duration: 0.2 } },
 };
 
+/**
+ * One session: title only. State is a single dot at the right edge (yellow working,
+ * green needs you, nothing otherwise); hovering swaps it for the provider mark and the age.
+ * Rows are opaque so rows that trade places slide past each other.
+ */
 function Row({
   selected,
   onClick,
-  children,
-  indent = 0,
+  title,
+  status,
+  provider,
+  meta,
+  dim,
   data,
 }: {
   selected: boolean;
   onClick: () => void;
-  children: React.ReactNode;
-  indent?: number;
+  title: string;
+  status: UiStatus;
+  provider: "claude" | "codex";
+  meta: string;
+  dim?: boolean;
   /** `data-*` hooks (self-test). */
   data?: Record<string, string | undefined>;
 }) {
+  const dot = status === "busy" || status === "starting" || status === "needs";
   return (
     <motion.button
       type="button"
+      data-nav
       {...data}
       {...rowMotion}
       onClick={onClick}
+      title={title}
       className={cx(
-        "relative flex w-full items-start gap-2 rounded-[8px] py-[5px] pr-2 text-left",
-        selected ? "[--row-tint:color-mix(in_oklab,var(--text)_7%,transparent)]" : "[--row-tint:transparent] hover:[--row-tint:var(--hover)]",
+        "group relative flex h-[36px] w-full items-center rounded-[10px] pl-[38px] pr-3 text-left text-base",
+        selected ? "[--row-tint:var(--hover)] text-fg" : cx("[--row-tint:transparent] hover:[--row-tint:var(--hover)] hover:text-fg", dim ? "text-faint" : "text-dim"),
       )}
-      // Opaque (tint over the panel colour): rows that trade places slide past
-      // each other instead of drawing their text on top of one another.
-      style={{ paddingLeft: 10 + indent, background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--panel)" }}
+      style={{ background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--bg)" }}
     >
-      {selected && <motion.span layoutId="sb-sel" transition={spring} className="absolute inset-y-[6px] left-0 w-[2.5px] rounded-full bg-accent" />}
-      {children}
+      <span className="min-w-0 flex-1 truncate group-hover:mr-[84px]">{title}</span>
+      {dot && (
+        <span className="ml-2 flex shrink-0 items-center group-hover:hidden">
+          <StatusDot status={status} size={8} />
+        </span>
+      )}
+      <span
+        className="absolute inset-y-0 right-0 hidden items-center gap-2 rounded-r-[10px] pl-6 pr-3 text-small text-faint group-hover:flex"
+        style={{ background: "linear-gradient(90deg, transparent, color-mix(in oklab, var(--text) 8%, var(--bg)) 22px)" }}
+      >
+        <span className="tnum">{meta}</span>
+        <ProviderMark provider={provider} size={14} />
+      </span>
     </motion.button>
   );
-}
-
-type Tone = "live" | "needs" | "insight" | "dim" | "loading";
-function subline(s: Session, a: Attention, now: number): { text: string; tone: Tone; title?: string } {
-  if (a.needs) return { text: a.needs, tone: "needs" };
-  // Details not parsed yet: don't guess what it's doing.
-  if (s.loaded === false && a.status === "busy" && !s.current) return { text: "", tone: "loading", title: "Reading transcript…" };
-  const headline = headlineIsTitle(s) ? undefined : s.insight?.headline;
-  if (a.status === "busy") {
-    if (!s.current || isThinking(s.current)) return headline ? { text: headline, tone: "insight", title: "Thinking…" } : { text: "Thinking…", tone: "live" };
-    const { name, detail } = splitTool(s.current);
-    return { text: detail ? `${name} ${shortDetail(detail)}` : name, tone: "live", title: headline };
-  }
-  if (headline && a.status === "idle") return { text: headline, tone: "insight", title: `Waiting · ${ago(s.updated, now)}` };
-  if (a.status === "idle") return { text: `Waiting · ${ago(s.updated, now)}`, tone: "dim" };
-  return { text: ago(s.updated, now), tone: "dim" };
 }
 
 const SessionRow = memo(function SessionRow({ s, att, selected }: { s: Session; att: Attention; selected: boolean }) {
   const open = useStore((st) => st.open);
   const now = useNow();
-  const sub = subline(s, att, now);
-  const agents = s.agents.filter((a) => !a.finished);
   const status = att.needs ? "needs" : att.status;
   return (
-    <>
-      <Row selected={selected} onClick={() => open({ kind: "session", key: sessionKey(s) })} data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined }}>
-        <span className="flex h-[22px] w-[8px] items-center justify-center">
-          <StatusDot status={status} size={8} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            <ProviderMark provider={s.provider} size={13} />
-            <span className={cx("truncate text-base", att.status === "ended" ? "text-dim" : "text-fg", selected && "font-medium")}>{displayTitle(s)}</span>
-            {att.needs ? (
-              <NeedsBadge small className="ml-auto" />
-            ) : (
-              s.managed !== null && <span className="ml-auto shrink-0 rounded-[4px] border border-line px-1 text-small font-medium text-faint">pty</span>
-            )}
-          </span>
-          {sub.tone === "loading" ? (
-            <span className="flex h-[18px] items-center" title={sub.title}>
-              <Skel w="55%" h={8} className="opacity-70" />
-            </span>
-          ) : (
-          <span
-            title={sub.title ?? sub.text}
-            className={cx(
-              "block truncate text-small",
-              sub.tone === "live" ? "text-busy-text/85" : sub.tone === "needs" ? "font-medium text-accent-text" : sub.tone === "insight" ? "text-dim" : "text-faint",
-            )}
-          >
-            {sub.text}
-          </span>
-          )}
-        </span>
-      </Row>
-      {agents.map((a) => (
-        <AgentRow key={`${sessionKey(s)}/${a.id}`} a={a} onClick={() => open({ kind: "session", key: sessionKey(s) })} />
-      ))}
-    </>
+    <Row
+      selected={selected}
+      onClick={() => open({ kind: "session", key: sessionKey(s) })}
+      title={displayTitle(s)}
+      status={status}
+      provider={s.provider}
+      meta={ago(s.updated, now)}
+      dim={att.status === "ended"}
+      data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined }}
+    />
   );
 });
-
-function AgentRow({ a, onClick }: { a: Agent; onClick: () => void }) {
-  const cur = a.current && !isThinking(a.current) ? splitTool(a.current) : null;
-  return (
-    <Row selected={false} onClick={onClick} indent={16}>
-      <span className="mt-[3px] h-[12px] w-[9px] shrink-0 rounded-bl-[5px] border-b border-l border-line" />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <StatusDot status="busy" size={6} />
-          <span className="truncate text-small text-fg/85">{a.description || a.kind}</span>
-          {a.model && <span className="ml-auto shrink-0 text-small text-faint">{modelLabel(a.model)}</span>}
-        </span>
-        <span className="block truncate text-small text-faint">{cur ? `${cur.name} ${shortDetail(cur.detail)}` : "Thinking…"}</span>
-      </span>
-    </Row>
-  );
-}
-
-function StartingRow({ info, selected }: { info: PtyInfo; selected: boolean }) {
-  const open = useStore((st) => st.open);
-  return (
-    <Row selected={selected} onClick={() => open({ kind: "pty", id: info.id })}>
-      <span className="flex h-[22px] w-[8px] items-center justify-center">
-        <StatusDot status="starting" size={8} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <ProviderMark provider={info.provider} size={13} />
-          <span className="truncate text-base text-fg">New {info.provider} session</span>
-        </span>
-        <span className="shimmer block truncate text-small">Starting…</span>
-      </span>
-    </Row>
-  );
-}
-
-function StartingChatRow({ info, selected }: { info: ChatInfo; selected: boolean }) {
-  const open = useStore((st) => st.open);
-  return (
-    <Row selected={selected} onClick={() => open({ kind: "chat", id: info.id })}>
-      <span className="flex h-[22px] w-[8px] items-center justify-center">
-        <StatusDot status={info.state === "idle" ? "idle" : "starting"} size={8} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <ProviderMark provider={info.provider} size={13} />
-          <span className="truncate text-base text-fg">New {info.provider === "claude" ? "Claude Code" : "Codex"} chat</span>
-        </span>
-        <span className="block truncate text-small text-faint">{info.state === "idle" ? "Ready for a prompt" : "Starting…"}</span>
-      </span>
-    </Row>
-  );
-}

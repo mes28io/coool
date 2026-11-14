@@ -114,6 +114,7 @@ interface State {
   sheet: Sheet;
   toasts: Toast[];
   sidebarWidth: number;
+  sidebarOpen: boolean;
 
   setSnapshot(s: Snapshot): void;
   setEnv(e: Environment): void;
@@ -140,6 +141,7 @@ interface State {
   toast(text: string, tone?: Toast["tone"]): void;
   dismissToast(id: number): void;
   setSidebarWidth(w: number): void;
+  toggleSidebar(): void;
 }
 
 /** Swap pty / chat targets for the session they turned into, once the backend linked them. */
@@ -184,7 +186,14 @@ export const useStore = create<State>((set, get) => ({
   palette: false,
   sheet: null,
   toasts: [],
-  sidebarWidth: readNum("coool.sidebar", 320),
+  sidebarWidth: readNum("coool.sidebar", 300),
+  sidebarOpen: (() => {
+    try {
+      return localStorage.getItem("coool.sidebarOpen") !== "0";
+    } catch {
+      return true;
+    }
+  })(),
 
   setSnapshot(snap) {
     const st = get();
@@ -357,6 +366,13 @@ export const useStore = create<State>((set, get) => ({
     setTimeout(() => get().dismissToast(id), tone === "error" ? 6000 : 3200);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  toggleSidebar() {
+    const v = !get().sidebarOpen;
+    try {
+      localStorage.setItem("coool.sidebarOpen", v ? "1" : "0");
+    } catch {}
+    set({ sidebarOpen: v });
+  },
   setSidebarWidth(w) {
     const v = Math.round(Math.min(420, Math.max(220, w)));
     try {

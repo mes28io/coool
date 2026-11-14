@@ -7,6 +7,7 @@ import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
 import { IAlert, IClose } from "./components/icons";
 import { Sheets } from "./components/Sheets";
+import { Rail } from "./components/Rail";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
 import { useStore } from "./store";
@@ -35,6 +36,7 @@ function useShortcuts() {
       let hit = true;
       if (k === "k") st.setPalette(!st.palette);
       else if (k === "t" && !e.shiftKey) st.setSheet({ kind: "new" });
+      else if (k === "b" && !e.shiftKey) st.toggleSidebar();
       else if (k === "w" && !e.shiftKey) st.closeFocused();
       else if (k === "\\" || e.code === "Backslash") st.split(e.shiftKey ? "col" : "row");
       else if (k === "l" && e.shiftKey) st.toggleTheme();
@@ -138,9 +140,17 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="flex h-full w-full">
-        <Sidebar />
-        <Workspace />
+      <div className="flex h-full w-full flex-col bg-panel">
+        {/* Window chrome: the macOS traffic lights sit in this strip, which also drags the window. */}
+        <div data-tauri-drag-region className="h-[40px] shrink-0" />
+        <div className="flex min-h-0 flex-1">
+          <Rail />
+          {/* One raised sheet lying on the window: sidebar panel + main area. */}
+          <div className="flex min-w-0 flex-1 overflow-hidden rounded-tl-[14px] border-l border-t border-hairline bg-bg">
+            <Sidebar />
+            <Workspace />
+          </div>
+        </div>
       </div>
       <Palette />
       <Sheets />

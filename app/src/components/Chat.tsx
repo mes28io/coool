@@ -524,7 +524,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
       <div
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-300",
-          running ? "border-[color-mix(in_oklab,var(--busy)_40%,var(--border))]" : "border-hairline",
+          "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pb-1.5 pt-2">
@@ -541,7 +541,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
             </span>
           ) : (
             <span className="flex items-center gap-1 text-small text-dim">
-              <ICheck size={14} className="text-accent-text" /> {fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)}
+              <ICheck size={14} className="text-faint" /> {fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)}
             </span>
           )}
         </div>
@@ -620,12 +620,10 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
       title={option.rules.length ? option.rules.join("\n") : undefined}
       className={cx(
         "group flex w-full items-start gap-2.5 rounded-[9px] border px-3 py-2 text-left transition-[background-color,border-color] duration-150 active:scale-[0.995]",
-        saved
-          ? "border-[color-mix(in_oklab,var(--busy)_28%,var(--border))] hover:bg-[color-mix(in_oklab,var(--busy)_7%,transparent)]"
-          : "border-line hover:border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] hover:bg-hover",
+        "border-line hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))] hover:bg-hover",
       )}
     >
-      <span className={cx("mt-[3px] flex size-[20px] shrink-0 items-center justify-center rounded-[5px]", saved ? "bg-[color-mix(in_oklab,var(--busy)_16%,transparent)] text-busy-text" : "bg-accent-soft text-accent-text")}>
+      <span className={cx("mt-[3px] flex size-[20px] shrink-0 items-center justify-center rounded-[5px]", "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-dim")}>
         {saved ? <IFile size={13} /> : <ICheck size={13} />}
       </span>
       <span className="min-w-0 flex-1">
@@ -634,7 +632,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
             <Ticks text={option.label} />
           </span>
           {quick && <Kbd className="ml-auto shrink-0">⇧⌘↵</Kbd>}
-          {saved && <span className="ml-auto shrink-0 rounded-[5px] bg-[color-mix(in_oklab,var(--busy)_14%,transparent)] px-1.5 text-small font-medium text-busy-text">{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
+          {saved && <span className="ml-auto flex shrink-0 items-center gap-1.5 rounded-[5px] border border-line bg-raised px-1.5 text-small font-medium text-dim"><span className="size-[6px] rounded-full bg-busy" />{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
         </span>
         <span className="mt-0.5 block text-small text-dim">{option.detail}</span>
       </span>
@@ -930,7 +928,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
   }
   return (
     <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint">
-      {item.ok ? <ICheck size={13} className="text-accent-text/80" /> : <IReturn size={13} />}
+      {item.ok ? <ICheck size={13} className="text-faint" /> : <IReturn size={13} />}
       <span>{item.ok ? "Done" : "Stopped"}</span>
       <span className="tnum">{fmtElapsed(item.durationMs)}</span>
       {model && (

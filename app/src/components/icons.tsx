@@ -103,6 +103,17 @@ export const IGear = mk(
 );
 export const IArrowUp = mk(<path d="M8 13V3.5M4 7.5l4-4 4 4" />);
 
+export const IHome = mk(<path d="M2.75 7.25L8 2.75l5.25 4.5V12.5a.75.75 0 01-.75.75H10V9.5H6v3.75H3.5a.75.75 0 01-.75-.75z" />);
+export const IBell = mk(<path d="M4 11V7.25a4 4 0 118 0V11l1 1.5H3zM6.75 14a1.4 1.4 0 002.5 0" />);
+export const ICompose = mk(<path d="M7 3H4.25A1.5 1.5 0 002.75 4.5v7.25a1.5 1.5 0 001.5 1.5H11.5a1.5 1.5 0 001.5-1.5V9M10.9 2.9l2.2 2.2L7.6 10.6 5.2 11l.4-2.4z" />);
+export const IFolderOpen = mk(<path d="M2.25 11.5V4.75a1.5 1.5 0 011.5-1.5H6l1.4 1.75h4.1a1.5 1.5 0 011.5 1.5V6.5M2.25 11.5l1.4-4.1a1 1 0 01.95-.7h8.9a.75.75 0 01.72.97l-1.2 4.1a1.5 1.5 0 01-1.44 1.08H3.75a1.5 1.5 0 01-1.5-1.5z" />);
+export const ISidebar = mk(
+  <>
+    <rect x="2.25" y="3" width="11.5" height="10" rx="2" />
+    <path d="M6.25 3v10" />
+  </>,
+);
+
 export function toolIcon(name: string) {
   const n = name.toLowerCase();
   if (/(bash|shell|exec|command)/.test(n)) return ITerminal;

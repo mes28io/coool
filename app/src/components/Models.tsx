@@ -82,7 +82,7 @@ export function ModelsBreakdown({ data, current }: { data: ModelsData; current?:
                   {modelLabel(r.model)}
                 </span>
                 {r.via_agent && <span className="shrink-0 text-small text-dim">subagents</span>}
-                {current && r.model === current && !r.via_agent && <span className="shrink-0 rounded-[4px] bg-accent-soft px-1 font-mono text-micro font-semibold uppercase tracking-wide text-accent-text">now</span>}
+                {current && r.model === current && !r.via_agent && <span className="shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1 font-mono text-micro font-semibold uppercase tracking-wide text-dim">now</span>}
                 <span className="ml-auto shrink-0 text-small text-faint tnum" title={`in ${fmtTokens(r.input)} · cached ${fmtTokens(r.cached)} · out ${fmtTokens(r.output)}`}>
                   {fmtTokens(t)}
                 </span>

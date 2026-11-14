@@ -44,12 +44,8 @@ export const statusLabel = (s: UiStatus) =>
 
 export function StatusPill({ status }: { status: UiStatus }) {
   if (status === "needs") return <NeedsBadge />;
-  const tone =
-    status === "busy" || status === "starting"
-      ? "text-busy-text bg-[color-mix(in_oklab,var(--busy)_12%,transparent)]"
-      : status === "idle"
-        ? "text-accent-text bg-accent-soft"
-        : "text-dim bg-hover";
+  // Neutral pill; only the dot carries the state colour.
+  const tone = status === "idle" || status === "busy" || status === "starting" ? "border border-line bg-raised text-fg/85" : "border border-hairline bg-raised text-dim";
   return (
     <span className={cx("inline-flex h-[24px] shrink-0 items-center gap-1.5 rounded-full pl-[7px] pr-2 text-small font-medium", tone)} data-status-pill={status}>
       <StatusDot status={status} size={7} />
@@ -142,7 +138,9 @@ export function ContextMeter({
   const exact = w.source === "reported";
   const raw = context / w.tokens;
   const pct = Math.min(1, raw);
-  const color = exact && pct > 0.85 ? "var(--error)" : pct > (exact ? 0.65 : 0.75) ? "var(--busy)" : "var(--accent)";
+  const known = w.source !== "assumed";
+  // Neutral unless it is actually high (>= 75% of a known window) or over it.
+  const color = known && raw > 1 ? "var(--error)" : known && pct >= 0.75 ? "var(--busy)" : "var(--dim)";
   const tip =
     `Context ${fmtTokens(context)} of ${fmtTokens(w.tokens)}` +
     (w.source === "reported" ? " (reported by the CLI)" : w.source === "family" ? ` (estimated for ${model})` : " (window unknown; 200k assumed)");

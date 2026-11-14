@@ -18,55 +18,27 @@ const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity
 
 // ---------- sidebar ----------
 
-/** Mirrors ProjectGroup > SessionRow / AgentRow. */
+/** Mirrors ProjectGroup > Row: folder glyph + name, then indented title bars. */
 export function SidebarSkeleton({ groups = 4 }: { groups?: number }) {
-  const plan: { name: number; rows: { t: number; s: number; agent?: boolean }[] }[] = [
-    { name: 58, rows: [{ t: 150, s: 112 }, { t: 128, s: 84, agent: true }, { t: 170, s: 96 }] },
-    { name: 44, rows: [{ t: 136, s: 118 }, { t: 160, s: 70 }] },
-    { name: 66, rows: [{ t: 176, s: 100 }, { t: 120, s: 88, agent: true }] },
-    { name: 38, rows: [{ t: 146, s: 64 }] },
+  const plan: { name: number; rows: number[] }[] = [
+    { name: 84, rows: [150, 128, 170] },
+    { name: 60, rows: [136, 160] },
+    { name: 96, rows: [176, 120] },
+    { name: 52, rows: [146] },
   ];
   let k = 0;
   return (
     <motion.div {...fade} aria-label="Loading sessions">
       {plan.slice(0, groups).map((g, gi) => (
-        <div key={gi} className="mb-1.5">
-          <div className="flex h-[34px] items-center gap-1.5 pl-1.5 pr-1">
-            <Skel w={8} h={8} r={2} i={k++} className="mx-[1.5px]" />
-            <Skel w={g.name} h={12} i={k++} />
-            <Skel w={28} h={20} i={k++} />
+        <div key={gi} className="mb-2">
+          <div className="flex h-[40px] items-center gap-2.5 px-2.5">
+            <Skel w={18} h={14} r={4} i={k++} />
+            <Skel w={g.name} h={11} i={k++} />
           </div>
           <div className="flex flex-col gap-px pt-px">
-            {g.rows.map((r, ri) => (
-              <div key={ri}>
-                <div className="flex items-start gap-2 py-[5px] pl-[10px] pr-2">
-                  <span className="flex h-[22px] w-[8px] items-center justify-center">
-                    <Skel w={8} h={8} i={k} />
-                  </span>
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="flex h-[22px] items-center gap-1.5">
-                      <Skel w={13} h={13} i={k} />
-                      <Skel w={r.t * 1.2} h={11} i={k++} />
-                    </span>
-                    <span className="flex h-[18px] items-center">
-                      <Skel w={r.s * 1.2} h={9} i={k++} className="opacity-70" />
-                    </span>
-                  </span>
-                </div>
-                {r.agent && (
-                  <div className="flex items-start gap-2 py-[5px] pl-[26px] pr-2">
-                    <span className="mt-[3px] h-[12px] w-[9px] shrink-0 rounded-bl-[5px] border-b border-l border-line" />
-                    <span className="flex flex-1 flex-col">
-                      <span className="flex h-[18px] items-center gap-1.5">
-                        <Skel w={6} h={6} i={k} />
-                        <Skel w={(r.t - 30) * 1.2} h={9} i={k++} />
-                      </span>
-                      <span className="flex h-[18px] items-center">
-                        <Skel w={(r.s - 10) * 1.2} h={8} i={k++} className="opacity-70" />
-                      </span>
-                    </span>
-                  </div>
-                )}
+            {g.rows.map((w, ri) => (
+              <div key={ri} className="flex h-[36px] items-center pl-[38px] pr-3">
+                <Skel w={w} h={10} i={k++} className="opacity-70" />
               </div>
             ))}
           </div>

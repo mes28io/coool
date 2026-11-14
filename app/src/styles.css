@@ -268,9 +268,9 @@ html.theme-fade *::after {
   background: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in oklab, var(--sweep, var(--busy)) 9%, transparent) 45%,
-    color-mix(in oklab, var(--sweep, var(--busy)) 14%, transparent) 50%,
-    color-mix(in oklab, var(--sweep, var(--busy)) 9%, transparent) 55%,
+    color-mix(in oklab, var(--sweep, var(--text)) 3%, transparent) 45%,
+    color-mix(in oklab, var(--sweep, var(--text)) 6%, transparent) 50%,
+    color-mix(in oklab, var(--sweep, var(--text)) 3%, transparent) 55%,
     transparent 100%
   );
   transform: translateX(-100%);

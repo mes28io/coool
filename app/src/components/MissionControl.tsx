@@ -11,7 +11,7 @@ import { useStableOrder } from "../lib/stable";
 import { useStore, type Since } from "../store";
 import { IPlay, IPlus, ISpark, toolIcon } from "./icons";
 import { Wordmark } from "./Wordmark";
-import { Button, ContextMeter, cx, Elapsed, ease, Kbd, NeedsBadge, PathText, ProviderMark, softSpring, StatusPill, Ticker } from "./primitives";
+import { Button, ContextMeter, cx, Elapsed, ease, Kbd, NeedsBadge, PathText, ProviderMark, softSpring, StatusDot, StatusPill, Ticker } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { CardSkeleton, RecentSkeleton, Skel } from "./Skeletons";
 
@@ -77,8 +77,8 @@ export function MissionControl() {
                       <span className="text-faint">·</span>{" "}
                     </>
                   )}
-                  <span className="text-busy-text tnum">{busy + starting.length + startingChats.length}</span> working <span className="text-faint">·</span>{" "}
-                  <span className="tnum">{live.length - busy - needs}</span> waiting <span className="text-faint">·</span>{" "}
+                  <span className="inline-flex items-center gap-1.5 align-baseline"><StatusDot status="busy" size={7} /><span className="tnum text-fg/85">{busy + starting.length + startingChats.length}</span> working</span> <span className="text-faint">·</span>{" "}
+                  <span className="inline-flex items-center gap-1.5 align-baseline"><StatusDot status="idle" size={7} /><span className="tnum text-fg/85">{live.length - busy - needs}</span> waiting</span> <span className="text-faint">·</span>{" "}
                   <span className="tnum">{projects}</span> {projects === 1 ? "project" : "projects"}
                 </>
               )}
@@ -209,7 +209,6 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
           : "border-line hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))]",
       )}
     >
-      {busy && <span className="edge-run absolute inset-x-0 top-0 h-px" />}
       <div className="flex items-center gap-1.5">
         <ProviderMark provider={s.provider} size={14} />
         <span className="truncate text-small font-medium text-dim">{folderName(s.cwd)}</span>
@@ -226,7 +225,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       <div
         className={cx(
           "mt-2.5 flex h-[36px] shrink-0 items-center gap-2 rounded-[8px] px-2.5",
-          needs ? "bg-accent-soft" : busy && !pending ? "sweep bg-[color-mix(in_oklab,var(--busy)_8%,transparent)]" : busy ? "bg-[color-mix(in_oklab,var(--busy)_6%,transparent)]" : "bg-[color-mix(in_oklab,var(--dim)_8%,transparent)]",
+          needs ? "bg-accent-soft" : "bg-[color-mix(in_oklab,var(--dim)_9%,transparent)]",
         )}
       >
         {needs ? (
@@ -239,7 +238,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
           </>
         ) : busy ? (
           <>
-            <CurIcon size={13} className="shrink-0 text-busy-text" />
+            <CurIcon size={13} className="shrink-0 text-dim" />
             <span className="min-w-0 flex-1 truncate text-base">
               {cur ? (
                 <>
@@ -251,7 +250,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
                 <span className="shimmer font-medium">Thinking</span>
               )}
             </span>
-            {!pending && <Elapsed since={since.at} approx={since.approx} className="shrink-0 text-small text-busy-text" />}
+            {!pending && <Elapsed since={since.at} approx={since.approx} className="shrink-0 text-small text-faint" />}
           </>
         ) : (
           <>
@@ -403,7 +402,6 @@ function EmptyState() {
       transition={{ duration: 0.4, ease }}
       className="relative flex flex-col items-center overflow-hidden rounded-[14px] border border-dashed border-line px-6 py-16 text-center"
     >
-      <div className="pointer-events-none absolute -top-24 h-[256px] w-[420px] rounded-full bg-[radial-gradient(closest-side,color-mix(in_oklab,var(--accent)_10%,transparent),transparent)]" />
       <Wordmark size={34} />
       <div className="mt-5 text-display font-semibold tracking-[-0.02em]">No agents running</div>
       <p className="mt-1 max-w-[360px] text-base text-dim">

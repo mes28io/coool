@@ -60,20 +60,21 @@ export function modelFamily(id: string | null | undefined): string {
 
 /** Stable colour per family, from the neutral and accent tokens. */
 export function modelColor(id: string | null | undefined): string {
+  const t = (n: number) => `color-mix(in oklab, var(--text) ${n}%, transparent)`;
   switch (modelFamily(id)) {
     case "fable":
     case "mythos":
-      return "var(--dim)";
+      return t(80);
     case "opus":
-      return "var(--text)";
+      return t(100);
     case "sonnet":
-      return "var(--accent)";
+      return t(60);
     case "haiku":
-      return "var(--busy)";
+      return t(35);
     case "gpt":
-      return "var(--faint)";
+      return t(50);
     default:
-      return "var(--dim)";
+      return t(25);
   }
 }
 
