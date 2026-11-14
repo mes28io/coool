@@ -50,7 +50,7 @@ function TabBar() {
     <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center gap-1 border-b border-hairline pl-2.5 pr-2.5">
       <button
         type="button"
-        title="Mission control"
+        title="Home"
         onClick={() => activate(null)}
         className={cx(
           "relative flex h-[38px] shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-base font-medium transition-colors duration-150",
@@ -59,7 +59,7 @@ function TabBar() {
       >
         {activeTab === null && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 -z-0 rounded-[8px] border border-line bg-raised shadow-card" />}
         <IGrid size={16} className="relative" />
-        {tabs.length === 0 && <span className="relative">Mission control</span>}
+        {tabs.length === 0 && <span className="relative">Home</span>}
       </button>
       {tabs.length > 0 && <span className="mx-1 h-4 w-px shrink-0 bg-line" />}
       <Reorder.Group axis="x" values={ids} onReorder={reorder} className="scroll-x flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden" data-tauri-drag-region>

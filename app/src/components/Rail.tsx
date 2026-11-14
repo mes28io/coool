@@ -136,7 +136,7 @@ export function Rail() {
           <ISidebar size={20} />
         </RailButton>
       )}
-      <RailButton label="Mission control" active={activeTab === null} onClick={() => activate(null)}>
+      <RailButton label="Home" active={activeTab === null} onClick={() => activate(null)}>
         <IHome size={20} />
       </RailButton>
       <RailButton label="Search" shortcut="⌘K" onClick={() => setPalette(true)}>

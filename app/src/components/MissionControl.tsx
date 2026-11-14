@@ -38,8 +38,6 @@ export function MissionControl() {
   const recent = useMemo(() => sessions.filter((s) => att.get(s)?.status === "ended").slice(0, 6), [sessions, att]);
   const starting = pending.map((id) => ptys[id]).filter(Boolean) as PtyInfo[];
   const startingChats = pendingChats.map((id) => chatInfos[id]).filter(Boolean) as ChatInfo[];
-  const busy = live.filter((s) => att.get(s)!.status === "busy" && !att.get(s)!.needs).length;
-  const needs = live.filter((s) => att.get(s)!.needs).length;
   // One ordered list ("Needs you", starting, the rest), held still while the pointer is over the grid.
   type Entry = { k: string; s?: Session; chat?: ChatInfo; p?: PtyInfo };
   const entries: Entry[] = [
@@ -50,7 +48,6 @@ export function MissionControl() {
   ];
   const shown = useStableOrder(entries, (e) => e.k, hover);
   const nothing = live.length + starting.length + startingChats.length === 0;
-  const projects = new Set(live.map((s) => s.cwd)).size;
   // Stagger only the cards present on first paint; later arrivals just fade in.
   const firstPaint = useRef(true);
   const stagger = firstPaint.current;
@@ -59,37 +56,7 @@ export function MissionControl() {
   return (
     <div className="scroll h-full">
       <div className="mx-auto max-w-[1280px] px-8 pb-12 pt-7">
-        <div className="mb-7">
-          <h1 className="text-display font-semibold tracking-[-0.02em]">Mission control</h1>
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-base leading-[22px] text-dim">
-            {!ready || loading ? (
-              <span>Looking for sessions…</span>
-            ) : nothing ? (
-              <span>Nothing running right now.</span>
-            ) : (
-              <>
-                {needs > 0 && (
-                  <span className="inline-flex items-center gap-1.5 text-accent-text">
-                    <StatusDot status="needs" size={7} />
-                    <span className="tnum">{needs}</span> {needs === 1 ? "needs" : "need"} you
-                  </span>
-                )}
-                <span className="inline-flex items-center gap-1.5">
-                  <StatusDot status="busy" size={7} />
-                  <span className="tnum">{busy + starting.length + startingChats.length}</span> working
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <StatusDot status="idle" size={7} />
-                  <span className="tnum">{live.length - busy - needs}</span> waiting
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-faint">
-                  <span>·</span>
-                  <span className="tnum">{projects}</span> {projects === 1 ? "project" : "projects"}
-                </span>
-              </>
-            )}
-          </p>
-        </div>
+        {(!ready || loading) && <p className="mb-5 text-small text-dim">Looking for sessions…</p>}
 
         {!ready || (loading && nothing) ? (
           <CardSkeletons />
@@ -116,7 +83,7 @@ export function MissionControl() {
 
         {ready && recent.length > 0 && (
           <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: stagger ? 0.25 : 0, duration: 0.3 }} className="mt-9">
-            <div className="mb-2 flex items-center gap-2 px-1 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Recently ended</div>
+            <div className="mb-1 px-1 text-small text-dim">Earlier</div>
             <div>
               {recent.map((s, i) => (
                 <RecentRow key={sessionKey(s)} s={s} first={i === 0} />
