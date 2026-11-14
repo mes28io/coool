@@ -791,6 +791,7 @@ impl Backend for Claude {
             }
             Some("result") => self.on_result(&v, o),
             Some("rate_limit_event") => {
+                crate::usage::observe_claude_rate_limit_event(&v);
                 let info = &v["rate_limit_info"];
                 if info["status"] == "rejected" {
                     o.ev(ChatEventKind::notice(NoticeLevel::Error, "Usage limit reached"));

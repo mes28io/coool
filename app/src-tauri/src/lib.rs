@@ -17,6 +17,7 @@ use coool_core::hub::Hub;
 use coool_core::insights::{self, Insight, Insights};
 use coool_core::model::{Provider, Session};
 use coool_core::pty::RawLog;
+use coool_core::usage::{PlanUsage, UsageMonitor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +48,8 @@ struct Core {
     streams: Mutex<HashMap<usize, Stream>>,
     chats: Mutex<HashMap<usize, ChatStream>>,
     insights: Mutex<Insights>,
+    /// CHAT_SPEC "Plan usage".
+    usage: UsageMonitor,
     /// Set once the user confirmed quitting (or nothing was running).
     allow_exit: AtomicBool,
     /// Wakes the refresher early (a chat or PTY started or ended).
@@ -66,6 +69,15 @@ struct Snapshot {
     loading: bool,
     /// CHAT_SPEC "Tauri contract additions".
     chats: Vec<ChatRow>,
+    /// CHAT_SPEC "Plan usage".
+    usage: UsageOut,
+}
+
+/// Plan usage per provider; `null` until something is known.
+#[derive(Clone, Serialize, Default)]
+struct UsageOut {
+    claude: Option<PlanUsage>,
+    codex: Option<PlanUsage>,
 }
 
 /// `Session` plus what the app knows about it beyond discovery.
@@ -191,7 +203,9 @@ impl Core {
                 })
                 .collect()
         };
-        let next = Snapshot { sessions, pending, ptys, loading, chats };
+        self.usage.tick();
+        let usage = UsageOut { claude: self.usage.get(Provider::Claude), codex: self.usage.get(Provider::Codex) };
+        let next = Snapshot { sessions, pending, ptys, loading, chats, usage };
         let mut cur = self.snapshot.lock().unwrap();
         // `updated` changes on every write, so a JSON compare is a cheap and exact "changed?".
         let changed = serde_json::to_string(&*cur).ok() != serde_json::to_string(&next).ok();
@@ -478,6 +492,16 @@ fn insights_set_enabled(core: State<'_, Arc<Core>>, enabled: bool) -> Res<()> {
     Ok(())
 }
 
+// ---- Plan usage (CHAT_SPEC "Plan usage") ----
+
+/// Refresh one provider's plan usage now (a hidden CLI probe that runs no
+/// model turn); the result arrives with a later `sessions` payload.
+#[tauri::command]
+fn usage_refresh(core: State<'_, Arc<Core>>, provider: Provider) {
+    core.usage.refresh_now(provider);
+    core.kick();
+}
+
 #[tauri::command(async)]
 fn pick_folder(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
@@ -703,6 +727,9 @@ pub fn run() {
     let selftest = selftest::SelfTest::from_env();
     let mut ins = Insights::new();
     ins.set_enabled(settings::load(selftest.as_ref()).insights);
+    let mut usage = UsageMonitor::new();
+    // Self-test runs stay off the person's accounts: free file reads only.
+    usage.set_probes(selftest.is_none());
     let core = Arc::new(Core {
         hub: Mutex::new(Hub::new(Duration::from_secs(24 * 3600))),
         // Until the first refresh lands, a `list_sessions` caller sees "loading".
@@ -710,6 +737,7 @@ pub fn run() {
         streams: Mutex::new(HashMap::new()),
         chats: Mutex::new(HashMap::new()),
         insights: Mutex::new(ins),
+        usage,
         allow_exit: AtomicBool::new(false),
         kick: (Mutex::new(false), Condvar::new()),
         selftest,
@@ -741,6 +769,7 @@ pub fn run() {
             insights_set_key,
             insights_clear_key,
             insights_set_enabled,
+            usage_refresh,
             pick_folder,
             environment,
             running_count,
@@ -767,6 +796,9 @@ pub fn run() {
             }
         })
         .on_window_event(|win, ev| {
+            if let WindowEvent::Focused(f) = ev {
+                win.state::<Arc<Core>>().usage.set_active(*f);
+            }
             if let WindowEvent::CloseRequested { api, .. } = ev {
                 let core = win.state::<Arc<Core>>();
                 let running = core.running();

@@ -167,3 +167,75 @@ cat /tmp/coool-selftest/demo-project/selftest.log
 ```
 
 The `quit` scenario ends the run by quitting the app; it logs the chat PIDs first (`PIDS …`) so a script can check none survive.
+
+## Plan usage
+
+How much of the person's Claude subscription limits and Codex (ChatGPT plan) limits are used, and when they reset. Core module `crates/core/src/usage.rs` (`UsageMonitor`); check it against the CLIs with `cargo run -q -p coool-core --example usage_print` (`-- --files` for the free sources only).
+
+coool never reads credentials (no `~/.claude/.credentials*`, Keychain, `~/.codex/auth.json`) and never calls an account API itself. Every number comes from a surface of the official CLI, which does the authenticated request.
+
+### Payload
+
+`sessions` gains `usage: { claude: PlanUsage | null, codex: PlanUsage | null }` (same event, same "emit only when changed" rule; usage changes rarely, so no separate event). `null` means nothing is known yet. Command: `usage_refresh({ provider: "claude" | "codex" })` asks for a probe now (past back-off and focus); the result arrives with a later `sessions` payload.
+
+```ts
+type PlanUsage = {
+  provider: "claude" | "codex";
+  plan: string | null;            // "Max 5x", "Pro", "Plus", ...
+  windows: UsageWindow[];         // every limit the CLI reports, in its order
+  credits: UsageCredits | null;   // Claude "extra usage" / Codex credits
+  reset_credits: number | null;   // Codex: free full resets (weekly + 5 h) available
+  fetched_ms: number;             // when the newest number here was read
+  source: "claude.get_usage" | "claude.cache" | "claude.stream" | "codex.app_server" | "codex.rollout";
+  stale: boolean;                 // fetched_ms older than 15 min
+  error: string | null;           // last refresh failed, or "plan limits don't apply" (API key etc.)
+};
+type UsageWindow = {
+  id: string;            // Claude: "session" | "weekly_all" | "weekly_scoped:<Model>" | <kind>; Codex: "<limit_id>:primary" | ":secondary" | ":spend"
+  label: string;         // "Current session", "Weekly (all models)", "Weekly (Fable)", "5-hour", "Weekly"
+  kind: string;          // "session" | "weekly" | "spend" | the CLI's own group for unknown meters
+  used_percent: number | null;   // 0-100; null once the window has reset since the reading
+  resets_ms: number | null;
+  window_minutes: number | null; // 300, 10080
+  model: string | null;          // per-model weekly limit (Claude)
+  severity: string | null;       // Claude, as the CLI says it: "normal" | "warning" | "critical" (seen), "limited" (a rejected stream event)
+  binding: boolean | null;       // Claude: the limit currently in force (is_active)
+  as_of_ms: number;              // windows can come from different sources
+  detail: string | null;         // "Reset since the last reading", "rate limit reached", "20.00 of 50.00"
+};
+type UsageCredits = { enabled, unlimited, balance /* Codex, decimal string */, used, limit, used_percent, currency, detail };
+```
+
+Real samples from this machine (`usage_print`, Claude Code 2.1.325, codex-cli 0.145.0):
+
+```json
+{"provider":"claude","plan":"Max 5x","source":"claude.get_usage","fetched_ms":1794672303865,"stale":false,"error":null,"reset_credits":null,"credits":{"balance":null,"currency":null,"detail":"Off","enabled":false,"limit":null,"unlimited":null,"used":null,"used_percent":null},
+ "windows":[
+  {"id":"session","label":"Current session","kind":"session","used_percent":91.0,"resets_ms":1794679199000,"window_minutes":300,"model":null,"severity":"critical","binding":true,"as_of_ms":1794672303865,"detail":null},
+  {"id":"weekly_all","label":"Weekly (all models)","kind":"weekly","used_percent":24.0,"resets_ms":1794887999000,"window_minutes":10080,"model":null,"severity":"normal","binding":false,"as_of_ms":1794672303865,"detail":null},
+  {"id":"weekly_scoped:Fable","label":"Weekly (Fable)","kind":"weekly","used_percent":10.0,"resets_ms":1794887999000,"window_minutes":10080,"model":"Fable","severity":"normal","binding":false,"as_of_ms":1794672303865,"detail":null}]}
+{"provider":"codex","plan":"Plus","source":"codex.app_server","fetched_ms":1794672303327,"stale":false,"error":null,"reset_credits":3,"credits":{"balance":"0","currency":null,"detail":null,"enabled":false,"limit":null,"unlimited":false,"used":null,"used_percent":null},
+ "windows":[
+  {"id":"codex:primary","label":"5-hour","kind":"session","used_percent":0.0,"resets_ms":1794679069000,"window_minutes":300,"model":null,"severity":null,"binding":null,"as_of_ms":1794672303327,"detail":null},
+  {"id":"codex:secondary","label":"Weekly","kind":"weekly","used_percent":5.0,"resets_ms":1794741407000,"window_minutes":10080,"model":null,"severity":null,"binding":null,"as_of_ms":1794672303327,"detail":null}]}
+```
+
+### Sources, freshness, cost
+
+| Source | What | Fresh as of | Cost | Cadence |
+|---|---|---|---|---|
+| `claude.cache`: `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json`) key `cachedUsageUtilization`, plus `oauthAccount.organizationType` / `organizationRateLimitTier` for the plan name | The CLI's own copy of its plan-usage endpoint answer: `limits[]` (kind, percent, severity, resets_at, scope.model, is_active) and `extra_usage`. Ignored when its `accountUuid` is not the signed-in account (as the CLI does). Only those keys are deserialized. | Whenever the CLI last fetched usage (its `/usage` screen, or our probe) | Free (file read) | stat every 10 s, parse on change |
+| `claude.get_usage`: hidden `claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --model haiku --strict-mcp-config --settings '{"disableAllHooks":true}'` in `$TMPDIR/coool-usage`, sent one `control_request` `{subtype:"get_usage", skip_behaviors:true}` and no prompt; stdin closed after the answer | Same data, live, plus `subscription_type` | Now | No model turn (`total_cost_usd: 0`, `model_usage: {}`); one request by the CLI to its usage endpoint; ~0.5 s; no transcript; refreshes the cache file too | When data is > 5 min old and the window is focused (or was, < 10 min ago); back-off 1, 2, 4 ... 30 min on failure |
+| `claude.stream`: `rate_limit_event` from coool's own structured chats (`usage::observe_claude_rate_limit_event`) | `unifiedWindows.five_hour` / `seven_day` utilization (a 0-1 fraction there), resets, status | Each turn in a coool chat | Free (rides on the person's turns) | Merged per window when newer; no per-model or credit data |
+| `codex.rollout`: newest `event_msg`/`token_count` with `rate_limits` in the 4 newest `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` (last 512 KB of each), newest per `limit_id` | primary/secondary windows (`used_percent`, `window_minutes`, `resets_at`), credits, `plan_type` | Last Codex turn anywhere on this machine (TUI, exec, coool chats) | Free (file read) | every 10 s, re-read only when the file list/mtimes change |
+| `codex.app_server`: short-lived `codex app-server` in `$TMPDIR/coool-usage`: `initialize`, `initialized`, `account/read` (plan), `account/rateLimits/read` | `rateLimitsByLimitId` (all metered buckets), credits, spend-control limit (`individualLimit`), `rateLimitResetCredits.availableCount` | Now | No turn, no rollout file; the CLI makes the account requests; ~1-2 s | Same rule as the Claude probe |
+
+Self-test builds run the file sources only. `UsageMonitor::set_probes(false)` turns the probes off entirely.
+
+### Limits of what can be known
+
+- Claude's plan limits are a 5-hour session window, a weekly all-models window and per-model weekly windows (currently one for Fable), plus optional extra-usage credits; Codex's (per `limit_id`, normally `codex`) are a 5-hour and a weekly window plus credits, an optional spend-control limit and redeemable reset credits. Both report percentages only, never absolute message or token budgets.
+- Usage on other devices and on claude.ai / chatgpt.com counts against the same limits but only shows up after the next probe (or Codex turn on this machine). The free sources alone go stale while the person is not using the CLIs; the probe is what keeps an idle reading current, and it only runs while coool is in use.
+- A window whose reset time has passed is shown with `used_percent: null` until the next reading (the new value is unknown, not zero).
+- Undocumented surfaces: `get_usage` is marked experimental in the CLI ("the response shape may change"), `cachedUsageUtilization` is an internal cache, and the endpoint object carries many placeholder keys. The parser prefers `limits[]` and falls back to the named windows (`five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `model_scoped`); unknown limit kinds are passed through with their own name. Claude `extra_usage` amounts are divided by `10^decimal_places` when that is given, which could not be checked on an account with extra usage on. Codex's app-server `account/*` methods are part of its generated schema (0.145) and the rollout `rate_limits` shape is the one the TUI writes; both are read case-insensitively (snake/camel).
+- Verified with Claude Code 2.1.325 and codex-cli 0.145.0.

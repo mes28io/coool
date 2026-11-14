@@ -11,4 +11,5 @@ mod loader;
 pub mod model;
 pub mod pty;
 pub mod tail;
+pub mod usage;
 pub mod util;
