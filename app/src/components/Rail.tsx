@@ -4,7 +4,7 @@ import { attention } from "../lib/live";
 import { displayTitle } from "../lib/format";
 import { sessionKey } from "../lib/types";
 import { useStore } from "../store";
-import { IBell, IGear, IHome, IMoon, ICompose, ISearch, ISidebar, ISun } from "./icons";
+import { IBell, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
 import { cx, ease, ProviderMark } from "./primitives";
 import { useProjects } from "./Sidebar";
 
@@ -127,15 +127,9 @@ export function Rail() {
   const toggleTheme = useStore((s) => s.toggleTheme);
   const sheet = useStore((s) => s.sheet);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
-  const toggleSidebar = useStore((s) => s.toggleSidebar);
 
   return (
-    <nav data-tauri-drag-region aria-label="coool" className="relative z-20 flex w-[72px] shrink-0 flex-col items-center gap-1.5 pb-3 pt-[44px]">
-      {!sidebarOpen && (
-        <RailButton label="Show sidebar" shortcut="⌘B" onClick={toggleSidebar}>
-          <ISidebar size={20} />
-        </RailButton>
-      )}
+    <nav data-tauri-drag-region aria-label="coool" className="relative z-20 flex w-[56px] shrink-0 flex-col items-center gap-1.5 pb-3 pt-1">
       <RailButton label="Home" active={activeTab === null} onClick={() => activate(null)}>
         <IHome size={20} />
       </RailButton>

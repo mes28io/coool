@@ -6,7 +6,7 @@ import { setHome } from "./lib/format";
 import { syncWindow } from "./lib/boot";
 import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
-import { IAlert, IClose } from "./components/icons";
+import { IAlert, IClose, ISidebar } from "./components/icons";
 import { Sheets } from "./components/Sheets";
 import { Rail } from "./components/Rail";
 import { Sidebar } from "./components/Sidebar";
@@ -126,6 +126,8 @@ function useBackendEvents() {
 
 export default function App() {
   const theme = useStore((s) => s.theme);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
   const setSystemTheme = useStore((s) => s.setSystemTheme);
   useShortcuts();
   useBackendEvents();
@@ -144,14 +146,26 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="relative flex h-full w-full bg-panel">
-        {/* The rail sits under the macOS traffic lights; with the 8px band above the sheet it is the drag area. */}
-        <Rail />
-        <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-[8px]" />
-        {/* One raised sheet lying on the window: sidebar panel + main area. */}
-        <div className="mt-[8px] flex min-w-0 flex-1 overflow-hidden rounded-tl-[14px] border-l border-t border-hairline bg-bg">
-          <Sidebar />
-          <Workspace />
+      <div className="flex h-full w-full flex-col bg-panel">
+        {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}
+        <div data-tauri-drag-region className="flex h-[40px] shrink-0 items-center pl-[84px] pr-3">
+          <button
+            type="button"
+            title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
+            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+            onClick={toggleSidebar}
+            className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
+          >
+            <ISidebar size={17} />
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1">
+          <Rail />
+          {/* One raised sheet lying on the window: sidebar panel + main area. */}
+          <div className="flex min-w-0 flex-1 overflow-hidden rounded-tl-[14px] border-l border-t border-hairline bg-bg">
+            <Sidebar />
+            <Workspace />
+          </div>
         </div>
       </div>
       <Palette />

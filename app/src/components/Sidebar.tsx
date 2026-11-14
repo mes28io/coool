@@ -8,9 +8,9 @@ import type { UiStatus } from "./primitives";
 import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { leaves, resolveTarget, useStore } from "../store";
-import { ICompose, IFolder, IFolderOpen, IPlus, ISidebar } from "./icons";
+import { ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
 import { Wordmark } from "./Wordmark";
-import { cx, ease, IconButton, ProviderMark, spring, StatusDot } from "./primitives";
+import { cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { SidebarSkeleton } from "./Skeletons";
 
 export interface Project {
@@ -102,7 +102,6 @@ export function Sidebar() {
   const width = useStore((s) => s.sidebarWidth);
   const open = useStore((s) => s.sidebarOpen);
   const setWidth = useStore((s) => s.setSidebarWidth);
-  const toggle = useStore((s) => s.toggleSidebar);
   const setSheet = useStore((s) => s.setSheet);
   const ready = useStore((s) => s.ready);
   const loading = useStore((s) => s.loading);
@@ -135,9 +134,6 @@ export function Sidebar() {
       <div className="absolute inset-y-0 left-0 flex flex-col overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
         <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center justify-between pl-4 pr-2">
           <Wordmark size={24} intro />
-          <IconButton title="Hide sidebar (⌘B)" onClick={toggle} className="text-faint">
-            <ISidebar size={18} />
-          </IconButton>
         </div>
 
         <div className="px-2 pb-1">
