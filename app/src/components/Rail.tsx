@@ -130,7 +130,7 @@ export function Rail() {
   const toggleSidebar = useStore((s) => s.toggleSidebar);
 
   return (
-    <nav aria-label="coool" className="relative z-20 flex w-[56px] shrink-0 flex-col items-center gap-1.5 pb-3 pt-1">
+    <nav data-tauri-drag-region aria-label="coool" className="relative z-20 flex w-[72px] shrink-0 flex-col items-center gap-1.5 pb-3 pt-[44px]">
       {!sidebarOpen && (
         <RailButton label="Show sidebar" shortcut="⌘B" onClick={toggleSidebar}>
           <ISidebar size={20} />
@@ -143,10 +143,24 @@ export function Rail() {
         <ISearch size={20} />
       </RailButton>
       <NeedsYou />
-      <span className="my-1 h-px w-6 bg-line" />
-      <RailButton label="New session" shortcut="⌘T" active={sheet?.kind === "new"} onClick={() => setSheet({ kind: "new" })}>
-        <ICompose size={20} />
-      </RailButton>
+      {/* While the panel is open its "New session" row is the one entry point; the rail takes over when it is collapsed. */}
+      <AnimatePresence initial={false}>
+        {!sidebarOpen && (
+          <motion.div
+            key="new"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2, ease }}
+            className="flex flex-col items-center gap-1.5"
+          >
+            <span className="my-1 h-px w-6 bg-line" />
+            <RailButton label="New session" shortcut="⌘T" active={sheet?.kind === "new"} onClick={() => setSheet({ kind: "new" })}>
+              <ICompose size={20} />
+            </RailButton>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="mt-auto flex flex-col items-center gap-1.5">
         <RailButton label={`${theme === "dark" ? "Light" : "Dark"} theme`} shortcut="⌘⇧L" onClick={toggleTheme}>

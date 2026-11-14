@@ -130,7 +130,7 @@ body,
 }
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--panel);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 15px;

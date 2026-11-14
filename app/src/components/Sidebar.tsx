@@ -133,7 +133,7 @@ export function Sidebar() {
       inert={!open}
     >
       <div className="absolute inset-y-0 left-0 flex flex-col overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
-        <div className="flex h-[52px] shrink-0 items-center justify-between pl-4 pr-2">
+        <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center justify-between pl-4 pr-2">
           <Wordmark size={24} intro />
           <IconButton title="Hide sidebar (⌘B)" onClick={toggle} className="text-faint">
             <ISidebar size={18} />
@@ -152,7 +152,7 @@ export function Sidebar() {
           </button>
         </div>
 
-        <div className="px-4 pb-1 pt-3 text-small text-dim">Projects</div>
+        <div className="px-4 pb-1 pt-5 text-small text-dim">Projects</div>
 
         <motion.div layoutScroll className="scroll min-h-0 flex-1 px-2 pb-4" onKeyDown={onKeyDown} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
           {!ready || (loading && projects.length === 0) ? (

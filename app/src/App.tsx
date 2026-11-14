@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect } from "react";
 import { api } from "./lib/backend";
 import { rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
+import { syncWindow } from "./lib/boot";
 import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
 import { IAlert, IClose } from "./components/icons";
@@ -129,7 +130,10 @@ export default function App() {
   useShortcuts();
   useBackendEvents();
 
-  useLayoutEffect(() => applyTheme(theme, true), [theme]);
+  useLayoutEffect(() => {
+    applyTheme(theme, true);
+    void syncWindow(theme);
+  }, [theme]);
   useEffect(() => {
     setTerminalTheme(theme);
     const mq = matchMedia("(prefers-color-scheme: light)");
@@ -140,16 +144,14 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="flex h-full w-full flex-col bg-panel">
-        {/* Window chrome: the macOS traffic lights sit in this strip, which also drags the window. */}
-        <div data-tauri-drag-region className="h-[40px] shrink-0" />
-        <div className="flex min-h-0 flex-1">
-          <Rail />
-          {/* One raised sheet lying on the window: sidebar panel + main area. */}
-          <div className="flex min-w-0 flex-1 overflow-hidden rounded-tl-[14px] border-l border-t border-hairline bg-bg">
-            <Sidebar />
-            <Workspace />
-          </div>
+      <div className="relative flex h-full w-full bg-panel">
+        {/* The rail sits under the macOS traffic lights; with the 8px band above the sheet it is the drag area. */}
+        <Rail />
+        <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-[8px]" />
+        {/* One raised sheet lying on the window: sidebar panel + main area. */}
+        <div className="mt-[8px] flex min-w-0 flex-1 overflow-hidden rounded-tl-[14px] border-l border-t border-hairline bg-bg">
+          <Sidebar />
+          <Workspace />
         </div>
       </div>
       <Palette />

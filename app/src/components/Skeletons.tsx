@@ -50,46 +50,44 @@ export function SidebarSkeleton({ groups = 4 }: { groups?: number }) {
 
 // ---------- mission control ----------
 
-/** Mirrors Card: header, title, current-activity bar, two activity lines, footer. */
+/** Mirrors Card: top line, title (two lines), one "now" line, footer. */
 export function CardSkeleton({ i = 0, label }: { i?: number; label?: string }) {
   const v = [
-    [64, 210, 180, 230, 150],
-    [52, 250, 140, 190, 210],
-    [72, 180, 200, 160, 120],
-  ][i % 3];
+    [64, "88%", "52%", 210, 70],
+    [52, "74%", "40%", 180, 54],
+    [72, "92%", "60%", 230, 80],
+  ][i % 3] as [number, string, string, number, number];
   const k = i * 3;
   return (
     <motion.div
       {...fade}
       layout
-      className="flex h-[256px] flex-col rounded-[10px] border border-hairline bg-raised/60 p-3.5"
+      className="flex flex-col rounded-[14px] border border-hairline bg-bg p-4"
       aria-label={label ?? "Loading session"}
     >
-      <div className="flex h-[24px] items-center gap-1.5">
+      <div className="flex h-[22px] items-center gap-1.5">
         <Skel w={14} h={14} i={k} />
         <Skel w={v[0]} h={10} i={k} />
-        <Skel w={80} h={24} i={k + 1} className="ml-auto" />
+        <Skel w={64} h={10} i={k + 1} className="ml-auto" />
       </div>
-      <div className="mt-2.5 flex h-[24px] items-center">
-        <Skel w={v[1]} h={14} i={k + 1} />
+      <div className="mt-2.5 flex flex-col gap-0">
+        <div className="flex h-[24px] items-center">
+          <Skel w={v[1]} h={14} i={k + 1} />
+        </div>
+        <div className="flex h-[24px] items-center">
+          <Skel w={v[2]} h={14} i={k + 2} />
+        </div>
       </div>
-      <Skel h={36} r={8} i={k + 2} className="mt-2.5 w-full opacity-70" />
-      <div className="mt-2.5 flex flex-1 flex-col gap-1">
-        {[v[2], v[3]].map((w, j) => (
-          <div key={j} className="flex h-[22px] items-center gap-1.5">
-            <Skel w={14} h={11} r={3} i={k + 3 + j} />
-            <Skel w={w} h={9} i={k + 3 + j} />
-          </div>
-        ))}
-        {label && <span className="mt-auto text-small text-faint">{label}</span>}
+      <div className="mt-3 flex h-[22px] items-center gap-2">
+        <Skel w={15} h={13} r={3} i={k + 2} />
+        <Skel w={v[3] / 1.4} h={10} i={k + 3} className="opacity-70" />
       </div>
-      <div className="mt-auto flex items-center gap-3 border-t border-hairline pt-2.5">
-        <Skel w={56} h={4} i={k + 5} />
-        <Skel w={30} h={9} i={k + 5} />
-        <Skel w={40} h={9} i={k + 6} />
-        <Skel w={v[4] / 2.4} h={9} i={k + 6} className="ml-auto" />
-        <Skel w={30} h={22} r={5} i={k + 7} />
+      <div className="mt-4 flex h-[18px] items-center gap-3">
+        <Skel w={56} h={4} i={k + 4} />
+        <Skel w={30} h={9} i={k + 4} />
+        <Skel w={v[4]} h={9} i={k + 5} />
       </div>
+      {label && <span className="mt-3 text-small text-faint">{label}</span>}
     </motion.div>
   );
 }
@@ -102,13 +100,13 @@ export function RecentSkeleton({ rows = 4 }: { rows?: number }) {
       <div className="mb-2 flex h-[16px] items-center px-1">
         <Skel w={96} h={8} i={0} />
       </div>
-      <div className="overflow-hidden rounded-[10px] border border-hairline">
+      <div>
         {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className={cx("flex h-[44px] items-center gap-3 bg-raised/50 px-3.5", i > 0 && "border-t border-hairline")}>
-            <Skel w={14} h={14} i={i} />
+          <div key={i} className={cx("flex h-[48px] items-center gap-3 px-1", i > 0 && "border-t border-hairline")}>
+            <Skel w={15} h={15} i={i} />
             <Skel w={ws[i % ws.length]} h={11} i={i} />
-            <Skel w={52} h={8} i={i} className="opacity-70" />
-            <Skel w={40} h={8} i={i + 1} className="ml-auto opacity-70" />
+            <Skel w={52} h={9} i={i} className="opacity-70" />
+            <Skel w={44} h={9} i={i + 1} className="ml-auto opacity-70" />
           </div>
         ))}
       </div>
