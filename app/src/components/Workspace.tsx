@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion, Reorder } from "motion/react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { chatTitle, needsAnswer, useChats } from "../lib/chat";
 import { displayTitle, folderName } from "../lib/format";
 import { useAttention } from "../lib/live";
@@ -45,6 +45,12 @@ export function TabBar() {
   const reorder = useStore((s) => s.reorder);
   const split = useStore((s) => s.split);
   const ids = useMemo(() => tabs.map((t) => t.id), [tabs]);
+  const strip = useRef<HTMLUListElement | null>(null);
+  // Keep the active tab in view when there are more tabs than room.
+  useEffect(() => {
+    const el = strip.current?.querySelector<HTMLElement>("[data-tab-active]");
+    el?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [activeTab, tabs.length]);
 
   return (
     <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-1 pl-2">
@@ -53,16 +59,16 @@ export function TabBar() {
         title="Home"
         onClick={() => activate(null)}
         className={cx(
-          "relative flex h-[38px] shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-base font-medium transition-colors duration-150",
+          "relative flex h-[34px] shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-base font-medium transition-colors duration-150",
           activeTab === null ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
-        {activeTab === null && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 -z-0 rounded-[8px] border border-line bg-raised shadow-card" />}
+        {activeTab === null && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 -z-0 rounded-[8px] border border-line bg-[var(--tab-active)] shadow-card" />}
         <IGrid size={16} className="relative" />
         {tabs.length === 0 && <span className="relative">Home</span>}
       </button>
       {tabs.length > 0 && <span className="mx-1 h-4 w-px shrink-0 bg-line" />}
-      <Reorder.Group axis="x" values={ids} onReorder={reorder} className="scroll-x flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden" data-tauri-drag-region>
+      <Reorder.Group ref={strip} axis="x" values={ids} onReorder={reorder} className="scroll-x flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden" data-tauri-drag-region>
         <AnimatePresence initial={false}>
           {tabs.map((t, i) => (
             <TabChip key={t.id} tab={t} active={t.id === activeTab} index={i} />
@@ -132,18 +138,19 @@ function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: num
       exit={{ opacity: 0, width: 0, transition: { duration: 0.16 } }}
       transition={spring}
       whileDrag={{ scale: 1.03, zIndex: 5 }}
-      className="relative shrink-0"
+      className="relative min-w-[96px] max-w-[230px] shrink"
       onPointerDown={() => activate(tab.id)}
       onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
+      data-tab-active={active ? "" : undefined}
     >
       <div
         title={`${title}${index < 9 ? `  (⌘${index + 1})` : ""}`}
         className={cx(
-          "group relative flex h-[38px] max-w-[230px] items-center gap-2 rounded-[8px] pl-2.5 pr-1 text-base transition-colors duration-150",
+          "group relative flex h-[34px] w-full items-center gap-2 rounded-[8px] pl-2.5 pr-1 text-base transition-colors duration-150",
           active ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
-        {active && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 rounded-[8px] border border-line bg-raised shadow-card" />}
+        {active && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 rounded-[8px] border border-line bg-[var(--tab-active)] shadow-card" />}
         <StatusDot status={status} size={7} className="relative" />
         {needs && !active && <span className="absolute inset-x-2 bottom-[3px] h-[2px] rounded-full bg-accent/70" />}
         {provider && <ProviderMark provider={provider} size={13} className="relative" />}

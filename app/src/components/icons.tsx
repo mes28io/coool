@@ -114,6 +114,15 @@ export const ISidebar = mk(
   </>,
 );
 
+export const IGauge = mk(
+  <>
+    <path d="M2.5 11.5a5.5 5.5 0 1111 0" />
+    <path d="M8 11.25l2.4-3.4" />
+    <path d="M4.2 7.2l.6.6M8 4.6v.8M11.8 7.2l-.6.6" />
+  </>,
+);
+export const IRefresh = mk(<path d="M13 3.5v3h-3M3 12.5v-3h3M12.4 6.5A4.75 4.75 0 004.2 5M3.6 9.5a4.75 4.75 0 008.2 1.5" />);
+
 export function toolIcon(name: string) {
   const n = name.toLowerCase();
   if (/(bash|shell|exec|command)/.test(n)) return ITerminal;

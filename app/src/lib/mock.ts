@@ -5,7 +5,7 @@
 
 import type { Backend, ChatBatch, PtyChunk } from "./backend";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
-import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, Provider, Session, Snapshot, Tokens } from "./types";
+import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
 const enc = new TextEncoder();
@@ -357,6 +357,45 @@ export function mockBackend(): Backend {
     loaded: false,
   });
 
+  // ---------- plan usage ----------
+  // `?usage=none` (nothing known), `?usage=error` (Claude not signed in), `?usage=stale` (old readings).
+  const usageMode = typeof location !== "undefined" ? (/[?&]usage=(\w+)/.exec(location.search)?.[1] ?? "") : "";
+  const nextMonday = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7));
+    d.setHours(9, 0, 0, 0);
+    return d.getTime();
+  };
+  const win = (id: string, label: string, kind: string, used: number | null, resets: number | null, minutes: number, extra: Partial<UsageWindow> = {}): UsageWindow => ({
+    id, label, kind, used_percent: used, resets_ms: resets, window_minutes: minutes, model: null, severity: null, binding: null, as_of_ms: Date.now(), detail: null, ...extra,
+  });
+  const mkUsage = (): { claude: PlanUsage | null; codex: PlanUsage | null } => {
+    if (usageMode === "none") return { claude: null, codex: null };
+    const t = Date.now();
+    const fetched = usageMode === "stale" ? t - 41 * 60_000 : t - 2 * 60_000;
+    const stale = usageMode === "stale";
+    const claude: PlanUsage = {
+      provider: "claude", plan: "Max 5x", source: "claude.get_usage", fetched_ms: fetched, stale, error: null, reset_credits: null,
+      credits: { enabled: true, unlimited: false, balance: null, used: 20, limit: 50, used_percent: 40, currency: "USD", detail: "20.00 of 50.00" },
+      windows: [
+        win("session", "Current session", "session", 91, t + (60 + 54) * 60_000, 300, { severity: "critical", binding: true }),
+        win("weekly_all", "Weekly (all models)", "weekly", 24, nextMonday(), 10080, { severity: "normal", binding: false }),
+        win("weekly_scoped:Fable", "Weekly (Fable)", "weekly", 10, nextMonday(), 10080, { severity: "normal", model: "Fable", binding: false }),
+      ],
+    };
+    const codex: PlanUsage = {
+      provider: "codex", plan: "Plus", source: "codex.app_server", fetched_ms: fetched, stale, error: null, reset_credits: 3,
+      credits: { enabled: false, unlimited: false, balance: "0", used: null, limit: null, used_percent: null, currency: null, detail: null },
+      windows: [
+        win("codex:primary", "5-hour", "session", null, null, 300, { detail: "Reset since the last reading" }),
+        win("codex:secondary", "Weekly", "weekly", 5, t + 26 * 3600_000, 10080),
+      ],
+    };
+    if (usageMode === "error") return { claude: { ...claude, plan: null, windows: [], credits: null, error: "Not signed in" }, codex };
+    return { claude, codex };
+  };
+  const usage = mkUsage();
+
   const snapshot = (): Snapshot => {
     if (!scan.started) return { sessions: [], pending: [], ptys: [], chats: [], loading: true };
     const sessions = live
@@ -372,6 +411,7 @@ export function mockBackend(): Backend {
       ptys: ptys.map(({ id, provider, cwd, running, started }) => ({ id, provider, cwd, running, started })),
       chats: chats.map((c) => c.info()),
       loading: scan.loading,
+      usage,
     };
   };
   const emitSessions = () => {
@@ -732,6 +772,15 @@ export function mockBackend(): Backend {
     },
     async quit() {
       ptys.forEach((p) => endPty(p.id));
+    },
+    async usageRefresh(provider) {
+      await delay(900);
+      const u = usage[provider];
+      if (!u || u.error) return;
+      u.fetched_ms = Date.now();
+      u.stale = false;
+      u.windows = u.windows.map((w) => (w.used_percent === null ? w : { ...w, used_percent: Math.min(100, w.used_percent + 1), as_of_ms: u.fetched_ms }));
+      emitSessions();
     },
     onSessions(cb) {
       subs.sessions.add(cb);

@@ -105,7 +105,52 @@ export interface Snapshot {
   loading?: boolean;
   ptys?: PtyInfo[];
   chats?: ChatInfo[];
+  /** Plan usage per provider (CHAT_SPEC "Plan usage"); missing = nothing known. */
+  usage?: { claude: PlanUsage | null; codex: PlanUsage | null };
 }
+
+// ---------- plan usage ----------
+
+export interface UsageWindow {
+  id: string;
+  label: string;
+  kind: string;
+  /** 0-100; null once the window has reset since the reading. */
+  used_percent: number | null;
+  resets_ms: number | null;
+  window_minutes: number | null;
+  model: string | null;
+  /** As the CLI says it ("normal" | "warning" | "critical" | "limited" ...): free text. */
+  severity: string | null;
+  binding: boolean | null;
+  as_of_ms: number;
+  detail: string | null;
+}
+
+export interface UsageCredits {
+  enabled: boolean | null;
+  unlimited: boolean | null;
+  balance: string | null;
+  used: number | string | null;
+  limit: number | string | null;
+  used_percent: number | null;
+  currency: string | null;
+  detail: string | null;
+}
+
+export interface PlanUsage {
+  provider: Provider;
+  plan: string | null;
+  windows: UsageWindow[];
+  credits: UsageCredits | null;
+  reset_credits: number | null;
+  fetched_ms: number;
+  source: string;
+  stale: boolean;
+  error: string | null;
+}
+
+export type PlanUsages = { claude: PlanUsage | null; codex: PlanUsage | null };
 
 // ---------- chat events (CHAT_SPEC "Events"), exactly as the backend serializes them ----------
 

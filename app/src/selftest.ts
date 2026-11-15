@@ -22,7 +22,7 @@ interface Config {
 }
 
 const PROMPT_BLUE = "Write three short sentences about the colour blue. Plain text, no lists, and keep every sentence under twelve words so the whole reply stays brief.";
-const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "insights", "quit"];
+const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "usage", "insights", "quit"];
 const CLAUDE_MODEL = "haiku";
 const CODEX_MODEL = "gpt-5.6-luna";
 
@@ -533,6 +533,26 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await shot("codex-done");
       if (!tool?.ok) throw new Fail(`shell: ${tool?.ok} ${tool?.output}`);
       return `model ${chat(id)?.model}, mode ${chat(id)?.permissionMode}; offered ${labels.join(" | ") || "nothing to remember"}`;
+    });
+  },
+
+  // Free: reads what the backend already gathered; no model turn.
+  async usage() {
+    await step("plan usage reaches the UI and the rail popover shows it", async () => {
+      const u = await waitFor("a usage payload", () => {
+        const x = (useStore.getState() as { usage?: { claude: unknown; codex: unknown } }).usage;
+        return x && (x.claude || x.codex) ? x : null;
+      }, 30_000);
+      const btn = ([...document.querySelectorAll("button[aria-label]")] as HTMLElement[]).find((b) => b.getAttribute("aria-label")!.startsWith("Usage"));
+      if (!btn) throw new Fail("no Usage button in the rail");
+      btn.click();
+      const pop = await waitFor("the usage popover", () => document.querySelector('[aria-label="Plan usage"]') as HTMLElement | null, 5_000);
+      await sleep(600);
+      await shot("usage");
+      const text = (pop.textContent ?? "").replace(/\s+/g, " ");
+      if (!/%/.test(text)) throw new Fail(`popover shows no percentages: ${text.slice(0, 160)}`);
+      btn.click();
+      return `claude ${u.claude ? "yes" : "no"}, codex ${u.codex ? "yes" : "no"}; popover: ${text.slice(0, 220)}`;
     });
   },
 

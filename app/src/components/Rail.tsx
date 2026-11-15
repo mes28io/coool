@@ -4,9 +4,10 @@ import { attention } from "../lib/live";
 import { displayTitle } from "../lib/format";
 import { sessionKey } from "../lib/types";
 import { useStore } from "../store";
-import { IBell, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
+import { IBell, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
 import { cx, ease, ProviderMark } from "./primitives";
 import { useProjects } from "./Sidebar";
+import { UsagePanel, usageHighest, useUsageProviders } from "./Usage";
 
 /** One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. */
 function RailButton({
@@ -15,6 +16,7 @@ function RailButton({
   onClick,
   active,
   badge,
+  dot,
   children,
   hideTip,
 }: {
@@ -23,6 +25,8 @@ function RailButton({
   onClick: () => void;
   active?: boolean;
   badge?: number;
+  /** A small state dot instead of a count. */
+  dot?: "warn" | "bad" | null;
   children: ReactNode;
   hideTip?: boolean;
 }) {
@@ -39,6 +43,7 @@ function RailButton({
         )}
       >
         {children}
+        {dot && <span className="absolute right-[8px] top-[8px] size-[7px] rounded-full ring-2 ring-panel" style={{ background: dot === "bad" ? "var(--error)" : "var(--busy)" }} />}
         {!!badge && badge > 0 && (
           <span className="absolute right-[3px] top-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-accent px-1 text-micro font-semibold leading-none text-accent-ink tnum">{badge}</span>
         )}
@@ -118,6 +123,54 @@ function NeedsYou() {
   );
 }
 
+/** Plan usage for Claude and Codex, as a popover next to the rail. */
+function UsageButton() {
+  const open = useStore((s) => s.usageOpen);
+  const setOpen = useStore((s) => s.setUsageOpen);
+  const usage = useStore((s) => s.usage);
+  const providers = useUsageProviders();
+  const box = useRef<HTMLDivElement>(null);
+  const hide = (["claude", "codex"] as const).filter((p) => !providers.includes(p));
+  const high = usageHighest(usage, [...hide]);
+
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("pointerdown", down);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", down);
+      window.removeEventListener("keydown", key);
+    };
+  }, [open, setOpen]);
+
+  return (
+    <div ref={box} className="relative">
+      <RailButton label={high ? `Usage · ${high.label} ${high.percent}%` : "Usage"} onClick={() => setOpen(!open)} active={open} dot={high?.tone ?? null} hideTip={open}>
+        <IGauge size={20} />
+      </RailButton>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, x: -6, scale: 0.98 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, transition: { duration: 0.12 } }}
+            transition={{ duration: 0.18, ease }}
+            style={{ transformOrigin: "left bottom" }}
+            className="absolute bottom-0 left-full z-50 ml-2 max-h-[calc(100vh-140px)] w-[340px] overflow-y-auto rounded-[12px] border border-line bg-raised shadow-pop scroll"
+            data-usage-popover
+            role="dialog"
+            aria-label="Plan usage"
+          >
+            <UsagePanel />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function Rail() {
   const activeTab = useStore((s) => s.activeTab);
   const activate = useStore((s) => s.activate);
@@ -157,6 +210,7 @@ export function Rail() {
       </AnimatePresence>
 
       <div className="mt-auto flex flex-col items-center gap-1.5">
+        <UsageButton />
         <RailButton label={`${theme === "dark" ? "Light" : "Dark"} theme`} shortcut="⌘⇧L" onClick={toggleTheme}>
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.span

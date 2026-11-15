@@ -43,6 +43,8 @@ export interface Backend {
   onPtyOutput(cb: (c: PtyChunk) => void): Unlisten;
   onPtyExit(cb: (id: number) => void): Unlisten;
   onConfirmQuit(cb: () => void): Unlisten;
+  /** Ask for a plan-usage reading now; the result arrives with a later `sessions` payload. */
+  usageRefresh(provider: Provider): Promise<void>;
 
   // ---- chat sessions (CHAT_SPEC "Tauri contract additions") ----
   startChat(opts: ChatOptions): Promise<number>;
@@ -147,6 +149,7 @@ async function tauriBackend(): Promise<Backend> {
     pickFolder: () => invoke("pick_folder"),
     environment: () => invoke("environment"),
     quit: () => invoke("quit_app"),
+    usageRefresh: (provider) => invoke("usage_refresh", { provider }),
     onSessions: (cb) => sub<Snapshot>("sessions", cb),
     onPtyOutput: (cb) =>
       sub<{ id: number; data: string; offset: number }>("pty-output", (p) =>

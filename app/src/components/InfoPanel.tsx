@@ -11,6 +11,8 @@ import { contextWindow, modelLabel } from "../lib/models";
 import { ModelsBreakdown } from "./Models";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { cx, ease, Segmented } from "./primitives";
+import { UsageBlock } from "./Usage";
+import { useStore } from "../store";
 
 export type InfoTab = "context" | "status" | "usage";
 
@@ -146,8 +148,13 @@ function UsageTab({ chat }: { chat: Chat }) {
   }, [chat]);
   const turns = chat.items.filter((i) => i.kind === "turn").length;
   const t = chat.tokens;
+  const planUsage = useStore((s) => s.usage[chat.provider]);
   return (
     <div>
+      {/* The plan windows for this chat's provider, the same rows as the rail popover. */}
+      <div className="border-b border-hairline px-3 pb-1 pt-1.5">
+        <UsageBlock provider={chat.provider} usage={planUsage} bare />
+      </div>
       <div className="grid grid-cols-4 gap-px border-b border-hairline bg-hairline">
         {[
           ["Input", t.input],
@@ -163,7 +170,7 @@ function UsageTab({ chat }: { chat: Chat }) {
       </div>
       <ModelsBreakdown data={data} current={chat.model} />
       {(
-        <div className="border-t border-hairline px-3.5 py-2 text-small text-faint">Token counts come straight from the CLI. coool doesn't estimate dollar cost or plan limits.</div>
+        <div className="border-t border-hairline px-3.5 py-2 text-small text-faint">Token counts come straight from the CLI. coool doesn't estimate dollar cost.</div>
       )}
     </div>
   );

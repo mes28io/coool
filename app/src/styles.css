@@ -42,6 +42,7 @@
   --hairline: color-mix(in oklab, var(--border) 70%, transparent);
   --accent-soft: color-mix(in oklab, var(--accent) 14%, transparent);
   --accent-ink: #0a2e12; /* text on green fills */
+  --tab-active: var(--raised);
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -69,6 +70,7 @@
   --hairline: color-mix(in oklab, var(--border) 70%, transparent);
   --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
   --accent-ink: #0a2e12;
+  --tab-active: #ffffff;
 }
 
 @theme inline {

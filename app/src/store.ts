@@ -2,7 +2,7 @@
 // everything else here is UI state (tabs, splits, theme, overlays).
 
 import { create } from "zustand";
-import type { ChatInfo, Environment, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
+import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
 import { sessionKey } from "./lib/types";
 
 export type Target = { kind: "session"; key: string } | { kind: "pty"; id: number } | { kind: "chat"; id: number };
@@ -97,6 +97,9 @@ interface State {
   sessionPty: Record<string, number>;
   exited: Record<number, boolean>;
   env: Environment | null;
+  usage: PlanUsages;
+  usageOpen: boolean;
+  setUsageOpen(v: boolean): void;
   chatInfos: Record<number, ChatInfo>;
   /** chat id -> session key, once discovery linked them (Session.chat). */
   chatOwner: Record<number, string>;
@@ -174,6 +177,9 @@ export const useStore = create<State>((set, get) => ({
   sessionPty: {},
   exited: {},
   env: null,
+  usage: { claude: null, codex: null },
+  usageOpen: false,
+  setUsageOpen: (v) => set({ usageOpen: v }),
   chatInfos: {},
   chatOwner: {},
   pendingChats: [],
@@ -256,6 +262,7 @@ export const useStore = create<State>((set, get) => ({
       chatInfos,
       pendingChats,
       since,
+      usage: { claude: snap.usage?.claude ?? null, codex: snap.usage?.codex ?? null },
       tabs: normalizeTabs(st.tabs, ptyOwner, chatOwner),
     });
   },

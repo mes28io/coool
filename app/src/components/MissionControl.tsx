@@ -136,7 +136,7 @@ function CardModel({ s }: { s: Session }) {
   );
 }
 
-/** Small state line at the top right of a card: a dot and one dim word ("Needs you" in green). */
+/** State at the top right of a card: just a dot ("Needs you" keeps its word, in green). */
 function StateLabel({ status, needs }: { status: "busy" | "idle" | "starting" | "ended"; needs?: boolean }) {
   if (needs)
     return (
@@ -145,10 +145,11 @@ function StateLabel({ status, needs }: { status: "busy" | "idle" | "starting" | 
         Needs you
       </span>
     );
+  // Dot only; the word lives in the tooltip and the accessible name.
+  const word = status === "idle" ? "Waiting for you" : statusLabel(status);
   return (
-    <span className="flex shrink-0 items-center gap-1.5 text-small text-dim">
-      <StatusDot status={status} size={7} />
-      {statusLabel(status)}
+    <span role="img" aria-label={word} title={word} className="flex size-[16px] shrink-0 items-center justify-center">
+      <StatusDot status={status} size={8} />
     </span>
   );
 }

@@ -68,7 +68,7 @@ export function CardSkeleton({ i = 0, label }: { i?: number; label?: string }) {
       <div className="flex h-[22px] items-center gap-1.5">
         <Skel w={14} h={14} i={k} />
         <Skel w={v[0]} h={10} i={k} />
-        <Skel w={64} h={10} i={k + 1} className="ml-auto" />
+        <Skel w={8} h={8} i={k + 1} className="ml-auto mr-1" />
       </div>
       <div className="mt-2.5 flex flex-col gap-0">
         <div className="flex h-[24px] items-center">

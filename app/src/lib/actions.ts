@@ -104,6 +104,15 @@ export async function chatCall(chat: number, f: () => Promise<unknown>): Promise
   }
 }
 
+/** Ask the backend for a fresh plan-usage reading; it arrives with a later `sessions` payload. */
+export function usageRefresh(provider: Provider): Promise<void> {
+  return api()
+    .usageRefresh(provider)
+    .catch((e) => {
+      if (!isNotAvailable(e)) toast(String(e), "error");
+    });
+}
+
 /** Answer a question card: per question, the picked labels and/or typed text; null declines. */
 export function answerQuestion(chat: number, requestId: string, answers: string[][] | null) {
   useChats.getState().answerQuestion(chat, requestId, answers ?? "declined");
