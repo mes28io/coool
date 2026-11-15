@@ -432,7 +432,9 @@ fn parse_line(
                             }
                             if item["is_error"].as_bool() == Some(true) {
                                 let txt = result_text(&item["content"]).unwrap_or_else(|| "tool error".into());
-                                push_activity(activity, Activity::message(ts.clone(), ActivityKind::Error, &txt, 200));
+                                let mut a = Activity::message(ts.clone(), ActivityKind::Error, &txt, 200);
+                                a.step = true;
+                                push_activity(activity, a);
                             }
                             // Still-running parallel calls take precedence; the most recent one wins.
                             *current = st.open_tools.last().map(|(_, s)| s.clone()).or(Some("thinking…".into()));

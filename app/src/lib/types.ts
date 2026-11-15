@@ -13,6 +13,8 @@ export interface Activity {
   full?: string;
   /** What is kept is not the whole message. */
   shortened?: boolean;
+  /** An error that is one failed step (a tool call), not a failed turn: shown quietly. */
+  step?: boolean;
 }
 
 export interface Tokens {

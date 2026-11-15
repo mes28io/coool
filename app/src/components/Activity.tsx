@@ -116,12 +116,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
               {b.type === "text" && (
                 <ActivityText a={b.a} />
               )}
-              {b.type === "error" && (
-                <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-base text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
-                  <IAlert size={16} className="mt-[2px] shrink-0" />
-                  <span className="selectable min-w-0 whitespace-pre-wrap break-words">{bodyOf(b.a)}{shortenedOf(b.a) && <span className="text-faint"> … shortened</span>}</span>
-                </div>
-              )}
+              {b.type === "error" && <ErrorBlock a={b.a} />}
               {b.type === "steps" && (
                 <StepGroup items={b.items} agents={session.agents} active={busy && last && !thinking} latest={last || i >= blocks.length - 2} live={lt} />
               )}
@@ -153,12 +148,7 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
           {b.type === "text" && (
             <ActivityText a={b.a} />
           )}
-          {b.type === "error" && (
-            <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
-              <IAlert size={16} className="mt-[2px] shrink-0" />
-              <span className="selectable min-w-0 whitespace-pre-wrap break-words">{bodyOf(b.a)}{shortenedOf(b.a) && <span className="text-faint"> … shortened</span>}</span>
-            </div>
-          )}
+          {b.type === "error" && <ErrorBlock a={b.a} />}
           {b.type === "steps" && <StepGroup items={b.items} agents={[]} active={false} latest={false} live={STILL} />}
         </div>
       ))}
@@ -477,5 +467,42 @@ function AgentModels({ agent }: { agent: Agent }) {
         <ModelTag key={m} model={m} />
       ))}
     </span>
+  );
+}
+
+
+/**
+ * An error in the timeline. A failed step (one tool call that returned an error; the agent
+ * usually carries on) is a quiet one-line row that expands on click. Anything else (the turn
+ * or the API failed) keeps the red block.
+ */
+function ErrorBlock({ a }: { a: Activity }) {
+  const [open, setOpen] = useState(false);
+  const body = bodyOf(a);
+  if (a.step) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={open ? undefined : body}
+        className="flex w-full items-start gap-2 rounded-[8px] px-2.5 py-1 text-left text-small text-dim transition-colors duration-150 hover:bg-hover"
+      >
+        <IAlert size={14} className="mt-[2px] shrink-0 text-err-text opacity-80" />
+        <span className={open ? "selectable min-w-0 whitespace-pre-wrap break-words" : "min-w-0 truncate"}>
+          <span className="text-faint">A step failed · </span>
+          {body}
+          {open && shortenedOf(a) && <span className="text-faint"> … shortened</span>}
+        </span>
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
+      <IAlert size={16} className="mt-[2px] shrink-0" />
+      <span className="selectable min-w-0 whitespace-pre-wrap break-words">
+        {body}
+        {shortenedOf(a) && <span className="text-faint"> … shortened</span>}
+      </span>
+    </div>
   );
 }

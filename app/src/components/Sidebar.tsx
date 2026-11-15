@@ -97,14 +97,11 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
       for (const s of p.live) {
         const a = att.get(s)!;
         if (a.needs) {
-          p.agents.needs += a.agents.length;
           if (s.updated > needsAt) [needsAt, p.needsKey] = [s.updated, sessionKey(s)];
         } else if (a.status === "busy") {
           p.working++;
-          p.agents.busy += a.agents.length;
         } else {
           p.waiting++;
-          p.agents.idle += a.agents.length;
         }
       }
       p.working += p.starting.length + p.startingChats.filter((c) => c.state !== "idle").length;
@@ -343,13 +340,14 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
       const att = attention(s, digest);
       const kids = p.children.get(s.id) ?? [];
       const key = sessionKey(s);
+      // Running subagents are not listed in the sidebar (owner's call): they show in the chat header's agents chip and on Home.
       const liveKids = kids.some((k) => attention(k, digest).status !== "ended");
-      const hasContent = att.agents.length > 0 || kids.length > 0;
+      const hasContent = kids.length > 0;
       // Open by default while anything in the block is live (or the open chat is in it); the person's choice wins.
-      const open = kidsOpen[key] ?? (att.agents.length > 0 || liveKids || kids.some((k) => sessionKey(k) === selected));
+      const open = kidsOpen[key] ?? (liveKids || kids.some((k) => sessionKey(k) === selected));
       return [
         <SessionRow key={key} s={s} att={att} selected={selected === key} auto={showAutomation && s.origin === "automation"} nest={hasContent ? (open ? "open" : "closed") : undefined} />,
-        <ChildRows key={`kids:${key}`} parent={s} agents={open ? att.agents : []} kids={open ? kids : []} selected={selected} digest={digest} />,
+        <ChildRows key={`kids:${key}`} parent={s} agents={[]} kids={open ? kids : []} selected={selected} digest={digest} />,
       ];
     },
   });
