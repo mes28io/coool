@@ -807,6 +807,8 @@ export function mockBackend(): Backend {
     setTimeout(() => promptLine(p), 260 * (lines.length + 1));
   };
   const handleInput = (p: (typeof ptys)[number], data: string) => {
+    // Strips bracketed-paste markers (ESC [200~ / ESC [201~): the control character is the point.
+    // oxlint-disable-next-line no-control-regex
     const clean = data.replace(/\x1b\[20[01]~/g, "");
     for (const ch of clean) {
       if (ch === "\r") {

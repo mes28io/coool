@@ -761,6 +761,8 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       } finally {
         await api().insightsSetEnabled(false);
         const after = await api().insightsStatus();
+        // Intentional: a failed clean-up must fail the check even when the body passed.
+        // oxlint-disable-next-line no-unsafe-finally
         if (after.enabled) throw new Fail("still enabled");
       }
     });

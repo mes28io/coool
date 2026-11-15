@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "react",
+    "unicorn",
+    "oxc"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "env": {
+    "browser": true,
+    "es2024": true
+  },
+  "rules": {
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn",
+    "unicorn/prefer-string-starts-ends-with": "off",
+    "react/react-in-jsx-scope": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-sort": "off",
+    "unicorn/no-array-reverse": "off",
+    "eslint/no-shadow": "off",
+    "eslint/no-underscore-dangle": "off",
+    "react/refs": "warn",
+    "react/set-state-in-effect": "warn",
+    "react/purity": "warn",
+    "react/static-components": "warn",
+    "react/immutability": "warn"
+  },
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "src-tauri"
+  ]
+}

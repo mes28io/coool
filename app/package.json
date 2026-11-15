@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "lint": "oxlint src",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "fonts": "node scripts/fetch-fonts.mjs --force",
@@ -32,6 +33,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "oxlint": "^1.93.0",
     "tailwindcss": "^4.3.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"
