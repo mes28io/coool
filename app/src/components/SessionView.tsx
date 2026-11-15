@@ -347,7 +347,7 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
   const model = session.model ? modelLabel(session.model) : null;
   // The same box as the chat composer, shown unavailable: coool can read this session but not type into it.
   return (
-    <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
+    <div className={cx("composer-dock shrink-0 pb-3", compact ? "px-3" : "px-6")}>
       <div
         aria-disabled="true"
         className="mx-auto max-w-[700px] cursor-not-allowed rounded-[20px] border border-line bg-raised/60 px-3.5 pb-2.5 pt-3.5 shadow-card"

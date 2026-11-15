@@ -296,7 +296,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
         ? "Steer the agent…" : `Message ${chat.provider === "claude" ? "Claude" : "Codex"}…  (/ for commands)`;
 
   return (
-    <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
+    <div className={cx("composer-dock shrink-0 pb-3", compact ? "px-3" : "px-6")}>
       <div className="relative mx-auto max-w-[700px]">
         {/* slash menu */}
         <AnimatePresence>

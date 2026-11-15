@@ -454,13 +454,13 @@ export function Button({
 
 /**
  * "Scroll to bottom" for a timeline the reader has scrolled up in. Floats centred over the bottom edge of the timeline
- * (just above the composer): a small solid pill, nothing behind it. `fresh`: new output arrived while away (dot + label); `needs`: an approval/question
+ * (just above the composer): a small solid pill, just above the composer dock's fade (`.composer-dock`). `fresh`: new output arrived while away (dot + label); `needs`: an approval/question
  * arrived (blue, "Needs you"). Place it in a zero-height `relative` box right after the scroller.
  */
 export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; fresh: boolean; needs: boolean; onClick: () => void }) {
   const label = needs ? "Needs you" : fresh ? "New output" : null;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-2.5">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[42px]">
       <button
         type="button"
         onClick={onClick}
