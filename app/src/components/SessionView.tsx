@@ -4,9 +4,8 @@ import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useState } 
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
-import { chatModels, chatTitle, needsAnswer, pendingPermission, useChats } from "../lib/chat";
+import { chatModels, chatTitle, pendingPermission, useChats } from "../lib/chat";
 import { displayTitle, folderName } from "../lib/format";
-import { useAttention } from "../lib/live";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { resolveTarget, useStore, type Target, type ViewMode } from "../store";
@@ -20,7 +19,7 @@ import { Composer } from "./Composer";
 import { IActivity, IArrowUp, IClose, IPlay, ITerminal } from "./icons";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
-import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark, type UiStatus } from "./primitives";
+import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark } from "./primitives";
 import { modelLabel } from "../lib/models";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
@@ -61,7 +60,6 @@ export function SessionView({
   const since = useStore((st) => (r.session ? st.since[sessionKey(r.session)] : undefined));
   const setMode = useStore((st) => st.setMode);
   const chat = useChats((st) => (r.chat !== null ? st.chats[r.chat] : undefined));
-  const att = useAttention(r.session);
   const scanning = useStore((st) => !st.ready || st.loading);
 
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
@@ -141,17 +139,12 @@ export function SessionView({
   const provider: Provider = session?.provider ?? chat?.provider ?? startingChat?.provider ?? starting?.provider ?? "claude";
   const cwd = session?.cwd ?? chat?.cwd ?? startingChat?.cwd ?? starting?.cwd ?? "";
   const chatLive = !!chat?.running;
-  let status: UiStatus = session ? (att?.status ?? session.status) : chat ? (chatLive ? (chat.state === "idle" ? (chat.ready ? "idle" : "starting") : "busy") : "ended") : running ? "starting" : "ended";
-  if (att?.needs || (chat && needsAnswer(chat))) status = "needs";
   const title = session ? displayTitle(session) : (chat && chatTitle(chat)) || `New ${provider === "claude" ? "Claude Code" : "Codex"} chat`;
   const canResume = !!session && !chatLive && !running && session.status === "ended" && !!session.id && !!session.cwd;
   const external = !!session && !hasTerm && !isChat;
   const model = chat?.model ?? session?.model ?? null;
   const context = chat && chat.context ? chat.context : (session?.tokens.context ?? 0);
   const showTokens = !!session || !!chat?.tokens.output;
-  // The agents chip speaks for subagents; the text beside the pill keeps jobs / shells.
-  const jobs = session?.live_children ?? 0;
-  const bgText = att?.agents.length ? (jobs > 0 ? `${jobs} ${jobs === 1 ? "job" : "jobs"} running` : null) : att?.background;
   const openTerm = () => r.chat !== null && openChatInTerminal(r.chat, session);
   const onOpenCard = (c: AgentCardData) => {
     const st = useStore.getState();
@@ -172,7 +165,6 @@ export function SessionView({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-base font-semibold tracking-[-0.005em] text-fg">{title}</h2>
-            {bgText && status !== "needs" && <span className="hidden shrink-0 text-small text-dim sm:inline">{bgText}</span>}
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
             <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />
