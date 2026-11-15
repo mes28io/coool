@@ -57,7 +57,7 @@ function RailButton({
         aria-pressed={active}
         onClick={onClick}
         className={cx(
-          "relative flex size-[40px] items-center justify-center rounded-[10px] transition-colors duration-150",
+          "relative flex size-[40px] items-center justify-center rounded-[14px] transition-colors duration-150",
           active ? "bg-raised text-fg shadow-card" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
@@ -70,7 +70,7 @@ function RailButton({
       {!hideTip && (
         <span
           role="tooltip"
-          className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 flex h-[30px] -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-[8px] border border-line bg-raised px-2.5 text-small text-fg opacity-0 shadow-pop transition-opacity duration-150 group-hover:opacity-100 group-hover:delay-500 group-focus-within:opacity-100"
+          className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 flex h-[30px] -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-[12px] border border-line bg-raised px-2.5 text-small text-fg opacity-0 shadow-pop transition-opacity duration-150 group-hover:opacity-100 group-hover:delay-500 group-focus-within:opacity-100"
         >
           {label}
           {shortcut && <span className="font-mono text-micro text-faint">{shortcut}</span>}
@@ -114,7 +114,7 @@ function NeedsYou() {
             exit={{ opacity: 0, transition: { duration: 0.12 } }}
             transition={{ duration: 0.16, ease }}
             style={pos}
-            className="fixed z-50 w-[280px] rounded-[12px] border border-line bg-raised p-1.5 shadow-pop"
+            className="fixed z-50 w-[280px] rounded-[18px] border border-line bg-raised p-1.5 shadow-pop"
             data-needs-popover
           >
             <div className="px-2.5 pb-1 pt-1.5 text-small text-dim">{list.length ? "Needs you" : "Nothing needs you right now."}</div>
@@ -127,7 +127,7 @@ function NeedsYou() {
                   open({ kind: "session", key: sessionKey(s) });
                   setShow(false);
                 }}
-                className="flex w-full items-start gap-2.5 rounded-[9px] px-2.5 py-2 text-left transition-colors duration-150 hover:bg-hover"
+                className="flex w-full items-start gap-2.5 rounded-[13px] px-2.5 py-2 text-left transition-colors duration-150 hover:bg-hover"
               >
                 <ProviderMark provider={s.provider} size={15} className="mt-[3px]" />
                 <span className="min-w-0 flex-1">
@@ -179,7 +179,7 @@ function UsageButton() {
             exit={{ opacity: 0, transition: { duration: 0.12 } }}
             transition={{ duration: 0.16, ease }}
             style={pos}
-            className="scroll fixed z-50 max-h-[calc(100vh-140px)] w-[280px] overflow-y-auto rounded-[12px] border border-line bg-raised shadow-pop"
+            className="scroll fixed z-50 max-h-[calc(100vh-140px)] w-[280px] overflow-y-auto rounded-[18px] border border-line bg-raised shadow-pop"
             data-usage-popover
             role="dialog"
             aria-label="Plan usage"

@@ -284,7 +284,7 @@ function Rich({ text, caret }: { text: string; caret?: boolean }) {
     if (isCode) {
       const body = part.replace(/^[^\n]*\n/, "");
       out.push(
-        <pre key={`c${pi}`} className="my-1 overflow-x-auto rounded-[8px] border border-hairline bg-[color-mix(in_oklab,var(--dim)_7%,transparent)] px-3 py-2 font-mono text-mono-small text-fg/90">
+        <pre key={`c${pi}`} className="my-1 overflow-x-auto rounded-[12px] border border-hairline bg-[color-mix(in_oklab,var(--dim)_7%,transparent)] px-3 py-2 font-mono text-mono-small text-fg/90">
           {body}
           {caret && lastPart && <span className="caret" />}
         </pre>,
@@ -360,7 +360,7 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
     );
   return (
     <div>
-      <button type="button" onClick={() => setOpen(!open)} className="group flex items-center gap-2 rounded-[8px] py-1 pl-0.5 pr-2 text-base hover:bg-hover">
+      <button type="button" onClick={() => setOpen(!open)} className="group flex items-center gap-2 rounded-[12px] py-1 pl-0.5 pr-2 text-base hover:bg-hover">
         <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint">
           <IChevron size={14} />
         </motion.span>
@@ -424,7 +424,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
           opened.current = false;
           setOpen(!isOpen);
         }}
-        className="group flex w-full items-center gap-2 rounded-[8px] py-[3px] pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
+        className="group flex w-full items-center gap-2 rounded-[12px] py-[3px] pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
       >
         <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint group-hover:text-dim">
           <IChevron size={14} />
@@ -436,12 +436,12 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           {chipsFor(tools).map(([name, n]) => (
-            <span key={name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">
+            <span key={name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">
               {name}
               {n > 1 && <span className="tnum text-faint">{n}</span>}
             </span>
           ))}
-          {failed > 0 && <span className="inline-flex h-[22px] shrink-0 items-center rounded-[5px] bg-[color-mix(in_oklab,var(--error)_10%,transparent)] px-1.5 text-small font-medium text-err-text">{failed} failed</span>}
+          {failed > 0 && <span className="inline-flex h-[22px] shrink-0 items-center rounded-[8px] bg-[color-mix(in_oklab,var(--error)_10%,transparent)] px-1.5 text-small font-medium text-err-text">{failed} failed</span>}
         </span>
         {!active && span > 0 && <span className="shrink-0 text-small text-faint tnum">{fmtElapsed(span)}</span>}
       </button>
@@ -492,7 +492,7 @@ function ToolStep({ t, cwd, dense, waiting }: { t: Tool; cwd: string; dense?: bo
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease }} className="overflow-hidden">
             <pre
               className={cx(
-                "selectable mb-1.5 ml-[6px] mt-0.5 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-[8px] border border-hairline px-3 py-2 font-mono text-mono-small leading-[16px]",
+                "selectable mb-1.5 ml-[6px] mt-0.5 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-[12px] border border-hairline px-3 py-2 font-mono text-mono-small leading-[16px]",
                 t.ok === false ? "bg-[color-mix(in_oklab,var(--error)_6%,transparent)] text-err-text/90" : "bg-[color-mix(in_oklab,var(--dim)_6%,transparent)] text-dim",
               )}
             >
@@ -523,12 +523,12 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
       </span>
       <div
         className={cx(
-          "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-300",
+          "min-w-0 flex-1 overflow-hidden rounded-[14px] border bg-raised shadow-card transition-[border-color] duration-300",
           "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pb-1.5 pt-2">
-          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{kind}</span>
+          <span className="rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{kind}</span>
           <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{stripToolName(tool.name, tool.summary)}</span>
           {modelIds.map((m) => (
             <ModelTag key={m} model={m} />
@@ -574,10 +574,10 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
 
 // ---------- approval ----------
 
-function permDetail(p: Perm): { lead: string; body: string; note?: string } {
+function permDetail(p: Perm, cwd: string): { lead: string; body: string; full?: string; note?: string } {
   const i = (p.input ?? {}) as Record<string, unknown>;
   if (typeof i.command === "string") return { lead: "run a command", body: i.command, note: typeof i.description === "string" ? i.description : undefined };
-  if (typeof i.file_path === "string") return { lead: /write/i.test(p.tool) ? "create a file" : "edit a file", body: i.file_path };
+  if (typeof i.file_path === "string") return { lead: /write/i.test(p.tool) ? "create a file" : "edit a file", body: cwd ? relPath(i.file_path, cwd) : i.file_path, full: i.file_path };
   if (typeof i.url === "string") return { lead: "fetch a page", body: i.url };
   return { lead: `use ${p.tool}`, body: p.summary };
 }
@@ -589,7 +589,7 @@ function Ticks({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         i % 2 ? (
-          <code key={i} className="rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] px-1 py-px font-mono text-[0.92em]">
+          <code key={i} className="rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] px-1 py-px font-mono text-[0.92em]">
             {p}
           </code>
         ) : (
@@ -619,11 +619,11 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
       onClick={onPick}
       title={option.rules.length ? option.rules.join("\n") : undefined}
       className={cx(
-        "group flex w-full items-start gap-2.5 rounded-[9px] border px-3 py-1.5 text-left transition-[background-color,border-color] duration-150 active:scale-[0.995]",
+        "group flex w-full items-start gap-2.5 rounded-[13px] border px-3 py-1.5 text-left transition-[background-color,border-color] duration-150 active:scale-[0.995]",
         "border-line hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))] hover:bg-hover",
       )}
     >
-      <span className={cx("mt-[3px] flex size-[20px] shrink-0 items-center justify-center rounded-[5px]", "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-dim")}>
+      <span className={cx("mt-[3px] flex size-[20px] shrink-0 items-center justify-center rounded-[8px]", "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-dim")}>
         {saved ? <IFile size={13} /> : <ICheck size={13} />}
       </span>
       <span className="min-w-0 flex-1">
@@ -632,7 +632,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
             <Ticks text={option.label} />
           </span>
           {quick && <Kbd className="ml-auto shrink-0">⇧⌘↵</Kbd>}
-          {saved && <span className="ml-auto flex shrink-0 items-center gap-1.5 rounded-[5px] border border-line bg-raised px-1.5 text-small font-medium text-dim"><span className="size-[6px] rounded-full bg-busy" />{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
+          {saved && <span className="ml-auto flex shrink-0 items-center gap-1.5 rounded-[8px] border border-line bg-raised px-1.5 text-small font-medium text-dim"><span className="size-[6px] rounded-full bg-busy" />{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
         </span>
         <span className="mt-0.5 block text-small text-dim">{option.detail}</span>
       </span>
@@ -641,7 +641,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
 }
 
 function Approval({ item, chat }: { item: Perm; chat: Chat }) {
-  const d = permDetail(item);
+  const d = permDetail(item, chat.cwd);
   const who = chat.provider === "claude" ? "Claude" : "Codex";
   const quick = item.remember[0]?.scope === "chat" ? item.remember[0] : null;
   return (
@@ -653,20 +653,20 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, scale: 0.985, transition: { duration: 0.14 } }}
           transition={{ type: "spring", stiffness: 420, damping: 32 }}
-          className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
+          className="attn-card rounded-[18px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
           data-approval={item.requestId}
         >
           <div className="flex items-center gap-2 px-3.5 pb-1.5 pt-3.5">
-            <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-needs-text">
+            <span className="flex size-[24px] items-center justify-center rounded-[9px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-needs-text">
               <ITerminal size={15} />
             </span>
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
               {who} wants to {d.lead}
             </span>
-            <span className="ml-auto rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">{item.tool}</span>
+            <span className="ml-auto rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">{item.tool}</span>
           </div>
           <div className="px-3.5">
-            <pre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90">{homeShort(d.body)}</pre>
+            <pre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[12px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90" title={d.full}>{homeShort(d.body)}</pre>
             {d.note && <div className="mt-1.5 text-small text-dim">{d.note}</div>}
           </div>
           <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-2.5">
@@ -743,11 +743,11 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, scale: 0.985, transition: { duration: 0.14 } }}
           transition={{ type: "spring", stiffness: 420, damping: 32 }}
-          className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
+          className="attn-card rounded-[18px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
           data-question={item.requestId}
         >
           <div className="flex items-center gap-2 px-3.5 pb-1 pt-3.5">
-            <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-base font-bold text-needs-text">?</span>
+            <span className="flex size-[24px] items-center justify-center rounded-[9px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-base font-bold text-needs-text">?</span>
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
               {who} has {item.questions.length === 1 ? "a question" : `${item.questions.length} questions`}
             </span>
@@ -758,7 +758,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
               return (
                 <div key={q.id || i} data-q={i}>
                   <div className="flex items-baseline gap-2">
-                    {q.header && <span className="shrink-0 rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">{q.header}</span>}
+                    {q.header && <span className="shrink-0 rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">{q.header}</span>}
                     <span className="selectable text-base text-fg">{q.question}</span>
                     {q.multi_select && <span className="shrink-0 text-small text-faint">pick any</span>}
                   </div>
@@ -777,14 +777,14 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
                               else edit(i, (x) => ({ ...x, picked: on ? [] : [o.label], other: "" }));
                             }}
                             className={cx(
-                              "group flex w-full items-start gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-left transition-[border-color,background-color] duration-150",
+                              "group flex w-full items-start gap-2.5 rounded-[13px] border px-2.5 py-[7px] text-left transition-[border-color,background-color] duration-150",
                               on ? "border-[color-mix(in_oklab,var(--accent)_55%,var(--border))] bg-accent-soft" : "border-line hover:border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] hover:bg-hover",
                             )}
                           >
                             <span
                               className={cx(
                                 "mt-[3px] flex size-[14px] shrink-0 items-center justify-center border transition-colors duration-150",
-                                q.multi_select ? "rounded-[4px]" : "rounded-full",
+                                q.multi_select ? "rounded-[6px]" : "rounded-full",
                                 on ? "border-accent bg-accent text-accent-ink" : "border-line group-hover:border-dim",
                               )}
                             >
@@ -817,7 +817,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
                           submit();
                         }
                       }}
-                      className="mt-1.5 h-[38px] w-full rounded-[9px] border border-line bg-bg px-2.5 text-base outline-none placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]"
+                      className="mt-1.5 h-[38px] w-full rounded-[13px] border border-line bg-bg px-2.5 text-base outline-none placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]"
                     />
                   )}
                 </div>
@@ -864,7 +864,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
 function Notice({ item, onOpenTerminal }: { item: Extract<ChatItem, { kind: "notice" }>; onOpenTerminal: () => void }) {
   if (item.needsTerminal)
     return (
-      <div className="flex items-center gap-3 rounded-[10px] border border-dashed border-line px-3.5 py-2.5">
+      <div className="flex items-center gap-3 rounded-[14px] border border-dashed border-line px-3.5 py-2.5">
         <ITerminal size={17} className="shrink-0 text-dim" />
         <span className="min-w-0 flex-1 text-base text-dim">{item.text}</span>
         <Button variant="outline" onClick={onOpenTerminal}>
@@ -874,7 +874,7 @@ function Notice({ item, onOpenTerminal }: { item: Extract<ChatItem, { kind: "not
     );
   if (item.level === "error")
     return (
-      <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
+      <div className="flex items-start gap-2 rounded-[12px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
         <IAlert size={16} className="mt-[2px] shrink-0" />
         <span className="selectable min-w-0 break-words">{item.text}</span>
       </div>
@@ -893,7 +893,7 @@ function Notice({ item, onOpenTerminal }: { item: Extract<ChatItem, { kind: "not
 function NoticeBlock({ item, lines }: { item: Extract<ChatItem, { kind: "notice" }>; lines: string[] }) {
   const [open, setOpen] = useState(lines.length <= 14);
   return (
-    <div className="rounded-[10px] border border-hairline">
+    <div className="rounded-[14px] border border-hairline">
       <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-small text-dim hover:text-fg">
         <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex text-faint">
           <IChevron size={13} />
@@ -944,7 +944,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
 function Exited({ item, onResume }: { item: Extract<ChatItem, { kind: "exited" }>; onResume?: () => void }) {
   const bad = item.code !== null && item.code !== 0;
   return (
-    <div className={cx("flex items-center gap-2 rounded-[10px] border border-dashed px-3.5 py-2 text-base", bad ? "border-[color-mix(in_oklab,var(--error)_35%,var(--border))] text-err-text/90" : "border-line text-dim")}>
+    <div className={cx("flex items-center gap-2 rounded-[14px] border border-dashed px-3.5 py-2 text-base", bad ? "border-[color-mix(in_oklab,var(--error)_35%,var(--border))] text-err-text/90" : "border-line text-dim")}>
       <StatusDot status="ended" size={8} />
       {bad ? `The CLI exited with code ${item.code}.` : "This chat's process has ended."}
       <span className="ml-auto font-mono text-mono-small text-faint tnum">{clockTime(item.ts)}</span>
@@ -979,7 +979,7 @@ function Welcome({ chat, onSuggest }: { chat: Chat; onSuggest: (t: string) => vo
             key={s}
             type="button"
             onClick={() => onSuggest(s)}
-            className="h-[36px] rounded-[9px] border border-line bg-raised px-3 text-base text-dim shadow-card transition-[border-color,color] duration-150 hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] hover:text-fg"
+            className="h-[36px] rounded-[13px] border border-line bg-raised px-3 text-base text-dim shadow-card transition-[border-color,color] duration-150 hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] hover:text-fg"
           >
             {s}
           </button>
@@ -1004,7 +1004,7 @@ function Earlier({ rows }: { rows: Activity[] }) {
   return (
     <div className="flex flex-col gap-4" data-earlier={rows.length}>
       {cut > 0 && (
-        <button type="button" onClick={() => setAll(true)} className="flex items-center gap-2 self-center rounded-[8px] px-2.5 py-1 text-small text-dim hover:bg-hover hover:text-fg">
+        <button type="button" onClick={() => setAll(true)} className="flex items-center gap-2 self-center rounded-[12px] px-2.5 py-1 text-small text-dim hover:bg-hover hover:text-fg">
           <IChevron size={13} className="-rotate-90" />
           {hiddenTurns} earlier {hiddenTurns === 1 ? "turn" : "turns"}
         </button>

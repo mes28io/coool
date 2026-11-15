@@ -141,7 +141,7 @@ export function Sidebar() {
             type="button"
             title="New session (⌘T)"
             onClick={() => setSheet({ kind: "new" })}
-            className="flex h-[34px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-base text-fg transition-colors duration-150 hover:bg-hover"
+            className="flex h-[34px] w-full items-center gap-2.5 rounded-[14px] px-2.5 text-base text-fg transition-colors duration-150 hover:bg-hover"
           >
             <ICompose size={18} className="text-dim" />
             New session
@@ -154,7 +154,7 @@ export function Sidebar() {
           {!ready || (loading && projects.length === 0) ? (
             <SidebarSkeleton />
           ) : projects.length === 0 ? (
-            <div className="mx-1 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-base text-dim">
+            <div className="mx-1 mt-2 rounded-[14px] border border-dashed border-line px-3 py-4 text-center text-base text-dim">
               No sessions in the last day.
               <br />
               <button className="mt-1 font-medium text-fg hover:underline" onClick={() => setSheet({ kind: "new" })}>
@@ -215,7 +215,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
           onClick={() => setCollapsed(!collapsed)}
           title={homeShort(p.cwd)}
           aria-expanded={!collapsed}
-          className="flex h-[34px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left transition-colors duration-150 hover:bg-hover"
+          className="flex h-[34px] w-full items-center gap-2.5 rounded-[14px] px-2.5 text-left transition-colors duration-150 hover:bg-hover"
         >
           <Folder size={18} className="shrink-0 text-dim" />
           <span className={cx("min-w-0 flex-1 truncate text-base font-medium", onlyEnded ? "text-dim" : "text-fg")}>{p.name}</span>
@@ -225,7 +225,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
           onClick={() => setSheet({ kind: "new", cwd: p.cwd })}
           title={`New session in ${p.name}`}
           aria-label={`New session in ${p.name}`}
-          className="absolute right-1.5 top-1/2 flex size-[28px] -translate-y-1/2 items-center justify-center rounded-[8px] text-dim opacity-0 transition-[opacity,background-color] duration-150 hover:bg-press hover:text-fg focus-visible:opacity-100 group-hover/proj:opacity-100"
+          className="absolute right-1.5 top-1/2 flex size-[28px] -translate-y-1/2 items-center justify-center rounded-[12px] text-dim opacity-0 transition-[opacity,background-color] duration-150 hover:bg-press hover:text-fg focus-visible:opacity-100 group-hover/proj:opacity-100"
         >
           <IPlus size={16} />
         </button>
@@ -260,7 +260,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
                   type="button"
                   data-nav
                   onClick={() => setShowAll(!showAll)}
-                  className="flex h-[28px] w-full items-center rounded-[10px] pl-[38px] text-left text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
+                  className="flex h-[28px] w-full items-center rounded-[14px] pl-[38px] text-left text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim"
                 >
                   {showAll ? "Show less" : "Show more"}
                 </button>
@@ -319,7 +319,7 @@ function Row({
       onClick={onClick}
       title={title}
       className={cx(
-        "group relative flex h-[30px] w-full items-center rounded-[10px] pl-[38px] pr-3 text-left text-base",
+        "group relative flex h-[30px] w-full items-center rounded-[14px] pl-[38px] pr-3 text-left text-base",
         selected ? "[--row-tint:var(--hover)] text-fg" : cx("[--row-tint:transparent] hover:[--row-tint:var(--hover)] hover:text-fg", dim ? "text-faint" : "text-dim"),
       )}
       style={{ background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--bg)" }}
@@ -331,7 +331,7 @@ function Row({
         </span>
       )}
       <span
-        className="absolute inset-y-0 right-0 hidden items-center gap-2 rounded-r-[10px] pl-6 pr-3 text-small text-faint group-hover:flex"
+        className="absolute inset-y-0 right-0 hidden items-center gap-2 rounded-r-[14px] pl-6 pr-3 text-small text-faint group-hover:flex"
         style={{ background: "linear-gradient(90deg, transparent, color-mix(in oklab, var(--text) 8%, var(--bg)) 22px)" }}
       >
         {cwdName && <span className="max-w-[60px] truncate opacity-60">{cwdName}</span>}

@@ -140,8 +140,8 @@
   --text-mono-base--line-height: 20px;
   --text-mono-prose: 14px;
   --text-mono-prose--line-height: 22px;
-  --radius-card: 10px;
-  --radius-sheet: 14px;
+  --radius-card: 16px;
+  --radius-sheet: 22px;
   --shadow-card: var(--shadow-card);
   --shadow-pop: var(--shadow-pop);
 }

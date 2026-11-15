@@ -30,7 +30,7 @@ export function Sheets() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.99, transition: { duration: 0.14 } }}
             transition={{ type: "spring", stiffness: 460, damping: 36 }}
-            className="relative w-[480px] max-w-[calc(100vw-32px)] overflow-hidden rounded-[14px] border border-line bg-raised shadow-pop"
+            className="relative w-[480px] max-w-[calc(100vw-32px)] overflow-hidden rounded-[22px] border border-line bg-raised shadow-pop"
             onKeyDown={(e) => e.key === "Escape" && close()}
           >
             <SheetBody sheet={sheet} close={close} />
@@ -61,7 +61,7 @@ function Field({ label, children, aside }: { label: string; children: ReactNode;
 }
 
 const inputCls =
-  "w-full rounded-[10px] border border-line bg-bg px-3 text-base outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
+  "w-full rounded-[14px] border border-line bg-bg px-3 text-base outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
 
 function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: string; initialProvider?: Provider; close: () => void }) {
   const sessions = useStore((s) => s.sessions);
@@ -128,7 +128,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
                   type="button"
                   onClick={() => setProvider(p)}
                   className={cx(
-                    "relative flex h-[56px] items-center gap-2.5 rounded-[10px] border px-3 text-left transition-[border-color,background-color] duration-150",
+                    "relative flex h-[56px] items-center gap-2.5 rounded-[14px] border px-3 text-left transition-[border-color,background-color] duration-150",
                     on ? "border-[color-mix(in_oklab,var(--accent)_55%,var(--border))] bg-accent-soft" : "border-line hover:bg-hover",
                   )}
                 >
@@ -171,7 +171,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
                     title={homeShort(r)}
                     onClick={() => setCwd(homeShort(r))}
                     className={cx(
-                      "h-[28px] rounded-[7px] border px-2 text-small transition-colors duration-150",
+                      "h-[28px] rounded-[10px] border px-2 text-small transition-colors duration-150",
                       on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
                     )}
                   >
@@ -199,7 +199,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
             type="button"
             onClick={() => setTerminal(!terminal)}
             title="Open the CLI's own terminal UI instead of a chat"
-            className={cx("flex h-[30px] items-center gap-1.5 rounded-[7px] px-2 text-small transition-colors duration-150", terminal ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg")}
+            className={cx("flex h-[30px] items-center gap-1.5 rounded-[10px] px-2 text-small transition-colors duration-150", terminal ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg")}
           >
             <ITerminal size={15} />
             {terminal ? "In a terminal" : "Use terminal instead"}
@@ -371,9 +371,9 @@ function Settings({ close }: { close: () => void }) {
           />
         </Field>
 
-        <div className="flex flex-col gap-3 rounded-[12px] border border-line p-4">
+        <div className="flex flex-col gap-3 rounded-[18px] border border-line p-4">
           <div className="flex items-start gap-3">
-            <span className="mt-[1px] flex size-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-dim">
+            <span className="mt-[1px] flex size-[30px] shrink-0 items-center justify-center rounded-[12px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-dim">
               <ISpark size={16} />
             </span>
             <div className="min-w-0 flex-1">
@@ -387,7 +387,7 @@ function Settings({ close }: { close: () => void }) {
               onChange={(v) => void run(() => api().insightsSetEnabled(v), { enabled: v })}
             />
           </div>
-          <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_8%,transparent)] px-3 py-2 text-small text-dim">
+          <div className="rounded-[12px] bg-[color-mix(in_oklab,var(--dim)_8%,transparent)] px-3 py-2 text-small text-dim">
             Uses <span className="font-medium text-fg/85">your own Anthropic API key</span>, billed to you, never your Claude Code or Codex login. A small model (Claude Haiku 5.5) runs only for
             live sessions whose activity changed, at most once per session every 45s, with an hourly cap. That is roughly $0.03 per hour of nonstop agent work per session, and
             usually far less.
@@ -399,7 +399,7 @@ function Settings({ close }: { close: () => void }) {
             </div>
           ) : st?.has_key && !replacing ? (
             <div className="flex items-center gap-2">
-              <span className="flex h-[38px] flex-1 items-center gap-2 rounded-[10px] border border-line bg-bg px-3 text-base">
+              <span className="flex h-[38px] flex-1 items-center gap-2 rounded-[14px] border border-line bg-bg px-3 text-base">
                 <ICheck size={15} className="text-accent-text" />
                 <span className="text-fg/90">Key saved in your Keychain</span>
                 <span className="ml-auto font-mono text-mono-small tracking-[0.2em] text-faint">••••••••</span>

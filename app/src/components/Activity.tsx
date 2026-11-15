@@ -39,7 +39,7 @@ export function Prose({ text }: { text: string }) {
     <>
       {parts.map((p, i) =>
         p.startsWith("`") && p.endsWith("`") && p.length > 2 ? (
-          <code key={i} className="rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-[5px] py-[1px] font-mono text-[0.88em] text-fg">
+          <code key={i} className="rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-[5px] py-[1px] font-mono text-[0.88em] text-fg">
             {p.slice(1, -1)}
           </code>
         ) : (
@@ -117,7 +117,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
                 </div>
               )}
               {b.type === "error" && (
-                <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-base text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
+                <div className="flex items-start gap-2 rounded-[12px] px-2.5 py-1.5 text-base text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
                   <IAlert size={16} className="mt-[2px] shrink-0" />
                   <span className="selectable min-w-0 break-words">{b.a.text}</span>
                 </div>
@@ -156,7 +156,7 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
             </div>
           )}
           {b.type === "error" && (
-            <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
+            <div className="flex items-start gap-2 rounded-[12px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
               <IAlert size={16} className="mt-[2px] shrink-0" />
               <span className="selectable min-w-0 break-words">{b.a.text}</span>
             </div>
@@ -175,7 +175,7 @@ function PromptBlock({ a }: { a: Activity }) {
 export function PromptBubble({ text, stamp }: { text: string; stamp?: string }) {
   return (
     <div className="flex flex-col items-end gap-1 pt-1">
-      <div className="selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[12px] rounded-br-[4px] border border-hairline bg-raised px-4 py-3 text-prose text-fg shadow-card">
+      <div className="selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[22px] rounded-br-[8px] border border-hairline bg-raised px-4 py-3 text-prose text-fg shadow-card">
         {text}
       </div>
       {stamp && <span className="pr-1 font-mono text-mono-small text-faint tnum">{stamp}</span>}
@@ -229,14 +229,14 @@ const StepGroup = memo(function StepGroup({
   const span = first !== null && lastT !== null ? lastT - first : 0;
 
   return (
-    <div className="rounded-[10px]">
+    <div className="rounded-[14px]">
       <button
         type="button"
         onClick={() => {
           opened.current = false;
           setOpen(!isOpen);
         }}
-        className="group flex w-full items-center gap-2 rounded-[8px] py-1 pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
+        className="group flex w-full items-center gap-2 rounded-[12px] py-1 pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
       >
         <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint group-hover:text-dim">
           <IChevron size={14} />
@@ -248,7 +248,7 @@ const StepGroup = memo(function StepGroup({
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           {chips.map((c) => (
-            <span key={c.name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">
+            <span key={c.name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">
               {c.name}
               {c.n > 1 && <span className="tnum text-faint">{c.n}</span>}
             </span>
@@ -329,7 +329,7 @@ export function StepLine({
     <div
       onClick={onClick}
       className={cx(
-        "group relative -ml-[19px] flex items-center gap-2.5 rounded-[7px] pr-2",
+        "group relative -ml-[19px] flex items-center gap-2.5 rounded-[10px] pr-2",
         "h-[28px]",
         active && !waiting && "sweep",
         onClick && "hover:bg-hover",
@@ -392,12 +392,12 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
       </span>
       <div
         className={cx(
-          "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card",
+          "min-w-0 flex-1 overflow-hidden rounded-[14px] border bg-raised shadow-card",
           "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
-          <span className="rounded-[5px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">
+          <span className="rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">
             {agent?.kind || "subagent"}
           </span>
           <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{detail || agent?.description}</span>

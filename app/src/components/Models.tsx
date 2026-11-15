@@ -31,7 +31,7 @@ export function sessionModelsData(s: Session): ModelsData {
 
 export function ModelTag({ model, className }: { model: string; className?: string }) {
   return (
-    <span className={cx("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim", className)} title={model}>
+    <span className={cx("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim", className)} title={model}>
       <span className="size-[6px] rounded-full" style={{ background: modelColor(model) }} />
       {modelLabel(model)}
     </span>
@@ -82,7 +82,7 @@ export function ModelsBreakdown({ data, current }: { data: ModelsData; current?:
                   {modelLabel(r.model)}
                 </span>
                 {r.via_agent && <span className="shrink-0 text-small text-dim">subagents</span>}
-                {current && r.model === current && !r.via_agent && <span className="shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1 font-mono text-micro font-semibold uppercase tracking-wide text-dim">now</span>}
+                {current && r.model === current && !r.via_agent && <span className="shrink-0 rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1 font-mono text-micro font-semibold uppercase tracking-wide text-dim">now</span>}
                 <span className="ml-auto shrink-0 text-small text-faint tnum" title={`in ${fmtTokens(r.input)} · cached ${fmtTokens(r.cached)} · out ${fmtTokens(r.output)}`}>
                   {fmtTokens(t)}
                 </span>
@@ -136,13 +136,13 @@ export function ModelsChip({ data, current }: { data: ModelsData; current: strin
         onClick={() => setOpen(!open)}
         title="Models used in this session"
         className={cx(
-          "flex h-[22px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[6px] px-1.5 text-small transition-colors duration-150",
+          "flex h-[22px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] px-1.5 text-small transition-colors duration-150",
           open ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
         <span className="size-[6px] rounded-full" style={{ background: modelColor(shown) }} />
         {modelLabel(shown)}
-        {others > 0 && <span className="rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1 font-sans text-small font-semibold text-dim">+{others}</span>}
+        {others > 0 && <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1 font-sans text-small font-semibold text-dim">+{others}</span>}
       </button>
       <Popover open={open} onClose={() => setOpen(false)} width={340}>
         <ModelsBreakdown data={data} current={current} />
