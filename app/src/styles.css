@@ -575,21 +575,32 @@ html.theme-fade *::after {
   }
 }
 
-/* Left-to-right reveal of a newly arrived label (checkpoints, steps): one span per character. */
-.cp-ch {
-  animation: cp-ch 200ms ease-out both;
+/* Left-to-right reveal of a newly arrived label (Reveal): a mask sweeping over one unchanged text node. */
+.rv-sweep {
+  display: inline-block;
+  -webkit-mask-image: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.1) 60%);
+  mask-image: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.1) 60%);
+  -webkit-mask-size: 250% 100%;
+  mask-size: 250% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  animation: rv-sweep 420ms ease-out both;
 }
-@keyframes cp-ch {
+@keyframes rv-sweep {
   from {
-    opacity: 0.1;
+    -webkit-mask-position: 100% 0;
+    mask-position: 100% 0;
   }
   to {
-    opacity: 1;
+    -webkit-mask-position: 0% 0;
+    mask-position: 0% 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cp-ch {
+  .rv-sweep {
     animation: none;
+    -webkit-mask-image: none;
+    mask-image: none;
   }
 }
 

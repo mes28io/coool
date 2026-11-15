@@ -13,6 +13,9 @@ import type { Activity, RememberOption } from "../lib/types";
 import { HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit } from "./Activity";
 import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
+import { toolMood } from "../lib/activityMood";
+import { fmtOut } from "../lib/agentCards";
+import { LiveIndicator } from "./Activity";
 import { RailItem, RailList, reducedMotion, Reveal } from "./StepRail";
 import { deriveCheckpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
@@ -22,7 +25,7 @@ import { NoteRows } from "./SteerStrip";
 import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ISpark, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
-import { Button, cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
+import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot } from "./primitives";
 import { useStore } from "../store";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
@@ -108,6 +111,23 @@ export function ChatTimeline({
   const content = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  // Scrolled away from the bottom: new output never moves the view; the button says so.
+  const [away, setAway] = useState(false);
+  const [fresh, setFresh] = useState(false);
+  const [needs, setNeeds] = useState(false);
+  const pinning = useRef(false);
+  const toBottom = (smooth: boolean) => {
+    const el = scroller.current;
+    if (!el) return;
+    stick.current = true;
+    // The smooth scroll passes through "not at the bottom": do not read that as the reader leaving.
+    pinning.current = true;
+    setTimeout(() => (pinning.current = false), 900);
+    setAway(false);
+    setFresh(false);
+    setNeeds(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth && !reducedMotion() ? "smooth" : "auto" });
+  };
   const working = chat.state !== "idle" && chat.running;
   // Checkpoints card (one per turn), shown from two checkpoints on.
   const cps = useMemo(() => deriveCheckpoints(chat), [chat.items, chat.running, chat.state]);
@@ -135,12 +155,24 @@ export function ChatTimeline({
     const inner = content.current;
     if (!el || !inner) return;
     el.scrollTop = el.scrollHeight;
+    let last = inner.offsetHeight;
     const ro = new ResizeObserver(() => {
       if (stick.current) el.scrollTop = el.scrollHeight;
+      else if (inner.offsetHeight > last) setFresh(true);
+      last = inner.offsetHeight;
     });
     ro.observe(inner);
     return () => ro.disconnect();
   }, []);
+
+  // New INPUT (a prompt or steering note sent, an approval or question answered) always scrolls to the bottom and re-pins.
+  const inputs = chat.notes.length + chat.items.reduce((n, i) => n + (i.kind === "prompt" || (i.kind === "permission" && i.answer) || (i.kind === "question" && i.answer) ? 1 : 0), 0);
+  const inputsSeen = useRef(inputs);
+  useLayoutEffect(() => {
+    if (inputs > inputsSeen.current) toBottom(true);
+    inputsSeen.current = inputs;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputs]);
 
   // Keep a newly arrived approval / question card fully visible above the composer (or, when
   // it is taller than the viewport, with its top just under the header). Only on arrival and
@@ -186,6 +218,11 @@ export function ChatTimeline({
     if (revealed.current !== askKey) {
       revealed.current = askKey;
       userMoved.current = false;
+      // Scrolled up: do not yank; the button turns blue instead.
+      if (!stick.current) {
+        setNeeds(true);
+        return;
+      }
       reveal(true);
     }
     // The card can still grow (options render, remember list); follow it until the reader scrolls.
@@ -198,11 +235,29 @@ export function ChatTimeline({
 
   const last = blocks[blocks.length - 1];
   const lastItem = last?.type === "item" ? last.item : null;
-  const runningTool = chat.items.some((i) => i.kind === "tool" && !i.parent && i.endTs === null);
   const liveText = lastItem?.kind === "text" && lastItem.streaming;
   const liveThink = lastItem?.kind === "thinking" && lastItem.endTs === null;
   const awaiting = !!chat.pendingPermission || !!chat.pendingQuestion;
-  const thinking = working && !runningTool && !liveText && !liveThink && !awaiting;
+  // The one live indicator row of the running turn: what the agent is doing right now.
+  const now = useMemo(() => {
+    let tool: Extract<ChatItem, { kind: "tool" }> | null = null;
+    let agent: Extract<ChatItem, { kind: "tool" }> | null = null;
+    let agents = 0;
+    for (const it of chat.items) {
+      if (it.kind !== "tool" || it.parent || it.endTs !== null) continue;
+      if (it.agent) {
+        agent = it;
+        agents++;
+      } else tool = it;
+    }
+    // The main agent's own work first; only subagents running and it doing nothing is the quiet "N agents running" line.
+    if (tool) return { mood: toolMood(tool.name), detail: toolSummary(tool, chat.cwd), at: tool.ts, agents, mainActive: true };
+    if (liveThink || liveText) return { mood: liveText ? ("write" as const) : chat.permissionMode === "plan" ? ("plan" as const) : ("think" as const), detail: "", at: lastItem?.ts ?? null, agents, mainActive: true };
+    if (agent) return { mood: "delegate" as const, detail: stripToolName(agent.name, agent.summary || ""), at: agent.ts, agents, mainActive: false };
+    return { mood: chat.permissionMode === "plan" ? ("plan" as const) : ("think" as const), detail: "", at: null, agents: 0, mainActive: true };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.items, chat.cwd, chat.permissionMode, liveText, liveThink]);
+  const showRow = working && !awaiting;
   // Precise: from event timestamps, never from HH:MM:SS.
   const idleSince = useMemo(() => {
     let t = chat.turnStart ?? chat.lastTs;
@@ -215,13 +270,21 @@ export function ChatTimeline({
   }, [chat.items, chat.turnStart, chat.lastTs]);
 
   return (
+    <div className="relative h-full">
     <div
       ref={scroller}
       className="scroll h-full"
       data-chat-timeline={chat.id}
       onScroll={(e) => {
         const el = e.currentTarget;
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        const at = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        if (pinning.current && !at) return;
+        stick.current = at;
+        setAway((a) => (a === !at ? a : !at));
+        if (at) {
+          setFresh(false);
+          setNeeds(false);
+        }
       }}
     >
       <div ref={content}>
@@ -238,7 +301,7 @@ export function ChatTimeline({
         {earlier && earlier.length > 0 && <Earlier rows={earlier} />}
         {!chat.ready && blocks.length === 0 && (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <ThinkingRow since={chat.lastTs} label={`Starting ${chat.provider} in ${folderName(chat.cwd)}`} orb="connecting" big />
+            <ThinkingRow since={chat.lastTs} label={`Starting ${chat.provider} in ${folderName(chat.cwd)}`} mood="start" big />
           </div>
         )}
         {chat.ready && blocks.length === 0 && !earlier?.length && <Welcome chat={chat} onSuggest={onSuggest} />}
@@ -258,14 +321,16 @@ export function ChatTimeline({
           );
         })}
         <AnimatePresence>
-          {thinking && (
+          {showRow && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
-              <ThinkingRow since={idleSince} />
+              <LiveIndicator since={now.at ?? idleSince} mood={now.mood} detail={now.detail} agents={now.agents} mainActive={now.mainActive} timerSince={chat.turnStart ?? idleSince} />
             </motion.div>
           )}
         </AnimatePresence>
         </div>
       </div>
+    </div>
+    <JumpToBottom away={away} fresh={fresh} needs={needs} onClick={() => toBottom(true)} />
     </div>
   );
 }
@@ -395,9 +460,8 @@ export function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "think
   if (live)
     return (
       <div className="flex flex-col gap-1">
-        <ThinkingRow since={item.ts} />
         {lastLine && (
-          <div className="ml-[28px] line-clamp-2 max-w-[640px] text-base italic text-faint">
+          <div className="ml-1 line-clamp-2 max-w-[640px] text-base italic text-faint">
             <span key={item.text.length} className="stream-chunk">
               {lastLine}
             </span>
@@ -521,12 +585,28 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
                 );
               })}
             </RailList>
+            <AgentsSummary tools={tools} chat={chat} nested={nested} />
           </motion.div>
         )}
       </AnimatePresence>
     </div>
   );
 });
+
+/** After several subagents of one turn have all finished: one dim line with the wall-clock span (not the sum). */
+function AgentsSummary({ tools, chat, nested }: { tools: Tool[]; chat: Chat; nested: Map<string, ChatItem[]> }) {
+  const agents = tools.filter((t) => t.agent);
+  if (agents.length < 2 || agents.some((a) => a.endTs === null)) return null;
+  const uses = agents.reduce((n, a) => n + (nested.get(a.id) ?? []).filter((k) => k.kind === "tool").length, 0);
+  const tokens = agents.reduce((n, a) => n + Object.values(chat.agents[a.id]?.models ?? {}).reduce((m, u) => m + u.output, 0), 0);
+  const span = Math.max(...agents.map((a) => a.endTs ?? a.ts)) - Math.min(...agents.map((a) => a.ts));
+  const parts = [`${agents.length} agents finished`, uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `${fmtOut(tokens)} tokens`, span > 0 && fmtElapsed(span)].filter(Boolean);
+  return (
+    <div className="ml-[34px] pb-1 pt-0.5 text-small text-faint tnum" data-agents-summary>
+      {parts.join(" · ")}
+    </div>
+  );
+}
 
 function ToolStep({ t, cwd, dense, waiting, fresh }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean; fresh?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -575,6 +655,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const models = Object.keys(chat.agents[tool.id]?.models ?? {});
   const fromText = [...new Set(texts.map((t) => t.model).filter(Boolean) as string[])];
   const modelIds = models.length ? models : fromText;
+  const outTokens = Object.values(chat.agents[tool.id]?.models ?? {}).reduce((n, u) => n + u.output, 0);
   const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
   const card = useRef<HTMLDivElement>(null);
   const focus = useStore((st) => st.agentFocus);
@@ -599,15 +680,12 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
             <ModelTag key={m} model={m} />
           ))}
           {running ? (
-            <StatusDot status="busy" size={7} />
-          ) : tool.ok === false ? (
-            <span className="flex items-center gap-1 text-small text-err-text">
-              <IAlert size={14} /> stopped
+            <span className="flex items-center gap-1.5 text-small text-faint">
+              <StatusDot status="busy" size={7} />
+              <LiveClock since={tool.ts} />
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-small text-dim">
-              <ICheck size={14} className="text-faint" /> {fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)}
-            </span>
+            <span className="text-small text-faint tnum">{fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)}</span>
           )}
         </div>
         {shownSteps.length > 0 && (
@@ -630,9 +708,18 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
             <AssistantText text={note.text} streaming={note.streaming} small />
           </div>
         )}
+        {!running && (
+          <div className={cx("flex items-center gap-1.5 border-t border-hairline px-3 py-1.5 text-small tnum", tool.ok === false ? "text-err-text" : "text-faint")} data-agent-result={tool.ok === false ? "failed" : "done"}>
+            {tool.ok === false ? <IAlert size={13} /> : <ICheck size={13} />}
+            <span className={cx("font-medium", tool.ok === false ? "" : "text-dim")}>{tool.ok === false ? "Failed" : "Done"}</span>
+            <span className="text-faint">
+              {[steps.length > 0 && `${steps.length} tool ${steps.length === 1 ? "use" : "uses"}`, outTokens > 0 && `${fmtOut(outTokens)} tokens`, fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)].filter(Boolean).join(" · ")}
+            </span>
+          </div>
+        )}
         {running && shownSteps.length === 0 && !note && (
           <div className="px-3 pb-2">
-            <ThinkingRow since={tool.ts} label="Starting" orb="connecting" />
+            <ThinkingRow since={tool.ts} label="Starting" mood="start" noOrb />
           </div>
         )}
       </div>
@@ -995,17 +1082,15 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
       break;
     }
   }
+  const verb = item.failed ? "Failed after" : item.ok ? "Worked for" : "Stopped after";
+  const parts = [item.tools > 0 && `${item.tools} tool ${item.tools === 1 ? "use" : "uses"}`, item.tokens !== null && `${fmtOut(item.tokens)} tokens`, model && modelLabel(model)].filter(Boolean) as string[];
   return (
-    <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint">
-      {item.ok ? <ICheck size={13} className="text-faint" /> : <IReturn size={13} />}
-      <span>{item.ok ? "Done" : "Stopped"}</span>
-      <span className="tnum">{fmtElapsed(item.durationMs)}</span>
-      {model && (
-        <>
-          <span>·</span>
-          <span>{modelLabel(model)}</span>
-        </>
-      )}
+    <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
+      {item.failed ? <IAlert size={13} className="text-err-text" /> : item.ok ? <ICheck size={13} className="text-faint" /> : <IReturn size={13} />}
+      <span className={cx("font-medium", item.failed ? "text-err-text" : "text-dim")}>
+        {verb} <span className="tnum">{fmtElapsed(item.durationMs)}</span>
+      </span>
+      {parts.length > 0 && <span>· {parts.join(" · ")}</span>}
     </div>
   );
 }

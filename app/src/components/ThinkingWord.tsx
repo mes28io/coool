@@ -7,11 +7,28 @@
 // stretch); `origin` is latched per seed. Pass `cycle={false}` when the stretch start is only an
 // estimate: the one stable word of that stretch is shown and never changes.
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { THINKING_WORD_MS, thinkingWordAt } from "../lib/format";
 import { cx } from "./primitives";
 import { reducedMotion, Reveal } from "./StepRail";
 
-export function ThinkingWord({ seed, origin, cycle = true, className }: { seed: number | string | null | undefined; origin: number | null; cycle?: boolean; className?: string }) {
+export function ThinkingWord({
+  seed,
+  origin,
+  words,
+  cycle = true,
+  className,
+  tone,
+}: {
+  seed: number | string | null | undefined;
+  origin: number | null;
+  /** The words of the current activity (see lib/activityMood.ts); the sequence cycles within this list only. */
+  words: readonly string[];
+  cycle?: boolean;
+  className?: string;
+  /** Shimmer colours (CSS values) for the word. */
+  tone?: { base?: string; hi?: string };
+}) {
   const step = THINKING_WORD_MS;
   // Reduced motion: one word per stretch, no cycling.
   const cycling = cycle && !reducedMotion();
@@ -31,21 +48,22 @@ export function ThinkingWord({ seed, origin, cycle = true, className }: { seed: 
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, base, cycling]);
-  const word = thinkingWordAt(seed, cycling ? n : 0) || "Thinking";
+  const word = thinkingWordAt(seed, cycling ? n : 0, words) || "Thinking";
   const first = useRef(word);
+  const shimmerStyle = { ["--shimmer-hi" as string]: tone?.hi ?? "var(--text)", ...(tone?.base ? { ["--shimmer-base" as string]: tone.base } : {}) } as CSSProperties;
   return (
     <span className={cx("inline-block whitespace-nowrap", className)}>
       {/* A new word replaces the old one outright (never both on screen), then sweeps in. No opacity animation on a wrapper here:
           the shimmer paints the text through background-clip, and a composited child layer would hide it. */}
-      <Reveal key={word} text={word} fresh={word !== first.current} />
+      <Reveal key={word} text={word} fresh={word !== first.current} inner={{ className: "shimmer", style: shimmerStyle }} />
     </span>
   );
 }
 
 /** The trailing "…": three dots lighting up in turn. Static under reduced motion. Fixed width, so nothing after it moves. */
-export function ThinkingDots({ className }: { className?: string }) {
+export function ThinkingDots({ className, color }: { className?: string; color?: string }) {
   return (
-    <span className={cx("think-dots inline-flex shrink-0 text-dim", className)}>
+    <span className={cx("think-dots inline-flex shrink-0", !color && "text-dim", className)} style={color ? { color } : undefined}>
       <span className="sr-only">…</span>
       <span aria-hidden>.</span>
       <span aria-hidden>.</span>

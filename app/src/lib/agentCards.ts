@@ -43,6 +43,8 @@ export interface AgentCardData {
   labelTool: string | null;
   /** Epoch ms the current step began; null when unknown. */
   since: number | null;
+  /** Epoch ms the agent began (its first step); null when unknown. */
+  startedAt: number | null;
   /** Every tool step, oldest first. */
   steps: CardStep[];
   /** Index of the step in progress, or -1. */
@@ -115,6 +117,7 @@ function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provi
     label: now.label,
     labelTool: now.name,
     since: end,
+    startedAt: first,
     steps,
     active: running && steps.length ? steps.length - 1 : -1,
     durationMs: first !== null && end !== null ? Math.max(0, end - first) : null,
@@ -182,6 +185,7 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
     label,
     labelTool: run >= 0 ? steps[run].name : null,
     since: live ? (run >= 0 ? tools[run].ts : lastEnd) : end,
+    startedAt: tool.ts,
     steps,
     active: live ? run : -1,
     durationMs: tool.endTs !== null ? Math.max(0, tool.endTs - tool.ts) : null,

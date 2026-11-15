@@ -3,7 +3,7 @@
 // Used by the step lists in Chat and Activity.
 
 import { motion } from "motion/react";
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cx, ease } from "./primitives";
 
 export const reducedMotion = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -17,25 +17,20 @@ export const RAIL = "color-mix(in oklab, var(--border) 45%, var(--faint))";
 /** Past dots: neutral and light. */
 export const DOT = "color-mix(in oklab, var(--faint) 60%, var(--border))";
 
-/** Text whose characters fade in from faint to full in a soft left-to-right sweep (~400ms). */
-export function Reveal({ text, fresh }: { text: string; fresh?: boolean }) {
+/**
+ * Text that arrives with a soft left-to-right sweep (~420ms). The text is ONE text node for its whole life
+ * (never per-character spans, which change kerning and advances), and the sweep is a mask on its wrapper, so
+ * glyph positions are identical before, during and after. `inner` is for text that carries its own
+ * `background-clip: text` treatment (the shimmer): it must sit inside the masked wrapper, not outside it.
+ */
+export function Reveal({ text, fresh, inner }: { text: string; fresh?: boolean; inner?: { className?: string; style?: CSSProperties } }) {
   const [on, setOn] = useState(() => !!fresh && text.length > 0 && !reducedMotion());
   useEffect(() => {
     if (!on) return;
-    const t = setTimeout(() => setOn(false), 640);
+    const t = setTimeout(() => setOn(false), 520);
     return () => clearTimeout(t);
   }, [on]);
-  if (!on) return <>{text}</>;
-  const chars = [...text];
-  return (
-    <span aria-label={text}>
-      {chars.map((c, i) => (
-        <span key={i} aria-hidden className="cp-ch" style={{ animationDelay: `${Math.round((i / chars.length) * 200)}ms` }}>
-          {c}
-        </span>
-      ))}
-    </span>
-  );
+  return <span className={on ? "rv-sweep" : undefined}>{inner ? <span className={inner.className} style={inner.style}>{text}</span> : text}</span>;
 }
 
 const Ready = createContext<{ current: boolean }>({ current: true });

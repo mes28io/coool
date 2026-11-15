@@ -101,6 +101,7 @@ export const IGear = mk(
     <circle cx="8" cy="8" r="4.25" />
   </>,
 );
+export const IArrowDown = mk(<path d="M8 3v9.5M4 8.5l4 4 4-4" />);
 export const IArrowUp = mk(<path d="M8 13V3.5M4 7.5l4-4 4 4" />);
 
 export const IHome = mk(<path d="M2.75 7.25L8 2.75l5.25 4.5V12.5a.75.75 0 01-.75.75H10V9.5H6v3.75H3.5a.75.75 0 01-.75-.75z" />);

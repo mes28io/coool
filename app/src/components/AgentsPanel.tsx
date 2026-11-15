@@ -5,14 +5,14 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { countsText, fmtOut, orderCards, type AgentCardData } from "../lib/agentCards";
 import { useNow } from "../lib/clock";
-import { fmtElapsed, thinkingOrbState } from "../lib/format";
+import { fmtClock, fmtElapsed } from "../lib/format";
+import { MOODS, toolMood } from "../lib/activityMood";
 import { modelLabel } from "../lib/models";
 import { useStableOrder } from "../lib/stable";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
-import { ThinkOrb } from "./ThinkOrb";
 import { ICheck, IChevron, ISpark, toolIcon } from "./icons";
 import { cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
-import { Reveal, reducedMotion } from "./StepRail";
+import { reducedMotion } from "./StepRail";
 
 /** Finished cards shown before "Show N more". */
 const DONE_CAP = 6;
@@ -114,10 +114,18 @@ export function AgentsPanel({
 function Timer({ since, className }: { since: number | null; className?: string }) {
   const now = useNow();
   if (since === null) return null;
-  const s = Math.max(0, Math.floor((now - since) / 1000));
+  if (since > now + 5000) return null;
+  return <span className={cx("tnum", className)}>{fmtClock(now - since)}</span>;
+}
+
+/** The agent's total time at the top right: ticking while it runs (from its first step), final once done. */
+function CardTotal({ card }: { card: AgentCardData }) {
+  const now = useNow();
+  const ms = card.state === "running" || card.state === "needs" ? (card.startedAt !== null && card.startedAt <= now + 5000 ? now - card.startedAt : null) : card.durationMs;
+  if (ms === null) return null;
   return (
-    <span className={cx("tnum", className)}>
-      {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
+    <span className="shrink-0 text-small text-faint tnum" title="Total time" data-card-total>
+      {fmtClock(ms)}
     </span>
   );
 }
@@ -173,18 +181,14 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
             {[card.model ? modelLabel(card.model) : null, card.kind].filter(Boolean).join(" · ")}
           </div>
         </div>
-        {card.tokens > 0 && (
-          <span className="shrink-0 text-small text-faint tnum" title="Output tokens">
-            {fmtOut(card.tokens)}
-          </span>
-        )}
+        <CardTotal card={card} />
         <Pill card={card} />
         <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="-mr-1 flex size-[20px] shrink-0 items-center justify-center text-faint" title={collapsed ? "Expand" : "Collapse"}>
           <IChevron size={14} />
         </motion.span>
       </div>
       <div className="px-3 pb-2.5 pt-1.5">
-        <Strip card={card} fresh={ready} />
+        <Strip card={card} />
       </div>
       <AnimatePresence initial={false}>
         {!collapsed && (
@@ -195,6 +199,7 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
               <div className="mt-1.5 flex h-[24px] items-center gap-2 text-small text-faint">
                 <span className="tnum">
                   {card.steps.length} {card.steps.length === 1 ? "step" : "steps"}
+                  {card.tokens > 0 && <> · {fmtOut(card.tokens)} tokens</>}
                 </span>
                 <span className="flex-1" />
                 {card.stoppable && (
@@ -215,8 +220,7 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
 }
 
 /** The "now" strip. */
-export function Strip({ card, fresh }: { card: AgentCardData; fresh: { current: boolean } }) {
-  const Icon = card.labelTool ? toolIcon(card.labelTool) : ISpark;
+export function Strip({ card }: { card: AgentCardData; fresh?: { current: boolean } }) {
   const base = "flex h-[34px] items-center gap-2 rounded-[8px] bg-raised px-2.5 text-base";
   if (card.state === "done")
     return (
@@ -242,33 +246,30 @@ export function Strip({ card, fresh }: { card: AgentCardData; fresh: { current: 
         {card.state === "needs" && <Timer since={card.since} className="shrink-0 text-small text-faint" />}
       </div>
     );
-  if (!card.labelTool) return <ThinkingStrip card={card} className={base} />;
-  return (
-    <div className={base}>
-      <Icon size={13} className="shrink-0 text-working-text" />
-      <span className="min-w-0 flex-1 truncate font-medium text-fg" title={card.label}>
-        <Reveal key={card.label} text={card.label} fresh={fresh.current} />
-      </span>
-      <Timer since={card.since} className="shrink-0 text-small text-faint" />
-    </div>
-  );
+  return <NowStrip card={card} className={base} />;
 }
 
-/** The strip while the agent is thinking. Word and orb are fixed when the stretch starts: card data is rebuilt about once a second and must not move them. */
-function ThinkingStrip({ card, className }: { card: AgentCardData; className: string }) {
-  const stretch = useRef({ seed: `${card.id}:${card.since ?? Date.now()}`, at: card.since ?? Date.now() }).current;
+/**
+ * The strip while the agent runs: the same orb + word as everywhere (from what it is doing), then the step's detail.
+ * Seeded by the card and its step count (fixed while one activity lasts), so the once-a-second card rebuild cannot move them.
+ */
+function NowStrip({ card, className }: { card: AgentCardData; className: string }) {
+  const mood = card.labelTool ? toolMood(card.labelTool) : "think";
+  const Icon = card.labelTool ? toolIcon(card.labelTool) : ISpark;
+  const seed = `${card.id}:${card.steps.length}:${mood}`;
+  const [mounted] = useState(() => Date.now());
+  const detail = card.labelTool ? card.label.replace(new RegExp(`^${card.labelTool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i"), "") : "";
   return (
     <div className={className}>
-      <span className="-mx-[3.5px] flex shrink-0">
-        <ThinkOrb state={thinkingOrbState(stretch.seed)} size={20} />
-      </span>
-      <span className="flex min-w-0 flex-1 font-medium">
-        <span className="shimmer min-w-0 truncate" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
-          <ThinkingWord seed={stretch.seed} origin={stretch.at} cycle={card.since !== null} />
+      {/* Subagents get words, not orbs: the tool icon keeps its slot. */}
+      {card.labelTool ? <Icon size={13} className="shrink-0 text-working-text" /> : <ISpark size={13} className="shrink-0 text-working-text" />}
+      <span className="flex min-w-0 flex-1 items-baseline">
+        <span className="inline-flex shrink-0 font-medium">
+          <ThinkingWord seed={seed} origin={card.since ?? mounted} words={MOODS[mood].words} cycle={card.since !== null} />
+          <ThinkingDots />
         </span>
-        <ThinkingDots />
+        {detail && <span className="ml-2 min-w-0 truncate font-mono text-mono-small text-dim" title={card.label}>{detail}</span>}
       </span>
-      <Timer since={card.since} className="shrink-0 text-small text-faint" />
     </div>
   );
 }

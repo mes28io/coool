@@ -268,10 +268,10 @@ export function SessionView({
                       onResume={session && !chatLive && !running ? () => resumeSession(session, leaf) : undefined}
                     />
                   ) : session ? (
-                    <Timeline session={session} compact={compact} live={liveTime(since, session.updated)} />
+                    <Timeline session={session} compact={compact} live={liveTime(since, session.updated, session.activity)} />
                   ) : (
                     <div className="flex h-full items-center justify-center">
-                      <ThinkingRow since={starting?.started ?? null} label={`Starting ${provider} in ${folderName(cwd)}`} orb="connecting" big />
+                      <ThinkingRow since={starting?.started ?? null} label={`Starting ${provider} in ${folderName(cwd)}`} mood="start" big />
                     </div>
                   )}
                 </motion.div>

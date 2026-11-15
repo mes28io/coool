@@ -2,7 +2,9 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
 import { useNow } from "../lib/clock";
 import { useChats } from "../lib/chat";
-import { ago, displayTitle, folderName, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, thinkingOrbState } from "../lib/format";
+import { ago, displayTitle, folderName, fmtElapsed, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
+import { turnTotals } from "../lib/turn";
+import { MOODS, moodOfCurrent } from "../lib/activityMood";
 import { attention, useChatDigest, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
@@ -13,7 +15,7 @@ import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { ThinkOrb } from "./ThinkOrb";
 import { IPlay, IPlus, ISpark, toolIcon } from "./icons";
 import { Wordmark } from "./Wordmark";
-import { AutoTag, Button, ContextMeter, cx, Elapsed, ease, Kbd, PathText, ProviderMark, softSpring, StatusDot, statusLabel } from "./primitives";
+import { AutoTag, Button, ContextMeter, cx, Elapsed, ease, LiveClock, Kbd, PathText, ProviderMark, softSpring, StatusDot, statusLabel } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { CardSkeleton, RecentSkeleton, Skel } from "./Skeletons";
 
@@ -121,7 +123,12 @@ function useCardSince(s: Session): { at: number; approx: boolean } {
     return c.stateSince;
   });
   if (chatAt !== null) return { at: chatAt, approx: false };
-  return since ? { at: since.currentAt, approx: !since.currentObserved } : { at: s.updated, approx: true };
+  if (since?.currentObserved) return { at: since.currentAt, approx: false };
+  // Not observed: the last activity entry's own stamp is exact (see liveTime in Activity.tsx).
+  const last = s.activity[s.activity.length - 1];
+  const stamp = last ? tsToMs(last.ts) : null;
+  if (stamp !== null && stamp <= Date.now() + 5000) return { at: stamp, approx: false };
+  return since ? { at: since.currentAt, approx: true } : { at: s.updated, approx: true };
 }
 
 function CardModel({ s }: { s: Session }) {
@@ -172,7 +179,10 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
   const CurIcon = cur ? toolIcon(cur.name) : ISpark;
   const since = useCardSince(s);
   // Fixed for the whole thinking stretch; an estimated start (it moves with refreshes) must not drive the word.
-  const stretchSeed = since.approx ? sessionKey(s) : since.at;
+  const mood = moodOfCurrent(thinking ? null : s.current, 0);
+  const turn = useMemo(() => turnTotals(s), [s]);
+  const worked = turn.startMs !== null && turn.endMs !== null && turn.endMs > turn.startMs ? turn.endMs - turn.startMs : 0;
+  const stretchSeed = `${since.approx ? sessionKey(s) : since.at}:${mood.mood}`;
   const running = att.agents;
   const ranCount = running.length ? 0 : s.agents.length;
   const jobs = s.live_children ?? 0;
@@ -224,32 +234,34 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
           </span>
         ) : busy ? (
           <>
-            {thinking && !pending ? (
-              <span className="-mx-[2.5px] flex shrink-0">
-                <ThinkOrb state={thinkingOrbState(stretchSeed)} size={20} live={i < MAX_LIVE_ORBS} />
-              </span>
-            ) : (
+            {pending ? (
               <CurIcon size={15} className="shrink-0 text-dim" />
+            ) : (
+              <span className="-mx-[2.5px] flex shrink-0">
+                <ThinkOrb state={MOODS[mood.mood].orb} size={20} live={i < MAX_LIVE_ORBS} />
+              </span>
             )}
             <span className="min-w-0 flex-1 truncate">
-              {cur ? (
-                <>
-                  <span className="font-medium text-fg/90">{cur.name}</span> <span className="font-mono text-mono-small text-dim">{shortDetail(cur.detail)}</span>
-                </>
-              ) : pending ? (
+              {pending ? (
                 <Skel w="60%" h={9} className="inline-block align-middle" />
               ) : (
-                <span className="inline-flex font-medium"><span className="shimmer"><ThinkingWord seed={stretchSeed} origin={since.at} cycle={!since.approx} /></span><ThinkingDots /></span>
+                <>
+                  <span className="inline-flex font-medium">
+                    <ThinkingWord seed={stretchSeed} origin={since.at} words={MOODS[mood.mood].words} cycle={!since.approx} />
+                    <ThinkingDots />
+                  </span>
+                  {cur && <span className="ml-2 font-mono text-mono-small text-dim">{shortDetail(cur.detail)}</span>}
+                </>
               )}
             </span>
-            {!pending && <Elapsed since={since.at} approx={since.approx} className="shrink-0 text-small text-faint" />}
+            {!pending && <LiveClock since={since.approx ? null : since.at} className="shrink-0 text-small text-faint" />}
           </>
         ) : headline ? (
           <span className="min-w-0 flex-1 truncate text-dim" title={headline}>
             {headline}
           </span>
         ) : (
-          <span className="min-w-0 flex-1 truncate text-dim">Waiting for you · {ago(s.updated, now)}</span>
+          <span className="min-w-0 flex-1 truncate text-dim" title={`Waiting for you · ${ago(s.updated, now)}`}>{worked ? `Waiting for you · worked ${fmtElapsed(worked)}` : `Waiting for you · ${ago(s.updated, now)}`}</span>
         )}
       </div>
 

@@ -1,11 +1,13 @@
 // Standalone demo pages for the browser build: `?ledger=demo` (Ledger with a working
 // in-memory undo). Mounted from main.tsx in place of the app.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ThinkingOrb, type OrbState } from "thinking-orbs";
 import { IBell, IGlobe, IFile, IGear } from "./icons";
-import { ThinkingRow } from "./Activity";
-import { ThinkingBlock } from "./Chat";
+import { ThinkingRow, Timeline } from "./Activity";
+import { MOODS, type Mood } from "../lib/activityMood";
+import { ThinkOrb } from "./ThinkOrb";
+import { Reveal } from "./StepRail";
 import { Strip } from "./AgentsPanel";
 import { Ledger, type LedgerChange } from "./Ledger";
 import { PlanCard, type PlanPhase, type PlanStep } from "./PlanCard";
@@ -157,33 +159,45 @@ export function OrbsDemo() {
     return () => cancelAnimationFrame(raf);
   }, [n]);
   const [t0] = useState(() => Date.now());
-  const [done, setDone] = useState(false);
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    // Card data is rebuilt about once a second in the app: do the same here to prove the word does not follow it.
     const t = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => {
-    if (!/[?&]row/.test(q)) return;
-    const t = setTimeout(() => setDone(true), 5000);
-    return () => clearTimeout(t);
-  }, [q]);
+  if (/[?&]rv(&|$)/.test(q)) return <RevealProbe dark={dark} />;
+  if (/[?&]ro(&|$)/.test(q)) return <ReadOnlyTour dark={dark} />;
+  if (/[?&]sz(&|$)/.test(q))
+    return (
+      <div className="min-h-screen bg-bg p-8 text-fg">
+        {(["searching", "composing", "working", "solving", "weaving", "shaping"] as OrbState[]).map((st) => (
+          <div key={st} className="flex items-center gap-8 py-3 text-prose">
+            <span className="w-28 text-small text-dim">{st}</span>
+            <ThinkOrb state={st} size={28} from={20} />
+            <span className="w-20 text-small text-faint">28 from 20</span>
+            <ThinkOrb state={st} size={28} from={64} />
+            <span className="w-20 text-small text-faint">28 from 64</span>
+            <ThinkOrb state={st} size={20} />
+            <span className="text-small text-faint">20</span>
+          </div>
+        ))}
+      </div>
+    );
   if (/[?&]row/.test(q))
     return (
       <div className="min-h-screen bg-bg p-8 text-fg">
-        <div className="mx-auto flex max-w-[700px] flex-col gap-4">
-          <ThinkingRow since={t0} />
-          {/* read-only session cases: estimated start that moves with every refresh, no start at all, a stretch 2 minutes old */}
-          <ThinkingRow since={t0 - 120_000 + tick * 1000} approx />
-          <ThinkingRow since={null} approx />
-          <ThinkingRow since={t0 - 120_000} />
-          <div className="w-[320px]">
-            <Strip card={{ state: "running", labelTool: null, label: `Churn${tick}`, since: t0 + tick * 40, id: "agent-1" } as never} fresh={{ current: false }} />
+        <div className="mx-auto flex max-w-[700px] flex-col gap-1">
+          {(Object.keys(MOODS) as Mood[]).map((m, k) => (
+            <ThinkingRow key={m} since={t0 - (k * 17 + 7) * 1000} mood={m} detail={["think", "plan", "start", "compact", "delegate"].includes(m) ? "" : "cargo test -p core -- --nocapture"} large />
+          ))}
+          <ThinkingRow since={null} mood="think" large />
+          <div className="mt-4 w-[320px]">
+            <Strip card={{ state: "running", labelTool: "Bash", label: `Bash cargo test`, since: t0 + tick * 40, id: "agent-1", steps: [] } as never} />
           </div>
-          <ThinkingRow since={t0} label="Starting claude in coool" orb="connecting" />
-          <ThinkingRow since={t0} label="Starting claude in coool" orb="connecting" big />
-          <ThinkingBlock item={{ kind: "thinking", key: "t", id: "t", ts: t0, endTs: done ? t0 + 4000 : null, text: "Weighing two ways to do this.\nThe second is simpler.", parent: null }} />
+          <div className="w-[320px]">
+            <Strip card={{ state: "running", labelTool: null, label: `Churn${tick}`, since: t0 + tick * 40, id: "agent-2", steps: [] } as never} />
+          </div>
+          <ThinkingRow since={t0} label="Starting claude in coool" mood="start" />
+          <ThinkingRow since={t0} label="Starting claude in coool" mood="start" big />
         </div>
       </div>
     );
@@ -216,4 +230,88 @@ export function OrbsDemo() {
 export function demoPage(): "ledger" | "plan" | "orbs" | null {
   const q = location.search;
   return /[?&]ledger=demo/.test(q) ? "ledger" : /[?&]plan=demo/.test(q) ? "plan" : /[?&]orbs=demo/.test(q) ? "orbs" : null;
+}
+
+/** Measures the Reveal sweep: element width and three glyph rects at every 30ms for 700ms after each new word. */
+function RevealProbe({ dark }: { dark: boolean }) {
+  const words = ["Deliberating", "Orchestrating", "Chiselling", "Contemplating"];
+  const [i, setI] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  const [log, setLog] = useState<string[]>([]);
+  useEffect(() => {
+    const t = setInterval(() => setI((x) => x + 1), 2000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (i === 0) return;
+    const rows: string[] = [];
+    const t0 = performance.now();
+    const sample = () => {
+      const el = ref.current;
+      if (!el) return;
+      const node = el.firstChild?.firstChild ?? el.firstChild;
+      const tn = (node && node.nodeType === 3 ? node : el.firstChild) as Text;
+      const rect = (k: number) => {
+        const r = document.createRange();
+        r.setStart(tn, k);
+        r.setEnd(tn, k + 1);
+        const b = r.getClientRects()[0];
+        return b ? `${b.left.toFixed(2)}` : "-";
+      };
+      const len = tn.length ?? 0;
+      rows.push(`${Math.round(performance.now() - t0)}ms w=${el.getBoundingClientRect().width.toFixed(2)} c0=${rect(0)} c${len >> 1}=${rect(len >> 1)} c${len - 1}=${rect(len - 1)} sweep=${!!el.querySelector(".rv-sweep") || el.firstElementChild?.className}`);
+      if (performance.now() - t0 < 700) setTimeout(sample, 30);
+      else setLog((l) => [...l, `-- word ${words[i % words.length]}`, ...rows]);
+    };
+    sample();
+  }, [i]);
+  return (
+    <div className="min-h-screen p-8 text-prose" style={{ background: dark ? "#212121" : "#fff", color: dark ? "#ececec" : "#0d0d0d" }}>
+      <div ref={ref} className="inline-block font-medium">
+        <Reveal key={i} text={words[i % words.length]} fresh={i > 0} />
+      </div>
+      <pre id="fps" className="mt-6 text-small">{log.join("\n")}</pre>
+    </div>
+  );
+}
+
+function hhmmss(t: number) {
+  return new Date(t).toTimeString().slice(0, 8);
+}
+
+/** A read-only session walking through thinking, search, read, edit, shell, subagent, thinking over ~40s, then ending. */
+function ReadOnlyTour({ dark }: { dark: boolean }) {
+  const [step, setStep] = useState(0);
+  const [t0] = useState(() => Date.now());
+  const plan = [
+    { at: 0, current: "thinking…", add: null as string | null },
+    { at: 5, current: "Grep · OutboxQueue", add: "tool|Grep · OutboxQueue" },
+    { at: 10, current: "Read · app/src/sync/outbox.ts", add: "tool|Read · app/src/sync/outbox.ts" },
+    { at: 15, current: "Edit · app/src/sync/outbox.ts", add: "tool|Edit · app/src/sync/outbox.ts" },
+    { at: 20, current: "Bash · cargo test -p core", add: "tool|Bash · cargo test -p core" },
+    { at: 25, current: "Agent · Audit the retry path", add: "agent|Agent · Audit the retry path" },
+    { at: 32, current: "thinking…", add: null },
+    { at: 40, current: null as string | null, add: null },
+  ];
+  useEffect(() => {
+    const t = setInterval(() => setStep(Math.floor((Date.now() - t0) / 1000)), 250);
+    return () => clearInterval(t);
+  }, [t0]);
+  const k = plan.filter((p) => p.at <= step).length - 1;
+  const done = k >= plan.length - 1;
+  const acts = [{ ts: hhmmss(t0 - 3000), kind: "prompt", text: "Make the outbox retry safe" }, ...plan.slice(0, k + 1).filter((p) => p.add).map((p) => ({ ts: hhmmss(t0 + p.at * 1000), kind: p.add!.split("|")[0], text: p.add!.split("|")[1] }))];
+  const session = {
+    key: "tour",
+    status: done ? "idle" : "busy",
+    current: plan[Math.max(0, k)].current,
+    updated: Date.now(),
+    loaded: true,
+    activity: acts,
+    agents: plan[k]?.add?.startsWith("agent") ? [{ id: "a1", kind: "general", description: "Audit the retry path", finished: false, current: null, tokens: { input: 0, cached: 0, output: 0, context: 0 }, activity: [], model: "claude-haiku-5-5", models: [] }] : [],
+  };
+  return (
+    <div className="h-screen bg-bg text-fg" style={{ colorScheme: dark ? "dark" : "light" }}>
+      <Timeline session={session as never} />
+    </div>
+  );
 }

@@ -739,6 +739,64 @@ export class MockChat {
       await this.say("Done: the sync layer is migrated.", gen);
       return;
     }
+    // "tour": one long turn through every activity (thinking, search, read, edit, shell, subagent, thinking), ~40s, for the live indicator.
+    if (/\btour\b/.test(p)) {
+      const think = async (text: string, ms: number) => {
+        const id = `msg_${rid()}`;
+        await this.stream("thinking_delta", id, text, null, gen);
+        await this.sleep(ms, gen);
+      };
+      await think("Let me work out where the retry logic lives before touching anything.", 4500);
+      await this.tool(gen, "Grep", "OutboxQueue", { pattern: "OutboxQueue" }, 5000, "12 matches in 4 files");
+      await this.tool(gen, "Read", `${cwd}/${f.a}`, { file_path: `${this.cwd}/${f.a}` }, 5000, "214 lines");
+      await this.tool(gen, "Edit", `${cwd}/${f.b}`, { file_path: `${this.cwd}/${f.b}` }, 5000, "Updated 3 hunks");
+      await this.tool(gen, "Bash", "cargo test -p core", { command: "cargo test -p core" }, 5000, "ok");
+      const agentId = `toolu_${rid()}`;
+      this.agentModel.set(agentId, "claude-haiku-5-5");
+      this.emit({ type: "tool_start", id: agentId, name: "Task", summary: "Audit the retry path", input: { subagent_type: "Explore", description: "Audit the retry path" }, parent_tool_id: null });
+      await this.sleep(6000, gen);
+      this.emit({ type: "tool_end", id: agentId, ok: true, output: "No other callers." });
+      await think("The audit found nothing else; time to decide whether to ship.", 4500);
+      await this.say("Done: the retry is safe and the tests pass.", gen);
+      return;
+    }
+    // "long": one long streaming reply (~25s), for the scrolling rules; "long ask" then asks to run a command.
+    if (/\blong\b/.test(p)) {
+      const para = (k: number) => `Section ${k + 1}. The outbox keeps every queued mutation in order, tags it with a monotonically increasing sequence number, and only acknowledges a batch once the server has confirmed the highest one, so a crash between two writes can never reorder or drop a change.`;
+      await this.say(Array.from({ length: 14 }, (_, k) => para(k)).join("\n\n"), gen);
+      if (/\bneeds\b/.test(p)) await this.tool(gen, "Bash", "npm test", { command: "npm test" }, 1200, "ok", { ask: true });
+      await this.say("That is the whole picture.", gen);
+      return;
+    }
+    // "crew": four subagents work in parallel with their own steps, then the main agent wraps up.
+    if (/\bcrew\b/.test(p)) {
+      await this.say("Splitting this across four agents.", gen, { think: "Four independent questions; they can run side by side." });
+      const sub = "claude-haiku-5-5";
+      const jobs: [string, [string, string, number][]][] = [
+        ["Survey the sync engine", [["Glob", "src/sync/**/*.ts", 1400], ["Read", "src/sync/outbox.ts", 2200], ["Grep", "drain\\(", 1600]]],
+        ["Audit the retry path", [["Grep", "retry|backoff", 1800], ["Read", "src/sync/retry.ts", 2600]]],
+        ["Check the test coverage", [["Glob", "tests/**/*", 1200], ["Read", "tests/outbox.test.ts", 2400], ["Bash", "cargo test -p core --no-run", 3200], ["Grep", "#\\[test\\]", 1500]]],
+        ["Review the API surface", [["Read", "src/api/mod.rs", 2000], ["Grep", "pub fn", 1700], ["Read", "src/api/client.rs", 2300]]],
+      ];
+      await Promise.all(
+        jobs.map(async ([desc, steps], k) => {
+          const agentId = `toolu_${rid()}`;
+          this.agentModel.set(agentId, sub);
+          await this.sleep(250 * k, gen);
+          this.emit({ type: "tool_start", id: agentId, name: "Task", summary: desc, input: { subagent_type: k % 2 ? "Explore" : "general-purpose", description: desc }, parent_tool_id: null });
+          try {
+            for (const [name, sm, ms] of steps) await this.tool(gen, name, sm, name === "Bash" ? { command: sm } : {}, ms, "ok", { parent: agentId });
+            await this.say(`${desc}: nothing blocking found.`, gen, { parent: agentId, model: sub });
+          } catch (e) {
+            this.emit({ type: "tool_end", id: agentId, ok: false, output: "Interrupted" });
+            throw e;
+          }
+          this.emit({ type: "tool_end", id: agentId, ok: true, output: `${desc}: nothing blocking found.` });
+        }),
+      );
+      await this.say("All four agents are done: nothing blocks the change, and I know where the retry belongs.", gen);
+      return;
+    }
     // Plan scenarios: "todo" (agent task list; "todo stop" ends with steps left), "codex plan" (update_plan), "plan mode" (ExitPlanMode approval).
     if (/\bcodex plan\b/.test(p)) return this.planDemo(gen, "update_plan");
     if (/\btodo\b/.test(p)) return this.planDemo(gen, "TodoWrite", /\bstop\b/.test(p));

@@ -103,12 +103,13 @@ export function tsToMs(ts: string, now = Date.now()): number | null {
   return t;
 }
 
+/** Every elapsed time in the app, live or finished: 7s, 2m 23s, 5m 0s, 1h 2m 23s (no zero padding, seconds always shown). */
 export function fmtElapsed(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
-  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m ${s % 60}s`;
 }
 
 /** For estimated durations: coarse on purpose, never seconds. */
@@ -154,31 +155,29 @@ export function thinkingWord(seed: number | string | null | undefined): string {
   return THINKING_WORDS[(h >>> 0) % THINKING_WORDS.length];
 }
 
-/** The orb animation for a thinking stretch: stable for the stretch, like `thinkingWord`. */
-export type ThinkOrbState = "working" | "searching" | "solving" | "connecting" | "weaving" | "composing" | "shaping";
-const THINK_ORBS: ThinkOrbState[] = ["working", "solving", "weaving", "composing", "shaping"];
-export function thinkingOrbState(seed: number | string | null | undefined, tool?: string | null): ThinkOrbState {
-  if (tool && /search|grep|glob|read|fetch|find|list/i.test(tool)) return "searching";
-  const str = "orb" + String(seed ?? 0);
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
-  return THINK_ORBS[(h >>> 0) % THINK_ORBS.length];
-}
-
 /**
  * The n-th word of a thinking stretch: n = 0 is `first` (default `thinkingWord(seed)`), later ones
  * are seeded by the stretch and never repeat the one before. Deterministic, so two views of the
  * same stretch show the same word at the same moment.
  */
-export function thinkingWordAt(seed: number | string | null | undefined, n: number, first?: string): string {
-  let w = first ?? thinkingWord(seed);
+export function thinkingWordAt(seed: number | string | null | undefined, n: number, words: readonly string[] = THINKING_WORDS): string {
+  const pick = (key: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+    return words[(h >>> 0) % words.length];
+  };
+  let w = pick(String(seed ?? 0));
+  if (words.length < 2) return w;
   for (let i = 1; i <= n; i++) {
-    let next = thinkingWord(`${seed}:${i}`);
-    for (let k = 1; next === w; k++) next = thinkingWord(`${seed}:${i}:${k}`);
+    let next = pick(`${seed}:${i}`);
+    for (let k = 1; next === w; k++) next = pick(`${seed}:${i}:${k}`);
     w = next;
   }
   return w;
 }
+
+/** The live-timer name for the same formatter. */
+export const fmtClock = fmtElapsed;
 
 /** How long a thinking word stays before the next one sweeps in. The one place to tune the cadence. */
 export const THINKING_WORD_MS = 8000;

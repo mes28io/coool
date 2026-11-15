@@ -46,7 +46,7 @@ export type ChatItem =
     }
   | { kind: "question"; key: string; requestId: string; questions: Question[]; ts: number; answer: QuestionAnswer | null; answeredTs: number | null }
   | { kind: "notice"; key: string; level: "info" | "warn" | "error"; text: string; needsTerminal: boolean; ts: number }
-  | { kind: "turn"; key: string; ts: number; durationMs: number; ok: boolean }
+  | { kind: "turn"; key: string; ts: number; durationMs: number; ok: boolean; failed: boolean; tools: number; tokens: number | null }
   | { kind: "exited"; key: string; ts: number; code: number | null };
 
 /** A steering note: text sent to the agent while it works (see lib/steer.ts). */
@@ -110,6 +110,8 @@ export interface Chat {
   seq: number;
   /** Epoch ms the current turn started (from event timestamps), null when idle. */
   turnStart: number | null;
+  /** Output tokens (chat total) when the turn began, to get the turn's own. */
+  turnOut0: number;
   /** Epoch ms of the last event of any kind. */
   lastTs: number;
   /** Epoch ms the run state last changed. */
@@ -158,6 +160,7 @@ export function emptyChat(id: number, info?: Partial<ChatInfo>): Chat {
     items: [],
     seq: 0,
     turnStart: null,
+    turnOut0: 0,
     lastTs: Date.now(),
     stateSince: Date.now(),
     context: 0,
@@ -260,7 +263,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           if (!n.asPrompt && e.steer !== false) break;
         }
         its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts });
-        c = { ...c, prompts: c.prompts[c.prompts.length - 1] === e.text ? c.prompts : [...c.prompts, e.text].slice(-200), turnStart: c.turnStart ?? e.ts };
+        c = { ...c, prompts: c.prompts[c.prompts.length - 1] === e.text ? c.prompts : [...c.prompts, e.text].slice(-200), turnStart: c.turnStart ?? e.ts, turnOut0: c.turnStart === null ? c.tokens.output : c.turnOut0 };
         break;
       }
       case "thinking_delta": {
@@ -392,6 +395,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           pendingQuestion: pq,
           stateSince: c.state === e.state ? c.stateSince : e.ts,
           turnStart: e.state === "idle" ? null : (c.turnStart ?? e.ts),
+          turnOut0: e.state !== "idle" && c.turnStart === null ? c.tokens.output : c.turnOut0,
         };
         break;
       }
@@ -407,7 +411,20 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
             if (it.kind === "thinking" && it.endTs === null) patch(i, { endTs: e.ts });
           }
         }
-        its().push({ kind: "turn", key, ts: e.ts, durationMs: e.duration_ms, ok: e.ok });
+        {
+          // What the turn consumed: steps since the previous turn ended (subagents' included), an error notice makes it "failed".
+          const a = items ?? c.items;
+          let tools = 0;
+          let failed = false;
+          for (let i = a.length - 1; i >= 0; i--) {
+            const it = a[i];
+            if (it.kind === "turn") break;
+            if (it.kind === "tool") tools++;
+            if (it.kind === "notice" && it.level === "error") failed = true;
+          }
+          const out = c.tokens.output - c.turnOut0;
+          its().push({ kind: "turn", key, ts: e.ts, durationMs: e.duration_ms, ok: e.ok, failed, tools, tokens: out > 0 ? out : null });
+        }
         // Notes the agent never reached arrive as `steer` events with state "unused" (they wait for the person).
         c = { ...c, turnStart: null };
         break;

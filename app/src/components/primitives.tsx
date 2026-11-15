@@ -1,7 +1,7 @@
 import { animate, AnimatePresence, motion, useMotionValue, useTransform } from "motion/react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import type { Provider, Status } from "../lib/types";
-import { homeShort, fmtApprox, fmtElapsed, fmtTokens } from "../lib/format";
+import { homeShort, fmtApprox, fmtClock, fmtElapsed, fmtTokens } from "../lib/format";
 import { useNow } from "../lib/clock";
 import { contextWindow } from "../lib/models";
 import claudeSvg from "../assets/brands/claude.svg?raw";
@@ -112,6 +112,20 @@ export function Ticker({ value, format = fmtTokens, className }: { value: number
  * A live timer. `approx` marks a start time that was estimated rather than
  * observed: it renders coarse ("~3m", "<1m") and never ticks seconds.
  */
+/**
+ * Exact elapsed time as m:ss (h:mm:ss past an hour), ticking every second. Hidden, never guessed, when there is
+ * no start, or the start is in the future by more than a few seconds (clock skew); a small future skew clamps to 0.
+ */
+export function LiveClock({ since, className, title }: { since: number | null; className?: string; title?: string }) {
+  const now = useNow();
+  if (since === null || !Number.isFinite(since) || since > now + 5000) return null;
+  return (
+    <span className={cx("tnum", className)} title={title}>
+      {fmtClock(now - since)}
+    </span>
+  );
+}
+
 export function Elapsed({ since, approx, className }: { since: number | null; approx?: boolean; className?: string }) {
   const now = useNow();
   if (since === null) return null;
@@ -435,5 +449,37 @@ export function Button({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * "Scroll to bottom" for a timeline the reader has scrolled up in. Sits centred at the bottom of the timeline pane
+ * (just above the composer). `fresh`: new output arrived while away (dot + label); `needs`: an approval/question
+ * arrived (blue, "Needs you"). Position it inside a `relative` wrapper around the scroller.
+ */
+export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; fresh: boolean; needs: boolean; onClick: () => void }) {
+  const label = needs ? "Needs you" : fresh ? "New output" : null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center">
+      <button
+        type="button"
+        onClick={onClick}
+        tabIndex={away ? 0 : -1}
+        aria-hidden={!away}
+        title={label ?? "Scroll to bottom"}
+        data-jump-bottom={needs ? "needs" : fresh ? "new" : "idle"}
+        className={cx(
+          "inline-flex h-[30px] items-center gap-1.5 rounded-full border bg-bg px-2.5 text-small font-medium shadow-pop transition-[opacity,transform] duration-200",
+          away ? "pointer-events-auto translate-y-0 opacity-100" : "translate-y-1 opacity-0",
+          needs ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))] text-needs-text" : "border-line text-dim hover:text-fg",
+        )}
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 3v9.5M4 8.5l4 4 4-4" />
+        </svg>
+        {label}
+        {fresh && !needs && <span className="size-[6px] rounded-full bg-working" />}
+      </button>
+    </div>
   );
 }

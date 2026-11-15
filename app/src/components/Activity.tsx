@@ -1,15 +1,18 @@
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, Session } from "../lib/types";
-import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, thinkingOrbState, tsToMs } from "../lib/format";
+import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
+import { MOODS, moodOfCurrent, type Mood } from "../lib/activityMood";
 import { useStore, type Since } from "../store";
+import { useNow } from "../lib/clock";
+import { turnTotals } from "../lib/turn";
 import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
-import type { ThinkOrbState } from "../lib/format";
-import { Elapsed, cx, ease, StatusDot } from "./primitives";
+import { Elapsed, JumpToBottom, LiveClock, cx, ease, StatusDot } from "./primitives";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { ThinkOrb } from "./ThinkOrb";
 import { Markdown } from "./Markdown";
 import { ModelTag } from "./Models";
+import { modelLabel } from "../lib/models";
 import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
 import { TimelineSkeleton } from "./Skeletons";
 
@@ -60,8 +63,18 @@ export interface LiveTime {
   at: number;
   approx: boolean;
 }
-export const liveTime = (since: Since | undefined, fallback: number): LiveTime =>
-  since ? { at: since.currentAt, approx: !since.currentObserved } : { at: fallback, approx: true };
+/**
+ * When the current activity began. Best: the change coool observed. Next: the last activity entry's own HH:MM:SS stamp
+ * (local; a long thinking stretch starts right after that entry, a running tool IS that entry). Only with neither is it
+ * an estimate (`approx`), and callers then show no timer. A stamp that lands in the future (clock skew) is not trusted.
+ */
+export const liveTime = (since: Since | undefined, fallback: number, activity?: Activity[]): LiveTime => {
+  if (since?.currentObserved) return { at: since.currentAt, approx: false };
+  const last = activity?.[activity.length - 1];
+  const at = last ? tsToMs(last.ts) : null;
+  if (at !== null && at <= Date.now() + 5000) return { at, approx: false };
+  return since ? { at: since.currentAt, approx: true } : { at: fallback, approx: true };
+};
 
 export function Timeline({ session, compact, live }: { session: Session; compact?: boolean; live?: LiveTime }) {
   const blocks = useMemo(() => buildBlocks(session.activity), [session.activity]);
@@ -69,15 +82,30 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const [away, setAway] = useState(false);
+  const [fresh, setFresh] = useState(false);
   const busy = session.status === "busy";
   const thinking = busy && (isThinking(session.current) || !session.current || blocks[blocks.length - 1]?.type !== "steps");
-  // Never time live work from HH:MM:SS activity stamps (wrong across a long think, and UTC-ish).
-  const lt = live ?? { at: session.updated, approx: true };
+  const lt = live ?? liveTime(undefined, session.updated, session.activity);
+  const turn = useMemo(() => turnTotals(session), [session]);
+  const agentsRunning = session.agents.filter((a) => !a.finished).length;
+  const now = moodOfCurrent(isThinking(session.current) ? null : session.current, 0);
+  // The main agent is doing something of its own unless it is only waiting on subagents.
+  const mainActive = agentsRunning === 0 || isThinking(session.current) || (!!session.current && now.mood !== "delegate");
 
   // Stay pinned to the bottom while the user is there; leave them alone once they scroll up.
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && stick.current) el.scrollTo({ top: el.scrollHeight, behavior: initial.current!.size === blocks.length ? "auto" : "smooth" });
+    if (!el) return;
+    // A new prompt (input) always scrolls to the bottom and re-pins; other new output only follows while pinned.
+    const newest = blocks[blocks.length - 1];
+    const promptArrived = newest?.type === "prompt" && !initial.current!.has(newest.key);
+    if (promptArrived) stick.current = true;
+    if (stick.current) {
+      setAway(false);
+      setFresh(false);
+      el.scrollTo({ top: el.scrollHeight, behavior: initial.current!.size === blocks.length || reducedMotion() ? "auto" : "smooth" });
+    } else setFresh(true);
   }, [blocks.length, session.activity.length, thinking]);
   useEffect(() => {
     const el = scroller.current;
@@ -95,12 +123,16 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   }
 
   return (
+    <div className="relative h-full">
     <div
       ref={scroller}
       className="scroll h-full"
       onScroll={(e) => {
         const el = e.currentTarget;
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        const at = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        stick.current = at;
+        setAway((a) => (a === !at ? a : !at));
+        if (at) setFresh(false);
       }}
     >
       <div className={cx("mx-auto flex max-w-[700px] flex-col pb-10 pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
@@ -126,14 +158,36 @@ export function Timeline({ session, compact, live }: { session: Session; compact
             </motion.div>
           );
         })}
+        {!busy && turn.startMs !== null && turn.endMs !== null && turn.endMs > turn.startMs && blocks[blocks.length - 1]?.type !== "prompt" && (
+          <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint" data-turn-end="done" title={turn.approxStart ? "since the earliest step shown" : undefined}>
+            <ICheck size={13} />
+            <span className="font-medium text-dim">
+              Worked for <span className="tnum">{fmtElapsed(turn.endMs - turn.startMs)}</span>
+            </span>
+            {turn.tools > 0 && <span>· {turn.tools} tool {turn.tools === 1 ? "use" : "uses"}</span>}
+            {session.model && <span>· {modelLabel(session.model)}</span>}
+          </div>
+        )}
         <AnimatePresence>
-          {thinking && (
+          {busy && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
-              <ThinkingRow since={lt.at} approx={lt.approx} />
+              <LiveIndicator since={lt.approx ? null : lt.at} mood={agentsRunning > 0 && !session.current ? "delegate" : now.mood} detail={now.detail} agents={agentsRunning} jobs={session.live_children ?? 0} mainActive={mainActive} timerSince={turn.startMs} timerTitle={turn.approxStart ? "since the earliest step shown" : undefined} />
             </motion.div>
           )}
         </AnimatePresence>
       </div>
+    </div>
+    <JumpToBottom
+      away={away}
+      fresh={fresh}
+      needs={false}
+      onClick={() => {
+        stick.current = true;
+        setAway(false);
+        setFresh(false);
+        scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
+      }}
+    />
     </div>
   );
 }
@@ -188,55 +242,132 @@ export function PromptBubble({ text, stamp, shortened }: { text: string; stamp?:
   );
 }
 
+/**
+ * The live "now" indicator: orb + word + dots, the tool's short detail, and an exact timer. `since` is the exact start of
+ * the current activity (null: unknown, so no timer and one fixed word). The orb and the word come from `mood`
+ * (lib/activityMood.ts); a new mood or start is a new stretch. `large` is the timeline's turn row (28px orb, prose size,
+ * full-strength text, timer at the right edge); the small form sits inside step cards.
+ */
 export function ThinkingRow({
   since,
-  approx,
+  mood = "think",
   label: given,
-  orb,
+  detail,
   big,
+  large,
+  noOrb,
   live = true,
+  timerSince,
+  timerTitle,
 }: {
   since: number | null;
-  approx?: boolean;
+  /** The running total shown at the right (the turn's start); defaults to `since`. Never restarts with the activity. */
+  timerSince?: number | null;
+  timerTitle?: string;
+  mood?: Mood;
+  /** A fixed label instead of the mood's words ("Starting claude in coool"). */
   label?: string;
-  /** Orb state; default rotates by thinking stretch. "connecting" for starting rows. */
-  orb?: ThinkOrbState;
+  detail?: string;
   /** Centered, 64px orb above the label (the empty "Starting…" screens). */
   big?: boolean;
+  large?: boolean;
+  /** Subagents: words only; a plain icon keeps the slot. */
+  noOrb?: boolean;
   live?: boolean;
 }) {
-  // A fresh word and orb per thinking stretch, held for as long as that stretch lasts.
-  // A stretch whose start is only an estimate (read-only sessions: `since` is the session's last update,
-  // which moves on every refresh) gets one word and one orb, latched when the row appears, and never cycles.
-  const exact = !approx && since !== null;
-  const latched = useRef(since);
-  const stretch = exact ? since : latched.current;
-  const state = useMemo(() => orb ?? thinkingOrbState(stretch), [orb, stretch]);
-  const text = (
-    <>
-      {/* Fixed-width slot (widest word) so the timer does not jitter as the word changes. */}
-      <span className="inline-flex font-medium" style={{ minWidth: given ? undefined : "15ch" }}>
-        <span className="shimmer inline-block" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
-          {given ?? <ThinkingWord seed={stretch} origin={exact ? since : null} cycle={exact} />}
-        </span>
-        <ThinkingDots />
-      </span>
-      <Elapsed since={since} approx={approx} className="text-small text-faint" />
-    </>
+  const exact = since !== null && Number.isFinite(since);
+  const [mounted] = useState(() => Date.now());
+  // One seed per stretch: the start of the activity and what it is. A new activity restarts word, orb and timer.
+  const seed = `${exact ? since : `m${mounted}`}:${mood}`;
+  const m = MOODS[mood];
+  const tone = large ? { base: "color-mix(in oklab, var(--text) 92%, var(--bg))", hi: "var(--text)" } : undefined;
+  const label = given ? (
+    <span className="shimmer inline-block" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
+      {given}
+    </span>
+  ) : (
+    <ThinkingWord seed={seed} origin={exact ? since : null} words={m.words} cycle={exact} tone={tone} />
   );
+  const dots = <ThinkingDots color={large ? "color-mix(in oklab, var(--text) 92%, var(--bg))" : undefined} />;
   if (big)
     return (
       <div className="flex flex-col items-center gap-3 py-1 text-base">
-        <ThinkOrb state={state} size={64} live={live} />
-        <div className="flex items-center gap-2.5">{text}</div>
+        <ThinkOrb state={m.orb} size={64} live={live} />
+        <div className="flex items-center gap-2.5">
+          <span className="inline-flex font-medium">
+            {label}
+            {dots}
+          </span>
+          <LiveClock since={exact ? since : null} className="text-small text-faint" />
+        </div>
+      </div>
+    );
+  if (large)
+    return (
+      <div className="flex items-center gap-3 pb-1 pt-2.5 text-prose" data-live-row data-mood={mood}>
+        <span className="flex size-[28px] shrink-0 items-center justify-center">
+          <ThinkOrb state={m.orb} size={28} live={live} />
+        </span>
+        <span className="inline-flex shrink-0 font-medium">
+          {label}
+          {dots}
+        </span>
+        {detail && <span className="selectable min-w-0 flex-1 truncate font-mono text-mono-small text-dim">{shortDetail(detail)}</span>}
+        <LiveClock since={timerSince !== undefined ? timerSince : exact ? since : null} title={timerTitle} className="ml-auto shrink-0 pr-2 text-small text-dim" />
       </div>
     );
   return (
     <div className="flex items-center gap-2.5 py-1 text-base">
       <span className="relative flex size-[22px] items-center justify-center">
-        <ThinkOrb state={state} size={20} live={live} />
+        {noOrb ? <ISpark size={14} className="text-dim" /> : <ThinkOrb state={m.orb} size={20} live={live} />}
       </span>
-      {text}
+      {/* Fixed-width slot (widest word) so the timer does not jitter as the word changes. */}
+      <span className="inline-flex font-medium" style={{ minWidth: given ? undefined : "15ch" }}>
+        {label}
+        {dots}
+      </span>
+      <LiveClock since={exact ? since : null} className="text-small text-faint" />
+    </div>
+  );
+}
+
+/**
+ * The live row of a running turn. While the main agent itself is working it is the animated ThinkingRow. When only
+ * subagents/jobs are running and the main agent is idle it is a quiet static line ("4 agents running", exact timer),
+ * like Claude Code's own status line: no orb, no shimmer, no cycling word. The orb for delegating is shown only for the
+ * moment the main agent is making the Agent call.
+ */
+export function LiveIndicator({
+  since,
+  mood,
+  detail,
+  agents,
+  jobs = 0,
+  mainActive,
+  timerSince,
+  timerTitle,
+}: {
+  since: number | null;
+  timerSince?: number | null;
+  timerTitle?: string;
+  mood: Mood;
+  detail?: string;
+  agents: number;
+  jobs?: number;
+  mainActive: boolean;
+}) {
+  const now = useNow();
+  const launching = mood === "delegate" && since !== null && now - since < 1500;
+  const quiet = !mainActive && agents + jobs > 0 && !launching;
+  if (!quiet) return <ThinkingRow since={since} mood={mood} detail={detail} large timerSince={timerSince} timerTitle={timerTitle} />;
+  const parts = [agents > 0 && `${agents} ${agents === 1 ? "agent" : "agents"}`, jobs > 0 && `${jobs} ${jobs === 1 ? "job" : "jobs"}`].filter(Boolean).join(", ");
+  return (
+    <div className="flex items-center gap-2 py-1 text-small text-dim" data-live-quiet>
+      <span className="flex size-[22px] shrink-0 items-center justify-center">
+        <span className="size-[7px] rounded-full bg-working" />
+      </span>
+      <span>{parts} running</span>
+      <LiveClock since={timerSince !== undefined ? timerSince : since} title={timerTitle} className="ml-auto shrink-0 pr-2 text-small text-dim" />
     </div>
   );
 }
@@ -394,10 +525,13 @@ export function StepLine({
         )}
       </span>
       <span
-        className={cx("shrink-0 text-base font-medium", active && !waiting ? "shimmer" : waiting ? "text-fg/85" : failed ? "text-err-text/90" : "text-fg/80")}
-        style={active && !waiting ? { ["--shimmer-base" as string]: "var(--text)", ["--shimmer-hi" as string]: "var(--dim)" } : undefined}
+        className={cx("shrink-0 text-base font-medium", waiting ? "text-fg/85" : failed ? "text-err-text/90" : !active && "text-fg/80")}
       >
-        <Reveal text={name} fresh={fresh} />
+        <Reveal
+          text={name}
+          fresh={fresh}
+          inner={active && !waiting ? { className: "shimmer", style: { ["--shimmer-base" as string]: "var(--text)", ["--shimmer-hi" as string]: "var(--dim)" } } : undefined}
+        />
       </span>
       {detail && (
         <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-mono-small", failed ? "text-err-text/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
@@ -501,7 +635,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
         )}
         {running && steps.length === 0 && (
           <div className="px-3 pb-2">
-            <ThinkingRow since={live.at} approx={live.approx} label="Starting" orb="connecting" />
+            <ThinkingRow since={live.approx ? null : live.at} label="Starting" mood="start" noOrb />
           </div>
         )}
       </div>
