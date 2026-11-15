@@ -169,7 +169,7 @@ export function SessionView({
         <ProviderMark provider={provider} size={17} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <h2 className="truncate text-title font-semibold tracking-[-0.01em] text-fg">{title}</h2>
+            <h2 className="truncate text-base font-semibold tracking-[-0.005em] text-fg">{title}</h2>
             <StatusPill status={status} background={status === "needs" ? null : att?.background} />
             {(session || panelOn) && (
               <AgentsChip

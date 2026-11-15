@@ -146,7 +146,7 @@ function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: num
       <div
         title={`${title}${index < 9 ? `  (⌘${index + 1})` : ""}`}
         className={cx(
-          "group relative flex h-[34px] w-full items-center gap-2 rounded-[9px] pl-2.5 pr-1 text-base transition-colors duration-150",
+          "group relative flex h-[34px] w-full items-center gap-2 rounded-[9px] pl-2.5 pr-1 text-[13px] transition-colors duration-150",
           active ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
