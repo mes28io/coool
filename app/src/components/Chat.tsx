@@ -13,7 +13,7 @@ import type { Activity, RememberOption } from "../lib/types";
 import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
-import { AgentCube } from "./AgentCube";
+import { AgentMark } from "./AgentMark";
 import { MoodSvg } from "./MoodGlyph";
 import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
@@ -684,7 +684,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
-        <AgentCube size={14} state={running ? "live" : end} />
+        <AgentMark size={14} state={running ? "live" : end} />
       </span>
       <div
         ref={card}

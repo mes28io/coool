@@ -1,5 +1,5 @@
 import type { SVGProps } from "react";
-import { AgentCube } from "./AgentCube";
+import { AgentMark } from "./AgentMark";
 
 type P = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -127,7 +127,7 @@ export const IRefresh = mk(<path d="M13 3.5v3h-3M3 12.5v-3h3M12.4 6.5A4.75 4.75 
 
 /** The subagent mark (a cube), static, in the parent's colour. Takes the same props as the stroke icons. */
 export function IAgent({ size = 14, className }: P) {
-  return <AgentCube size={size} state="plain" className={className} />;
+  return <AgentMark size={size} state="plain" className={className} />;
 }
 
 export function toolIcon(name: string) {
