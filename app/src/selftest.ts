@@ -22,7 +22,7 @@ interface Config {
 }
 
 const PROMPT_BLUE = "Write three short sentences about the colour blue. Plain text, no lists, and keep every sentence under twelve words so the whole reply stays brief.";
-const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "usage", "insights", "quit"];
+const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "pty", "usage", "insights", "quit"];
 const CLAUDE_MODEL = "haiku";
 const CODEX_MODEL = "gpt-5.6-luna";
 
@@ -533,6 +533,28 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await shot("codex-done");
       if (!tool?.ok) throw new Fail(`shell: ${tool?.ok} ${tool?.output}`);
       return `model ${chat(id)?.model}, mode ${chat(id)?.permissionMode}; offered ${labels.join(" | ") || "nothing to remember"}`;
+    });
+  },
+
+  // Free: starts the CLI's own terminal UI in the throwaway folder (no prompt is sent), then stops it.
+  async pty(ctx) {
+    await step("a starting terminal session is grouped under its project", async () => {
+      const id = (await invoke("spawn_session", { req: { provider: "claude", cwd: ctx.cfg.dir, rows: 30, cols: 100 } })) as number;
+      try {
+        const info = await waitFor("the terminal row", () => useStore.getState().ptys[id] ?? null, 10_000);
+        await sleep(900);
+        await shot("pty-starting");
+        const side = (document.querySelector("aside, [data-sidebar]") as HTMLElement | null)?.innerText ?? document.body.innerText;
+        const want = (info.project || info.cwd).split("/").filter(Boolean).pop()!;
+        const raw = info.cwd.split("/").filter(Boolean).pop()!;
+        const lines = side.split("\n").map((l) => l.trim());
+        if (!lines.includes(want)) throw new Fail(`sidebar has no project row "${want}"`);
+        if (want !== raw && lines.includes(raw)) throw new Fail(`sidebar still shows the raw folder "${raw}" as a project`);
+        return `cwd …/${raw}; project ${info.project ?? "(none)"}; sidebar shows "${want}"${want !== raw ? `, not "${raw}"` : ""}`;
+      } finally {
+        await invoke("stop_session", { managed: id, pid: null }).catch(() => {});
+        await sleep(1500);
+      }
     });
   },
 
