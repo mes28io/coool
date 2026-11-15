@@ -10,6 +10,7 @@ import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { resolveTarget, useStore, type Target, type ViewMode } from "../store";
 import { liveTime, Timeline, ThinkingRow } from "./Activity";
+import { AgentsChip } from "./AgentsChip";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
@@ -120,6 +121,9 @@ export function SessionView({
   const tokIn = chat && chat.tokens.input ? chat.tokens.input + chat.tokens.cached : session ? session.tokens.input + session.tokens.cached : 0;
   const tokOut = chat && chat.tokens.output ? chat.tokens.output : (session?.tokens.output ?? 0);
   const showTokens = !!session || !!chat?.tokens.output;
+  // The agents chip speaks for subagents; the text beside the pill keeps jobs / shells.
+  const jobs = session?.live_children ?? 0;
+  const bgText = att?.agents.length ? (jobs > 0 ? `${jobs} ${jobs === 1 ? "job" : "jobs"} running` : null) : att?.background;
   const openTerm = () => r.chat !== null && openChatInTerminal(r.chat, session);
 
   return (
@@ -131,7 +135,8 @@ export function SessionView({
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-title font-semibold tracking-[-0.01em] text-fg">{title}</h2>
             <StatusPill status={status} background={status === "needs" ? null : att?.background} />
-            {att?.background && status !== "needs" && <span className="hidden shrink-0 text-small text-dim sm:inline">{att.background}</span>}
+            {session && <AgentsChip session={session} />}
+            {bgText && status !== "needs" && <span className="hidden shrink-0 text-small text-dim sm:inline">{bgText}</span>}
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
             <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />

@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, Session } from "../lib/types";
 import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
-import type { Since } from "../store";
+import { useStore, type Since } from "../store";
 import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
 import { Elapsed, cx, ease, StatusDot } from "./primitives";
 import { Markdown } from "./Markdown";
@@ -232,6 +232,11 @@ const StepGroup = memo(function StepGroup({
   live: LiveTime;
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
+  const focus = useStore((st) => st.agentFocus);
+  const holdsFocus = !!focus && Date.now() - focus.at < FOCUS_FRESH_MS && items.some((i) => i.a.kind === "agent" && agentOf(i.a, agents)?.id === focus.id);
+  useEffect(() => {
+    if (holdsFocus) setOpen(true);
+  }, [holdsFocus]);
   const isOpen = open ?? (latest || items.length <= 2);
   const mountKeys = useRef(new Set(items.map((i) => i.key)));
   const chips = summarize(items);
@@ -380,9 +385,30 @@ export function StepLine({
   );
 }
 
+/** The subagent an "Agent · description" step belongs to. */
+const agentOf = (a: Activity, agents: Agent[]): Agent | null => {
+  const { detail } = splitTool(a.text);
+  return agents.find((g) => g.description && (g.description === detail || detail.startsWith(g.description))) ?? null;
+};
+
+/** Asked (from the sidebar or the header chip) to show this subagent's card, and recent enough to still mean it. */
+const FOCUS_FRESH_MS = 6000;
+
 function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; active: boolean; live: LiveTime }) {
   const { detail } = splitTool(a.text);
-  const agent = agents.find((g) => g.description && (g.description === detail || detail.startsWith(g.description))) ?? null;
+  const agent = agentOf(a, agents);
+  const card = useRef<HTMLDivElement>(null);
+  const focus = useStore((st) => st.agentFocus);
+  const focused = !!agent && !!focus && focus.id === agent.id && Date.now() - focus.at < FOCUS_FRESH_MS;
+  useEffect(() => {
+    if (!focused) return;
+    // After the group has opened and the timeline has settled at the bottom.
+    const t = setTimeout(() => {
+      card.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+      useStore.setState({ agentFocus: null });
+    }, 380);
+    return () => clearTimeout(t);
+  }, [focused]);
   const running = agent ? !agent.finished : active;
   const steps = agent?.activity.filter((x) => x.kind === "tool" || x.kind === "agent").slice(-5) ?? [];
   const agentSeen = useRef(new Set(steps.map((s) => `${s.ts}${s.text}`)));
@@ -392,9 +418,11 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
         <ISpark size={14} />
       </span>
       <div
+        ref={card}
+        data-agent-card={agent?.id}
         className={cx(
-          "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card",
-          "border-hairline",
+          "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
+          focused ? "border-[color-mix(in_oklab,var(--status-working)_45%,var(--border))]" : "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">

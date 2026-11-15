@@ -166,7 +166,14 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
   const cur = busy && !thinking && s.current ? splitTool(s.current) : null;
   const CurIcon = cur ? toolIcon(cur.name) : ISpark;
   const since = useCardSince(s);
-  const agents = s.agents.filter((a) => !a.finished).length;
+  const running = att.agents;
+  const ranCount = running.length ? 0 : s.agents.length;
+  const jobs = s.live_children ?? 0;
+  // "4 agents working" / "4 agents, 2 jobs working"
+  const crew = running.length ? `${running.length} ${running.length === 1 ? "agent" : "agents"}${jobs > 0 ? `, ${jobs} ${jobs === 1 ? "job" : "jobs"}` : ""} working` : null;
+  const names = running.map((a) => a.description || a.kind);
+  const crewNames = names.slice(0, 2).join(", ");
+  const crewMore = names.length > 2 ? `+${names.length - 2} more` : "";
   const headline = s.insight?.headline && !headlineIsTitle(s) ? s.insight.headline : null;
   const pending = s.loaded === false;
 
@@ -198,6 +205,11 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
             </span>
             <span className="shrink-0 text-small text-needs-text/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review →" : "Open →"}</span>
           </>
+        ) : crew ? (
+          <span className="flex min-w-0 flex-1 items-center gap-2 text-fg/90" data-card-agents>
+            <StatusDot status="busy" size={7} />
+            <span className="truncate font-medium">{crew}</span>
+          </span>
         ) : att.background ? (
           <span className="flex min-w-0 flex-1 items-center gap-2 text-fg/90" data-card-background>
             <StatusDot status="busy" size={7} />
@@ -228,6 +240,13 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
         )}
       </div>
 
+      {crew && !needs && (
+        <div className="mt-0.5 flex h-[18px] min-w-0 items-center pl-[15px] text-small text-dim" title={names.join(", ")} data-card-agent-names>
+          <span className="min-w-0 truncate">{crewNames}</span>
+          {crewMore && <span className="ml-1.5 shrink-0 text-faint">{crewMore}</span>}
+        </div>
+      )}
+
       {pending ? (
         <div className="mt-auto flex h-[18px] items-center gap-3 pt-2.5 box-content" title="Reading this session's transcript…">
           <Pending w="56px" h={4} />
@@ -238,9 +257,9 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
         <div className="mt-auto flex h-[18px] items-center gap-3 box-content pt-2.5 text-small text-dim">
           <ContextMeter context={s.tokens.context} model={s.model} compact />
           <CardModel s={s} />
-          {agents > 0 && (
+          {ranCount > 0 && (
             <span className="ml-auto shrink-0 text-dim">
-              {agents} {agents === 1 ? "agent" : "agents"}
+              {ranCount} {ranCount === 1 ? "agent ran" : "agents ran"}
             </span>
           )}
         </div>

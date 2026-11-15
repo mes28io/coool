@@ -3,12 +3,13 @@ import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNow } from "../lib/clock";
 import { ago, displayTitle, folderName, homeShort, projectOf } from "../lib/format";
 import { attention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
-import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
+import { modelLabel } from "../lib/models";
+import type { Agent, ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
 import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { leaves, resolveTarget, useStore } from "../store";
-import { ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
+import { IChevron, ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { SidebarSkeleton } from "./Skeletons";
@@ -32,6 +33,8 @@ export interface Project {
   updated: number;
   /** Child runs listed under their parent's row, by parent session id (not counted anywhere else). */
   children: Map<string, Session[]>;
+  /** Running subagents of the project's live sessions, by the dot their session counts under (not sessions: never in `working`). */
+  agents: Record<"needs" | "busy" | "idle", number>;
 }
 
 export function useProjects(): { projects: Project[]; digest: ChatDigest } {
@@ -45,7 +48,7 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
     const by = new Map<string, Project>();
     const get = (cwd: string) => {
       let p = by.get(cwd);
-      if (!p) by.set(cwd, (p = { cwd, name: folderName(cwd), live: [], ended: [], starting: [], startingChats: [], status: "ended", needs: 0, working: 0, waiting: 0, needsKey: null, updated: 0, children: new Map() }));
+      if (!p) by.set(cwd, (p = { cwd, name: folderName(cwd), live: [], ended: [], starting: [], startingChats: [], status: "ended", needs: 0, working: 0, waiting: 0, needsKey: null, updated: 0, children: new Map(), agents: { needs: 0, busy: 0, idle: 0 } }));
       return p;
     };
     const att = new Map<Session, Attention>();
@@ -94,9 +97,15 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
       for (const s of p.live) {
         const a = att.get(s)!;
         if (a.needs) {
+          p.agents.needs += a.agents.length;
           if (s.updated > needsAt) [needsAt, p.needsKey] = [s.updated, sessionKey(s)];
-        } else if (a.status === "busy") p.working++;
-        else p.waiting++;
+        } else if (a.status === "busy") {
+          p.working++;
+          p.agents.busy += a.agents.length;
+        } else {
+          p.waiting++;
+          p.agents.idle += a.agents.length;
+        }
       }
       p.working += p.starting.length + p.startingChats.filter((c) => c.state !== "idle").length;
       p.waiting += p.startingChats.filter((c) => c.state === "idle").length;
@@ -264,7 +273,8 @@ function OtherToolsLine() {
 
 /** "coool: 1 needs you, 2 working". */
 function summaryLabel(p: Project): string {
-  const parts = [p.needs && `${p.needs} needs you`, p.working && `${p.working} working`, p.waiting && `${p.waiting} waiting`].filter(Boolean);
+  const agents = p.agents.needs + p.agents.busy + p.agents.idle;
+  const parts = [p.needs && `${p.needs} needs you`, p.working && `${p.working} working`, p.waiting && `${p.waiting} waiting`, agents && `${agents} ${agents === 1 ? "agent" : "agents"}`].filter(Boolean);
   return parts.length ? `${p.name}: ${parts.join(", ")}` : p.name;
 }
 
@@ -281,7 +291,8 @@ function Summary({ p }: { p: Project }) {
   const body = shown.map(([st, n]) => (
     <span key={st} className="flex items-center gap-[3px]" data-summary={st}>
       <StatusDot status={st} size={8} />
-      {n > 1 && <span className="tnum text-small leading-none text-dim">{n}</span>}
+      {(n > 1 || p.agents[st as "needs" | "busy" | "idle"] > 0) && <span className="tnum text-small leading-none text-dim">{n}</span>}
+      {p.agents[st as "needs" | "busy" | "idle"] > 0 && <span className="tnum text-small leading-none text-faint">+{p.agents[st as "needs" | "busy" | "idle"]}</span>}
     </span>
   ));
   const label = summaryLabel(p);
@@ -312,6 +323,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
   const setRevealed = useStore((s) => s.setRevealed);
   const setSheet = useStore((s) => s.setSheet);
   const showAutomation = useStore((s) => s.showAutomation);
+  const kidsOpen = useStore((s) => s.kidsOpen);
   const onlyEnded = p.live.length + p.starting.length + p.startingChats.length === 0;
   const Folder = collapsed ? IFolder : IFolderOpen;
 
@@ -327,10 +339,19 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
   const more = p.ended.length - ended.length;
   const sessionRow = (s: Session): Item => ({
     key: sessionKey(s),
-    el: () => [
-      <SessionRow key={sessionKey(s)} s={s} att={attention(s, digest)} selected={selected === sessionKey(s)} auto={showAutomation && s.origin === "automation"} />,
-      p.children.has(s.id) && <ChildRows key={`kids:${sessionKey(s)}`} kids={p.children.get(s.id)!} selected={selected} digest={digest} />,
-    ],
+    el: () => {
+      const att = attention(s, digest);
+      const kids = p.children.get(s.id) ?? [];
+      const key = sessionKey(s);
+      const liveKids = kids.some((k) => attention(k, digest).status !== "ended");
+      const hasContent = att.agents.length > 0 || kids.length > 0;
+      // Open by default while anything in the block is live (or the open chat is in it); the person's choice wins.
+      const open = kidsOpen[key] ?? (att.agents.length > 0 || liveKids || kids.some((k) => sessionKey(k) === selected));
+      return [
+        <SessionRow key={key} s={s} att={att} selected={selected === key} auto={showAutomation && s.origin === "automation"} nest={hasContent ? (open ? "open" : "closed") : undefined} />,
+        <ChildRows key={`kids:${key}`} parent={s} agents={open ? att.agents : []} kids={open ? kids : []} selected={selected} digest={digest} />,
+      ];
+    },
   });
   const items: Item[] = [
     ...p.startingChats.map((c) => ({
@@ -408,24 +429,55 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
 /** Recent ended child runs shown under their parent before "Show N more jobs". */
 const KIDS_ENDED = 2;
 
-/** A session's child runs: live ones always, then the most recent ended ones. */
-function ChildRows({ kids, selected, digest }: { kids: Session[]; selected: string | null; digest: ChatDigest }) {
+/** A session's nested block: its running subagents, then live child runs, then the most recent ended ones. */
+function ChildRows({ parent, agents, kids, selected, digest }: { parent: Session; agents: Agent[]; kids: Session[]; selected: string | null; digest: ChatDigest }) {
   const [all, setAll] = useState(false);
   const live = kids.filter((k) => attention(k, digest).status !== "ended").sort((a, b) => b.updated - a.updated);
   const ended = kids.filter((k) => attention(k, digest).status === "ended").sort((a, b) => b.updated - a.updated);
   const shown = all ? ended : ended.filter((k, i) => i < KIDS_ENDED || sessionKey(k) === selected);
   const more = ended.length - shown.length;
   return (
-    <>
+    <AnimatePresence initial={false}>
+      {agents.map((a) => (
+        <AgentRow key={`agent:${sessionKey(parent)}:${a.id}`} parent={parent} a={a} />
+      ))}
       {[...live, ...shown].map((k) => (
         <SessionRow key={sessionKey(k)} s={k} att={attention(k, digest)} selected={selected === sessionKey(k)} nested />
       ))}
-      {(more > 0 || all) && (
-        <button type="button" data-nav data-show-jobs onClick={() => setAll(!all)} className={cx(disclosure, "pl-[54px]")}>
+      {kids.length > 0 && (more > 0 || all) && (
+        <button key="jobs-more" type="button" data-nav data-show-jobs onClick={() => setAll(!all)} className={cx(disclosure, "pl-[54px]")}>
           {all ? "Fewer jobs" : `Show ${more} more ${more === 1 ? "job" : "jobs"}`}
         </button>
       )}
-    </>
+    </AnimatePresence>
+  );
+}
+
+/** A running subagent: a worker inside its session, listed like a child job. Opens the session at that agent's card. */
+function AgentRow({ parent, a }: { parent: Session; a: Agent }) {
+  const open = useStore((st) => st.open);
+  const focusAgent = useStore((st) => st.focusAgent);
+  const title = a.description || a.kind;
+  return (
+    <Row
+      selected={false}
+      onClick={() => {
+        open({ kind: "session", key: sessionKey(parent) });
+        focusAgent(a.id);
+      }}
+      title={title}
+      status="busy"
+      provider={parent.provider}
+      meta=""
+      nested
+      tip={a.current}
+      hover={
+        <span className="flex min-w-0 items-center gap-1" title={a.model}>
+          <span className="truncate">{a.model ? modelLabel(a.model).split(" ")[0] : a.kind}</span>
+        </span>
+      }
+      data={{ "data-agent-row": a.id, "data-nested": "1" }}
+    />
   );
 }
 
@@ -457,6 +509,8 @@ function Row({
   nested,
   tip,
   data,
+  hover,
+  nest,
 }: {
   selected: boolean;
   onClick: () => void;
@@ -473,6 +527,10 @@ function Row({
   nested?: boolean;
   /** Extra state for the tooltip and accessible name ("2 jobs running"). */
   tip?: string | null;
+  /** Replaces the age and provider mark in the right slot on hover. */
+  hover?: ReactNode;
+  /** The row owns a nested block: a chevron appears on hover to fold it. */
+  nest?: { open: boolean; onToggle: () => void };
   /** `data-*` hooks (self-test). */
   data?: Record<string, string | undefined>;
 }) {
@@ -493,6 +551,25 @@ function Row({
       )}
       style={{ background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--bg)" }}
     >
+      {nest && (
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={nest.open ? "Hide agents and jobs" : "Show agents and jobs"}
+          aria-expanded={nest.open}
+          title={nest.open ? "Hide agents and jobs" : "Show agents and jobs"}
+          data-nest-toggle
+          onClick={(e) => {
+            e.stopPropagation();
+            nest.onToggle();
+          }}
+          className="absolute left-[9px] top-1/2 flex size-[20px] -translate-y-1/2 items-center justify-center rounded-[6px] text-faint opacity-0 transition-[opacity,background-color,color] duration-150 hover:bg-press hover:text-fg group-hover:opacity-100"
+        >
+          <motion.span animate={{ rotate: nest.open ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex">
+            <IChevron size={13} />
+          </motion.span>
+        </span>
+      )}
       <span className={cx("min-w-0 flex-1 truncate", auto && "opacity-80")}>{title}</span>
       {auto && <AutoTag className="ml-1.5" />}
       {/* A fixed slot at the right edge: the status dot at rest, age and provider on hover. The title always ends before it. */}
@@ -502,17 +579,22 @@ function Row({
             <StatusDot status={status} size={8} />
           </span>
         )}
-        <span className="hidden items-center gap-1.5 text-small text-faint group-hover:flex">
-          <span className="tnum truncate">{meta}</span>
-          <ProviderMark provider={provider} size={14} />
+        <span className="hidden max-w-full items-center gap-1.5 text-small text-faint group-hover:flex">
+          {hover ?? (
+            <>
+              <span className="tnum truncate">{meta}</span>
+              <ProviderMark provider={provider} size={14} />
+            </>
+          )}
         </span>
       </span>
     </motion.button>
   );
 }
 
-const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested }: { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean }) {
+const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest }: { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean; nest?: "open" | "closed" }) {
   const open = useStore((st) => st.open);
+  const setKidsOpen = useStore((st) => st.setKidsOpen);
   const now = useNow();
   const status = att.needs ? "needs" : att.status;
   return (
@@ -527,6 +609,7 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested }: 
       dim={att.status === "ended"}
       auto={auto}
       nested={nested}
+      nest={nest ? { open: nest === "open", onToggle: () => setKidsOpen(sessionKey(s), nest !== "open") } : undefined}
       tip={att.needs ?? att.background}
       data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined }}
     />

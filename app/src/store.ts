@@ -139,6 +139,12 @@ interface State {
    * expanded: a project always opens in its short version.
    */
   revealed: Record<string, number>;
+  /** A session's nested block (subagents + jobs) opened or folded by the person, by session key; this run only. Absent = automatic. */
+  kidsOpen: Record<string, boolean>;
+  setKidsOpen(key: string, open: boolean): void;
+  /** A subagent to scroll to and open in its session's activity view (stamped; stale after a few seconds). */
+  agentFocus: { id: string; at: number } | null;
+  focusAgent(id: string): void;
   toggleCollapsed(project: string): void;
   setRevealed(project: string, n: number): void;
 
@@ -272,6 +278,10 @@ export const useStore = create<State>((set, get) => ({
   sidebarWidth: readNum("coool.sidebar", 300),
   collapsed: readCollapsed(),
   revealed: {},
+  kidsOpen: {},
+  setKidsOpen: (key, open) => set((s) => ({ kidsOpen: { ...s.kidsOpen, [key]: open } })),
+  agentFocus: null,
+  focusAgent: (id) => set({ agentFocus: { id, at: Date.now() } }),
   toggleCollapsed(project) {
     const collapsed = { ...get().collapsed };
     if (collapsed[project]) delete collapsed[project];

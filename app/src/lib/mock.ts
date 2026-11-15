@@ -97,6 +97,8 @@ const NEEDS: Record<string, string> = {
   c7d1e9: "Asked whether to keep the old offset() API or update all 6 callers",
 };
 const INSIGHTS_KEY = "coool.mock.insights";
+/** Mock terminal session with running subagents (sidebar nesting, Home card, header chip). */
+const AGENTS_DEMO = "3d0a7e51-9c2b-4f1d-b6a8-5e4c3d2b1a09";
 const SHOW_AUTOMATION_KEY = "coool.mock.showAutomation";
 function readInsights(): InsightsStatus {
   try {
@@ -434,6 +436,84 @@ export function mockBackend(): Backend {
     live.push({ s, script: "atlas", step: 0, idleFor: 0, cycle });
   });
 
+  // A terminal session between turns with four subagents still working (and three that
+  // finished): the sidebar nests the running ones under it. One finishes after ~15 s.
+  const p3d = `${HOME}/code/project-3d`;
+  const ag3 = add(
+    session({
+      provider: "claude",
+      id: AGENTS_DEMO,
+      cwd: p3d,
+      title: "Ship the Blender add-on milestone",
+      status: "idle",
+      pid: 40555,
+      tokens: tok(64_000, 11_000, 92_000),
+      activity: history("pixel", ["Split the milestone across four agents and report back when they finish"], now - 3 * 60_000, 1, 4),
+      updated: now - 20_000,
+    }),
+    "pixel",
+  );
+  const mkAgent = (id: string, kind: string, description: string, finished: boolean, steps: string[], ageS: number): Agent => ({
+    id,
+    kind,
+    description,
+    finished,
+    current: finished ? null : steps[0],
+    tokens: tok(9_000 + steps.length * 700, 1_200, 16_000),
+    activity: steps.map((x, i) => parseStep(x, now - (ageS - i * 6) * 1000)),
+  });
+  const AGENT_STEPS: Record<string, string[]> = {
+    ag3d1: ["Read · ~/code/project-3d/src/uv/unwrap.rs", "Grep · seam_angle", "Edit · ~/code/project-3d/src/uv/unwrap.rs", "Bash · cargo test uv::", "Read · ~/code/project-3d/src/texture/image.rs"],
+    ag3d2: ["Glob · src/curves/**/*.rs", "Read · ~/code/project-3d/src/curves/bezier.rs", "Edit · ~/code/project-3d/src/text/outline.rs", "Bash · cargo test curves::", "thinking…"],
+    ag3d3: ["Grep · KHR_materials", "Read · ~/code/project-3d/src/gltf/import.rs", "Edit · ~/code/project-3d/src/ui/modifiers.tsx", "Bash · pnpm tsc --noEmit", "Edit · ~/code/project-3d/src/gltf/import.rs"],
+    ag3d4: ["Read · ~/code/project-3d/src/ui/Toolbar.tsx", "Edit · ~/code/project-3d/src/ui/Toolbar.tsx", "Bash · pnpm vitest run", "Grep · TODO polish"],
+  };
+  ag3.agents.push(
+    mkAgent("ag3d1", "general-purpose", "UV unwrap and image textures", false, AGENT_STEPS.ag3d1, 70),
+    mkAgent("ag3d2", "general-purpose", "Curves and text objects", false, AGENT_STEPS.ag3d2, 64),
+    mkAgent("ag3d3", "Explore", "glTF import and modifier panel", false, AGENT_STEPS.ag3d3, 58),
+    mkAgent("ag3d4", "general-purpose", "App polish fixes", false, AGENT_STEPS.ag3d4, 40),
+    mkAgent("ag3d5", "Explore", "Survey the Blender operator API", true, ["Grep · bpy.ops", "Read · docs/operators.md"], 600),
+    mkAgent("ag3d6", "general-purpose", "Set up the add-on test harness", true, ["Write · tests/conftest.py", "Bash · pytest -q"], 420),
+    mkAgent("ag3d7", "Explore", "Find the mesh export hot path", true, ["Grep · export_mesh", "Read · src/export/mesh.rs"], 240),
+  );
+  for (const a of ag3.agents) ag3.activity.push(act("agent", `Agent · ${a.description}`, now - 200_000));
+  {
+    let t0 = 0;
+    let n = 0;
+    setInterval(() => {
+      // The clock starts once the startup scan has filled this session in.
+      if (!t0) {
+        if (scanned(live.find((l) => l.s === ag3)!) === "full") t0 = Date.now();
+        return;
+      }
+      n++;
+      let changed = false;
+      for (const a of ag3.agents) {
+        if (a.finished) continue;
+        const steps = AGENT_STEPS[a.id];
+        // The polish agent wraps up about 15 s in.
+        if (a.id === "ag3d4" && Date.now() - t0 > 15_000) {
+          a.finished = true;
+          a.current = null;
+          a.activity.push(act("tool", "Bash · pnpm vitest run", Date.now()));
+          ag3.activity.push(act("text", "Subagent finished: app polish fixes.", Date.now()));
+          changed = true;
+          continue;
+        }
+        const next = steps[(n + a.id.charCodeAt(a.id.length - 1)) % steps.length];
+        if (next !== a.current) {
+          a.current = next;
+          a.activity.push(parseStep(next, Date.now()));
+          a.activity.splice(0, Math.max(0, a.activity.length - 12));
+          changed = true;
+        }
+      }
+      ag3.updated = Date.now();
+      if (changed) emitSessions();
+    }, 2800);
+  }
+
   // ---------- event plumbing ----------
   const subs = {
     sessions: new Set<(s: Snapshot) => void>(),
@@ -766,7 +846,7 @@ export function mockBackend(): Backend {
     for (const l of live) {
       const s = l.s;
       if (l.chat) continue; // chats drive their own session
-      if (s.background_tasks) continue; // the demo parent waits for its jobs
+      if (s.background_tasks || s.id === AGENTS_DEMO) continue; // the demo parents wait for their jobs / agents
       if (s.parent) {
         // Background jobs: keep working; the first one sometimes waits for an approval.
         if (s.id === "job0") {

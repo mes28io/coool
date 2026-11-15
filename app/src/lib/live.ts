@@ -4,7 +4,7 @@
 
 import { useMemo } from "react";
 import { chatNeeds, chatStatus, useChats } from "./chat";
-import type { Session, Status } from "./types";
+import type { Agent, Session, Status } from "./types";
 
 export interface ChatDigest {
   needs: Record<number, string>;
@@ -48,15 +48,24 @@ export interface Attention {
   source: "approval" | "cli" | "job" | "insight" | null;
   /** "Working in background": what still runs ("2 jobs running"), or null. */
   background: string | null;
+  /** Subagents of this session that still run (empty for an ended session). */
+  agents: Agent[];
 }
 
-/** "2 jobs running" / "Background tasks running" for an idle session with live child runs or shells; else null. */
-export function backgroundLabel(s: Session, status: Status): string | null {
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** Subagents still working inside a session (never for an ended one). */
+export function runningAgents(s: Session): Agent[] {
+  return s.status === "ended" ? [] : s.agents.filter((a) => !a.finished);
+}
+
+/** "4 agents, 2 jobs running" / "Background tasks running" for an idle session with live subagents, child runs or shells; else null. */
+export function backgroundLabel(s: Session, status: Status, agents = 0): string | null {
   if (status !== "idle") return null;
   const n = s.live_children ?? 0;
-  if (n > 0) return `${n} ${n === 1 ? "job" : "jobs"} running`;
+  const parts = [agents > 0 && plural(agents, "agent", "agents"), n > 0 && plural(n, "job", "jobs"), n === 0 && !!s.background_tasks && "Background tasks"].filter(Boolean);
   // The CLI only says that background tasks run, not how many.
-  return s.background_tasks ? "Background tasks running" : null;
+  return parts.length ? `${parts.join(", ")} running` : null;
 }
 
 export function attention(s: Session, d: ChatDigest): Attention {
@@ -64,15 +73,16 @@ export function attention(s: Session, d: ChatDigest): Attention {
   const cs = chat !== null ? d.status[chat] : undefined;
   // A chat that exited still leaves a live PTY (open in terminal), so only trust "ended" from discovery then.
   const raw: Status = cs && !(cs === "ended" && s.managed !== null) ? cs : s.status;
-  const background = backgroundLabel(s, raw);
+  const agents = raw === "ended" ? [] : runningAgents(s);
+  const background = backgroundLabel(s, raw, agents.length);
   const status: Status = background ? "busy" : raw;
   const approval = chat !== null ? (d.needs[chat] ?? null) : null;
-  if (approval) return { status, needs: approval, source: "approval", background };
+  if (approval) return { status, needs: approval, source: "approval", background, agents };
   const live = raw !== "ended";
-  if (live && s.waiting_for) return { status, needs: `Waiting for you: ${s.waiting_for}`, source: "cli", background };
-  if (live && s.child_needs) return { status, needs: s.child_needs, source: "job", background };
+  if (live && s.waiting_for) return { status, needs: `Waiting for you: ${s.waiting_for}`, source: "cli", background, agents };
+  if (live && s.child_needs) return { status, needs: s.child_needs, source: "job", background, agents };
   const ins = live ? (s.insight?.needs_you ?? null) : null;
-  return { status, needs: ins, source: ins ? "insight" : null, background };
+  return { status, needs: ins, source: ins ? "insight" : null, background, agents };
 }
 
 export function useAttention(s: Session | null): Attention | null {
