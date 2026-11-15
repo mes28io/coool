@@ -9,6 +9,7 @@ pub mod hub;
 pub mod insights;
 mod loader;
 pub mod model;
+pub mod project;
 pub mod pty;
 pub mod tail;
 pub mod usage;

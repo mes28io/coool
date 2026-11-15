@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion, Reorder } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chatTitle, needsAnswer, useChats } from "../lib/chat";
-import { displayTitle, folderName } from "../lib/format";
+import { displayTitle, folderName, projectOf } from "../lib/format";
 import { useAttention } from "../lib/live";
 import type { Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -290,7 +290,7 @@ function PanePicker({ leaf }: { leaf: Leaf }) {
                 <StatusDot status={s.status} size={7} />
                 <ProviderMark provider={s.provider} size={13} />
                 <span className="min-w-0 flex-1 truncate text-base">{displayTitle(s)}</span>
-                <span className="shrink-0 text-small text-faint">{folderName(s.cwd)}</span>
+                <span className="shrink-0 text-small text-faint">{folderName(projectOf(s))}</span>
               </button>
             ))}
             {list.length === 0 && <div className="px-2 py-3 text-center text-base text-dim">No matches</div>}

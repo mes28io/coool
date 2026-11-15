@@ -286,6 +286,7 @@ export class MockChat {
       id: this.sessionId,
       title: "",
       cwd: this.cwd,
+      project: this.cwd,
       model: this.model,
       pid: 52000 + this.id,
       status: "busy",

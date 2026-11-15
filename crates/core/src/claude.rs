@@ -243,6 +243,7 @@ fn session(id: &str, e: &Entry) -> Session {
         title: if v.title.is_empty() { e.reg_title.clone() } else { v.title.clone() },
         cwd: if v.cwd.is_empty() { e.reg_cwd.clone() } else { v.cwd.clone() },
         model: v.model.clone(),
+        project: String::new(),
         pid,
         status,
         current,

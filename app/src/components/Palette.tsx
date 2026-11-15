@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { displayTitle, folderName, homeShort } from "../lib/format";
+import { displayTitle, folderName, homeShort, projectOf } from "../lib/format";
 import { sessionKey } from "../lib/types";
 import { leaves, resolveTarget, useStore } from "../store";
 import { openChatInTerminal } from "../lib/actions";
@@ -58,7 +58,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         id: `s:${sessionKey(s)}`,
         group: "Sessions",
         label: displayTitle(s),
-        hint: folderName(s.cwd),
+        hint: folderName(projectOf(s)),
         icon: (
           <span className="flex items-center gap-1.5">
             <StatusDot status={s.status} size={7} />
@@ -70,15 +70,16 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     }
     const seen = new Set<string>();
     for (const s of st.sessions) {
-      if (!s.cwd || seen.has(s.cwd)) continue;
-      seen.add(s.cwd);
+      const proj = projectOf(s);
+      if (!proj || seen.has(proj)) continue;
+      seen.add(proj);
       out.push({
-        id: `p:${s.cwd}`,
+        id: `p:${proj}`,
         group: "Projects",
-        label: `New session in ${folderName(s.cwd)}`,
-        hint: homeShort(s.cwd),
+        label: `New session in ${folderName(proj)}`,
+        hint: homeShort(proj),
         icon: <IFolder size={16} />,
-        run: done(() => st.setSheet({ kind: "new", cwd: s.cwd })),
+        run: done(() => st.setSheet({ kind: "new", cwd: proj })),
       });
     }
     const tab = st.tabs.find((t) => t.id === st.activeTab);

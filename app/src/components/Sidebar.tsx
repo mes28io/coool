@@ -1,7 +1,7 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
 import { useNow } from "../lib/clock";
-import { ago, displayTitle, folderName, homeShort } from "../lib/format";
+import { ago, displayTitle, folderName, homeShort, projectOf } from "../lib/format";
 import { attention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
 import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
@@ -43,7 +43,7 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
     for (const s of sessions) {
       const a = attention(s, digest);
       att.set(s, a);
-      const p = get(s.cwd || "unknown");
+      const p = get(projectOf(s) || "unknown");
       (a.status === "ended" ? p.ended : p.live).push(s);
       if (a.needs) p.needs++;
       p.updated = Math.max(p.updated, s.updated);
@@ -293,6 +293,7 @@ function Row({
   status,
   provider,
   meta,
+  cwdName,
   dim,
   data,
 }: {
@@ -302,6 +303,8 @@ function Row({
   status: UiStatus;
   provider: "claude" | "codex";
   meta: string;
+  /** Last folder of the session's cwd when it is not the project folder; shown dim on hover. */
+  cwdName?: string;
   dim?: boolean;
   /** `data-*` hooks (self-test). */
   data?: Record<string, string | undefined>;
@@ -321,7 +324,7 @@ function Row({
       )}
       style={{ background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--bg)" }}
     >
-      <span className="min-w-0 flex-1 truncate group-hover:mr-[84px]">{title}</span>
+      <span className={cx("min-w-0 flex-1 truncate group-hover:mr-[84px]", cwdName && "group-hover:mr-[150px]")}>{title}</span>
       {dot && (
         <span className="ml-2 flex shrink-0 items-center group-hover:hidden">
           <StatusDot status={status} size={8} />
@@ -331,6 +334,7 @@ function Row({
         className="absolute inset-y-0 right-0 hidden items-center gap-2 rounded-r-[10px] pl-6 pr-3 text-small text-faint group-hover:flex"
         style={{ background: "linear-gradient(90deg, transparent, color-mix(in oklab, var(--text) 8%, var(--bg)) 22px)" }}
       >
+        {cwdName && <span className="max-w-[60px] truncate opacity-60">{cwdName}</span>}
         <span className="tnum">{meta}</span>
         <ProviderMark provider={provider} size={14} />
       </span>
@@ -350,6 +354,7 @@ const SessionRow = memo(function SessionRow({ s, att, selected }: { s: Session; 
       status={status}
       provider={s.provider}
       meta={ago(s.updated, now)}
+      cwdName={s.cwd && s.cwd !== projectOf(s) ? folderName(s.cwd) : undefined}
       dim={att.status === "ended"}
       data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined }}
     />

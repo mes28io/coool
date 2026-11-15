@@ -2,7 +2,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
 import { useNow } from "../lib/clock";
 import { useChats } from "../lib/chat";
-import { ago, displayTitle, folderName, headlineIsTitle, isThinking, shortDetail, splitTool } from "../lib/format";
+import { ago, displayTitle, folderName, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool } from "../lib/format";
 import { attention, useChatDigest, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
@@ -32,7 +32,7 @@ export function MissionControl() {
     const rank = (s: Session) => (att.get(s)!.needs ? 0 : att.get(s)!.status === "busy" ? 1 : 2);
     const live = sessions
       .filter((s) => att.get(s)!.status !== "ended")
-      .sort((a, b) => rank(a) - rank(b) || folderName(a.cwd).localeCompare(folderName(b.cwd)) || displayTitle(a).localeCompare(displayTitle(b)));
+      .sort((a, b) => rank(a) - rank(b) || folderName(projectOf(a)).localeCompare(folderName(projectOf(b))) || displayTitle(a).localeCompare(displayTitle(b)));
     return { live, att };
   }, [sessions, digest]);
   const recent = useMemo(() => sessions.filter((s) => att.get(s)?.status === "ended").slice(0, 6), [sessions, att]);
@@ -182,7 +182,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
     >
       <div className="flex h-[22px] items-center gap-1.5">
         <ProviderMark provider={s.provider} size={14} />
-        <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(s.cwd)}</span>
+        <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(projectOf(s))}</span>
         <StateLabel status={att.status} needs={!!needs} />
       </div>
       <div className="mt-2 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">{displayTitle(s)}</div>
@@ -286,7 +286,7 @@ function RecentRow({ s, first }: { s: Session; first: boolean }) {
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={() => open({ kind: "session", key: sessionKey(s) })}>
         <ProviderMark provider={s.provider} size={15} />
         <span className="truncate text-base text-fg/85 group-hover:text-fg">{displayTitle(s)}</span>
-        <span className="shrink-0 text-small text-faint">{folderName(s.cwd)}</span>
+        <span className="shrink-0 text-small text-faint">{folderName(projectOf(s))}</span>
       </button>
       <Button variant="ghost" className="h-[30px] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100" onClick={() => resumeInto(s)} title="Resume inside coool">
         <IPlay size={13} />

@@ -199,6 +199,9 @@ impl Hub {
         if live_only {
             all.retain(|s| s.status != Status::Ended || s.managed.is_some() || s.chat.is_some());
         }
+        for s in &mut all {
+            s.project = crate::project::project_root(&s.cwd);
+        }
         all.sort_by(|a, b| a.status.cmp(&b.status).then(b.updated.cmp(&a.updated)));
         all
     }

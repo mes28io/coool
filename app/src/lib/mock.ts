@@ -145,6 +145,7 @@ function session(p: Partial<Session> & Pick<Session, "provider" | "id" | "cwd">)
     updated: Date.now(),
     managed: null,
     ...p,
+    project: p.project ?? p.cwd,
   };
 }
 
@@ -274,6 +275,19 @@ export function mockBackend(): Backend {
       updated: now - 7 * 60_000,
     }),
     "pixel",
+  );
+  add(
+    session({
+      provider: "claude",
+      id: "5c7e19",
+      cwd: `/private/tmp/claude-501/-Users-me-code-atlas-api/b1cd1930-6f74-4abe-bf52-13f0eba84069/scratchpad/env-test`,
+      project: atlas,
+      title: "Check the env loader handles empty values",
+      tokens: tok(6_000, 1_000, 8_000),
+      activity: history("atlas", ["Check the env loader handles empty values"], now - 3 * 3600_000, 1, 4),
+      updated: now - 3 * 3600_000,
+    }),
+    "atlas",
   );
   add(
     session({

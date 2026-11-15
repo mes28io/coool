@@ -128,6 +128,9 @@ pub struct Session {
     pub id: String,
     pub title: String,
     pub cwd: String,
+    /// Folder the session is grouped under (see [`crate::project`]); filled in by
+    /// [`crate::hub::Hub::refresh`], empty before that.
+    pub project: String,
     pub model: String,
     pub pid: Option<u32>,
     pub status: Status,

@@ -298,6 +298,7 @@ impl CodexSource {
             title: self.title_map.get(&id).cloned().unwrap_or_default(),
             id,
             cwd: v.cwd.clone(),
+            project: String::new(),
             model: v.model.clone(),
             pid: None,
             status,

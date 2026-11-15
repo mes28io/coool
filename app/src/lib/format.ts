@@ -15,6 +15,11 @@ export function ago(ms: number, now = Date.now()): string {
   return `${Math.floor(d / 86400)}d ago`;
 }
 
+/** The folder a session is grouped under: its `project`, else its `cwd`. */
+export function projectOf(s: { project?: string; cwd: string }): string {
+  return s.project || s.cwd;
+}
+
 export function folderName(cwd: string): string {
   const parts = cwd.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || cwd || "unknown";

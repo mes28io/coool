@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { newChat } from "../lib/actions";
 import { api, isNotAvailable } from "../lib/backend";
-import { folderName, homeShort } from "../lib/format";
+import { folderName, homeShort, projectOf } from "../lib/format";
 import { estimateSize } from "../lib/termlite";
 import type { InsightsStatus, Provider } from "../lib/types";
 import { useStore, type Sheet, type ThemePref } from "../store";
@@ -69,10 +69,10 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
   const toast = useStore((s) => s.toast);
   const recents = useMemo(() => {
     const seen: string[] = [];
-    for (const s of sessions) if (s.cwd && !seen.includes(s.cwd)) seen.push(s.cwd);
+    for (const s of sessions) if (projectOf(s) && !seen.includes(projectOf(s))) seen.push(projectOf(s));
     return seen.slice(0, 6);
   }, [sessions]);
-  const [provider, setProvider] = useState<Provider>(initialProvider ?? sessions.find((s) => s.cwd === initialCwd)?.provider ?? "claude");
+  const [provider, setProvider] = useState<Provider>(initialProvider ?? sessions.find((s) => projectOf(s) === initialCwd)?.provider ?? "claude");
   const [cwd, setCwd] = useState(initialCwd ? homeShort(initialCwd) : recents[0] ? homeShort(recents[0]) : "");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);

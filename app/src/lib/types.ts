@@ -52,6 +52,8 @@ export interface Session {
   id: string;
   title: string;
   cwd: string;
+  /** Folder the session is grouped under (differs from `cwd` for scratch dirs and worktrees); may be empty. */
+  project: string;
   model: string;
   pid: number | null;
   status: Status;

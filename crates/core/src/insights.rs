@@ -514,6 +514,7 @@ mod tests {
             id: id.into(),
             title: "Fix the parser".into(),
             cwd: "/Users/x/code/myproj".into(),
+            project: String::new(),
             model: "m".into(),
             pid: None,
             status: Status::Busy,
