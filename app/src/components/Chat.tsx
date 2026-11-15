@@ -747,7 +747,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
           )}
           {running && shownSteps.length === 0 && !note && (
             <div className="px-3 pb-2">
-              <ThinkingRow since={tool.ts} label="Starting" mood="start" noOrb />
+              <ThinkingRow since={tool.ts} label="Starting" mood="start" />
             </div>
           )}
         </FoldBody>

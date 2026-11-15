@@ -13,7 +13,6 @@ import { turnTotals } from "../lib/turn";
 import { IAlert, IChevron, ICheck, toolIcon } from "./icons";
 import { Elapsed, JumpToBottom, LiveClock, cx, ease, StatusDot } from "./primitives";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
-import { ThinkOrb } from "./ThinkOrb";
 import { Markdown } from "./Markdown";
 import { ModelTag } from "./Models";
 import { modelLabel } from "../lib/models";
@@ -274,7 +273,6 @@ export function ThinkingRow({
   detail,
   big,
   large,
-  noOrb,
   live = true,
   timerSince,
   timerTitle,
@@ -287,11 +285,9 @@ export function ThinkingRow({
   /** A fixed label instead of the mood's words ("Starting claude in coool"). */
   label?: string;
   detail?: string;
-  /** Centered, 64px orb above the label (the empty "Starting…" screens). */
+  /** Centered, larger glyph above the label (the empty "Starting…" screens). */
   big?: boolean;
   large?: boolean;
-  /** Subagents: words only; a plain icon keeps the slot. */
-  noOrb?: boolean;
   live?: boolean;
 }) {
   const exact = since !== null && Number.isFinite(since);
@@ -311,7 +307,7 @@ export function ThinkingRow({
   if (big)
     return (
       <div className="flex flex-col items-center gap-3 py-1 text-base">
-        <ThinkOrb state={m.orb} size={64} live={live} />
+        <MoodGlyph mood={mood} size={28} live={live} className="text-working-text" />
         <div className="flex items-center gap-2.5">
           <span className="inline-flex font-medium">
             {label}
@@ -324,8 +320,8 @@ export function ThinkingRow({
   if (large)
     return (
       <div className="flex items-center gap-3 pb-1 pt-2.5 text-prose" data-live-row data-mood={mood}>
-        <span className="flex size-[28px] shrink-0 items-center justify-center">
-          <ThinkOrb state={m.orb} size={28} live={live} />
+        <span className="flex size-[20px] shrink-0 items-center justify-center">
+          <MoodGlyph mood={mood} size={16} live={live} className="text-working-text" />
         </span>
         <span className="inline-flex shrink-0 font-medium">
           {label}
@@ -338,7 +334,7 @@ export function ThinkingRow({
   return (
     <div className="flex items-center gap-2.5 py-1 text-base">
       <span className="relative flex size-[22px] items-center justify-center">
-        {noOrb ? <MoodGlyph mood={mood} size={14} live={live} className="text-working-text" /> : <ThinkOrb state={m.orb} size={20} live={live} />}
+        <MoodGlyph mood={mood} size={14} live={live} className="text-working-text" />
       </span>
       {/* Fixed-width slot (widest word) so the timer does not jitter as the word changes. */}
       <span className="inline-flex font-medium" style={{ minWidth: given ? undefined : "15ch" }}>
@@ -734,7 +730,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
           )}
           {running && steps.length === 0 && (
             <div className="px-3 pb-2">
-              <ThinkingRow since={live.approx ? null : live.at} label="Starting" mood="start" noOrb />
+              <ThinkingRow since={live.approx ? null : live.at} label="Starting" mood="start" />
             </div>
           )}
         </FoldBody>
