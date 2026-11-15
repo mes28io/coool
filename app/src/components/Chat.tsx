@@ -10,7 +10,10 @@ import { type Chat, type ChatItem, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { modelLabel } from "../lib/models";
 import type { Activity, RememberOption } from "../lib/types";
-import { HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit } from "./Activity";
+import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
+import { useFold } from "../lib/cardFold";
+import { isStopReason } from "../lib/stopped";
+import { MoodGlyph } from "./MoodGlyph";
 import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
 import { toolMood } from "../lib/activityMood";
@@ -116,6 +119,7 @@ export function ChatTimeline({
   const [fresh, setFresh] = useState(false);
   const [needs, setNeeds] = useState(false);
   const pinning = useRef(false);
+  const lastTop = useRef(0);
   const toBottom = (smooth: boolean) => {
     const el = scroller.current;
     if (!el) return;
@@ -270,17 +274,22 @@ export function ChatTimeline({
   }, [chat.items, chat.turnStart, chat.lastTs]);
 
   return (
-    <div className="relative h-full">
+    <div className="flex h-full flex-col">
     <div
       ref={scroller}
-      className="scroll h-full"
+      className="scroll min-h-0 flex-1"
       data-chat-timeline={chat.id}
       onScroll={(e) => {
         const el = e.currentTarget;
         const at = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        // Only the reader moving up unpins (a smooth scroll to the bottom moves down; growth below keeps scrollTop).
+        const up = el.scrollTop < lastTop.current - 1;
+        lastTop.current = el.scrollTop;
         if (pinning.current && !at) return;
-        stick.current = at;
-        setAway((a) => (a === !at ? a : !at));
+        if (at) stick.current = true;
+        else if (up) stick.current = false;
+        const isAway = !stick.current;
+        setAway((a) => (a === isAway ? a : isAway));
         if (at) {
           setFresh(false);
           setNeeds(false);
@@ -330,7 +339,10 @@ export function ChatTimeline({
         </div>
       </div>
     </div>
-    <JumpToBottom away={away} fresh={fresh} needs={needs} onClick={() => toBottom(true)} />
+    {/* The jump button floats over the bottom of the timeline as a small solid pill, nothing behind it; it only shows while the reader is away. */}
+    <div className="relative h-0 shrink-0">
+      <JumpToBottom away={away} fresh={fresh} needs={needs} onClick={() => toBottom(true)} />
+    </div>
     </div>
   );
 }
@@ -534,7 +546,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
   }, [holdsFocus]);
   const isOpen = open ?? (latest || active || tools.length <= 2);
   const mountKeys = useRef(new Set(tools.map((t) => t.key)));
-  const failed = tools.filter((t) => t.ok === false).length;
+  const failed = tools.filter((t) => t.ok === false && !t.stopped).length;
   const end = Math.max(...tools.map((t) => t.endTs ?? t.ts));
   const span = end - tools[0].ts;
   const pendingTool = chat.pendingPermission ? (chat.items.find((i) => i.kind === "permission" && i.requestId === chat.pendingPermission) as Perm | undefined)?.tool : undefined;
@@ -608,7 +620,7 @@ function AgentsSummary({ tools, chat, nested }: { tools: Tool[]; chat: Chat; nes
   );
 }
 
-function ToolStep({ t, cwd, dense, waiting, fresh }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean; fresh?: boolean }) {
+function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean; fresh?: boolean; stoppedIn?: boolean }) {
   const [open, setOpen] = useState(false);
   const hasOut = !!t.output && t.endTs !== null;
   return (
@@ -619,6 +631,7 @@ function ToolStep({ t, cwd, dense, waiting, fresh }: { t: Tool; cwd: string; den
         active={t.endTs === null}
         waiting={waiting}
         failed={t.ok === false}
+        stopped={t.ok === false && (!!t.stopped || stoppedIn)}
         dense={dense}
         fresh={fresh}
         stamp={clockTime(t.ts)}
@@ -632,7 +645,7 @@ function ToolStep({ t, cwd, dense, waiting, fresh }: { t: Tool; cwd: string; den
             <pre
               className={cx(
                 "selectable mb-1.5 ml-[6px] mt-0.5 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-[8px] border border-hairline px-3 py-2 font-mono text-mono-small leading-[16px]",
-                t.ok === false ? "bg-[color-mix(in_oklab,var(--error)_6%,transparent)] text-err-text/90" : "bg-[color-mix(in_oklab,var(--dim)_6%,transparent)] text-dim",
+                t.ok === false && !t.stopped && !stoppedIn ? "bg-[color-mix(in_oklab,var(--error)_6%,transparent)] text-err-text/90" : "bg-[color-mix(in_oklab,var(--dim)_6%,transparent)] text-dim",
               )}
             >
               {t.output}
@@ -659,69 +672,87 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
   const card = useRef<HTMLDivElement>(null);
   const focus = useStore((st) => st.agentFocus);
-  const lit = useFocusLit(!!focus && focus.id === tool.id && Date.now() - focus.at < 6000, card);
+  const asked = !!focus && focus.id === tool.id && Date.now() - focus.at < 6000;
+  const lit = useFocusLit(asked, card);
+  // Finished cards (done, failed, stopped) fold to one row; see lib/cardFold.ts.
+  const [open, toggle] = useFold(`chat:${tool.id}`, !running, card);
+  useEffect(() => {
+    if (asked && !open) toggle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked]);
+  const end: AgentEnd = tool.ok === false ? (tool.stopped || !tool.output.trim() || isStopReason(tool.output) ? "stopped" : "failed") : "done";
+  const reason = tool.ok === false ? tool.output.split("\n").find((l) => l.trim())?.trim().replace(/^\[(.*)\]$/, "$1") || null : null;
+  const title = stripToolName(tool.name, tool.summary);
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
-        <ISpark size={14} />
+        <MoodGlyph mood="delegate" size={14} live={running} />
       </span>
       <div
         ref={card}
         data-agent-card={tool.id}
+        data-open={open}
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
           lit ? "border-[color-mix(in_oklab,var(--status-working)_45%,var(--border))]" : "border-hairline",
         )}
       >
-        <div className="flex items-center gap-2 px-3 pb-1.5 pt-2">
-          <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{kind}</span>
-          <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{stripToolName(tool.name, tool.summary)}</span>
-          {modelIds.map((m) => (
-            <ModelTag key={m} model={m} />
-          ))}
-          {running ? (
+        {running ? (
+          <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-center gap-2 px-3 pb-1.5 pt-2">
+            <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{kind}</span>
+            <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
+            {modelIds.map((m) => (
+              <ModelTag key={m} model={m} />
+            ))}
             <span className="flex items-center gap-1.5 text-small text-faint">
               <StatusDot status="busy" size={7} />
               <LiveClock since={tool.ts} />
             </span>
-          ) : (
-            <span className="text-small text-faint tnum">{fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)}</span>
+            <FoldChevron open={open} />
+          </div>
+        ) : (
+          <FinishedAgentHead end={end} title={title} parts={agentResultParts(steps.length, outTokens, (tool.endTs ?? tool.ts) - tool.ts)} reason={end === "done" ? null : reason} open={open} onToggle={toggle} />
+        )}
+        <FoldBody open={open}>
+          {!running && (
+            <div className="flex items-center gap-2 px-3 pb-1">
+              <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{kind}</span>
+              {modelIds.map((m) => (
+                <ModelTag key={m} model={m} />
+              ))}
+              {end !== "done" && reason && reason !== "Stopped" && (
+                <span className={cx("min-w-0 flex-1 truncate text-small", end === "failed" ? "text-err-text/90" : "text-dim")} title={reason}>
+                  {reason}
+                </span>
+              )}
+            </div>
           )}
-        </div>
-        {shownSteps.length > 0 && (
-          <div className="pb-1.5 pl-[14px] pr-1">
-            {hidden > 0 && <div className="pb-0.5 pl-[20px] text-small text-faint">{hidden} earlier</div>}
-            <RailList>
-              {shownSteps.map((s, i) => {
-                const fresh = !agentSeen.current.has(s.key);
-                return (
-                  <RailItem key={s.key} first={i === 0} last={i === shownSteps.length - 1} fresh={fresh} active={s.endTs === null}>
-                    <ToolStep t={s} cwd={chat.cwd} dense fresh={fresh} />
-                  </RailItem>
-                );
-              })}
-            </RailList>
-          </div>
-        )}
-        {note && (
-          <div className="border-t border-hairline px-3 py-2">
-            <AssistantText text={note.text} streaming={note.streaming} small />
-          </div>
-        )}
-        {!running && (
-          <div className={cx("flex items-center gap-1.5 border-t border-hairline px-3 py-1.5 text-small tnum", tool.ok === false ? "text-err-text" : "text-faint")} data-agent-result={tool.ok === false ? "failed" : "done"}>
-            {tool.ok === false ? <IAlert size={13} /> : <ICheck size={13} />}
-            <span className={cx("font-medium", tool.ok === false ? "" : "text-dim")}>{tool.ok === false ? "Failed" : "Done"}</span>
-            <span className="text-faint">
-              {[steps.length > 0 && `${steps.length} tool ${steps.length === 1 ? "use" : "uses"}`, outTokens > 0 && `${fmtOut(outTokens)} tokens`, fmtElapsed((tool.endTs ?? tool.ts) - tool.ts)].filter(Boolean).join(" · ")}
-            </span>
-          </div>
-        )}
-        {running && shownSteps.length === 0 && !note && (
-          <div className="px-3 pb-2">
-            <ThinkingRow since={tool.ts} label="Starting" mood="start" noOrb />
-          </div>
-        )}
+          {shownSteps.length > 0 && (
+            <div className="pb-1.5 pl-[14px] pr-1">
+              {hidden > 0 && <div className="pb-0.5 pl-[20px] text-small text-faint">{hidden} earlier</div>}
+              <RailList>
+                {shownSteps.map((s, i) => {
+                  const fresh = !agentSeen.current.has(s.key);
+                  return (
+                    <RailItem key={s.key} first={i === 0} last={i === shownSteps.length - 1} fresh={fresh} active={s.endTs === null}>
+                      <ToolStep t={s} cwd={chat.cwd} dense fresh={fresh} stoppedIn={end === "stopped" && i === shownSteps.length - 1} />
+                    </RailItem>
+                  );
+                })}
+              </RailList>
+            </div>
+          )}
+          {note && (
+            <div className="border-t border-hairline px-3 py-2">
+              <AssistantText text={note.text} streaming={note.streaming} small />
+            </div>
+          )}
+          {running && shownSteps.length === 0 && !note && (
+            <div className="px-3 pb-2">
+              <ThinkingRow since={tool.ts} label="Starting" mood="start" noOrb />
+            </div>
+          )}
+        </FoldBody>
       </div>
     </div>
   );

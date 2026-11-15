@@ -453,14 +453,14 @@ export function Button({
 }
 
 /**
- * "Scroll to bottom" for a timeline the reader has scrolled up in. Sits centred at the bottom of the timeline pane
- * (just above the composer). `fresh`: new output arrived while away (dot + label); `needs`: an approval/question
- * arrived (blue, "Needs you"). Position it inside a `relative` wrapper around the scroller.
+ * "Scroll to bottom" for a timeline the reader has scrolled up in. Floats centred over the bottom edge of the timeline
+ * (just above the composer): a small solid pill, nothing behind it. `fresh`: new output arrived while away (dot + label); `needs`: an approval/question
+ * arrived (blue, "Needs you"). Place it in a zero-height `relative` box right after the scroller.
  */
 export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; fresh: boolean; needs: boolean; onClick: () => void }) {
   const label = needs ? "Needs you" : fresh ? "New output" : null;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-2.5">
       <button
         type="button"
         onClick={onClick}
@@ -469,7 +469,7 @@ export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; f
         title={label ?? "Scroll to bottom"}
         data-jump-bottom={needs ? "needs" : fresh ? "new" : "idle"}
         className={cx(
-          "inline-flex h-[30px] items-center gap-1.5 rounded-full border bg-bg px-2.5 text-small font-medium shadow-pop transition-[opacity,transform] duration-200",
+          "relative inline-flex h-[30px] items-center gap-1.5 rounded-full border bg-bg px-2.5 text-small font-medium shadow-pop transition-[opacity,transform] duration-200",
           away ? "pointer-events-auto translate-y-0 opacity-100" : "translate-y-1 opacity-0",
           needs ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))] text-needs-text" : "border-line text-dim hover:text-fg",
         )}

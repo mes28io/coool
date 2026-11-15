@@ -1,6 +1,6 @@
 // `?agents=demo` opens the browser mock's session with running subagents ("Ship the Blender
 // add-on milestone"), `?agents=jobs` the one with child jobs, `?agents=chat` a chat whose
-// subagents arrive as chat items. The ids are shared with lib/mock.ts.
+// subagents arrive as chat items, `?agents=stop` a chat whose turn is stopped mid-step. The ids are shared with lib/mock.ts.
 
 import { sessionKey } from "./types";
 import { useStore } from "../store";
@@ -13,8 +13,8 @@ export function openAgentsDemo() {
   const mode = /[?&]agents=(\w+)/.exec(location.search)?.[1];
   if (!mode) return;
   const off = useStore.subscribe((st) => {
-    if (mode === "chat") {
-      const info = Object.values(st.chatInfos).find((c) => c.cwd.endsWith("/blender-addon"));
+    if (mode === "chat" || mode === "stop") {
+      const info = Object.values(st.chatInfos).find((c) => c.cwd.endsWith(mode === "stop" ? "/stop-demo" : "/blender-addon"));
       if (!info) return;
       off();
       st.open({ kind: "chat", id: info.id });

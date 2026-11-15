@@ -512,9 +512,9 @@ html.theme-fade *::after {
   }
 }
 
+/* Was `content-visibility: auto`. Off: rows never rendered got a 60px placeholder and grew when scrolled
+   into view, which made scrolling up jump in WebKit (no scroll anchoring) and raised false "New output". */
 .cv-auto {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 60px;
 }
 
 /* ---------- terminal ---------- */

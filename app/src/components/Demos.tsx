@@ -1,16 +1,15 @@
 // Standalone demo pages for the browser build: `?ledger=demo` (Ledger with a working
 // in-memory undo). Mounted from main.tsx in place of the app.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ThinkingOrb, type OrbState } from "thinking-orbs";
 import { IBell, IGlobe, IFile, IGear } from "./icons";
 import { ThinkingRow, Timeline } from "./Activity";
 import { MOODS, type Mood } from "../lib/activityMood";
-import { ThinkOrb } from "./ThinkOrb";
-import { Reveal } from "./StepRail";
 import { Strip } from "./AgentsPanel";
 import { Ledger, type LedgerChange } from "./Ledger";
 import { PlanCard, type PlanPhase, type PlanStep } from "./PlanCard";
+import { MoodGlyph, MoodSvg } from "./MoodGlyph";
 
 const m = (n: number) => Date.now() - n * 60_000;
 
@@ -164,24 +163,7 @@ export function OrbsDemo() {
     const t = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(t);
   }, []);
-  if (/[?&]rv(&|$)/.test(q)) return <RevealProbe dark={dark} />;
   if (/[?&]ro(&|$)/.test(q)) return <ReadOnlyTour dark={dark} />;
-  if (/[?&]sz(&|$)/.test(q))
-    return (
-      <div className="min-h-screen bg-bg p-8 text-fg">
-        {(["searching", "composing", "working", "solving", "weaving", "shaping"] as OrbState[]).map((st) => (
-          <div key={st} className="flex items-center gap-8 py-3 text-prose">
-            <span className="w-28 text-small text-dim">{st}</span>
-            <ThinkOrb state={st} size={28} from={20} />
-            <span className="w-20 text-small text-faint">28 from 20</span>
-            <ThinkOrb state={st} size={28} from={64} />
-            <span className="w-20 text-small text-faint">28 from 64</span>
-            <ThinkOrb state={st} size={20} />
-            <span className="text-small text-faint">20</span>
-          </div>
-        ))}
-      </div>
-    );
   if (/[?&]row/.test(q))
     return (
       <div className="min-h-screen bg-bg p-8 text-fg">
@@ -227,52 +209,9 @@ export function OrbsDemo() {
 }
 
 /** Which demo page, if any, `?x=demo` asks for. */
-export function demoPage(): "ledger" | "plan" | "orbs" | null {
+export function demoPage(): "ledger" | "plan" | "orbs" | "glyphs" | null {
   const q = location.search;
-  return /[?&]ledger=demo/.test(q) ? "ledger" : /[?&]plan=demo/.test(q) ? "plan" : /[?&]orbs=demo/.test(q) ? "orbs" : null;
-}
-
-/** Measures the Reveal sweep: element width and three glyph rects at every 30ms for 700ms after each new word. */
-function RevealProbe({ dark }: { dark: boolean }) {
-  const words = ["Deliberating", "Orchestrating", "Chiselling", "Contemplating"];
-  const [i, setI] = useState(0);
-  const ref = useRef<HTMLDivElement>(null);
-  const [log, setLog] = useState<string[]>([]);
-  useEffect(() => {
-    const t = setInterval(() => setI((x) => x + 1), 2000);
-    return () => clearInterval(t);
-  }, []);
-  useEffect(() => {
-    if (i === 0) return;
-    const rows: string[] = [];
-    const t0 = performance.now();
-    const sample = () => {
-      const el = ref.current;
-      if (!el) return;
-      const node = el.firstChild?.firstChild ?? el.firstChild;
-      const tn = (node && node.nodeType === 3 ? node : el.firstChild) as Text;
-      const rect = (k: number) => {
-        const r = document.createRange();
-        r.setStart(tn, k);
-        r.setEnd(tn, k + 1);
-        const b = r.getClientRects()[0];
-        return b ? `${b.left.toFixed(2)}` : "-";
-      };
-      const len = tn.length ?? 0;
-      rows.push(`${Math.round(performance.now() - t0)}ms w=${el.getBoundingClientRect().width.toFixed(2)} c0=${rect(0)} c${len >> 1}=${rect(len >> 1)} c${len - 1}=${rect(len - 1)} sweep=${!!el.querySelector(".rv-sweep") || el.firstElementChild?.className}`);
-      if (performance.now() - t0 < 700) setTimeout(sample, 30);
-      else setLog((l) => [...l, `-- word ${words[i % words.length]}`, ...rows]);
-    };
-    sample();
-  }, [i]);
-  return (
-    <div className="min-h-screen p-8 text-prose" style={{ background: dark ? "#212121" : "#fff", color: dark ? "#ececec" : "#0d0d0d" }}>
-      <div ref={ref} className="inline-block font-medium">
-        <Reveal key={i} text={words[i % words.length]} fresh={i > 0} />
-      </div>
-      <pre id="fps" className="mt-6 text-small">{log.join("\n")}</pre>
-    </div>
-  );
+  return /[?&]ledger=demo/.test(q) ? "ledger" : /[?&]plan=demo/.test(q) ? "plan" : /[?&]orbs=demo/.test(q) ? "orbs" : /[?&]glyphs=demo/.test(q) ? "glyphs" : null;
 }
 
 function hhmmss(t: number) {
@@ -312,6 +251,76 @@ function ReadOnlyTour({ dark }: { dark: boolean }) {
   return (
     <div className="h-screen bg-bg text-fg" style={{ colorScheme: dark ? "dark" : "light" }}>
       <Timeline session={session as never} />
+    </div>
+  );
+}
+
+const MOOD_LIST = Object.keys(MOODS) as Mood[];
+
+function GlyphPanel({ dark }: { dark: boolean }) {
+  const bg = dark ? "#212121" : "#ffffff";
+  const fg = dark ? "#ececec" : "#0d0d0d";
+  const green = dark ? "#28c840" : "#1a7f37";
+  const faint = dark ? "#8f8f8f" : "#8f8f8f";
+  const [k, setK] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setK((x) => x + 1), 1600);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="flex-1 p-5" style={{ background: bg, color: fg }} data-glyph-panel={dark ? "dark" : "light"}>
+      <div className="mb-2 grid grid-cols-[72px_40px_40px_40px_40px_1fr] items-center gap-y-0 text-small" style={{ opacity: 0.55 }}>
+        <span>{dark ? "dark" : "light"}</span>
+        <span>13 live</span>
+        <span>14 live</span>
+        <span>14 still</span>
+        <span>faint</span>
+        <span>in context</span>
+      </div>
+      {MOOD_LIST.map((m) => (
+        <div key={m} className="grid h-[30px] grid-cols-[72px_40px_40px_40px_40px_1fr] items-center text-[13px]" data-glyph-row={m}>
+          <span style={{ opacity: 0.55 }}>{m}</span>
+          <span style={{ color: green }} data-cell="13">
+            <MoodSvg mood={m} size={13} />
+          </span>
+          <span style={{ color: green }} data-cell="14">
+            <MoodSvg mood={m} size={14} />
+          </span>
+          <span style={{ color: green }} data-cell="still">
+            <MoodSvg mood={m} size={14} live={false} />
+          </span>
+          <span style={{ color: faint }} data-cell="faint">
+            <MoodSvg mood={m} size={12} live={false} />
+          </span>
+          <span className="flex items-center gap-2">
+            <span style={{ color: green }} className="flex">
+              <MoodSvg mood={m} size={14} />
+            </span>
+            <span className="font-medium">{MOODS[m].words[0]}...</span>
+            <span className="ml-3 flex items-center gap-2" style={{ opacity: 0.9 }}>
+              <ThinkingOrb state={MOODS[m].orb} size={20} theme={dark ? "dark" : "light"} />
+              <span style={{ opacity: 0.55 }}>orb (main agent)</span>
+            </span>
+          </span>
+        </div>
+      ))}
+      <div className="mt-3 flex items-center gap-2 text-[13px]" data-glyph-fade>
+        <span style={{ opacity: 0.55 }} className="w-[72px]">cross-fade</span>
+        <span style={{ color: green }} className="flex">
+          <MoodGlyph mood={MOOD_LIST[k % MOOD_LIST.length]} size={14} />
+        </span>
+        <span className="font-medium">{MOODS[MOOD_LIST[k % MOOD_LIST.length]].words[0]}</span>
+      </div>
+    </div>
+  );
+}
+
+/** `?glyphs=demo`: the subagent mood glyphs at real size, live and still, dark and light, next to the orbs. */
+export function GlyphsDemo() {
+  return (
+    <div className="flex min-h-screen">
+      <GlyphPanel dark />
+      <GlyphPanel dark={false} />
     </div>
   );
 }

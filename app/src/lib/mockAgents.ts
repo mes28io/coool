@@ -1,6 +1,6 @@
 // `?agents=chat`: a chat that hands work to four subagents at once (Task calls with nested
-// tool calls, delivered as chat items): one finishes, one has a failed step, one is stopped,
-// one keeps going for a good while. See lib/agentsDemo.ts.
+// tool calls, delivered as chat items): one fails, one finishes after a failed step, one is
+// stopped by the person (interrupted mid-step), one keeps going for a good while. See lib/agentsDemo.ts.
 
 import type { MockChat } from "./mockChat";
 
@@ -13,8 +13,10 @@ interface Script {
   desc: string;
   model: string;
   steps: { name: string; summary: string; ms: number; fail?: boolean }[];
-  /** "done" | "stopped" */
-  end: "done" | "stopped";
+  /** How it ends: "stopped" is cut off by the person in its last step. */
+  end: "done" | "stopped" | "failed";
+  /** The failure ("failed" only). */
+  error?: string;
   say: string;
   startAfter: number;
 }
@@ -22,7 +24,7 @@ interface Script {
 const P = "~/code/blender-addon/src";
 const SCRIPTS: Script[] = [
   {
-    kind: "Explore", desc: "Survey the Blender operator API", model: "claude-haiku-5-5", end: "done", startAfter: 600,
+    kind: "Explore", desc: "Survey the Blender operator API", model: "claude-haiku-5-5", end: "failed", error: "API error: rate limited (429) while reading docs/api/types.md", startAfter: 600,
     say: "Found 212 operators; the add-on needs 9 of them, all stable since Blender 3.6.",
     steps: [
       { name: "Grep", summary: "bpy.ops", ms: 1800 }, { name: "Read", summary: `${P}/ops/register.py`, ms: 2200 }, { name: "Grep", summary: "register_class", ms: 1900 },
@@ -44,7 +46,7 @@ const SCRIPTS: Script[] = [
     say: "",
     steps: [
       { name: "Write", summary: "tests/conftest.py", ms: 2300 }, { name: "Bash", summary: "blender -b --python tests/run.py", ms: 3300 }, { name: "Edit", summary: "tests/conftest.py", ms: 2000 },
-      { name: "Bash", summary: "blender -b --python tests/run.py", ms: 3000, fail: true },
+      { name: "Bash", summary: "blender -b --python tests/run.py", ms: 3000 },
     ],
   },
   {
@@ -84,8 +86,11 @@ export async function runAgentsChat(c: MockChat) {
         const tid = `toolu_${rid()}`;
         c.emit({ type: "tool_start", id: tid, name: st.name, summary: st.summary, input: {}, parent_tool_id: aid });
         await wait(st.ms);
+        if (sc.end === "stopped" && st === sc.steps[sc.steps.length - 1]) {
+          c.emit({ type: "tool_end", id: tid, ok: false, output: "[Request interrupted by user for tool use]" });
+          break;
+        }
         c.emit({ type: "tool_end", id: tid, ok: !st.fail, output: st.fail ? "error: 2 tests failed" : "ok" });
-        if (st.fail && sc.end === "stopped") break;
         const sid = `msg_${rid()}`;
         c.emit({ type: "assistant_message", id: sid, text: `Checked ${st.summary}.`, model: sc.model, parent_tool_id: aid });
         usage(sc.model);
@@ -95,10 +100,11 @@ export async function runAgentsChat(c: MockChat) {
         c.emit({ type: "assistant_message", id: sid, text: sc.say, model: sc.model, parent_tool_id: aid });
         usage(sc.model);
         c.emit({ type: "tool_end", id: aid, ok: true, output: sc.say });
-      } else c.emit({ type: "tool_end", id: aid, ok: false, output: "The test harness could not start Blender: exit code 134" });
+      } else if (sc.end === "failed") c.emit({ type: "tool_end", id: aid, ok: false, output: sc.error ?? "failed" });
+      else c.emit({ type: "tool_end", id: aid, ok: false, output: "[Request interrupted by user for tool use]" });
     }),
   );
-  c.emit({ type: "assistant_message", id: `msg_${rid()}`, text: "Three of four agents finished. The exporter is 4.1x faster; the test harness could not start Blender, so that one needs another look.", model: c.model, parent_tool_id: null });
+  c.emit({ type: "assistant_message", id: `msg_${rid()}`, text: "Two of four agents finished. The exporter is 4.1x faster; the API survey hit a rate limit and the test harness was stopped, so those need another look.", model: c.model, parent_tool_id: null });
   c.emit({ type: "turn_end", duration_ms: Date.now() - c.turnStart, ok: true });
   c.setState("idle");
 }

@@ -2,11 +2,15 @@ import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, Session } from "../lib/types";
 import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
-import { MOODS, moodOfCurrent, type Mood } from "../lib/activityMood";
+import { MOODS, moodOfCurrent, toolMood, type Mood } from "../lib/activityMood";
+import { fmtOut } from "../lib/agentCards";
+import { useFold } from "../lib/cardFold";
+import { isStopReason } from "../lib/stopped";
+import { MoodGlyph } from "./MoodGlyph";
 import { useStore, type Since } from "../store";
 import { useNow } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
-import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
+import { IAlert, IChevron, ICheck, toolIcon } from "./icons";
 import { Elapsed, JumpToBottom, LiveClock, cx, ease, StatusDot } from "./primitives";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { ThinkOrb } from "./ThinkOrb";
@@ -82,6 +86,8 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const seenPrompt = useRef<string | null>(null);
+  const lastTop = useRef(0);
   const [away, setAway] = useState(false);
   const [fresh, setFresh] = useState(false);
   const busy = session.status === "busy";
@@ -98,9 +104,14 @@ export function Timeline({ session, compact, live }: { session: Session; compact
     const el = scroller.current;
     if (!el) return;
     // A new prompt (input) always scrolls to the bottom and re-pins; other new output only follows while pinned.
+    // Only once per prompt: the newest block stays that prompt for a while, and re-pinning on every later
+    // re-run would drag a reader who scrolled up back down.
     const newest = blocks[blocks.length - 1];
-    const promptArrived = newest?.type === "prompt" && !initial.current!.has(newest.key);
-    if (promptArrived) stick.current = true;
+    const promptArrived = newest?.type === "prompt" && !initial.current!.has(newest.key) && seenPrompt.current !== newest.key;
+    if (promptArrived) {
+      seenPrompt.current = newest.key;
+      stick.current = true;
+    }
     if (stick.current) {
       setAway(false);
       setFresh(false);
@@ -123,15 +134,21 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   }
 
   return (
-    <div className="relative h-full">
+    <div className="flex h-full flex-col">
     <div
       ref={scroller}
-      className="scroll h-full"
+      className="scroll min-h-0 flex-1"
       onScroll={(e) => {
         const el = e.currentTarget;
         const at = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-        stick.current = at;
-        setAway((a) => (a === !at ? a : !at));
+        // Only the reader moving up unpins. A smooth scroll to the bottom passes through "not at the bottom"
+        // while moving down, and content growing below never changes scrollTop: neither means the reader left.
+        const up = el.scrollTop < lastTop.current - 1;
+        lastTop.current = el.scrollTop;
+        if (at) stick.current = true;
+        else if (up) stick.current = false;
+        const isAway = !stick.current;
+        setAway((a) => (a === isAway ? a : isAway));
         if (at) setFresh(false);
       }}
     >
@@ -177,17 +194,19 @@ export function Timeline({ session, compact, live }: { session: Session; compact
         </AnimatePresence>
       </div>
     </div>
-    <JumpToBottom
-      away={away}
-      fresh={fresh}
-      needs={false}
-      onClick={() => {
-        stick.current = true;
-        setAway(false);
-        setFresh(false);
-        scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
-      }}
-    />
+    <div className="relative h-0 shrink-0">
+      <JumpToBottom
+        away={away}
+        fresh={fresh}
+        needs={false}
+        onClick={() => {
+          stick.current = true;
+          setAway(false);
+          setFresh(false);
+          scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
+        }}
+      />
+    </div>
     </div>
   );
 }
@@ -319,7 +338,7 @@ export function ThinkingRow({
   return (
     <div className="flex items-center gap-2.5 py-1 text-base">
       <span className="relative flex size-[22px] items-center justify-center">
-        {noOrb ? <ISpark size={14} className="text-dim" /> : <ThinkOrb state={m.orb} size={20} live={live} />}
+        {noOrb ? <MoodGlyph mood={mood} size={14} live={live} className="text-working-text" /> : <ThinkOrb state={m.orb} size={20} live={live} />}
       </span>
       {/* Fixed-width slot (widest word) so the timer does not jitter as the word changes. */}
       <span className="inline-flex font-medium" style={{ minWidth: given ? undefined : "15ch" }}>
@@ -478,15 +497,20 @@ export function StepLine({
   since,
   approx,
   failed,
+  stopped,
   waiting,
   fresh,
   onClick,
   open,
+  dense,
 }: {
   name: string;
   detail: string;
   active: boolean;
+  /** Inside a subagent card: the running step shows the subagent's live glyph. */
   dense?: boolean;
+  /** Cut off by Stop / an interrupt: neutral, never red. */
+  stopped?: boolean;
   stamp?: string;
   since?: number | null;
   approx?: boolean;
@@ -513,19 +537,21 @@ export function StepLine({
       <span
         className={cx(
           "relative flex size-[18px] shrink-0 items-center justify-center",
-          waiting ? "text-needs-text" : active ? "text-working-text" : failed ? "text-err-text" : "text-faint",
+          waiting ? "text-needs-text" : active ? "text-working-text" : failed && !stopped ? "text-err-text" : "text-faint",
         )}
       >
         {waiting ? (
           <span className="size-[7px] rounded-full bg-needs breathe" />
-        ) : failed ? (
+        ) : failed && !stopped ? (
           <IAlert size={14} />
+        ) : active && dense ? (
+          <MoodGlyph mood={toolMood(name)} size={13} />
         ) : (
           <Icon size={12} />
         )}
       </span>
       <span
-        className={cx("shrink-0 text-base font-medium", waiting ? "text-fg/85" : failed ? "text-err-text/90" : !active && "text-fg/80")}
+        className={cx("shrink-0 text-base font-medium", waiting ? "text-fg/85" : failed && !stopped ? "text-err-text/90" : stopped ? "text-dim" : !active && "text-fg/80")}
       >
         <Reveal
           text={name}
@@ -534,14 +560,18 @@ export function StepLine({
         />
       </span>
       {detail && (
-        <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-mono-small", failed ? "text-err-text/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
+        <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-mono-small", failed && !stopped ? "text-err-text/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
           {/* A struck-through path is read at a glance: short, like the rest of the timeline. */}
-          <Reveal text={failed ? shortDetail(homeShort(detail)) : detail} fresh={fresh} />
+          <Reveal text={failed && !stopped ? shortDetail(homeShort(detail)) : detail} fresh={fresh} />
         </span>
       )}
       {!detail && <span className="flex-1" />}
       {waiting ? (
         <span className="shrink-0 text-small text-needs-text">waiting for you</span>
+      ) : stopped ? (
+        <span className="shrink-0 text-small text-faint" data-step-stopped>
+          stopped
+        </span>
       ) : active ? (
         <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-small text-faint" />
       ) : (
@@ -581,6 +611,52 @@ export function useFocusLit(asked: boolean, card: { current: HTMLElement | null 
   return lit;
 }
 
+/** How a finished subagent ended, and its one-line result: "Done · 3 tool uses · 53 tokens · 5s". */
+export type AgentEnd = "done" | "failed" | "stopped";
+export function agentResultParts(uses: number, tokens: number, ms: number | null): string[] {
+  return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `${fmtOut(tokens)} tokens`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
+}
+
+/** The chevron of a foldable card: › folded, ⌄ open. */
+export function FoldChevron({ open }: { open: boolean }) {
+  return (
+    <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: reducedMotion() ? 0 : 0.18, ease }} className="-mr-1 flex size-[20px] shrink-0 items-center justify-center text-faint" title={open ? "Collapse" : "Expand"}>
+      <IChevron size={14} />
+    </motion.span>
+  );
+}
+
+/** The header of a finished subagent card, and all of it when folded: status, task, result line, chevron. */
+export function FinishedAgentHead({ end, title, parts, reason, open, onToggle }: { end: AgentEnd; title: string; parts: string[]; reason?: string | null; open: boolean; onToggle: () => void }) {
+  const label = end === "failed" ? "Failed" : end === "stopped" ? "Stopped" : "Done";
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-center gap-2 px-3 py-[7px] text-left transition-colors duration-150 hover:bg-hover" data-agent-result={end} title={reason || undefined}>
+      <span className="flex size-[14px] shrink-0 items-center justify-center">
+        {end === "failed" ? <IAlert size={13} className="text-err-text" /> : end === "stopped" ? <span className="size-[7px] rounded-full bg-faint" /> : <ICheck size={13} className="text-faint" />}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
+      <span className={cx("shrink-0 text-small tnum", end === "failed" ? "text-err-text" : "text-faint")}>
+        <span className={cx("font-medium", end !== "failed" && "text-dim")}>{label}</span>
+        {parts.length > 0 && <> · {parts.join(" · ")}</>}
+      </span>
+      <FoldChevron open={open} />
+    </button>
+  );
+}
+
+/** Folds with the same ease the Agents panel uses. */
+export function FoldBody({ open, children }: { open: boolean; children: ReactNode }) {
+  return (
+    <AnimatePresence initial={false}>
+      {open && (
+        <motion.div key="body" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reducedMotion() ? 0 : 0.26, ease }} className="overflow-hidden">
+          {children}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; active: boolean; live: LiveTime }) {
   const { detail } = splitTool(a.text);
   const agent = agentOf(a, agents);
@@ -589,55 +665,79 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   const asked = !!agent && !!focus && focus.id === agent.id && Date.now() - focus.at < FOCUS_FRESH_MS;
   const focused = useFocusLit(asked, card);
   const running = agent ? !agent.finished : active;
-  const steps = agent?.activity.filter((x) => x.kind === "tool" || x.kind === "agent").slice(-5) ?? [];
+  const all = agent?.activity ?? [];
+  const steps = all.filter((x) => x.kind === "tool" || x.kind === "agent").slice(-5);
   const agentSeen = useRef(new Set(steps.map((s) => `${s.ts}${s.text}`)));
+  // How it ended: a closing error is a failure, or a stop when it says the person interrupted it.
+  const last = all[all.length - 1];
+  const failedEnd = !running && !!last && last.kind === "error" && !last.step;
+  const reason = failedEnd ? (last.full ?? last.text) : null;
+  const end: AgentEnd = failedEnd ? (isStopReason(reason) ? "stopped" : "failed") : "done";
+  const t0 = all.length ? tsToMs(all[0].ts) : null;
+  const t1 = last ? tsToMs(last.ts) : null;
+  const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, agent?.tokens.output ?? 0, t0 !== null && t1 !== null ? t1 - t0 : null);
+  const [open, toggle] = useFold(`agent:${agent?.id ?? a.text}`, !running, card);
+  useEffect(() => {
+    if (asked && !open) toggle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked]);
+  const title = detail || agent?.description || "Subagent";
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
-        <ISpark size={14} />
+        <MoodGlyph mood="delegate" size={14} live={running} />
       </span>
       <div
         ref={card}
         data-agent-card={agent?.id}
+        data-open={open}
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
           focused ? "border-[color-mix(in_oklab,var(--status-working)_45%,var(--border))]" : "border-hairline",
         )}
       >
-        <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
-          <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">
-            {agent?.kind || "subagent"}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{detail || agent?.description}</span>
-          {agent && <AgentModels agent={agent} />}
-          {running ? (
-            <StatusDot status="busy" size={7} />
-          ) : (
-            <span className="flex items-center gap-1 text-small text-dim">
-              <ICheck size={14} className="text-faint" /> done
+        {running ? (
+          <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-center gap-2 px-3 pt-2 pb-1.5">
+            <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">
+              {agent?.kind || "subagent"}
             </span>
+            <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
+            {agent && <AgentModels agent={agent} />}
+            <StatusDot status="busy" size={7} />
+            <FoldChevron open={open} />
+          </div>
+        ) : (
+          <FinishedAgentHead end={end} title={title} parts={parts} reason={reason} open={open} onToggle={toggle} />
+        )}
+        <FoldBody open={open}>
+          {!running && (
+            <div className="flex items-center gap-2 px-3 pb-1">
+              <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{agent?.kind || "subagent"}</span>
+              {agent && <AgentModels agent={agent} />}
+              {reason && <span className={cx("min-w-0 flex-1 truncate text-small", end === "failed" ? "text-err-text/90" : "text-dim")} title={reason}>{reason}</span>}
+            </div>
           )}
-        </div>
-        {steps.length > 0 && (
-          <div className="pb-1.5 pl-[14px] pr-1">
-            <RailList>
-              {steps.map((s, i) => {
-                const k = `${s.ts}${s.text}`;
-                const fresh = !agentSeen.current.has(k);
-                return (
-                  <RailItem key={k} first={i === 0} last={i === steps.length - 1} fresh={fresh} active={running && i === steps.length - 1}>
-                    <StepRow a={s} active={running && i === steps.length - 1} dense live={live} fresh={fresh} />
-                  </RailItem>
-                );
-              })}
-            </RailList>
-          </div>
-        )}
-        {running && steps.length === 0 && (
-          <div className="px-3 pb-2">
-            <ThinkingRow since={live.approx ? null : live.at} label="Starting" mood="start" noOrb />
-          </div>
-        )}
+          {steps.length > 0 && (
+            <div className="pb-1.5 pl-[14px] pr-1">
+              <RailList>
+                {steps.map((s, i) => {
+                  const k = `${s.ts}${s.text}`;
+                  const fresh = !agentSeen.current.has(k);
+                  return (
+                    <RailItem key={k} first={i === 0} last={i === steps.length - 1} fresh={fresh} active={running && i === steps.length - 1}>
+                      <StepRow a={s} active={running && i === steps.length - 1} dense live={live} fresh={fresh} />
+                    </RailItem>
+                  );
+                })}
+              </RailList>
+            </div>
+          )}
+          {running && steps.length === 0 && (
+            <div className="px-3 pb-2">
+              <ThinkingRow since={live.approx ? null : live.at} label="Starting" mood="start" noOrb />
+            </div>
+          )}
+        </FoldBody>
       </div>
     </div>
   );
@@ -669,6 +769,7 @@ function ErrorBlock({ a }: { a: Activity }) {
   const [open, setOpen] = useState(false);
   const body = bodyOf(a);
   if (a.step) {
+    const stopped = isStopReason(a.full ?? a.text);
     return (
       <button
         type="button"
@@ -676,9 +777,15 @@ function ErrorBlock({ a }: { a: Activity }) {
         title={open ? undefined : body}
         className="flex w-full items-start gap-2 rounded-[8px] px-2.5 py-1 text-left text-small text-dim transition-colors duration-150 hover:bg-hover"
       >
-        <IAlert size={14} className="mt-[2px] shrink-0 text-err-text opacity-80" />
-        <span className={open ? "selectable min-w-0 whitespace-pre-wrap break-words" : "min-w-0 truncate"}>
-          <span className="text-faint">A step failed · </span>
+        {stopped ? (
+          <span className="mt-[2px] flex size-[14px] shrink-0 items-center justify-center">
+            <span className="size-[7px] rounded-full bg-faint" />
+          </span>
+        ) : (
+          <IAlert size={14} className="mt-[2px] shrink-0 text-err-text opacity-80" />
+        )}
+        <span className={open ? "selectable min-w-0 whitespace-pre-wrap break-words" : "min-w-0 truncate"} data-step-error={stopped ? "stopped" : "failed"}>
+          <span className="text-faint">{stopped ? "A step was stopped · " : "A step failed · "}</span>
           {body}
           {open && shortenedOf(a) && <span className="text-faint"> … shortened</span>}
         </span>

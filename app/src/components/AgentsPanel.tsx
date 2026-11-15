@@ -2,15 +2,17 @@
 // Takes plain cards (lib/agentCards.ts); knows nothing about where they came from.
 
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { countsText, fmtOut, orderCards, type AgentCardData } from "../lib/agentCards";
 import { useNow } from "../lib/clock";
 import { fmtClock, fmtElapsed } from "../lib/format";
 import { MOODS, toolMood } from "../lib/activityMood";
+import { useFold } from "../lib/cardFold";
 import { modelLabel } from "../lib/models";
 import { useStableOrder } from "../lib/stable";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
-import { ICheck, IChevron, ISpark, toolIcon } from "./icons";
+import { ICheck, IChevron, toolIcon } from "./icons";
+import { MoodGlyph } from "./MoodGlyph";
 import { cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
@@ -139,37 +141,24 @@ function Pill({ card }: { card: AgentCardData }) {
       ) : s === "needs" ? (
         <StatusDot status="needs" size={7} />
       ) : s === "failed" ? (
-        <span className="size-[7px] rounded-full bg-err" />
+        <span className={cx("size-[7px] rounded-full", card.stopped ? "bg-faint" : "bg-err")} />
       ) : (
         <ICheck size={12} className="-ml-[2px] text-dim" />
       )}
-      {s === "running" ? "Running" : s === "needs" ? "Needs you" : s === "failed" ? "Failed" : "Done"}
+      {s === "running" ? "Running" : s === "needs" ? "Needs you" : s === "failed" ? (card.stopped ? "Stopped" : "Failed") : "Done"}
     </span>
   );
 }
 
 function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => void; onStop: () => void }) {
-  const [collapsed, setCollapsed] = useState(card.state === "done");
-  const manual = useRef(false);
-  const ready = useRef(false);
-  useEffect(() => {
-    ready.current = true;
-  }, []);
-  // Settles by itself when the agent finishes (unless the person already chose); reopens if it runs again.
-  useEffect(() => {
-    if (manual.current) return;
-    if (card.state !== "done") return setCollapsed(false);
-    const t = setTimeout(() => setCollapsed(true), reducedMotion() ? 0 : 900);
-    return () => clearTimeout(t);
-  }, [card.state]);
-  const toggle = () => {
-    manual.current = true;
-    setCollapsed(!collapsed);
-  };
+  // Finished (done, failed, stopped): folded to the header and the result line; see lib/cardFold.ts.
+  const el = useRef<HTMLDivElement>(null);
+  const [open, toggle] = useFold(card.id, card.state === "done" || card.state === "failed", el);
+  const collapsed = !open;
   const full = `${card.kind}${card.description ? ` · ${card.description}` : ""}`;
 
   return (
-    <div className="overflow-hidden rounded-[14px] border border-hairline bg-bg shadow-card" data-agent-panel-card={card.id} data-state={card.state}>
+    <div ref={el} className="overflow-hidden rounded-[14px] border border-hairline bg-bg shadow-card" data-agent-panel-card={card.id} data-state={card.stopped ? "stopped" : card.state} data-open={open}>
       <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-center gap-2 px-3 pb-1 pt-2.5">
         <ProviderMark provider={card.provider} size={16} />
         <div className="min-w-0 flex-1">
@@ -238,10 +227,11 @@ export function Strip({ card }: { card: AgentCardData; fresh?: { current: boolea
     return (
       <div className={base}>
         <span className="flex size-[13px] shrink-0 items-center justify-center">
-          {card.state === "failed" ? <span className="size-[7px] rounded-full bg-err" /> : <StatusDot status="needs" size={7} />}
+          {card.state === "failed" ? <span className={cx("size-[7px] rounded-full", card.stopped ? "bg-faint" : "bg-err")} /> : <StatusDot status="needs" size={7} />}
         </span>
-        <span className="min-w-0 flex-1 truncate font-medium text-fg" title={card.error ?? undefined}>
-          {card.error || (card.state === "failed" ? "Failed" : "Needs you")}
+        {card.stopped && <span className="shrink-0 font-medium text-fg">Stopped</span>}
+        <span className={cx("min-w-0 flex-1 truncate", card.stopped ? "text-small text-dim" : "font-medium text-fg")} title={card.error ?? undefined}>
+          {card.stopped ? (card.error && card.error !== "Stopped" ? card.error : "") : card.error || (card.state === "failed" ? "Failed" : "Needs you")}
         </span>
         {card.state === "needs" && <Timer since={card.since} className="shrink-0 text-small text-faint" />}
       </div>
@@ -255,14 +245,13 @@ export function Strip({ card }: { card: AgentCardData; fresh?: { current: boolea
  */
 function NowStrip({ card, className }: { card: AgentCardData; className: string }) {
   const mood = card.labelTool ? toolMood(card.labelTool) : "think";
-  const Icon = card.labelTool ? toolIcon(card.labelTool) : ISpark;
   const seed = `${card.id}:${card.steps.length}:${mood}`;
   const [mounted] = useState(() => Date.now());
   const detail = card.labelTool ? card.label.replace(new RegExp(`^${card.labelTool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i"), "") : "";
   return (
     <div className={className}>
-      {/* Subagents get words, not orbs: the tool icon keeps its slot. */}
-      {card.labelTool ? <Icon size={13} className="shrink-0 text-working-text" /> : <ISpark size={13} className="shrink-0 text-working-text" />}
+      {/* Subagents get words, not orbs: a small glyph of what it is doing keeps the slot. */}
+      <MoodGlyph mood={mood} size={14} className="text-working-text" />
       <span className="flex min-w-0 flex-1 items-baseline">
         <span className="inline-flex shrink-0 font-medium">
           <ThinkingWord seed={seed} origin={card.since ?? mounted} words={MOODS[mood].words} cycle={card.since !== null} />

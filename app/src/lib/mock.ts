@@ -514,6 +514,15 @@ export function mockBackend(): Backend {
           changed = true;
           continue;
         }
+        // The polish agent is stopped by the person about 24 s in.
+        if (a.id === "ag3d4" && el > 24_000) {
+          a.finished = true;
+          a.current = null;
+          a.activity.push(act("error", "Interrupted by user", t));
+          ag3.activity.push(act("text", "Subagent stopped: App polish fixes.", t));
+          changed = true;
+          continue;
+        }
         if (a.id === "ag3d3" && el > 34_000) {
           a.finished = true;
           a.current = null;
@@ -869,6 +878,20 @@ export function mockBackend(): Backend {
   if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
   if (location.search.includes("plan=chat")) void import("./mockPlan").then((m) => m.runPlanChat(newChat("claude", coool, {}, 0))); // see mockPlan.ts
   if (location.search.includes("steer=demo")) void import("./mockPlan").then((m) => m.runSteerDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
+  if (location.search.includes("agents=stop")) {
+    // `?agents=stop`: a chat whose turn the person stops while a step runs (see lib/agentsDemo.ts).
+    const c = newChat("claude", `${HOME}/code/stop-demo`, {}, 0);
+    c.always.add("Bash");
+    c.always.add("Edit");
+    setTimeout(() => c.send("Add a slash command menu to the chat composer"), 1500);
+    let seen = 0;
+    const iv = setInterval(() => {
+      if (c.runningTool && ++seen === 3) {
+        clearInterval(iv);
+        c.interrupt();
+      }
+    }, 600);
+  }
   if (location.search.includes("agents=chat")) void import("./mockAgents").then((m) => m.runAgentsChat(newChat("claude", `${HOME}/code/blender-addon`, {}, 0))); // see mockAgents.ts
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 

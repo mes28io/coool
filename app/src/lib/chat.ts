@@ -5,6 +5,7 @@
 import { create } from "zustand";
 import type { Activity, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
 import { shortTitle } from "./format";
+import { isStopReason } from "./stopped";
 
 /** "always": allowed and one of the request's remember options applied (`remembered`). */
 export type PermissionAnswer = "allow" | "always" | "deny" | "answered";
@@ -28,6 +29,8 @@ export type ChatItem =
       output: string;
       parent: string | null;
       agent: boolean;
+      /** Cut off by Stop / an interrupt (ok is false, but it did not fail): shown neutral, never counted as failed. */
+      stopped?: boolean;
     }
   | {
       kind: "permission";
@@ -319,7 +322,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         break;
       case "tool_end": {
         const i = findLast((x) => x.kind === "tool" && x.id === e.id);
-        if (i >= 0) patch(i, { endTs: e.ts, ok: e.ok, output: e.output });
+        if (i >= 0) patch(i, { endTs: e.ts, ok: e.ok, output: e.output, stopped: !e.ok && isStopReason(e.output) });
         break;
       }
       case "commands":
@@ -406,7 +409,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           const a = items ?? c.items;
           for (let i = 0; i < a.length; i++) {
             const it = a[i];
-            if (it.kind === "tool" && it.endTs === null) patch(i, { endTs: e.ts, ok: false, output: it.output || "Stopped" });
+            if (it.kind === "tool" && it.endTs === null) patch(i, { endTs: e.ts, ok: false, output: it.output || "Stopped", stopped: true });
             if (it.kind === "text" && it.streaming) patch(i, { streaming: false });
             if (it.kind === "thinking" && it.endTs === null) patch(i, { endTs: e.ts });
           }

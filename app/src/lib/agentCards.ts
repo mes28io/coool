@@ -9,6 +9,7 @@ import { useStore } from "../store";
 import type { Chat, ChatItem } from "./chat";
 import { displayTitle, homeShort, isThinking, shortDetail, splitTool, stripToolName, thinkingWord, tsToMs } from "./format";
 import { attention, useChatDigest, type ChatDigest } from "./live";
+import { isStopReason } from "./stopped";
 import type { Activity, Agent, Provider, Session } from "./types";
 import { sessionKey } from "./types";
 
@@ -55,6 +56,8 @@ export interface AgentCardData {
   result: string | null;
   /** First line of the failure / what the job needs from the person. */
   error: string | null;
+  /** A "failed" card the person stopped (interrupted by user): shown neutral, as "Stopped". */
+  stopped: boolean;
   /** Recency, epoch ms. */
   lastAt: number;
   /** A job coool itself runs: the Stop action applies. */
@@ -62,6 +65,8 @@ export interface AgentCardData {
 }
 
 const firstLine = (s: string | null | undefined) => (s ?? "").split("\n").find((l) => l.trim())?.trim() ?? "";
+/** "[Request interrupted by user for tool use]" -> "Request interrupted by user for tool use". */
+const unbracket = (s: string) => s.replace(/^\[(.*)\]$/, "$1");
 
 /** "Read · ~/a/b/c.rs" -> "Read b/c.rs". */
 export function stepLabel(text: string): { name: string; label: string } {
@@ -85,6 +90,8 @@ function stepsFromActivity(list: Activity[]): CardStep[] {
       out.push({ key: `${base}#${n}`, name, label, failed: false, ms: at[i] !== null && next !== undefined && next !== null ? Math.max(0, next - at[i]!) : null });
       idx.push(i);
     } else if (a.kind === "error" && a.step) {
+      // A step the person interrupted did not fail.
+      if (isStopReason(a.text)) return;
       const last = out[out.length - 1];
       if (last) last.failed = true;
       else out.push({ key: `${a.ts}|${a.text.slice(0, 40)}#f`, name: "Error", label: firstLine(a.text), failed: true, ms: null });
@@ -122,7 +129,8 @@ function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provi
     active: running && steps.length ? steps.length - 1 : -1,
     durationMs: first !== null && end !== null ? Math.max(0, end - first) : null,
     result: lastText ? firstLine(lastText.full ?? lastText.text) || null : null,
-    error: failed ? firstLine(last!.full ?? last!.text) : (o.needs ?? null),
+    error: failed ? unbracket(firstLine(last!.full ?? last!.text)) : (o.needs ?? null),
+    stopped: failed && isStopReason(last!.full ?? last!.text),
     lastAt: end ?? 0,
   };
 }
@@ -155,10 +163,11 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
   const texts = kids.filter((k): k is Extract<ChatItem, { kind: "text" }> => k.kind === "text");
   const live = tool.endTs === null && chat.running;
   const failed = tool.endTs !== null && tool.ok === false;
+  const stopped = failed && (!!tool.stopped || !tool.output.trim() || isStopReason(tool.output));
   const steps: CardStep[] = tools.map((t) => {
     const { name } = splitTool(t.name);
     const detail = shortDetail(homeShort(stripToolName(t.name, t.summary || "")));
-    return { key: t.key, name, label: detail ? `${name} ${detail}` : name, failed: t.ok === false, ms: t.endTs !== null ? Math.max(0, t.endTs - t.ts) : null };
+    return { key: t.key, name, label: detail ? `${name} ${detail}` : name, failed: t.ok === false && !t.stopped && !(stopped && (t.endTs === null || isStopReason(t.output))), ms: t.endTs !== null ? Math.max(0, t.endTs - t.ts) : null };
   });
   let run = -1;
   tools.forEach((t, i) => {
@@ -190,7 +199,8 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
     active: live ? run : -1,
     durationMs: tool.endTs !== null ? Math.max(0, tool.endTs - tool.ts) : null,
     result: lastText ? firstLine(lastText.text) || firstLine(tool.output) || null : firstLine(tool.output) || null,
-    error: failed ? firstLine(tool.output) || "Stopped" : null,
+    error: failed ? unbracket(firstLine(tool.output)) || "Stopped" : null,
+    stopped,
     lastAt: end,
     stoppable: false,
   };
@@ -249,7 +259,8 @@ export function countsText(cards: AgentCardData[]): string {
   const n = (f: (c: AgentCardData) => boolean) => cards.filter(f).length;
   const parts = [
     [n(isLive), "running"],
-    [n((c) => c.state === "failed"), "failed"],
+    [n((c) => c.state === "failed" && !c.stopped), "failed"],
+    [n((c) => c.state === "failed" && c.stopped), "stopped"],
     [n((c) => c.state === "done"), "done"],
   ] as const;
   return parts.filter(([k]) => k > 0).map(([k, w]) => `${k} ${w}`).join(" · ");
