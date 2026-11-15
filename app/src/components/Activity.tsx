@@ -307,7 +307,7 @@ export function ThinkingRow({
   if (big)
     return (
       <div className="flex flex-col items-center gap-3 py-1 text-base">
-        <MoodGlyph mood={mood} size={28} live={live} className="text-working-text" />
+        <MoodGlyph mood={mood} size={28} live={live} className="text-dim" />
         <div className="flex items-center gap-2.5">
           <span className="inline-flex font-medium">
             {label}
@@ -321,7 +321,7 @@ export function ThinkingRow({
     return (
       <div className="flex items-center gap-3 pb-1 pt-2.5 text-prose" data-live-row data-mood={mood}>
         <span className="flex size-[20px] shrink-0 items-center justify-center">
-          <MoodGlyph mood={mood} size={16} live={live} className="text-working-text" />
+          <MoodGlyph mood={mood} size={16} live={live} className="text-dim" />
         </span>
         <span className="inline-flex shrink-0 font-medium">
           {label}
@@ -334,7 +334,7 @@ export function ThinkingRow({
   return (
     <div className="flex items-center gap-2.5 py-1 text-base">
       <span className="relative flex size-[22px] items-center justify-center">
-        <MoodGlyph mood={mood} size={14} live={live} className="text-working-text" />
+        <MoodGlyph mood={mood} size={14} live={live} className="text-dim" />
       </span>
       {/* Fixed-width slot (widest word) so the timer does not jitter as the word changes. */}
       <span className="inline-flex font-medium" style={{ minWidth: given ? undefined : "15ch" }}>
@@ -533,7 +533,7 @@ export function StepLine({
       <span
         className={cx(
           "relative flex size-[18px] shrink-0 items-center justify-center",
-          waiting ? "text-needs-text" : active ? "text-working-text" : failed && !stopped ? "text-err-text" : "text-faint",
+          waiting ? "text-needs-text" : active ? "text-dim" : failed && !stopped ? "text-err-text" : "text-faint",
         )}
       >
         {waiting ? (

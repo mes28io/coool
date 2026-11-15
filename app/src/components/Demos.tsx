@@ -2,11 +2,8 @@
 // in-memory undo). Mounted from main.tsx in place of the app.
 
 import { useEffect, useState } from "react";
-import { ThinkingOrb, type OrbState } from "thinking-orbs";
 import { IBell, IGlobe, IFile, IGear } from "./icons";
-import { ThinkingRow, Timeline } from "./Activity";
 import { MOODS, type Mood } from "../lib/activityMood";
-import { Strip } from "./AgentsPanel";
 import { Ledger, type LedgerChange } from "./Ledger";
 import { PlanCard, type PlanPhase, type PlanStep } from "./PlanCard";
 import { AgentMark } from "./AgentMark";
@@ -109,152 +106,14 @@ export function PlanDemo() {
   );
 }
 
-const ORB_STATES: OrbState[] = ["working", "searching", "solving", "listening", "connecting", "weaving", "composing", "breathing", "shaping"];
-
-function OrbPanel({ dark, tint }: { dark: boolean; tint?: string }) {
-  const bg = dark ? "#212121" : "#ffffff";
-  const fg = dark ? "#ececec" : "#0d0d0d";
-  return (
-    <div className="flex-1 p-5" style={{ background: bg, color: fg }}>
-      <div className="mb-3 text-small" style={{ opacity: 0.6 }}>
-        {dark ? "dark tuning" : "light tuning"} {tint ? `· tint ${tint}` : "· stock"}
-      </div>
-      {ORB_STATES.map((st) => (
-        <div key={st} className="flex items-center gap-4 py-1">
-          <span className="w-24 text-small" style={{ opacity: 0.6 }}>{st}</span>
-          <ThinkingOrb state={st} size={64} theme={dark ? "dark" : "light"} color={tint} />
-          <span className="flex items-center gap-2.5 text-[14px]">
-            <span className="flex size-[22px] items-center justify-center">
-              <ThinkingOrb state={st} size={20} theme={dark ? "dark" : "light"} color={tint} />
-            </span>
-            Pondering the next step
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function OrbsDemo() {
-  const [fps, setFps] = useState("");
-  const q = location.search;
-  const n = Number(/[?&]n=(\d+)/.exec(q)?.[1] ?? 0);
-  const dark = !/[?&]light/.test(q);
-  useEffect(() => {
-    if (!n) return;
-    const dt: number[] = [];
-    let last = performance.now();
-    let raf = 0;
-    const tick = (t: number) => {
-      dt.push(t - last);
-      last = t;
-      if (dt.length >= 300) {
-        const s = dt.slice(10).sort((a, b) => a - b);
-        setFps(`frame ms avg ${(s.reduce((a, b) => a + b, 0) / s.length).toFixed(2)} p95 ${s[Math.floor(s.length * 0.95)].toFixed(2)} max ${s[s.length - 1].toFixed(2)}`);
-        dt.length = 0;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [n]);
-  const [t0] = useState(() => Date.now());
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((x) => x + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  if (/[?&]ro(&|$)/.test(q)) return <ReadOnlyTour dark={dark} />;
-  if (/[?&]row/.test(q))
-    return (
-      <div className="min-h-screen bg-bg p-8 text-fg">
-        <div className="mx-auto flex max-w-[700px] flex-col gap-1">
-          {(Object.keys(MOODS) as Mood[]).map((m, k) => (
-            <ThinkingRow key={m} since={t0 - (k * 17 + 7) * 1000} mood={m} detail={["think", "plan", "start", "compact", "delegate"].includes(m) ? "" : "cargo test -p core -- --nocapture"} large />
-          ))}
-          <ThinkingRow since={null} mood="think" large />
-          <div className="mt-4 w-[320px]">
-            <Strip card={{ state: "running", labelTool: "Bash", label: `Bash cargo test`, since: t0 + tick * 40, id: "agent-1", steps: [] } as never} />
-          </div>
-          <div className="w-[320px]">
-            <Strip card={{ state: "running", labelTool: null, label: `Churn${tick}`, since: t0 + tick * 40, id: "agent-2", steps: [] } as never} />
-          </div>
-          <ThinkingRow since={t0} label="Starting claude in coool" mood="start" />
-          <ThinkingRow since={t0} label="Starting claude in coool" mood="start" big />
-        </div>
-      </div>
-    );
-  if (n)
-    return (
-      <div className="p-5" style={{ background: dark ? "#212121" : "#fff", color: dark ? "#ececec" : "#0d0d0d", minHeight: "100vh" }}>
-        <div id="fps">{fps}</div>
-        <div className="flex flex-wrap gap-3">
-          {Array.from({ length: n }, (_, i) => (
-            <ThinkingOrb key={i} state={ORB_STATES[i % 9]} size={20} theme={dark ? "dark" : "light"} />
-          ))}
-        </div>
-      </div>
-    );
-  return (
-    <div className="min-h-screen">
-      <div className="flex">
-        <OrbPanel dark />
-        <OrbPanel dark={false} />
-      </div>
-      <div className="flex">
-        <OrbPanel dark tint="#28c840" />
-        <OrbPanel dark={false} tint="#1a7f37" />
-      </div>
-    </div>
-  );
-}
 
 /** Which demo page, if any, `?x=demo` asks for. */
-export function demoPage(): "ledger" | "plan" | "orbs" | "glyphs" | null {
+export function demoPage(): "ledger" | "plan" | "glyphs" | null {
   const q = location.search;
-  return /[?&]ledger=demo/.test(q) ? "ledger" : /[?&]plan=demo/.test(q) ? "plan" : /[?&]orbs=demo/.test(q) ? "orbs" : /[?&]glyphs=demo/.test(q) ? "glyphs" : null;
+  return /[?&]ledger=demo/.test(q) ? "ledger" : /[?&]plan=demo/.test(q) ? "plan" : /[?&]glyphs=demo/.test(q) ? "glyphs" : null;
 }
 
-function hhmmss(t: number) {
-  return new Date(t).toTimeString().slice(0, 8);
-}
 
-/** A read-only session walking through thinking, search, read, edit, shell, subagent, thinking over ~40s, then ending. */
-function ReadOnlyTour({ dark }: { dark: boolean }) {
-  const [step, setStep] = useState(0);
-  const [t0] = useState(() => Date.now());
-  const plan = [
-    { at: 0, current: "thinking…", add: null as string | null },
-    { at: 5, current: "Grep · OutboxQueue", add: "tool|Grep · OutboxQueue" },
-    { at: 10, current: "Read · app/src/sync/outbox.ts", add: "tool|Read · app/src/sync/outbox.ts" },
-    { at: 15, current: "Edit · app/src/sync/outbox.ts", add: "tool|Edit · app/src/sync/outbox.ts" },
-    { at: 20, current: "Bash · cargo test -p core", add: "tool|Bash · cargo test -p core" },
-    { at: 25, current: "Agent · Audit the retry path", add: "agent|Agent · Audit the retry path" },
-    { at: 32, current: "thinking…", add: null },
-    { at: 40, current: null as string | null, add: null },
-  ];
-  useEffect(() => {
-    const t = setInterval(() => setStep(Math.floor((Date.now() - t0) / 1000)), 250);
-    return () => clearInterval(t);
-  }, [t0]);
-  const k = plan.filter((p) => p.at <= step).length - 1;
-  const done = k >= plan.length - 1;
-  const acts = [{ ts: hhmmss(t0 - 3000), kind: "prompt", text: "Make the outbox retry safe" }, ...plan.slice(0, k + 1).filter((p) => p.add).map((p) => ({ ts: hhmmss(t0 + p.at * 1000), kind: p.add!.split("|")[0], text: p.add!.split("|")[1] }))];
-  const session = {
-    key: "tour",
-    status: done ? "idle" : "busy",
-    current: plan[Math.max(0, k)].current,
-    updated: Date.now(),
-    loaded: true,
-    activity: acts,
-    agents: plan[k]?.add?.startsWith("agent") ? [{ id: "a1", kind: "general", description: "Audit the retry path", finished: false, current: null, tokens: { input: 0, cached: 0, output: 0, context: 0 }, activity: [], model: "claude-haiku-5-5", models: [] }] : [],
-  };
-  return (
-    <div className="h-screen bg-bg text-fg" style={{ colorScheme: dark ? "dark" : "light" }}>
-      <Timeline session={session as never} />
-    </div>
-  );
-}
 
 const MOOD_LIST = Object.keys(MOODS) as Mood[];
 
@@ -298,10 +157,6 @@ function GlyphPanel({ dark }: { dark: boolean }) {
               <MoodSvg mood={m} size={14} />
             </span>
             <span className="font-medium">{MOODS[m].words[0]}...</span>
-            <span className="ml-3 flex items-center gap-2" style={{ opacity: 0.9 }}>
-              <ThinkingOrb state={MOODS[m].orb} size={20} theme={dark ? "dark" : "light"} />
-              <span style={{ opacity: 0.55 }}>orb (main agent)</span>
-            </span>
           </span>
         </div>
       ))}
@@ -325,7 +180,7 @@ function GlyphPanel({ dark }: { dark: boolean }) {
   );
 }
 
-/** `?glyphs=demo`: the subagent mood glyphs at real size, live and still, dark and light, next to the orbs. */
+/** `?glyphs=demo`: the subagent mood glyphs at real size, live and still, dark and light */
 export function GlyphsDemo() {
   return (
     <div className="flex min-h-screen">

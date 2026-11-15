@@ -12,7 +12,7 @@ import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { useStore, type Since } from "../store";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
-import { ThinkOrb } from "./ThinkOrb";
+import { MoodGlyph } from "./MoodGlyph";
 import { IPlay, IPlus, ISpark, toolIcon } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, Button, ContextMeter, cx, Elapsed, ease, LiveClock, Kbd, PathText, ProviderMark, softSpring, StatusDot, statusLabel } from "./primitives";
@@ -164,8 +164,6 @@ function StateLabel({ status, needs, background }: { status: "busy" | "idle" | "
   );
 }
 
-/** Home can show many thinking cards; only the first few animate. */
-const MAX_LIVE_ORBS = 6;
 
 const cardCls = "group relative flex flex-col overflow-hidden rounded-[18px] border bg-bg p-4 text-left transition-[border-color] duration-200";
 
@@ -237,9 +235,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
             {pending ? (
               <CurIcon size={15} className="shrink-0 text-dim" />
             ) : (
-              <span className="-mx-[2.5px] flex shrink-0">
-                <ThinkOrb state={MOODS[mood.mood].orb} size={20} live={i < MAX_LIVE_ORBS} />
-              </span>
+              <MoodGlyph mood={mood.mood} size={15} live className="text-dim" />
             )}
             <span className="min-w-0 flex-1 truncate">
               {pending ? (
