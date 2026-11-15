@@ -570,21 +570,27 @@ function Row({
       )}
       <span className={cx("min-w-0 flex-1 truncate", auto && "opacity-80")}>{title}</span>
       {auto && <AutoTag className="ml-1.5" />}
-      {/* A fixed slot at the right edge: the status dot at rest, age and provider on hover. The title always ends before it. */}
-      <span className="relative ml-2 flex h-full w-[56px] shrink-0 items-center justify-end">
-        {dot && (
-          <span className="flex items-center pr-1 group-hover:hidden">
-            <StatusDot status={status} size={8} />
-          </span>
-        )}
-        <span className="hidden max-w-full items-center gap-1.5 text-small text-faint group-hover:flex">
-          {hover ?? (
-            <>
-              <span className="tnum truncate">{meta}</span>
-              <ProviderMark provider={provider} size={14} />
-            </>
-          )}
+      {/* At rest the title runs up to the status dot (or the edge). On hover, age and provider slide in over the
+          title's end on the row's own background, faded in from the left, so the title is never cut early. */}
+      {dot && (
+        <span className="ml-2 flex shrink-0 items-center pr-1 group-hover:invisible">
+          <StatusDot status={status} size={8} />
         </span>
+      )}
+      <span
+        className="pointer-events-none absolute inset-y-0 right-2 hidden items-center gap-1.5 pl-7 text-small text-faint group-hover:flex"
+        style={{
+          background: "linear-gradient(var(--row-tint), var(--row-tint)), var(--bg)",
+          maskImage: "linear-gradient(to right, transparent, black 22px)",
+          WebkitMaskImage: "linear-gradient(to right, transparent, black 22px)",
+        }}
+      >
+        {hover ?? (
+          <>
+            <span className="tnum whitespace-nowrap">{meta}</span>
+            <ProviderMark provider={provider} size={14} />
+          </>
+        )}
       </span>
     </motion.button>
   );
