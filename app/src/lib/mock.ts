@@ -3,7 +3,7 @@
 // statuses flip, steps arrive, subagents run, and coool-run sessions get a
 // fake terminal stream. Also the demo for coool.sh.
 
-import type { Backend, ChatBatch, PtyChunk } from "./backend";
+import { NotAvailable, type Backend, type ChatBatch, type PtyChunk } from "./backend";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
@@ -708,6 +708,9 @@ export function mockBackend(): Backend {
   chCoool.always.add("Bash");
   setTimeout(() => chCoool.send("Add a slash command menu to the chat composer"), 2200);
   if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
+  if (location.search.includes("plan=chat")) void import("./mockPlan").then((m) => m.runPlanChat(newChat("claude", coool, {}, 0))); // see mockPlan.ts
+  if (location.search.includes("steer=demo")) void import("./mockPlan").then((m) => m.runSteerDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
+  if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 
   const insights: InsightsStatus = readInsights();
   const saveInsights = () => {
@@ -984,6 +987,15 @@ export function mockBackend(): Backend {
     },
     async chatInterrupt(id) {
       chats[id]?.interrupt();
+    },
+    async chatSteer(id, text, now) {
+      const c = chats[id];
+      if (!c) throw new Error("no such chat");
+      if (location.search.includes("steer=local")) throw new NotAvailable("chat_steer"); // exercise the client-side fallback
+      return c.steer(text, now);
+    },
+    async chatSteerCancel(id, noteId) {
+      chats[id]?.steerCancel(noteId);
     },
     async chatSetModel(id, model) {
       await delay(120);

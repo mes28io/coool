@@ -74,7 +74,7 @@ function Marker({ status, n }: { status: PlanStatus; n: number }) {
   );
 }
 
-function StepRow({ s, i, last, fresh }: { s: PlanStep; i: number; last: boolean; fresh: boolean }) {
+function StepRow({ s, i, last, fresh, prevDone }: { s: PlanStep; i: number; last: boolean; fresh: boolean; prevDone: boolean }) {
   const instant = reducedMotion();
   return (
     <motion.div
@@ -86,18 +86,25 @@ function StepRow({ s, i, last, fresh }: { s: PlanStep; i: number; last: boolean;
       data-plan-step={s.status}
     >
       <div className="relative flex gap-2.5 pb-[7px] pt-[5px]">
-        {!last && (
-          <>
-            <span aria-hidden className="absolute bottom-0 top-[26px] w-px" style={{ left: 8.5, background: "color-mix(in oklab, var(--border) 70%, transparent)" }} />
-            <motion.span
-              aria-hidden
-              className="absolute bottom-0 top-[26px] w-px"
-              style={{ left: 8.5, background: RAIL, transformOrigin: "top" }}
-              initial={false}
-              animate={{ scaleY: s.status === "done" ? 1 : 0 }}
-              transition={{ duration: instant ? 0 : 0.35, ease }}
-            />
-          </>
+        {/* Rail: this row's lower half, and the upper half joining the previous row's. */}
+        {[
+          { show: !last, top: 26, bottom: 0, drawn: s.status === "done", delay: 0 },
+          { show: i > 0, top: 0, height: 4, drawn: prevDone, delay: 0.2 },
+        ].map(
+          (g, k) =>
+            g.show && (
+              <span key={k}>
+                <span aria-hidden className="absolute w-px" style={{ left: 8.5, top: g.top, bottom: g.bottom, height: g.height, background: "color-mix(in oklab, var(--border) 70%, transparent)" }} />
+                <motion.span
+                  aria-hidden
+                  className="absolute w-px"
+                  style={{ left: 8.5, top: g.top, bottom: g.bottom, height: g.height, background: RAIL, transformOrigin: "top" }}
+                  initial={false}
+                  animate={{ scaleY: g.drawn ? 1 : 0 }}
+                  transition={{ duration: instant ? 0 : k ? 0.12 : 0.3, ease, delay: instant ? 0 : g.delay }}
+                />
+              </span>
+            ),
         )}
         <span className="relative mt-[1px] shrink-0">
           <Marker status={s.status} n={i + 1} />
@@ -249,7 +256,7 @@ export function PlanCard({
         {steps.length > 0 ? (
           <AnimatePresence initial={false}>
             {steps.map((s, i) => (
-              <StepRow key={keyOf(s, i)} s={s} i={i} last={i === steps.length - 1} fresh={fresh.has(keyOf(s, i))} />
+              <StepRow key={keyOf(s, i)} s={s} i={i} last={i === steps.length - 1} fresh={fresh.has(keyOf(s, i))} prevDone={i > 0 && steps[i - 1].status === "done"} />
             ))}
           </AnimatePresence>
         ) : (

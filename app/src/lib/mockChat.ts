@@ -24,6 +24,9 @@ export interface ChatHost {
 
 class Interrupted extends Error {}
 
+/** The `?md=demo` reply: bold with numbers, a wide table, nested lists, code, a link, a quote, a task list. */
+const MD_DEMO = "## Disk check\n\nConfirmed: only **2.5 GB free of 460 GB**. While the full scan runs, here is what I found so far:\n\n| Item | Amount | Share | Notes |\n|---|---:|---:|---|\n| node_modules (all projects) | 48.2 GB | 10.5% | 31 folders, the largest is `pixelforge` at 9.8 GB |\n| Xcode DerivedData | 37.9 GB | 8.2% | safe to delete, rebuilt on demand |\n| Docker images | 22.4 GB | 4.9% | 14 images unused for 30+ days |\n| Simulators | 15.1 GB | 3.3% | iOS 16 and 17 runtimes you no longer target |\n\n> Nothing here has been deleted. I only *read* sizes.\n\nClean-up plan, safest first:\n\n1. **Clear build caches**\n   - `rm -rf ~/Library/Developer/Xcode/DerivedData`\n   - `pnpm store prune`\n2. **Remove old simulators**, then ~~reinstall~~ keep only the newest runtime\n3. Review the Docker images with `docker image prune -a`\n\n- [x] Scan the home folder\n- [ ] Delete caches (needs your OK)\n\n```bash\ndu -sh ~/Library/Developer/Xcode/DerivedData\n# 37G  /Users/you/Library/Developer/Xcode/DerivedData\n```\n\nSee the [Xcode docs](https://developer.apple.com/documentation/xcode) for what is safe to remove.\n";
+
 const CLAUDE_MODELS: ModelOption[] = [
   { id: "claude-opus-5-5", label: "Opus 5.5" },
   { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
@@ -461,6 +464,10 @@ export class MockChat {
     const id = `toolu_${rid()}`;
     const parent = opts.parent ?? null;
     this.emit({ type: "tool_start", id, name, summary, input, parent_tool_id: parent });
+    if (!parent) {
+      this.runningTool = id;
+      this.deliverQueued(id);
+    }
     if (opts.ask && this.needsAsk(name)) {
       const answer = await this.ask(name, summary, input, gen);
       if (gen !== this.gen) {
@@ -473,13 +480,57 @@ export class MockChat {
       }
     }
     try {
-      await this.sleep(ms, gen);
+      // In slices, so a "Now" note can cut the step short.
+      for (let left = ms; left > 0; left -= 100) {
+        await this.sleep(Math.min(100, left), gen);
+        if (this.abortStep && !parent) {
+          this.abortStep = false;
+          this.emit({ type: "tool_end", id, ok: false, output: "Interrupted by a note" });
+          this.runningTool = null;
+          return false;
+        }
+      }
     } catch (e) {
       this.emit({ type: "tool_end", id, ok: false, output: "Interrupted" });
       throw e;
     }
     this.emit({ type: "tool_end", id, ok: !opts.fail, output });
+    if (!parent) this.runningTool = null;
     return !opts.fail;
+  }
+
+  // ---------- steering (mirrors the backend contract: chat_steer / chat_steer_cancel + `steer` events) ----------
+  notes: { id: string; text: string }[] = [];
+  runningTool: string | null = null;
+  abortStep = false;
+  private emitSteer(note_id: string, text: string, state: "queued" | "picked_up" | "interrupted" | "unused", tool_id: string | null) {
+    this.emit({ type: "steer", note_id, text, state, tool_id } as unknown as Draft);
+  }
+  /** `now: false` waits for the next step boundary; `now: true` cuts the running step short. */
+  steer(text: string, now: boolean): string {
+    if (!this.busy) throw new Error("no turn is running");
+    const id = `note_${rid()}`;
+    if (now) {
+      this.emitSteer(id, text, "interrupted", this.runningTool);
+      this.emit({ type: "user_message", id: `u_${rid()}`, text });
+      this.abortStep = this.runningTool !== null;
+    } else {
+      this.notes.push({ id, text });
+      this.emitSteer(id, text, "queued", null);
+    }
+    return id;
+  }
+  steerCancel(noteId: string) {
+    this.notes = this.notes.filter((n) => n.id !== noteId);
+  }
+  /** At a step boundary: queued notes are picked up by the step that starts. */
+  private deliverQueued(toolId: string) {
+    const due = this.notes;
+    this.notes = [];
+    for (const n of due) {
+      this.emitSteer(n.id, n.text, "picked_up", toolId);
+      this.emit({ type: "user_message", id: `u_${rid()}`, text: n.text });
+    }
   }
 
   private needsAsk(name: string) {
@@ -569,6 +620,8 @@ export class MockChat {
       this.emit({ type: "notice", level: "warn", text: "Interrupted. Tell it what to do instead.", needs_terminal: false });
     } finally {
       if (this.running) {
+        for (const n of this.notes) this.emitSteer(n.id, n.text, "unused", null);
+        this.notes = [];
         this.emit({ type: "turn_end", duration_ms: this.now() - this.turnStart, ok: ok && !this.failed });
         this.failed = false;
         this.setState("idle");
@@ -658,6 +711,29 @@ export class MockChat {
       return;
     }
 
+    if (/markdown demo/.test(p)) {
+      await this.tool(gen, "Read", "df -h /", { file_path: `${this.cwd}/disk.txt` }, 700, "ok");
+      await this.tool(gen, "Bash", "du -sh ~/*", { command: "du -sh ~/*" }, 900, "ok");
+      await this.say(MD_DEMO, gen);
+      return;
+    }
+    if (/slow steps/.test(p)) {
+      await this.say("I'll take this one step at a time so you can steer.", gen);
+      const f = this.files();
+      const steps: [string, string, number, string][] = [
+        ["Read", f.a, 2800, "214 lines"],
+        ["Grep", "OutboxQueue", 2400, "12 matches"],
+        ["Edit", f.b, 3000, "Updated 3 hunks"],
+        ["Read", f.b, 2600, "98 lines"],
+        ["Edit", f.a, 3000, "Updated 1 hunk"],
+        ["Bash", f.test, 3200, "ok"],
+        ["Edit", f.b, 2800, "Updated 2 hunks"],
+        ["Bash", "git diff --stat", 2400, "2 files changed"],
+      ];
+      for (const [name, summary, ms, out] of steps) await this.tool(gen, name, summary, name === "Bash" ? { command: summary } : { file_path: `${this.cwd}/${summary}` }, ms, out);
+      await this.say("Done: the sync layer is migrated.", gen);
+      return;
+    }
     // Plan scenarios: "todo" (agent task list; "todo stop" ends with steps left), "codex plan" (update_plan), "plan mode" (ExitPlanMode approval).
     if (/\bcodex plan\b/.test(p)) return this.planDemo(gen, "update_plan");
     if (/\btodo\b/.test(p)) return this.planDemo(gen, "TodoWrite", /\bstop\b/.test(p));

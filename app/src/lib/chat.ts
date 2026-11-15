@@ -49,6 +49,32 @@ export type ChatItem =
   | { kind: "turn"; key: string; ts: number; durationMs: number; ok: boolean }
   | { kind: "exited"; key: string; ts: number; code: number | null };
 
+/** A steering note: text sent to the agent while it works (see lib/steer.ts). */
+export type NoteState = "queued" | "picked_up" | "interrupted" | "unused";
+export interface Note {
+  id: string;
+  text: string;
+  state: NoteState;
+  /** The step (tool call id) it was delivered during, when known. */
+  toolId: string | null;
+  ts: number;
+  /** Fallback only: held in the client until the turn ends (the backend has no chat_steer). */
+  local?: boolean;
+  /** The matching `user_message` echo was already swallowed. */
+  echoed?: boolean;
+}
+
+/** The backend's `steer` event (CHAT_SPEC addition, not yet in lib/types.ts). */
+export interface SteerEvent {
+  seq: number;
+  ts: number;
+  type: "steer";
+  note_id: string;
+  text: string;
+  state: NoteState;
+  tool_id: string | null;
+}
+
 export interface UsagePoint {
   ts: number;
   model: string | null;
@@ -98,6 +124,8 @@ export interface Chat {
   prompts: string[];
   pendingPermission: string | null;
   pendingQuestion: string | null;
+  /** Steering notes for this chat, oldest first. */
+  notes: Note[];
   /** Parent of the most recent assistant output, to attribute the next `usage`. */
   lastParent: string | null;
   replayed: boolean;
@@ -136,6 +164,7 @@ export function emptyChat(id: number, info?: Partial<ChatInfo>): Chat {
     prompts: [],
     pendingPermission: null,
     pendingQuestion: null,
+    notes: [],
     lastParent: null,
     replayed: false,
   };
@@ -173,6 +202,23 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
     if (e.seq > 0 && e.seq <= c.seq) continue;
     c = { ...c, seq: Math.max(c.seq, e.seq), lastTs: Math.max(c.lastTs, e.ts) };
     const key = `${e.type}:${e.seq}`;
+    if ((e as { type: string }).type === "steer") {
+      const s = e as unknown as SteerEvent;
+      // The step it attached to; unknown -> the last top-level step so far.
+      let toolId = s.tool_id;
+      if (!toolId && s.state !== "queued" && s.state !== "unused") {
+        const a = items ?? c.items;
+        for (let i = a.length - 1; i >= 0 && !toolId; i--) {
+          const it = a[i];
+          if (it.kind === "tool" && !it.parent) toolId = it.id;
+          if (it.kind === "prompt") break;
+        }
+      }
+      const cur = c.notes.find((n) => n.id === s.note_id);
+      const note: Note = { ...(cur ?? { id: s.note_id, ts: s.ts }), text: s.text || cur?.text || "", state: s.state, toolId: toolId ?? cur?.toolId ?? null, local: false };
+      c = { ...c, notes: cur ? c.notes.map((n) => (n.id === s.note_id ? note : n)) : [...c.notes, note] };
+      continue;
+    }
     switch (e.type) {
       case "ready":
         c = {
@@ -189,10 +235,29 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           contextWindow: e.context_window ?? c.contextWindow,
         };
         break;
-      case "user_message":
+      case "user_message": {
+        // A steering note arrives as a user message too; it is shown under its step, not as a prompt.
+        if (c.turnStart !== null) {
+          const a = items ?? c.items;
+          let hasStep = false;
+          for (let i = a.length - 1; i >= 0; i--) {
+            const it = a[i];
+            if (it.kind === "prompt") break;
+            if (it.kind === "tool" && !it.parent) {
+              hasStep = true;
+              break;
+            }
+          }
+          const n = hasStep ? c.notes.find((x) => !x.echoed && x.text.trim() === e.text.trim() && x.state !== "unused") : undefined;
+          if (n) {
+            c = { ...c, notes: c.notes.map((x) => (x === n ? { ...x, echoed: true } : x)) };
+            break;
+          }
+        }
         its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts });
         c = { ...c, prompts: c.prompts[c.prompts.length - 1] === e.text ? c.prompts : [...c.prompts, e.text].slice(-200), turnStart: c.turnStart ?? e.ts };
         break;
+      }
       case "thinking_delta": {
         const i = findLast((x) => x.kind === "thinking" && x.id === e.message_id && x.parent === e.parent_tool_id);
         if (i >= 0) {
@@ -338,7 +403,8 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           }
         }
         its().push({ kind: "turn", key, ts: e.ts, durationMs: e.duration_ms, ok: e.ok });
-        c = { ...c, turnStart: null };
+        // Notes the agent never reached are neither sent nor dropped: they wait for the person.
+        c = { ...c, turnStart: null, notes: c.notes.some((n) => n.state === "queued" && !n.local) ? c.notes.map((n) => (n.state === "queued" && !n.local ? { ...n, state: "unused" as const } : n)) : c.notes };
         break;
       case "notice":
         its().push({ kind: "notice", key, level: e.level, text: e.text, needsTerminal: e.needs_terminal, ts: e.ts });
@@ -387,6 +453,10 @@ interface ChatStore {
   /** Optimistic local answer so the card responds instantly. */
   answer(id: number, requestId: string, a: PermissionAnswer, remembered?: RememberOption | null): void;
   answerQuestion(id: number, requestId: string, a: QuestionAnswer): void;
+  /** Optimistic / local steering notes; events reconcile them by id. */
+  noteAdd(id: number, n: Note): void;
+  noteDrop(id: number, noteId: string): void;
+  noteSet(id: number, noteId: string, p: Partial<Note>): void;
   /** Local-only row (e.g. "not available yet"), never sent to the backend. */
   local(id: number, item: { level: "info" | "warn" | "error"; text: string; needsTerminal?: boolean }): void;
 }
@@ -470,6 +540,23 @@ export const useChats = create<ChatStore>((set) => ({
       if (!c) return s;
       const items = c.items.map((it) => (it.kind === "question" && it.requestId === requestId ? { ...it, answer: a, answeredTs: Date.now() } : it));
       return { chats: { ...s.chats, [id]: { ...c, items, pendingQuestion: c.pendingQuestion === requestId ? null : c.pendingQuestion } } };
+    }),
+  noteAdd: (id, n) =>
+    set((s) => {
+      const c = s.chats[id];
+      if (!c) return s;
+      // An event may have beaten the command's reply: keep the event's state.
+      return { chats: { ...s.chats, [id]: { ...c, notes: c.notes.some((x) => x.id === n.id) ? c.notes : [...c.notes, n] } } };
+    }),
+  noteDrop: (id, noteId) =>
+    set((s) => {
+      const c = s.chats[id];
+      return c ? { chats: { ...s.chats, [id]: { ...c, notes: c.notes.filter((n) => n.id !== noteId) } } } : s;
+    }),
+  noteSet: (id, noteId, p) =>
+    set((s) => {
+      const c = s.chats[id];
+      return c ? { chats: { ...s.chats, [id]: { ...c, notes: c.notes.map((n) => (n.id === noteId ? { ...n, ...p } : n)) } } } : s;
     }),
   local: (id, n) =>
     set((s) => {

@@ -36,7 +36,7 @@ export interface Checkpoints {
   attempts: number;
 }
 
-const WRITE = /(edit|write|notebook|apply_patch|patch)/i;
+const WRITE = /^(write|edit|multiedit|notebookedit|apply_patch|patch)$/i;
 const SHELL = /(bash|shell|exec|command)/i;
 const LOOK = /(read|view|grep|glob|search|find|rg)/i;
 

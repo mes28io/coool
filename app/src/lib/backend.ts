@@ -50,6 +50,9 @@ export interface Backend {
   startChat(opts: ChatOptions): Promise<number>;
   chatSend(id: number, text: string): Promise<void>;
   chatInterrupt(id: number): Promise<void>;
+  /** Steer a running turn: `now: false` delivers at the next step boundary, `now: true` interrupts the current step. Returns the note id. */
+  chatSteer(id: number, text: string, now: boolean): Promise<string>;
+  chatSteerCancel(id: number, noteId: string): Promise<void>;
   chatSetModel(id: number, model: string): Promise<void>;
   chatSetPermissionMode(id: number, mode: string): Promise<void>;
   /** `remember`: a `permission_request.remember` option id to apply (allows). */
@@ -119,6 +122,8 @@ async function tauriBackend(): Promise<Backend> {
       }),
     chatSend: (id, text) => soft("chat_send", { id, text }),
     chatInterrupt: (id) => soft("chat_interrupt", { id }),
+    chatSteer: (id, text, now) => soft("chat_steer", { id, text, now }),
+    chatSteerCancel: (id, noteId) => soft("chat_steer_cancel", { id, noteId }),
     chatSetModel: (id, model) => soft("chat_set_model", { id, model }),
     chatSetPermissionMode: (id, mode) => soft("chat_set_permission_mode", { id, mode }),
     chatRespondPermission: (id, requestId, allow, always, remember) => soft("chat_respond_permission", { id, requestId, allow, always, remember: remember ?? null }),

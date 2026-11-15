@@ -16,6 +16,8 @@ import type { CommandKind } from "../lib/types";
 import { IArrowUp, ICheck, IStop, ITerminal } from "./icons";
 import { InfoPanel, type InfoTab } from "./InfoPanel";
 import { useInfoRequest } from "../lib/infoRequest";
+import { flushLocal, steer } from "../lib/steer";
+import { SteerStrip } from "./SteerStrip";
 import { Chip, cx, ease, Kbd, Popover } from "./primitives";
 
 type Native = "model" | "clear" | "context" | "status" | "usage" | "mode" | "changes";
@@ -202,13 +204,20 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     }
   };
 
-  const send = (raw?: string) => {
+  const send = (raw?: string, now = false) => {
     const t = (raw ?? text).trim();
     if (!t || disabled) return;
     const m = /^\/(\S+)\s*$/.exec(t);
     const native = m ? nativeByKey.get(m[1].toLowerCase()) : undefined;
     if (native) return runNative(native);
     hist.current = { i: null, draft: "" };
+    // While a turn runs, plain text steers it (a slash command still goes to the CLI as before).
+    if (working && !t.startsWith("/")) {
+      if (chat.pendingPermission || chat.pendingQuestion) return;
+      setText("");
+      void steer(chat, t, now);
+      return;
+    }
     setText("");
     void chatCall(chat.id, () => api().chatSend(chat.id, t));
   };
@@ -234,7 +243,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      return send();
+      return send(undefined, e.metaKey || e.ctrlKey);
     }
     if (e.key === "Escape" && working && !text) {
       e.preventDefault();
@@ -267,7 +276,11 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     }
   };
 
-  const can = !!text.trim() && !disabled;
+  const can = !!text.trim() && !disabled && !(working && (chat.pendingPermission || chat.pendingQuestion) && !text.trim().startsWith("/"));
+  // Fallback (no chat_steer in the backend): held notes go out as one prompt when the turn ends.
+  useEffect(() => {
+    if (!working) flushLocal(chat);
+  }, [working]); // eslint-disable-line react-hooks/exhaustive-deps
   const model = pendingModel ?? chat.model;
   const modes = PERMISSION_MODES[chat.provider] ?? [];
   const mode = modes.find((m) => m.id === chat.permissionMode);
@@ -278,9 +291,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const placeholder = disabled
     ? "This chat has ended"
     : chat.pendingPermission || chat.pendingQuestion
-      ? "Answer the request above, or queue a follow-up…"
+      ? "Answer the request above first"
       : working
-        ? "Queue a follow-up…  (Esc to stop)" : `Message ${chat.provider === "claude" ? "Claude" : "Codex"}…  (/ for commands)`;
+        ? "Steer the agent…" : `Message ${chat.provider === "claude" ? "Claude" : "Codex"}…  (/ for commands)`;
 
   return (
     <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
@@ -354,6 +367,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             disabled && "opacity-60",
           )}
         >
+          <SteerStrip chat={chat} />
           <textarea
             ref={ta}
             rows={1}
@@ -473,6 +487,11 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
               </Popover>
             </div>
             <span className="flex-1" />
+            {!compact && working && (
+              <span className="hidden items-center gap-1.5 font-mono text-micro text-faint md:flex" data-steer-hint>
+                <Kbd>↵</Kbd> next step <span>·</span> <Kbd>⌘↵</Kbd> interrupt now <span>·</span> <Kbd>esc</Kbd> stop
+              </span>
+            )}
             {!compact && !working && (
               <span className="hidden items-center gap-1 text-small text-faint md:flex">
                 <Kbd>⇧</Kbd>
@@ -511,7 +530,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                     "flex size-[32px] items-center justify-center rounded-[9px] transition-[background-color,color] duration-150",
                     can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
                   )}
-                  title={working ? "Queue for after this turn" : "Send (Enter)"}
+                  title={working ? "Queue a note for the next step (↵), or interrupt now (⌘↵)" : "Send (Enter)"}
                 >
                   <IArrowUp size={17} strokeWidth={1.9} />
                 </motion.button>

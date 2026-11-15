@@ -5,6 +5,7 @@ import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } fro
 import type { Since } from "../store";
 import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
 import { Elapsed, cx, ease, StatusDot } from "./primitives";
+import { Markdown } from "./Markdown";
 import { ModelTag } from "./Models";
 import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
 import { TimelineSkeleton } from "./Skeletons";
@@ -113,9 +114,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
             >
               {b.type === "prompt" && <PromptBlock a={b.a} />}
               {b.type === "text" && (
-                <div className="selectable text-prose text-fg/90">
-                  <Prose text={b.a.text} />
-                </div>
+                <ActivityText a={b.a} />
               )}
               {b.type === "error" && (
                 <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-base text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
@@ -152,9 +151,7 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
         <div key={b.key}>
           {b.type === "prompt" && <PromptBlock a={b.a} />}
           {b.type === "text" && (
-            <div className="selectable text-prose text-fg/90">
-              <Prose text={b.a.text} />
-            </div>
+            <ActivityText a={b.a} />
           )}
           {b.type === "error" && (
             <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
@@ -165,6 +162,22 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
           {b.type === "steps" && <StepGroup items={b.items} agents={[]} active={false} latest={false} live={STILL} />}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The text of a transcript reply. Today the core sends one flattened line (~400 chars); when it sends
+ * the full text, change `bodyOf` (and `shortenedOf`) here: nothing else needs to move.
+ */
+const bodyOf = (a: Activity): string => a.text;
+const shortenedOf = (_a: Activity): boolean => false;
+
+function ActivityText({ a }: { a: Activity }) {
+  return (
+    <div>
+      <Markdown text={bodyOf(a)} className="text-prose text-fg/90" />
+      {shortenedOf(a) && <div className="mt-1 text-small text-faint">… shortened</div>}
     </div>
   );
 }
@@ -339,11 +352,6 @@ export function StepLine({
       >
         {waiting ? (
           <span className="size-[7px] rounded-full bg-needs breathe" />
-        ) : active ? (
-          <svg width="13" height="13" viewBox="0 0 16 16" className="spin">
-            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
-            <path d="M8 2a6 6 0 016 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
         ) : failed ? (
           <IAlert size={14} />
         ) : (

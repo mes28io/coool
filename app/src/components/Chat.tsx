@@ -4,19 +4,21 @@
 // requests become an inline approval card.
 
 import { AnimatePresence, motion } from "motion/react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { answerPermission, answerQuestion } from "../lib/actions";
 import { type Chat, type ChatItem, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { modelLabel } from "../lib/models";
 import type { Activity, RememberOption } from "../lib/types";
-import { HistoryBlocks, PromptBubble, Prose, StepLine, ThinkingRow } from "./Activity";
+import { HistoryBlocks, PromptBubble, StepLine, ThinkingRow } from "./Activity";
+import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
 import { RailItem, RailList, reducedMotion } from "./StepRail";
 import { deriveCheckpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
 import { isPlanTool, parsePlan, planForTurn } from "../lib/plan";
 import { PlanCard } from "./PlanCard";
+import { NoteRows } from "./SteerStrip";
 import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ISpark, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
@@ -26,8 +28,8 @@ type Tool = Extract<ChatItem, { kind: "tool" }>;
 type Perm = Extract<ChatItem, { kind: "permission" }>;
 type Ask = Extract<ChatItem, { kind: "question" }>;
 
-/** The tool behind a question card; the card stands for it, so it isn't listed as a step. */
-const QUESTION_TOOLS = /^(AskUserQuestion|request_user_input)$/;
+/** The tool behind a question or plan-approval card; the card stands for it, so it isn't listed as a step. */
+const QUESTION_TOOLS = /^(AskUserQuestion|request_user_input|ExitPlanMode)$/;
 type Block =
   | { type: "item"; key: string; item: ChatItem }
   | { type: "steps"; key: string; tools: Tool[] }
@@ -274,17 +276,7 @@ function PlanApproval({ item, chat }: { item: Perm; chat: Chat }) {
       attention={open}
       data-approval={open ? item.requestId : undefined}
       data-approval-done={open ? undefined : (item.answer ?? "")}
-      body={
-        p.body ? (
-          <div className="flex flex-col gap-2">
-            {p.body.split(/\n{2,}/).map((para, i) => (
-              <p key={i} className={cx("whitespace-pre-wrap", /^#/.test(para) && "font-medium text-fg")}>
-                {para.replace(/^#+\s+/, "")}
-              </p>
-            ))}
-          </div>
-        ) : undefined
-      }
+      body={p.body ? <Markdown text={p.body} /> : undefined}
       onApprove={open ? () => answerPermission(chat.id, item.requestId, "allow") : undefined}
       onReject={open ? () => answerPermission(chat.id, item.requestId, "deny") : undefined}
     />
@@ -354,77 +346,8 @@ function useReveal(text: string, streaming: boolean): number {
 const AssistantText = memo(function AssistantText({ text, streaming, small }: { text: string; streaming: boolean; small?: boolean }) {
   const n = useReveal(text, streaming);
   const typing = streaming || n < text.length;
-  return (
-    <div className={cx("selectable", small ? "text-small text-dim [&_.caret]:h-[11px] [&_.caret]:w-[5px]" : "text-prose text-fg/90")}>
-      <Rich text={text.slice(0, n)} caret={typing} />
-    </div>
-  );
+  return <Markdown text={text.slice(0, n)} streaming={typing} className={small ? "text-small text-dim" : "text-prose text-fg/90"} />;
 });
-
-/** Small markdown subset: paragraphs, lists, fenced code, `code`, **bold**. */
-function Rich({ text, caret }: { text: string; caret?: boolean }) {
-  const parts = text.split(/```/);
-  const out: ReactNode[] = [];
-  parts.forEach((part, pi) => {
-    const isCode = pi % 2 === 1;
-    const lastPart = pi === parts.length - 1;
-    if (isCode) {
-      const body = part.replace(/^[^\n]*\n/, "");
-      out.push(
-        <pre key={`c${pi}`} className="my-1 overflow-x-auto rounded-[8px] border border-hairline bg-[color-mix(in_oklab,var(--dim)_7%,transparent)] px-3 py-2 font-mono text-mono-small text-fg/90">
-          {body}
-          {caret && lastPart && <span className="caret" />}
-        </pre>,
-      );
-      return;
-    }
-    const paras = part.split(/\n{2,}/).filter((p, i, a) => p.trim() || (lastPart && i === a.length - 1));
-    paras.forEach((p, i) => {
-      const end = caret && lastPart && i === paras.length - 1;
-      const lines = p.split("\n").filter((l) => l.trim());
-      const list = lines.length > 0 && lines.every((l) => /^\s*([-*]|\d+\.)\s/.test(l));
-      if (list) {
-        const ordered = /^\s*\d+\./.test(lines[0]);
-        const L = ordered ? "ol" : "ul";
-        out.push(
-          <L key={`l${pi}-${i}`} className={cx("my-0.5 flex flex-col gap-1 pl-5", ordered ? "list-decimal" : "list-disc", "marker:text-faint")}>
-            {lines.map((l, li) => (
-              <li key={li}>
-                <Inline text={l.replace(/^\s*([-*]|\d+\.)\s/, "")} />
-                {end && li === lines.length - 1 && <span className="caret" />}
-              </li>
-            ))}
-          </L>,
-        );
-      } else
-        out.push(
-          <p key={`p${pi}-${i}`} className="whitespace-pre-wrap [&:not(:first-child)]:mt-2.5">
-            <Inline text={p.replace(/^\n+/, "")} />
-            {end && <span className="caret" />}
-          </p>,
-        );
-    });
-  });
-  if (!out.length && caret) out.push(<span key="c" className="caret" />);
-  return <>{out}</>;
-}
-
-function Inline({ text }: { text: string }) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return (
-    <>
-      {parts.map((p, i) =>
-        p.startsWith("**") && p.endsWith("**") && p.length > 4 ? (
-          <strong key={i} className="font-semibold text-fg">
-            {p.slice(2, -2)}
-          </strong>
-        ) : (
-          <Prose key={i} text={p} />
-        ),
-      )}
-    </>
-  );
-}
 
 // ---------- thinking ----------
 
@@ -539,7 +462,10 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
                     {t.agent ? (
                       <AgentCard tool={t} chat={chat} kids={nested.get(t.id) ?? []} />
                     ) : (
-                      <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
+                      <>
+                        <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
+                        <NoteRows notes={chat.notes.filter((n) => n.toolId === t.id)} />
+                      </>
                     )}
                   </RailItem>
                 );
@@ -992,9 +918,9 @@ function NoticeBlock({ item, lines }: { item: Extract<ChatItem, { kind: "notice"
       <AnimatePresence initial={false}>
         {open && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease }} className="overflow-hidden">
-            <pre className={cx("selectable max-h-[320px] overflow-auto whitespace-pre-wrap border-t border-hairline px-3 py-2 font-mono text-mono-small leading-[16px]", item.level === "warn" ? "text-busy-text" : "text-dim")}>
-              {lines.slice(1).join("\n")}
-            </pre>
+            <div className={cx("max-h-[320px] overflow-auto border-t border-hairline px-3 py-2 text-small", item.level === "warn" ? "text-busy-text" : "text-dim")}>
+              <Markdown text={lines.slice(1).join("\n")} />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
