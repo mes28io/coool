@@ -80,6 +80,8 @@ export interface PtyInfo {
   id: number;
   provider: Provider;
   cwd: string;
+  /** Folder it is grouped under; absent from older backends and the mock. */
+  project?: string;
   running: boolean;
   started: number;
 }
@@ -91,6 +93,8 @@ export interface ChatInfo {
   id: number;
   provider: Provider;
   cwd: string;
+  /** Folder it is grouped under; absent from older backends and the mock. */
+  project?: string;
   session_id: string | null;
   model: string | null;
   permission_mode?: string | null;

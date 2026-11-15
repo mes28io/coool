@@ -51,13 +51,13 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
     for (const id of pendingChats) {
       const info = chatInfos[id];
       if (!info) continue;
-      const p = get(info.cwd);
+      const p = get(info.project || info.cwd);
       p.startingChats.push(info);
     }
     for (const id of pending) {
       const info = ptys[id];
       if (!info) continue;
-      const p = get(info.cwd);
+      const p = get(info.project || info.cwd);
       p.starting.push(info);
       p.updated = Math.max(p.updated, info.started);
     }

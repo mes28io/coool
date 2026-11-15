@@ -255,7 +255,7 @@ function StartingCard({ p, chat, i, stagger }: { p?: PtyInfo; chat?: ChatInfo; i
     >
       <div className="flex h-[22px] items-center gap-1.5">
         <ProviderMark provider={info.provider} size={14} />
-        <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(info.cwd)}</span>
+        <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(info.project || info.cwd)}</span>
         <StateLabel status={ready ? "idle" : "starting"} />
       </div>
       <div className="mt-2 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">

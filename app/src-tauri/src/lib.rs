@@ -95,6 +95,8 @@ struct PtyInfo {
     id: usize,
     provider: Provider,
     cwd: String,
+    /// The folder this is grouped under (see `coool_core::project`).
+    project: String,
     running: bool,
     /// Epoch ms.
     started: u64,
@@ -105,6 +107,8 @@ struct ChatRow {
     id: usize,
     provider: Provider,
     cwd: String,
+    /// The folder this is grouped under (see `coool_core::project`).
+    project: String,
     session_id: Option<String>,
     model: Option<String>,
     permission_mode: Option<String>,
@@ -167,7 +171,7 @@ impl Core {
                 .filter_map(|(id, m)| {
                     let m = m.as_ref()?;
                     let started = m.started.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-                    Some(PtyInfo { id, provider: m.provider, cwd: m.cwd.clone(), running: m.is_running(), started })
+                    Some(PtyInfo { id, provider: m.provider, project: coool_core::project::project_root(&m.cwd), cwd: m.cwd.clone(), running: m.is_running(), started })
                 })
                 .collect();
             let chats: Vec<ChatRow> = hub
@@ -177,6 +181,7 @@ impl Core {
                     pid: hub.chat(c.id).and_then(|x| x.pid),
                     id: c.id,
                     provider: c.provider,
+                    project: coool_core::project::project_root(&c.cwd),
                     cwd: c.cwd,
                     session_id: c.session_id,
                     model: none_if_empty(c.model),
