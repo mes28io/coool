@@ -1,10 +1,13 @@
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, Session } from "../lib/types";
-import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, thinkingWord, tsToMs } from "../lib/format";
+import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, thinkingOrbState, tsToMs } from "../lib/format";
 import { useStore, type Since } from "../store";
 import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
+import type { ThinkOrbState } from "../lib/format";
 import { Elapsed, cx, ease, StatusDot } from "./primitives";
+import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
+import { ThinkOrb } from "./ThinkOrb";
 import { Markdown } from "./Markdown";
 import { ModelTag } from "./Models";
 import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
@@ -185,19 +188,55 @@ export function PromptBubble({ text, stamp, shortened }: { text: string; stamp?:
   );
 }
 
-export function ThinkingRow({ since, approx, label: given }: { since: number | null; approx?: boolean; label?: string }) {
-  // A fresh word per thinking stretch, held for as long as that stretch lasts.
-  const word = useMemo(() => thinkingWord(since), [since]);
-  const label = given ?? word;
+export function ThinkingRow({
+  since,
+  approx,
+  label: given,
+  orb,
+  big,
+  live = true,
+}: {
+  since: number | null;
+  approx?: boolean;
+  label?: string;
+  /** Orb state; default rotates by thinking stretch. "connecting" for starting rows. */
+  orb?: ThinkOrbState;
+  /** Centered, 64px orb above the label (the empty "Starting…" screens). */
+  big?: boolean;
+  live?: boolean;
+}) {
+  // A fresh word and orb per thinking stretch, held for as long as that stretch lasts.
+  // A stretch whose start is only an estimate (read-only sessions: `since` is the session's last update,
+  // which moves on every refresh) gets one word and one orb, latched when the row appears, and never cycles.
+  const exact = !approx && since !== null;
+  const latched = useRef(since);
+  const stretch = exact ? since : latched.current;
+  const state = useMemo(() => orb ?? thinkingOrbState(stretch), [orb, stretch]);
+  const text = (
+    <>
+      {/* Fixed-width slot (widest word) so the timer does not jitter as the word changes. */}
+      <span className="inline-flex font-medium" style={{ minWidth: given ? undefined : "15ch" }}>
+        <span className="shimmer inline-block" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
+          {given ?? <ThinkingWord seed={stretch} origin={exact ? since : null} cycle={exact} />}
+        </span>
+        <ThinkingDots />
+      </span>
+      <Elapsed since={since} approx={approx} className="text-small text-faint" />
+    </>
+  );
+  if (big)
+    return (
+      <div className="flex flex-col items-center gap-3 py-1 text-base">
+        <ThinkOrb state={state} size={64} live={live} />
+        <div className="flex items-center gap-2.5">{text}</div>
+      </div>
+    );
   return (
     <div className="flex items-center gap-2.5 py-1 text-base">
       <span className="relative flex size-[22px] items-center justify-center">
-        <ISpark size={16} className="text-dim breathe" />
+        <ThinkOrb state={state} size={20} live={live} />
       </span>
-      <span className="shimmer font-medium" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
-        {label}
-      </span>
-      <Elapsed since={since} approx={approx} className="text-small text-faint" />
+      {text}
     </div>
   );
 }
@@ -462,7 +501,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
         )}
         {running && steps.length === 0 && (
           <div className="px-3 pb-2">
-            <ThinkingRow since={live.at} approx={live.approx} label="Starting" />
+            <ThinkingRow since={live.at} approx={live.approx} label="Starting" orb="connecting" />
           </div>
         )}
       </div>

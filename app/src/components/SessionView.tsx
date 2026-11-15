@@ -271,7 +271,7 @@ export function SessionView({
                     <Timeline session={session} compact={compact} live={liveTime(since, session.updated)} />
                   ) : (
                     <div className="flex h-full items-center justify-center">
-                      <ThinkingRow since={starting?.started ?? null} label={`Starting ${provider} in ${folderName(cwd)}`} />
+                      <ThinkingRow since={starting?.started ?? null} label={`Starting ${provider} in ${folderName(cwd)}`} orb="connecting" big />
                     </div>
                   )}
                 </motion.div>

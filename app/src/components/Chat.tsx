@@ -13,7 +13,7 @@ import type { Activity, RememberOption } from "../lib/types";
 import { HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit } from "./Activity";
 import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
-import { RailItem, RailList, reducedMotion } from "./StepRail";
+import { RailItem, RailList, reducedMotion, Reveal } from "./StepRail";
 import { deriveCheckpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
 import { isPlanTool, isSyntheticPlan, isTaskNoise, parsePlan, planForTurn } from "../lib/plan";
@@ -238,7 +238,7 @@ export function ChatTimeline({
         {earlier && earlier.length > 0 && <Earlier rows={earlier} />}
         {!chat.ready && blocks.length === 0 && (
           <div className="flex min-h-[40vh] items-center justify-center">
-            <ThinkingRow since={chat.lastTs} label={`Starting ${chat.provider} in ${folderName(chat.cwd)}`} />
+            <ThinkingRow since={chat.lastTs} label={`Starting ${chat.provider} in ${folderName(chat.cwd)}`} orb="connecting" big />
           </div>
         )}
         {chat.ready && blocks.length === 0 && !earlier?.length && <Welcome chat={chat} onSuggest={onSuggest} />}
@@ -373,10 +373,25 @@ const AssistantText = memo(function AssistantText({ text, streaming, small }: { 
 
 // ---------- thinking ----------
 
-function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }> }) {
+export function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }> }) {
   const [open, setOpen] = useState(false);
   const live = item.endTs === null;
   const lastLine = item.text.trim().split(/\n/).pop() ?? "";
+  // A stretch that ends while on screen: the icon pops into a check for a moment and the label sweeps in.
+  const wasLive = useRef(live);
+  const [pop, setPop] = useState(false);
+  useEffect(() => {
+    if (live) {
+      wasLive.current = true;
+      return;
+    }
+    if (!wasLive.current) return;
+    wasLive.current = false;
+    if (reducedMotion()) return;
+    setPop(true);
+    const t = setTimeout(() => setPop(false), 1200);
+    return () => clearTimeout(t);
+  }, [live]);
   if (live)
     return (
       <div className="flex flex-col gap-1">
@@ -396,8 +411,16 @@ function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }>
         <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint">
           <IChevron size={14} />
         </motion.span>
-        <ISpark size={14} className="text-dim/80" />
-        <span className="text-dim group-hover:text-fg/85">Thought for {fmtElapsed((item.endTs ?? item.ts) - item.ts)}</span>
+        {pop ? (
+          <motion.span initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", stiffness: 420, damping: 18 }} className="flex text-dim">
+            <ICheck size={14} />
+          </motion.span>
+        ) : (
+          <ISpark size={14} className="text-dim/80" />
+        )}
+        <span className="text-dim group-hover:text-fg/85">
+          <Reveal key={pop ? "pop" : "rest"} text={`Thought for ${fmtElapsed((item.endTs ?? item.ts) - item.ts)}`} fresh={pop} />
+        </span>
       </button>
       <AnimatePresence initial={false}>
         {open && (
@@ -609,7 +632,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
         )}
         {running && shownSteps.length === 0 && !note && (
           <div className="px-3 pb-2">
-            <ThinkingRow since={tool.ts} label="Starting" />
+            <ThinkingRow since={tool.ts} label="Starting" orb="connecting" />
           </div>
         )}
       </div>

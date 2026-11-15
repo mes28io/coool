@@ -5,7 +5,7 @@ import "./styles.css";
 // Pally is fetched at install time (licence forbids committing it); absent => Geist fallback.
 import.meta.glob("./assets/fonts/pally/pally.css", { eager: true });
 import App from "./App";
-import { demoPage, LedgerDemo, PlanDemo } from "./components/Demos";
+import { demoPage, LedgerDemo, OrbsDemo, PlanDemo } from "./components/Demos";
 import { initBackend } from "./lib/backend";
 
 // Wait for the bundled fonts so xterm measures Geist Mono, not a fallback.
@@ -17,7 +17,7 @@ Promise.all([
 ]).then(() => {
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
-      {demoPage() === "ledger" ? <LedgerDemo /> : demoPage() === "plan" ? <PlanDemo /> : <App />}
+      {demoPage() === "ledger" ? <LedgerDemo /> : demoPage() === "plan" ? <PlanDemo /> : demoPage() === "orbs" ? <OrbsDemo /> : <App />}
     </StrictMode>,
   );
 });

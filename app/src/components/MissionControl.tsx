@@ -2,13 +2,15 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
 import { useNow } from "../lib/clock";
 import { useChats } from "../lib/chat";
-import { ago, displayTitle, folderName, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, thinkingWord } from "../lib/format";
+import { ago, displayTitle, folderName, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, thinkingOrbState } from "../lib/format";
 import { attention, useChatDigest, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { useStableOrder } from "../lib/stable";
 import { useStore, type Since } from "../store";
+import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
+import { ThinkOrb } from "./ThinkOrb";
 import { IPlay, IPlus, ISpark, toolIcon } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, Button, ContextMeter, cx, Elapsed, ease, Kbd, PathText, ProviderMark, softSpring, StatusDot, statusLabel } from "./primitives";
@@ -155,6 +157,9 @@ function StateLabel({ status, needs, background }: { status: "busy" | "idle" | "
   );
 }
 
+/** Home can show many thinking cards; only the first few animate. */
+const MAX_LIVE_ORBS = 6;
+
 const cardCls = "group relative flex flex-col overflow-hidden rounded-[18px] border bg-bg p-4 text-left transition-[border-color] duration-200";
 
 const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Attention; i: number; stagger: boolean }) {
@@ -166,6 +171,8 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
   const cur = busy && !thinking && s.current ? splitTool(s.current) : null;
   const CurIcon = cur ? toolIcon(cur.name) : ISpark;
   const since = useCardSince(s);
+  // Fixed for the whole thinking stretch; an estimated start (it moves with refreshes) must not drive the word.
+  const stretchSeed = since.approx ? sessionKey(s) : since.at;
   const running = att.agents;
   const ranCount = running.length ? 0 : s.agents.length;
   const jobs = s.live_children ?? 0;
@@ -217,7 +224,13 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
           </span>
         ) : busy ? (
           <>
-            <CurIcon size={15} className="shrink-0 text-dim" />
+            {thinking && !pending ? (
+              <span className="-mx-[2.5px] flex shrink-0">
+                <ThinkOrb state={thinkingOrbState(stretchSeed)} size={20} live={i < MAX_LIVE_ORBS} />
+              </span>
+            ) : (
+              <CurIcon size={15} className="shrink-0 text-dim" />
+            )}
             <span className="min-w-0 flex-1 truncate">
               {cur ? (
                 <>
@@ -226,7 +239,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
               ) : pending ? (
                 <Skel w="60%" h={9} className="inline-block align-middle" />
               ) : (
-                <span className="shimmer font-medium">{thinkingWord(s.updated)}</span>
+                <span className="inline-flex font-medium"><span className="shimmer"><ThinkingWord seed={stretchSeed} origin={since.at} cycle={!since.approx} /></span><ThinkingDots /></span>
               )}
             </span>
             {!pending && <Elapsed since={since.at} approx={since.approx} className="shrink-0 text-small text-faint" />}

@@ -652,3 +652,39 @@ html.theme-fade *::after {
     opacity: 0;
   }
 }
+
+/* The trailing dots of a thinking label (ThinkingDots): one by one, a brief hold, restart. */
+.think-dots > span[aria-hidden] {
+  opacity: 0;
+  animation: 1.4s linear infinite both;
+}
+.think-dots > span:nth-child(2) {
+  animation-name: think-dot-1;
+}
+.think-dots > span:nth-child(3) {
+  animation-name: think-dot-2;
+}
+.think-dots > span:nth-child(4) {
+  animation-name: think-dot-3;
+}
+@keyframes think-dot-1 {
+  0% { opacity: 0; }
+  8%, 86% { opacity: 1; }
+  96%, 100% { opacity: 0; }
+}
+@keyframes think-dot-2 {
+  0%, 16% { opacity: 0; }
+  26%, 86% { opacity: 1; }
+  96%, 100% { opacity: 0; }
+}
+@keyframes think-dot-3 {
+  0%, 32% { opacity: 0; }
+  42%, 86% { opacity: 1; }
+  96%, 100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .think-dots > span[aria-hidden] {
+    animation: none;
+    opacity: 1;
+  }
+}

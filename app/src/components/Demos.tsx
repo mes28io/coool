@@ -2,7 +2,11 @@
 // in-memory undo). Mounted from main.tsx in place of the app.
 
 import { useEffect, useState } from "react";
+import { ThinkingOrb, type OrbState } from "thinking-orbs";
 import { IBell, IGlobe, IFile, IGear } from "./icons";
+import { ThinkingRow } from "./Activity";
+import { ThinkingBlock } from "./Chat";
+import { Strip } from "./AgentsPanel";
 import { Ledger, type LedgerChange } from "./Ledger";
 import { PlanCard, type PlanPhase, type PlanStep } from "./PlanCard";
 
@@ -103,8 +107,113 @@ export function PlanDemo() {
   );
 }
 
-/** Which demo page, if any, `?x=demo` asks for. */
-export function demoPage(): "ledger" | "plan" | null {
+const ORB_STATES: OrbState[] = ["working", "searching", "solving", "listening", "connecting", "weaving", "composing", "breathing", "shaping"];
+
+function OrbPanel({ dark, tint }: { dark: boolean; tint?: string }) {
+  const bg = dark ? "#212121" : "#ffffff";
+  const fg = dark ? "#ececec" : "#0d0d0d";
+  return (
+    <div className="flex-1 p-5" style={{ background: bg, color: fg }}>
+      <div className="mb-3 text-small" style={{ opacity: 0.6 }}>
+        {dark ? "dark tuning" : "light tuning"} {tint ? `· tint ${tint}` : "· stock"}
+      </div>
+      {ORB_STATES.map((st) => (
+        <div key={st} className="flex items-center gap-4 py-1">
+          <span className="w-24 text-small" style={{ opacity: 0.6 }}>{st}</span>
+          <ThinkingOrb state={st} size={64} theme={dark ? "dark" : "light"} color={tint} />
+          <span className="flex items-center gap-2.5 text-[14px]">
+            <span className="flex size-[22px] items-center justify-center">
+              <ThinkingOrb state={st} size={20} theme={dark ? "dark" : "light"} color={tint} />
+            </span>
+            Pondering the next step
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function OrbsDemo() {
+  const [fps, setFps] = useState("");
   const q = location.search;
-  return /[?&]ledger=demo/.test(q) ? "ledger" : /[?&]plan=demo/.test(q) ? "plan" : null;
+  const n = Number(/[?&]n=(\d+)/.exec(q)?.[1] ?? 0);
+  const dark = !/[?&]light/.test(q);
+  useEffect(() => {
+    if (!n) return;
+    const dt: number[] = [];
+    let last = performance.now();
+    let raf = 0;
+    const tick = (t: number) => {
+      dt.push(t - last);
+      last = t;
+      if (dt.length >= 300) {
+        const s = dt.slice(10).sort((a, b) => a - b);
+        setFps(`frame ms avg ${(s.reduce((a, b) => a + b, 0) / s.length).toFixed(2)} p95 ${s[Math.floor(s.length * 0.95)].toFixed(2)} max ${s[s.length - 1].toFixed(2)}`);
+        dt.length = 0;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [n]);
+  const [t0] = useState(() => Date.now());
+  const [done, setDone] = useState(false);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    // Card data is rebuilt about once a second in the app: do the same here to prove the word does not follow it.
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (!/[?&]row/.test(q)) return;
+    const t = setTimeout(() => setDone(true), 5000);
+    return () => clearTimeout(t);
+  }, [q]);
+  if (/[?&]row/.test(q))
+    return (
+      <div className="min-h-screen bg-bg p-8 text-fg">
+        <div className="mx-auto flex max-w-[700px] flex-col gap-4">
+          <ThinkingRow since={t0} />
+          {/* read-only session cases: estimated start that moves with every refresh, no start at all, a stretch 2 minutes old */}
+          <ThinkingRow since={t0 - 120_000 + tick * 1000} approx />
+          <ThinkingRow since={null} approx />
+          <ThinkingRow since={t0 - 120_000} />
+          <div className="w-[320px]">
+            <Strip card={{ state: "running", labelTool: null, label: `Churn${tick}`, since: t0 + tick * 40, id: "agent-1" } as never} fresh={{ current: false }} />
+          </div>
+          <ThinkingRow since={t0} label="Starting claude in coool" orb="connecting" />
+          <ThinkingRow since={t0} label="Starting claude in coool" orb="connecting" big />
+          <ThinkingBlock item={{ kind: "thinking", key: "t", id: "t", ts: t0, endTs: done ? t0 + 4000 : null, text: "Weighing two ways to do this.\nThe second is simpler.", parent: null }} />
+        </div>
+      </div>
+    );
+  if (n)
+    return (
+      <div className="p-5" style={{ background: dark ? "#212121" : "#fff", color: dark ? "#ececec" : "#0d0d0d", minHeight: "100vh" }}>
+        <div id="fps">{fps}</div>
+        <div className="flex flex-wrap gap-3">
+          {Array.from({ length: n }, (_, i) => (
+            <ThinkingOrb key={i} state={ORB_STATES[i % 9]} size={20} theme={dark ? "dark" : "light"} />
+          ))}
+        </div>
+      </div>
+    );
+  return (
+    <div className="min-h-screen">
+      <div className="flex">
+        <OrbPanel dark />
+        <OrbPanel dark={false} />
+      </div>
+      <div className="flex">
+        <OrbPanel dark tint="#28c840" />
+        <OrbPanel dark={false} tint="#1a7f37" />
+      </div>
+    </div>
+  );
+}
+
+/** Which demo page, if any, `?x=demo` asks for. */
+export function demoPage(): "ledger" | "plan" | "orbs" | null {
+  const q = location.search;
+  return /[?&]ledger=demo/.test(q) ? "ledger" : /[?&]plan=demo/.test(q) ? "plan" : /[?&]orbs=demo/.test(q) ? "orbs" : null;
 }

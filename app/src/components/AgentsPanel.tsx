@@ -5,9 +5,11 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { countsText, fmtOut, orderCards, type AgentCardData } from "../lib/agentCards";
 import { useNow } from "../lib/clock";
-import { fmtElapsed } from "../lib/format";
+import { fmtElapsed, thinkingOrbState } from "../lib/format";
 import { modelLabel } from "../lib/models";
 import { useStableOrder } from "../lib/stable";
+import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
+import { ThinkOrb } from "./ThinkOrb";
 import { ICheck, IChevron, ISpark, toolIcon } from "./icons";
 import { cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { Reveal, reducedMotion } from "./StepRail";
@@ -213,7 +215,7 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
 }
 
 /** The "now" strip. */
-function Strip({ card, fresh }: { card: AgentCardData; fresh: { current: boolean } }) {
+export function Strip({ card, fresh }: { card: AgentCardData; fresh: { current: boolean } }) {
   const Icon = card.labelTool ? toolIcon(card.labelTool) : ISpark;
   const base = "flex h-[34px] items-center gap-2 rounded-[8px] bg-raised px-2.5 text-base";
   if (card.state === "done")
@@ -240,11 +242,31 @@ function Strip({ card, fresh }: { card: AgentCardData; fresh: { current: boolean
         {card.state === "needs" && <Timer since={card.since} className="shrink-0 text-small text-faint" />}
       </div>
     );
+  if (!card.labelTool) return <ThinkingStrip card={card} className={base} />;
   return (
     <div className={base}>
       <Icon size={13} className="shrink-0 text-working-text" />
       <span className="min-w-0 flex-1 truncate font-medium text-fg" title={card.label}>
         <Reveal key={card.label} text={card.label} fresh={fresh.current} />
+      </span>
+      <Timer since={card.since} className="shrink-0 text-small text-faint" />
+    </div>
+  );
+}
+
+/** The strip while the agent is thinking. Word and orb are fixed when the stretch starts: card data is rebuilt about once a second and must not move them. */
+function ThinkingStrip({ card, className }: { card: AgentCardData; className: string }) {
+  const stretch = useRef({ seed: `${card.id}:${card.since ?? Date.now()}`, at: card.since ?? Date.now() }).current;
+  return (
+    <div className={className}>
+      <span className="-mx-[3.5px] flex shrink-0">
+        <ThinkOrb state={thinkingOrbState(stretch.seed)} size={20} />
+      </span>
+      <span className="flex min-w-0 flex-1 font-medium">
+        <span className="shimmer min-w-0 truncate" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
+          <ThinkingWord seed={stretch.seed} origin={stretch.at} cycle={card.since !== null} />
+        </span>
+        <ThinkingDots />
       </span>
       <Timer since={card.since} className="shrink-0 text-small text-faint" />
     </div>
