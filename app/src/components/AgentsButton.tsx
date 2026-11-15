@@ -25,9 +25,7 @@ export function AgentsButton({ cards, shells = 0, open, onToggle, compact }: { c
       aria-label={title}
       aria-pressed={open}
       className={cx(
-        // Fixed width (fits "99 running"), so the button never grows or shrinks as the label changes.
-        "flex h-[28px] shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-[8px] px-2.5 text-small tabular-nums transition-colors duration-150",
-        compact ? "w-[48px]" : "w-[108px]",
+        "flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[8px] px-2.5 text-small tabular-nums transition-colors duration-150",
         open ? "bg-hover" : "hover:bg-hover",
       )}
     >
