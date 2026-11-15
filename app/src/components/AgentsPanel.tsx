@@ -8,8 +8,8 @@ import { useNow } from "../lib/clock";
 import { fmtElapsed } from "../lib/format";
 import { modelLabel } from "../lib/models";
 import { useStableOrder } from "../lib/stable";
-import { ICheck, IChevron, IClose, ISpark, toolIcon } from "./icons";
-import { cx, ease, IconButton, ProviderMark, spring, StatusDot } from "./primitives";
+import { ICheck, IChevron, ISpark, toolIcon } from "./icons";
+import { cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { Reveal, reducedMotion } from "./StepRail";
 
 /** Finished cards shown before "Show N more". */
@@ -26,7 +26,6 @@ export function AgentsPanel({
   dragging,
   onWidth,
   onDragging,
-  onClose,
   onOpenCard,
   onStop,
 }: {
@@ -36,7 +35,6 @@ export function AgentsPanel({
   dragging: boolean;
   onWidth: (w: number) => void;
   onDragging: (d: boolean) => void;
-  onClose: () => void;
   onOpenCard: (c: AgentCardData) => void;
   onStop: (c: AgentCardData) => void;
 }) {
@@ -65,9 +63,6 @@ export function AgentsPanel({
           <span className="min-w-0 flex-1 truncate text-small text-dim tnum" data-agents-count>
             {countsText(cards)}
           </span>
-          <IconButton title="Close panel" onClick={onClose}>
-            <IClose size={14} />
-          </IconButton>
         </div>
         <div className="scroll min-h-0 flex-1 px-3 pb-3" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
           <AnimatePresence initial={false}>

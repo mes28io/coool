@@ -16,7 +16,7 @@ import { AgentsPanel } from "./AgentsPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IClose, IPlay, IStop, ITerminal } from "./icons";
+import { IActivity, IClose, IPlay, ISidebar, ITerminal } from "./icons";
 import { ModelsChip, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark, StatusPill, Ticker, type UiStatus } from "./primitives";
@@ -139,8 +139,6 @@ export function SessionView({
   let status: UiStatus = session ? (att?.status ?? session.status) : chat ? (chatLive ? (chat.state === "idle" ? (chat.ready ? "idle" : "starting") : "busy") : "ended") : running ? "starting" : "ended";
   if (att?.needs || (chat && needsAnswer(chat))) status = "needs";
   const title = session ? displayTitle(session) : (chat && chatTitle(chat)) || `New ${provider === "claude" ? "Claude Code" : "Codex"} chat`;
-  const live = session ? session.status !== "ended" : running || chatLive;
-  const canStop = chatLive || (live && !isChat && (running || !!session?.pid));
   const canResume = !!session && !chatLive && !running && session.status === "ended" && !!session.id && !!session.cwd;
   const external = !!session && !hasTerm && !isChat;
   const model = chat?.model ?? session?.model ?? null;
@@ -224,11 +222,15 @@ export function SessionView({
             {!compact && "Open in terminal"}
           </Button>
         )}
-        {canStop && (
-          <Button variant="ghost" onClick={() => askStop(session, running ? pty : null, title, chatLive ? r.chat : null)} title="Stop session" className={compact ? "px-2" : ""}>
-            <IStop size={15} />
-            {!compact && "Stop"}
-          </Button>
+        {/* The agents panel toggle sits where Stop used to be (Stop lives in the composer and the palette). */}
+        {panelOn && panelKey && (
+          <IconButton
+            title={panelOpen ? "Hide agents" : "Show agents"}
+            onClick={() => setAgentsPanel(panelKey, panelOpen ? "closed" : "open")}
+            className={panelOpen ? "bg-hover text-fg" : ""}
+          >
+            <ISidebar size={17} className="-scale-x-100" />
+          </IconButton>
         )}
         {canResume && (
           <Button variant="outline" onClick={() => resumeSession(session!, leaf)} title="Resume this session inside coool">
@@ -295,7 +297,6 @@ export function SessionView({
             dragging={resizing}
             onWidth={setAgentsWidth}
             onDragging={setResizing}
-            onClose={() => setAgentsPanel(panelKey, "closed")}
             onOpenCard={onOpenCard}
             onStop={onStopCard}
           />
@@ -346,7 +347,7 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
     <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
       <div className="mx-auto flex max-w-[700px] items-center gap-3 rounded-[14px] border border-dashed border-line px-4 py-2.5">
         <span className="min-w-0 flex-1 text-base text-dim">
-          {ended ? <>This session has ended. Resume it here to keep going in a chat.</> : <>Running outside coool. Stop it and resume here to take control.</>}
+          {ended ? <>This session has ended. Resume it here to keep going in a chat.</> : <>Running outside coool. When it ends you can resume it here.</>}
         </span>
         {ended && session.id && (
           <>
