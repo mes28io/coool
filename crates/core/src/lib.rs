@@ -16,3 +16,4 @@ pub mod pty;
 pub mod tail;
 pub mod usage;
 pub mod util;
+pub mod watch;

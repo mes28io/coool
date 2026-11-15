@@ -1,14 +1,17 @@
 //! Tauri shell around `coool_core::hub::Hub`.
 //!
-//! One `Hub` behind a mutex, refreshed by a background thread about once a
-//! second (emits `sessions` when anything changed, sooner when kicked), plus a
-//! ~16ms pump that streams raw PTY bytes to xterm.js (`pty-output`, `pty-exit`)
-//! and chat events (`chat-event`). The pump reads through handles cloned out of
-//! the Hub, so a slow refresh never delays streamed text.
+//! One `Hub` behind a mutex, refreshed by a background thread as soon as a
+//! transcript or registry file changes (file-system events, see
+//! `coool_core::watch`), when kicked, and at least once a second. It sends the
+//! UI one full `sessions` payload, then `sessions-delta`s carrying only the
+//! sessions that changed. A ~16ms pump streams raw PTY bytes to xterm.js
+//! (`pty-output`, `pty-exit`) and chat events (`chat-event`); it reads through
+//! handles cloned out of the Hub, so a slow refresh never delays streamed text.
 //! See docs/APP_SPEC.md ("Backend contract") and docs/CHAT_SPEC.md.
 
 mod env;
 mod selftest;
+mod trace;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -18,12 +21,14 @@ use coool_core::insights::{self, Insight, Insights};
 use coool_core::model::{Provider, Session};
 use coool_core::pty::RawLog;
 use coool_core::usage::{PlanUsage, UsageMonitor};
+use coool_core::watch::{Watch, Waker};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
 /// Byte-stream handles for one managed PTY, cloned out of the Hub at spawn so
@@ -44,7 +49,10 @@ struct ChatStream {
 
 struct Core {
     hub: Mutex<Hub>,
-    snapshot: Mutex<Snapshot>,
+    /// What the UI was last sent (see [`Published`]).
+    published: Mutex<Published>,
+    /// Taken by `publish` from building a payload through emitting it.
+    emit_order: Mutex<()>,
     streams: Mutex<HashMap<usize, Stream>>,
     chats: Mutex<HashMap<usize, ChatStream>>,
     insights: Mutex<Insights>,
@@ -52,16 +60,33 @@ struct Core {
     usage: UsageMonitor,
     /// Set once the user confirmed quitting (or nothing was running).
     allow_exit: AtomicBool,
-    /// Wakes the refresher early (a chat or PTY started or ended).
-    kick: (Mutex<bool>, Condvar),
+    /// Wakes the refresher early: a chat or PTY started or ended (`kick`), or a
+    /// watched file changed.
+    waker: Arc<Waker>,
     selftest: Option<selftest::SelfTest>,
     /// Settings sheet: "Show runs started by other tools" (persisted).
     show_automation: AtomicBool,
+    /// `COOOL_TRACE_SESSIONS`: latency trace (off unless set).
+    trace: Option<trace::Trace>,
 }
 
-#[derive(Clone, Serialize, Default)]
-struct Snapshot {
-    sessions: Vec<SessionOut>,
+/// The last payload the UI got, per session, so the next refresh sends only
+/// what changed. `seq` numbers the payloads; a delta names the `seq` it
+/// applies to (`base`), so a UI that missed one asks `list_sessions` again.
+struct Published {
+    seq: u64,
+    /// Session keys (`provider:id`) in display order.
+    order: Vec<String>,
+    /// Session key -> its JSON as last sent.
+    sessions: HashMap<String, String>,
+    /// [`Rest`] as a JSON object.
+    rest: String,
+}
+
+/// Everything in the sessions payload besides the sessions (the spec'd
+/// `{ sessions, pending }` plus additive fields).
+#[derive(Serialize, Default)]
+struct Rest {
     pending: Vec<usize>,
     /// Additive to the spec'd `{ sessions, pending }`: what each PTY coool
     /// launched is, so a pending tab knows its provider and folder.
@@ -78,6 +103,110 @@ struct Snapshot {
     show_automation: bool,
 }
 
+/// `{"k":v,...}` from already-serialized values, followed by the fields of `rest` (a JSON object).
+fn object(head: &[(&str, &str)], rest: &str) -> String {
+    let mut out = String::with_capacity(rest.len() + head.iter().map(|(k, v)| k.len() + v.len() + 4).sum::<usize>() + 2);
+    out.push('{');
+    for (i, (k, v)) in head.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(k);
+        out.push_str("\":");
+        out.push_str(v);
+    }
+    let inner = rest.trim().strip_prefix('{').and_then(|r| r.strip_suffix('}')).unwrap_or("").trim();
+    if !inner.is_empty() {
+        if !head.is_empty() {
+            out.push(',');
+        }
+        out.push_str(inner);
+    }
+    out.push('}');
+    out
+}
+
+/// A payload for the UI.
+struct Update {
+    event: &'static str,
+    payload: String,
+    /// Keys of the sessions it carries.
+    changed: Vec<String>,
+}
+
+impl Published {
+    fn new() -> Self {
+        // Until the first refresh lands, a `list_sessions` caller sees "loading".
+        let rest = serde_json::to_string(&Rest { loading: true, ..Rest::default() }).unwrap_or_default();
+        Self { seq: 0, order: Vec::new(), sessions: HashMap::new(), rest }
+    }
+
+    /// Takes the latest sessions (key, JSON; in display order) and the rest of
+    /// the payload. Returns what to emit, or None when nothing changed (the
+    /// very first call always emits: the UI waits for it).
+    fn update(&mut self, sessions: Vec<(String, String)>, rest: String, trace: bool) -> Option<Update> {
+        let first = self.seq == 0;
+        // `updated` changes on every write, so comparing a session's JSON is a cheap and exact "changed?".
+        let mut next = HashMap::with_capacity(sessions.len());
+        let mut order = Vec::with_capacity(sessions.len());
+        let mut upsert = String::from("{");
+        let mut changed = Vec::new();
+        for (key, json) in sessions {
+            if self.sessions.get(&key) != Some(&json) {
+                if upsert.len() > 1 {
+                    upsert.push(',');
+                }
+                upsert.push_str(&serde_json::to_string(&key).unwrap_or_default());
+                upsert.push(':');
+                upsert.push_str(&json);
+                changed.push(key.clone());
+            }
+            order.push(key.clone());
+            next.insert(key, json);
+        }
+        upsert.push('}');
+        if !first && changed.is_empty() && order == self.order && rest == self.rest {
+            return None;
+        }
+        let base = self.seq;
+        self.seq += 1;
+        self.sessions = next;
+        self.order = order;
+        self.rest = rest;
+        let trace = trace.then(|| format!("{{\"seq\":{},\"at\":{}}}", self.seq, trace::now_ms()));
+        if first {
+            return Some(Update { event: "sessions", payload: self.full(trace.as_deref()), changed });
+        }
+        let order = serde_json::to_string(&self.order).unwrap_or_default();
+        let (seq, base) = (self.seq.to_string(), base.to_string());
+        let mut head = vec![("seq", seq.as_str()), ("base", base.as_str()), ("order", order.as_str()), ("upsert", upsert.as_str())];
+        if let Some(t) = &trace {
+            head.push(("trace", t));
+        }
+        Some(Update { event: "sessions-delta", payload: object(&head, &self.rest), changed })
+    }
+
+    /// The whole state: `{ seq, order, sessions, ...rest }` (the `sessions` event and `list_sessions`).
+    fn full(&self, trace: Option<&str>) -> String {
+        let mut list = String::from("[");
+        for (i, k) in self.order.iter().enumerate() {
+            if i > 0 {
+                list.push(',');
+            }
+            list.push_str(self.sessions.get(k).map_or("null", String::as_str));
+        }
+        list.push(']');
+        let order = serde_json::to_string(&self.order).unwrap_or_default();
+        let seq = self.seq.to_string();
+        let mut head = vec![("seq", seq.as_str()), ("order", order.as_str()), ("sessions", list.as_str())];
+        if let Some(t) = trace {
+            head.push(("trace", t));
+        }
+        object(&head, &self.rest)
+    }
+}
+
 /// Plan usage per provider; `null` until something is known.
 #[derive(Clone, Serialize, Default)]
 struct UsageOut {
@@ -85,14 +214,20 @@ struct UsageOut {
     codex: Option<PlanUsage>,
 }
 
-/// `Session` plus what the app knows about it beyond discovery.
-#[derive(Clone, Serialize)]
-struct SessionOut {
-    #[serde(flatten)]
-    session: Session,
-    /// CHAT_SPEC "AI insights"; only while insights are on.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    insight: Option<Insight>,
+/// A session's JSON: `Session` plus what the app knows about it beyond
+/// discovery (`insight`, CHAT_SPEC "AI insights", only while insights are on).
+fn session_json(s: &Session, insight: Option<&Insight>) -> String {
+    let mut json = s.to_json();
+    if let Some(i) = insight
+        && json.ends_with('}')
+        && let Ok(i) = serde_json::to_string(i)
+    {
+        json.pop();
+        json.push_str(",\"insight\":");
+        json.push_str(&i);
+        json.push('}');
+    }
+    json
 }
 
 #[derive(Clone, Serialize, PartialEq)]
@@ -164,7 +299,8 @@ fn none_if_empty(s: String) -> Option<String> {
 }
 
 impl Core {
-    fn refresh(&self) -> (Snapshot, bool) {
+    /// One refresh: every session (keyed, in display order) and the rest of the payload.
+    fn collect(&self) -> (Vec<(String, Session, Option<Insight>)>, Rest) {
         let (mut sessions, pending, ptys, loading, chats) = {
             let mut hub = self.hub.lock().unwrap();
             let s = hub.refresh(false);
@@ -205,30 +341,59 @@ impl Core {
         let sessions = {
             let mut ins = self.insights.lock().unwrap();
             ins.tick(&sessions);
+            let mut seen: HashMap<String, usize> = HashMap::new();
             sessions
                 .into_iter()
                 .map(|s| {
                     let insight = if ins.enabled() { ins.get(s.provider, &s.id).cloned() } else { None };
-                    SessionOut { session: s, insight }
+                    // Keys only identify rows in deltas; a repeated id still gets its own row.
+                    let mut key = format!("{}:{}", s.provider.label(), s.id);
+                    let n = seen.entry(key.clone()).or_default();
+                    *n += 1;
+                    if *n > 1 {
+                        key = format!("{key}#{n}");
+                    }
+                    (key, s, insight)
                 })
                 .collect()
         };
         self.usage.tick();
         let usage = UsageOut { claude: self.usage.get(Provider::Claude), codex: self.usage.get(Provider::Codex) };
         let show_automation = self.show_automation.load(Ordering::Relaxed);
-        let next = Snapshot { sessions, pending, ptys, loading, chats, usage, show_automation };
-        let mut cur = self.snapshot.lock().unwrap();
-        // `updated` changes on every write, so a JSON compare is a cheap and exact "changed?".
-        let changed = serde_json::to_string(&*cur).ok() != serde_json::to_string(&next).ok();
-        *cur = next.clone();
-        (next, changed)
+        (sessions, Rest { pending, ptys, loading, chats, usage, show_automation })
+    }
+
+    /// Refresh, and send the UI what changed: the full state the first time
+    /// (`sessions`), afterwards only changed sessions (`sessions-delta`).
+    /// Returns whether the initial load is still running.
+    fn publish(&self, app: &AppHandle) -> bool {
+        let t0 = Instant::now();
+        let (sessions, rest) = self.collect();
+        let collected = t0.elapsed();
+        let loading = rest.loading;
+        let t1 = Instant::now();
+        let rest = serde_json::to_string(&rest).unwrap_or_else(|_| "{}".into());
+        let sessions: Vec<(String, String)> = sessions.into_iter().map(|(k, s, i)| (k, session_json(&s, i.as_ref()))).collect();
+        // Held through the emit, so payloads go out in `seq` order (`published`
+        // itself is not: `list_sessions` must never wait for an emit).
+        let _order = self.emit_order.lock().unwrap();
+        let (u, seq) = {
+            let mut p = self.published.lock().unwrap();
+            let Some(u) = p.update(sessions, rest, self.trace.is_some()) else { return loading };
+            (u, p.seq)
+        };
+        let built = t1.elapsed();
+        let (t2, bytes) = (Instant::now(), u.payload.len());
+        let _ = app.emit_str(u.event, u.payload);
+        if let Some(t) = &self.trace {
+            t.emit(seq, u.event, collected, built, t2.elapsed(), bytes, &u.changed, &self.published.lock().unwrap());
+        }
+        loading
     }
 
     /// Ask the refresher for a refresh now rather than at its next tick.
     fn kick(&self) {
-        let (m, cv) = &self.kick;
-        *m.lock().unwrap() = true;
-        cv.notify_one();
+        self.waker.kick();
     }
 
     fn register_pty(&self, hub: &Hub, id: usize) {
@@ -249,8 +414,7 @@ impl Core {
             id
         };
         // Surface the pending tab right away instead of waiting for the next tick.
-        let (snap, _) = self.refresh();
-        let _ = app.emit("sessions", snap);
+        self.publish(app);
         Ok(id)
     }
 
@@ -278,9 +442,11 @@ fn check_launch(provider: Provider, dir: &str) -> Res<()> {
 
 // ---------- commands ----------
 
+/// The full state as last sent (same shape as the `sessions` event).
 #[tauri::command]
-fn list_sessions(core: State<'_, Arc<Core>>) -> Snapshot {
-    core.snapshot.lock().unwrap().clone()
+fn list_sessions(core: State<'_, Arc<Core>>) -> Box<RawValue> {
+    let full = core.published.lock().unwrap().full(None);
+    RawValue::from_string(full).unwrap_or_else(|_| RawValue::from_string("null".into()).expect("valid JSON"))
 }
 
 #[derive(Deserialize)]
@@ -389,8 +555,7 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
         id
     };
     // The chat row (and a pending tab) shows up right away.
-    let (snap, _) = core.refresh();
-    let _ = app.emit("sessions", snap);
+    core.publish(&app);
     Ok(id)
 }
 
@@ -465,8 +630,7 @@ fn open_in_terminal(app: AppHandle, core: State<'_, Arc<Core>>, id: usize) -> Re
         core.register_pty(&hub, pty);
         pty
     };
-    let (snap, _) = core.refresh();
-    let _ = app.emit("sessions", snap);
+    core.publish(&app);
     Ok(pty)
 }
 
@@ -615,21 +779,17 @@ mod settings {
 
 fn spawn_refresher(app: AppHandle, core: Arc<Core>) {
     thread::spawn(move || {
-        let mut first = true;
+        // Transcript and registry writes wake the loop within a few ms; the
+        // timer still catches what no file write announces (a process that
+        // died, a session ageing out, plan usage, insights).
+        let mut watch = Watch::sources(core.waker.clone());
         loop {
-            let (snap, changed) = core.refresh();
             // The first payload goes out right away, even if empty, with `loading`.
-            let loading = snap.loading;
-            if changed || first {
-                let _ = app.emit("sessions", snap);
-            }
-            first = false;
-            // Poll faster while the initial load streams in; wake early when kicked.
+            let loading = core.publish(&app);
+            // Poll faster while the initial load streams in.
             let wait = Duration::from_millis(if loading { 200 } else { 1000 });
-            let (m, cv) = &core.kick;
-            let g = m.lock().unwrap();
-            let (mut g, _) = cv.wait_timeout_while(g, wait, |k| !*k).unwrap();
-            *g = false;
+            watch.ensure();
+            core.waker.wait(wait);
         }
     });
 }
@@ -779,16 +939,17 @@ pub fn run() {
     usage.set_probes(selftest.is_none() || std::env::var_os("COOOL_SELFTEST_PROBES").is_some());
     let core = Arc::new(Core {
         hub: Mutex::new(hub),
-        // Until the first refresh lands, a `list_sessions` caller sees "loading".
-        snapshot: Mutex::new(Snapshot { loading: true, ..Snapshot::default() }),
+        published: Mutex::new(Published::new()),
+        emit_order: Mutex::new(()),
         streams: Mutex::new(HashMap::new()),
         chats: Mutex::new(HashMap::new()),
         insights: Mutex::new(ins),
         usage,
         allow_exit: AtomicBool::new(false),
-        kick: (Mutex::new(false), Condvar::new()),
+        waker: Waker::new(),
         selftest,
         show_automation: AtomicBool::new(prefs.show_automation),
+        trace: trace::Trace::from_env(),
     });
 
     let app = tauri::Builder::default()
@@ -829,6 +990,7 @@ pub fn run() {
             selftest::selftest_log,
             selftest::selftest_shot,
             selftest::selftest_request_quit,
+            trace::trace_sessions,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
@@ -876,4 +1038,89 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn rest(pending: &[usize]) -> String {
+        serde_json::to_string(&Rest { pending: pending.to_vec(), ..Rest::default() }).unwrap()
+    }
+
+    fn rows(r: &[(&str, Value)]) -> Vec<(String, String)> {
+        r.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn full_first_then_only_what_changed() {
+        let mut p = Published::new();
+        let before: Value = serde_json::from_str(&p.full(None)).unwrap();
+        assert_eq!((before["seq"].as_u64(), before["loading"].as_bool(), before["sessions"].as_array().map(Vec::len)), (Some(0), Some(true), Some(0)));
+
+        let a = json!({"id": "a", "updated": 1});
+        let b = json!({"id": "b", "updated": 1});
+        let u = p.update(rows(&[("claude:a", a.clone()), ("codex:b", b.clone())]), rest(&[]), false).expect("the first payload always goes out");
+        assert_eq!(u.event, "sessions");
+        let v: Value = serde_json::from_str(&u.payload).unwrap();
+        assert_eq!(v, json!({"seq": 1, "order": ["claude:a", "codex:b"], "sessions": [a, b], "pending": [], "ptys": [], "loading": false, "chats": [], "usage": {"claude": null, "codex": null}, "show_automation": false}));
+        assert_eq!(serde_json::from_str::<Value>(&p.full(None)).unwrap(), v, "list_sessions returns the same");
+
+        assert!(p.update(rows(&[("claude:a", a.clone()), ("codex:b", b.clone())]), rest(&[]), false).is_none(), "nothing changed");
+
+        let a2 = json!({"id": "a", "updated": 2});
+        let u = p.update(rows(&[("claude:a", a2.clone()), ("codex:b", b.clone())]), rest(&[]), true).unwrap();
+        let v: Value = serde_json::from_str(&u.payload).unwrap();
+        assert_eq!((u.event, &v["seq"], &v["base"], &v["upsert"], &v["order"]), ("sessions-delta", &json!(2), &json!(1), &json!({"claude:a": a2}), &json!(["claude:a", "codex:b"])));
+        assert_eq!(v["trace"]["seq"], json!(2));
+        assert_eq!(u.changed, vec!["claude:a".to_string()]);
+
+        // Reordered, one gone, other fields changed: no session data, just the new order.
+        let u = p.update(rows(&[("codex:b", b.clone())]), rest(&[3]), false).unwrap();
+        let v: Value = serde_json::from_str(&u.payload).unwrap();
+        assert_eq!((&v["base"], &v["upsert"], &v["order"], &v["pending"]), (&json!(2), &json!({}), &json!(["codex:b"]), &json!([3])));
+    }
+
+    #[test]
+    fn object_joins_fields() {
+        assert_eq!(object(&[("a", "1")], r#"{"b":2}"#), r#"{"a":1,"b":2}"#);
+        assert_eq!(object(&[("a", "1")], "{}"), r#"{"a":1}"#);
+        assert_eq!(object(&[], r#"{"b":2}"#), r#"{"b":2}"#);
+    }
+
+    #[test]
+    fn insight_is_added_to_the_session_json() {
+        let s = Session {
+            provider: Provider::Claude,
+            id: "x".into(),
+            title: String::new(),
+            cwd: String::new(),
+            project: String::new(),
+            model: String::new(),
+            pid: None,
+            status: coool_core::model::Status::Idle,
+            current: None,
+            last_prompt: None,
+            tokens: Default::default(),
+            activity: Vec::new(),
+            agents: Vec::new(),
+            updated: std::time::UNIX_EPOCH,
+            managed: None,
+            chat: None,
+            models: Vec::new(),
+            loaded: true,
+            origin: Default::default(),
+            parent: None,
+            live_children: 0,
+            background_tasks: false,
+            waiting_for: None,
+        };
+        let plain: Value = serde_json::from_str(&session_json(&s, None)).unwrap();
+        assert_eq!(plain["id"], "x");
+        assert!(plain.get("insight").is_none());
+        let i = Insight { headline: "h".into(), needs_you: None, generated_ms: 5 };
+        let with: Value = serde_json::from_str(&session_json(&s, Some(&i))).unwrap();
+        assert_eq!((&with["id"], &with["insight"]), (&json!("x"), &json!({"headline": "h", "needs_you": null, "generated_ms": 5})));
+    }
 }

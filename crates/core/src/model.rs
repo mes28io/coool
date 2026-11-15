@@ -265,6 +265,13 @@ pub fn push_activity(list: &mut Vec<Activity>, a: Activity) {
 }
 
 impl Session {
+    /// This session as JSON (what the desktop app sends). Serialized here, in
+    /// this crate, so callers built without optimizations still get the
+    /// optimized serializer: a debug build of the app spends ~25x longer otherwise.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "null".into())
+    }
+
     /// Best human label: AI title, else the last prompt, else the folder name.
     pub fn display_title(&self) -> String {
         if !self.title.is_empty() {

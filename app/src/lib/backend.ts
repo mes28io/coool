@@ -1,6 +1,7 @@
 // One interface, two implementations: the Tauri shell, or a built-in mock
 // when running in a plain browser (`pnpm dev`). See docs/APP_SPEC.md.
 
+import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
 import type { ChatEvent, ChatOptions, Environment, InsightsStatus, Provider, Snapshot } from "./types";
 
 export interface PtyChunk {
@@ -114,6 +115,60 @@ async function tauriBackend(): Promise<Backend> {
     }
   };
 
+  // ---- sessions: one full payload, then deltas (see SessionsMerge) ----
+  const merge = new SessionsMerge();
+  const sessionCbs = new Set<(s: Snapshot) => void>();
+  let resyncing = false;
+  const deliver = (snap: Snapshot, trace?: Trace, kind?: string) => {
+    const t0 = performance.now();
+    for (const cb of sessionCbs) cb(snap);
+    if (!trace) return;
+    const recv = Date.now();
+    const apply = performance.now() - t0;
+    // Roughly when the result is on screen: after the next frame.
+    requestAnimationFrame(() =>
+      setTimeout(() => {
+        const line = `seq=${trace.seq} at=${trace.at} recv=${recv - Math.round(apply)} kind=${kind} lag_ms=${recv - Math.round(apply) - trace.at} apply_ms=${apply.toFixed(2)} paint_ms=${(performance.now() - t0).toFixed(2)}`;
+        invoke("trace_sessions", { line }).catch(() => {});
+      }, 0),
+    );
+  };
+  const resync = () => {
+    if (resyncing) return;
+    resyncing = true;
+    invoke<FullWire>("list_sessions")
+      .then((w) => {
+        const snap = merge.full(w);
+        if (snap) deliver(snap);
+      })
+      .catch(() => {})
+      .finally(() => (resyncing = false));
+  };
+  let sessionsSubs: Unlisten[] = [];
+  const onSessions = (cb: (s: Snapshot) => void): Unlisten => {
+    sessionCbs.add(cb);
+    if (sessionCbs.size === 1) {
+      sessionsSubs = [
+        sub<FullWire>("sessions", (w) => {
+          const snap = merge.full(w);
+          if (snap) deliver(snap, w.trace, "full");
+        }),
+        sub<DeltaWire>("sessions-delta", (w) => {
+          const r = merge.delta(w);
+          if (r === "gap") resync();
+          else if (r !== "stale") deliver(r, w.trace, "delta");
+        }),
+      ];
+    }
+    return () => {
+      sessionCbs.delete(cb);
+      if (sessionCbs.size === 0) {
+        sessionsSubs.forEach((u) => u());
+        sessionsSubs = [];
+      }
+    };
+  };
+
   return {
     kind: "tauri",
     startChat: (o) =>
@@ -144,7 +199,7 @@ async function tauriBackend(): Promise<Backend> {
     insightsClearKey: () => soft("insights_clear_key"),
     insightsSetEnabled: (enabled) => soft("insights_set_enabled", { enabled }),
     setShowAutomation: (enabled) => soft("set_show_automation", { enabled }),
-    listSessions: () => invoke("list_sessions"),
+    listSessions: async () => merge.full(await invoke<FullWire>("list_sessions")) ?? merge.snapshot(),
     spawnSession: (req) => invoke("spawn_session", { req }),
     resumeSession: (req) => invoke("resume_session", { req }),
     ptyWrite: (id, data) => invoke("pty_write", { id, data }),
@@ -159,7 +214,7 @@ async function tauriBackend(): Promise<Backend> {
     environment: () => invoke("environment"),
     quit: () => invoke("quit_app"),
     usageRefresh: (provider) => invoke("usage_refresh", { provider }),
-    onSessions: (cb) => sub<Snapshot>("sessions", cb),
+    onSessions,
     onPtyOutput: (cb) =>
       sub<{ id: number; data: string; offset: number }>("pty-output", (p) =>
         cb({ id: p.id, bytes: b64ToBytes(p.data), offset: p.offset }),

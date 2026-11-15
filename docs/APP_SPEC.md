@@ -39,17 +39,19 @@ Aim: calm, dense, precise; the motion is what makes it feel alive. Reference poi
 
 ## Backend contract (Tauri)
 
-State: one `Hub` behind a mutex, refreshed by a background thread about once a second.
+State: one `Hub` behind a mutex, refreshed by a background thread whenever a file it reads changes (FSEvents / inotify on `~/.claude/projects`, `~/.claude/sessions`, `~/.codex/sessions`, `~/.codex/session_index.jsonl`, through `coool_core::watch`: the first change after a quiet spell refreshes at once, the rest of a burst at most every 30 ms), when coool itself starts or stops something, and at least once a second (200 ms while the initial load runs) for what no file write announces (a process that died, a session ageing out, plan usage, insights). Watching only: nothing there is written, and files coool never reads (`~/.claude/sessions/*.key`) are ignored.
 
 Events (backend to frontend):
 
-- `sessions`: `{ sessions: Session[], pending: number[] }` on every refresh that changed something. `Session` is the serde form of `coool_core::model::Session` (see `crates/core/src/model.rs`; `updated` is epoch ms, `managed` is the PTY id or null).
+- `sessions`: the whole state, once, as soon as the app starts: `{ seq, order: string[], sessions: Session[], pending: number[], ...additive fields }` (`ptys`, `loading`, `chats`, `usage`, `show_automation`). `Session` is the serde form of `coool_core::model::Session` (see `crates/core/src/model.rs`; `updated` is epoch ms, `managed` is the PTY id or null), plus `insight` while insights are on. `order` is the key of each session in `sessions` (`provider:id`; a repeated id gets `#2`, `#3`), in display order.
+- `sessions-delta`: after that, on every refresh that changed something: `{ seq, base, order, upsert: { [key]: Session }, pending, ...additive fields }`. It applies to the state numbered `base` (the previous payload's `seq`); `upsert` holds only the sessions whose JSON changed, `order` lists every current key (a key not in it is gone), and the non-session fields are always complete. A frontend whose `seq` isn't `base` (it missed one, or just reloaded) calls `list_sessions` and continues from that. `app/src/lib/sessionsMerge.ts` rebuilds full snapshots from these (unchanged sessions keep their object), so the rest of the UI only ever sees `Snapshot`s; the browser mock hands over full snapshots directly.
+- With `COOOL_TRACE_SESSIONS=<file>` set, payloads also carry `trace: { seq, at }` and the frontend reports when it applied each (`trace_sessions`); see `app/src-tauri/src/trace.rs`. Off otherwise.
 - `pty-output`: `{ id: number, data: string /* base64 */, offset: number }` streamed from `Managed.raw` (poll `RawLog::read_since` every ~16ms per live PTY, emit only when there are new bytes).
 - `pty-exit`: `{ id: number }`.
 
 Commands (frontend to backend):
 
-- `list_sessions() -> { sessions, pending }`
+- `list_sessions() -> { seq, order, sessions, pending, ... }` (the state as last sent, same shape as the `sessions` event)
 - `spawn_session({ provider, cwd, args?, rows, cols }) -> number` (PTY id)
 - `resume_session({ provider, sessionId, cwd, rows, cols }) -> number` (claude: `--resume <id>`; codex: `resume <id>`)
 - `pty_write({ id, data })`, `pty_resize({ id, rows, cols })`, `pty_replay({ id }) -> { data /* base64 */, offset }` (everything buffered so far, for a terminal that mounts late)
