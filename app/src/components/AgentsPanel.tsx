@@ -3,7 +3,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useRef, useState } from "react";
-import { countsText, orderCards, type AgentCardData } from "../lib/agentCards";
+import { countsText, isLive, orderCards, type AgentCardData } from "../lib/agentCards";
 import { useNow } from "../lib/clock";
 import { fmtClock, fmtElapsed } from "../lib/format";
 import { MOODS, toolMood } from "../lib/activityMood";
@@ -27,8 +27,9 @@ export function AgentsBody({ cards, onOpenCard, onStop }: { cards: AgentCardData
   const [hover, setHover] = useState(false);
   const [all, setAll] = useState(false);
   const ordered = useStableOrder(orderCards(cards), (c) => c.id, hover);
-  const done = ordered.filter((c) => c.state === "done");
-  const rest = ordered.filter((c) => c.state !== "done");
+  // Finished = done, failed or stopped; they share one recency order and one "Show more" cap.
+  const done = ordered.filter((c) => !isLive(c));
+  const rest = ordered.filter(isLive);
   const shownDone = all ? done : done.slice(0, DONE_CAP);
   const more = done.length - shownDone.length;
 

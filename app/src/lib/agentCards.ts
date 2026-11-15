@@ -232,7 +232,8 @@ export function useAgentCards(session: Session | null, chat: Chat | undefined): 
 }
 
 /**
- * Running ones first, then needs-you / failed, then finished (most recent first).
+ * Needs-you first, then running, then every finished card (done, failed or stopped) most recent first:
+ * a failed or stopped agent is history like a done one and must not sit above newer results.
  * Running cards are ordered by when they were started, not by their latest step: with
  * several agents stepping every couple of seconds, "most recently active first" swaps the
  * cards on nearly every tick and nothing can be followed. Flip this to restore recency order.
@@ -240,7 +241,7 @@ export function useAgentCards(session: Session | null, chat: Chat | undefined): 
 export const RUNNING_BY_RECENCY = false;
 
 export function orderCards(cards: AgentCardData[]): AgentCardData[] {
-  const rank = (c: AgentCardData) => (c.state === "running" ? 0 : c.state === "done" ? 2 : 1);
+  const rank = (c: AgentCardData) => (c.state === "needs" ? 0 : c.state === "running" ? 1 : 2);
   return cards
     .map((c, i) => ({ c, i }))
     .sort((a, b) => {
