@@ -460,7 +460,7 @@ export function Button({
 export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; fresh: boolean; needs: boolean; onClick: () => void }) {
   const label = needs ? "Needs you" : fresh ? "New output" : null;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[42px]">
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[72px]">
       <button
         type="button"
         onClick={onClick}

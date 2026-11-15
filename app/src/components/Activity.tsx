@@ -152,7 +152,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
         if (at) setFresh(false);
       }}
     >
-      <div className={cx("mx-auto flex max-w-[700px] flex-col pb-10 pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
+      <div className={cx("mx-auto flex max-w-[700px] flex-col pb-[72px] pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
         {blocks.map((b, i) => {
           const fresh = !initial.current!.has(b.key);
           const last = i === blocks.length - 1;
