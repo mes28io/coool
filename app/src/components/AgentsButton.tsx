@@ -1,17 +1,21 @@
-// Header button for a session's subagents: the `delegate` glyph (animated green while any run, static dim when none) plus a label ("2 running" / "5 agents · 1 failed").
-// Toggles the Agents panel. Green and animated while any run, dim and still when all are done.
+// Header button for a session's subagents and background shells: the `delegate` glyph (animated green while
+// anything runs, static dim when nothing does) plus a short label: the number of running jobs (agents + shells,
+// "3 running"), or the agent count dim ("5 agents") when nothing runs. Toggles the Agents panel.
 
 import { motion } from "motion/react";
 import { isLive, type AgentCardData } from "../lib/agentCards";
 import { MoodGlyph } from "./MoodGlyph";
 import { cx } from "./primitives";
 
-export function AgentsButton({ cards, open, onToggle, compact }: { cards: AgentCardData[]; open: boolean; onToggle: () => void; compact?: boolean }) {
-  const live = cards.filter(isLive).length;
+export function AgentsButton({ cards, shells = 0, open, onToggle, compact }: { cards: AgentCardData[]; shells?: number; open: boolean; onToggle: () => void; compact?: boolean }) {
+  const agentsLive = cards.filter(isLive).length;
+  const live = agentsLive + shells;
   const failed = cards.filter((c) => !isLive(c) && c.state === "failed" && !c.stopped).length;
   const n = cards.length;
-  const full = live ? `${live} running` : `${n} ${n === 1 ? "agent" : "agents"}`;
-  const title = `${open ? "Hide agents" : "Show agents"} (${full}${failed ? `, ${failed} failed` : ""})`;
+  const label = live ? `${live} running` : `${n} ${n === 1 ? "agent" : "agents"}`;
+  // The tooltip keeps the breakdown the label leaves out.
+  const detail = [agentsLive && `${agentsLive} ${agentsLive === 1 ? "agent" : "agents"} running`, shells && `${shells} ${shells === 1 ? "shell" : "shells"}`, !live && `${n} ${n === 1 ? "agent" : "agents"}`, failed && `${failed} failed`].filter(Boolean).join(", ");
+  const title = `${open ? "Hide agents" : "Show agents"} (${detail})`;
   return (
     <button
       type="button"
@@ -26,9 +30,8 @@ export function AgentsButton({ cards, open, onToggle, compact }: { cards: AgentC
       )}
     >
       <MoodGlyph mood="delegate" size={15} live={live > 0} className={cx("transition-colors duration-300", live > 0 ? "text-working-text" : "text-dim")} />
-      <motion.span key={live ? "live" : "idle"} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25 }} className={live ? "font-medium text-working-text" : "text-dim"}>
-        {compact ? (live || n) : full}
-        {!compact && !live && failed > 0 && <span className="text-err-text"> · {failed} failed</span>}
+      <motion.span key={live ? "live" : "idle"} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25 }} className={live ? "font-medium text-working-text" : "text-dim"} data-agents-label>
+        {compact ? live || n : label}
       </motion.span>
     </button>
   );

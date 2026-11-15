@@ -67,6 +67,8 @@ pub(crate) struct View {
     /// Codex subagent rollouts: the thread that spawned it, and its name.
     pub parent: Option<String>,
     pub agent_name: String,
+    /// Claude: recent Bash tool calls (see [`crate::shells`]).
+    pub bash: Vec<crate::shells::BashCall>,
 }
 
 /// Parse state of one transcript (what the cache persists).

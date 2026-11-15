@@ -539,6 +539,23 @@ fn stop_session(core: State<'_, Arc<Core>>, managed: Option<usize>, pid: Option<
     Err("nothing to stop".into())
 }
 
+/// Stop a background shell of a live session (APP_SPEC "Background shells"):
+/// only a pid a fresh scan still lists as a shell; SIGTERM to its process
+/// group (or the pid), SIGKILL after 3 s.
+#[tauri::command(async)]
+fn stop_shell(core: State<'_, Arc<Core>>, pid: u32) -> Res<()> {
+    core.hub.lock().unwrap().stop_shell(pid).map_err(|e| format!("{e:#}"))?;
+    core.kick();
+    Ok(())
+}
+
+/// The session ids on screen: only their shells get output tails.
+#[tauri::command(async)]
+fn shells_focus(core: State<'_, Arc<Core>>, ids: Vec<String>) {
+    core.hub.lock().unwrap().set_shell_focus(ids);
+    core.kick();
+}
+
 // ---- chats (CHAT_SPEC "Tauri contract additions") ----
 
 #[tauri::command(async)]
@@ -964,6 +981,8 @@ pub fn run() {
             pty_replay,
             send_prompt,
             stop_session,
+            stop_shell,
+            shells_focus,
             start_chat,
             chat_send,
             chat_interrupt,
@@ -1115,6 +1134,7 @@ mod tests {
             live_children: 0,
             background_tasks: false,
             waiting_for: None,
+            shells: Vec::new(),
         };
         let plain: Value = serde_json::from_str(&session_json(&s, None)).unwrap();
         assert_eq!(plain["id"], "x");

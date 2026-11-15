@@ -13,6 +13,7 @@ pub mod model;
 pub mod origin;
 pub mod project;
 pub mod pty;
+pub mod shells;
 pub mod tail;
 pub mod usage;
 pub mod util;

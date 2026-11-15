@@ -5,7 +5,7 @@ import { useChats } from "../lib/chat";
 import { ago, displayTitle, folderName, fmtElapsed, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { turnTotals } from "../lib/turn";
 import { MOODS, moodOfCurrent } from "../lib/activityMood";
-import { attention, useChatDigest, type Attention } from "../lib/live";
+import { attention, liveJobs, useChatDigest, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -183,7 +183,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
   const stretchSeed = `${since.approx ? sessionKey(s) : since.at}:${mood.mood}`;
   const running = att.agents;
   const ranCount = running.length ? 0 : s.agents.length;
-  const jobs = s.live_children ?? 0;
+  const jobs = liveJobs(s);
   // "4 agents working" / "4 agents, 2 jobs working"
   const crew = running.length ? `${running.length} ${running.length === 1 ? "agent" : "agents"}${jobs > 0 ? `, ${jobs} ${jobs === 1 ? "job" : "jobs"}` : ""} working` : null;
   const names = running.map((a) => a.description || a.kind);

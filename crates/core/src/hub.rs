@@ -50,6 +50,10 @@ pub struct Hub {
     client_name: String,
     /// Live child run pid -> pid of the session above it (see [`crate::lineage`]).
     ancestors: crate::lineage::AncestorCache,
+    /// Background shells under live sessions (see [`crate::shells`]).
+    shells: crate::shells::Shells,
+    /// Live sessions as of the last refresh (id, pid, cwd, provider), for [`Hub::stop_shell`].
+    shell_targets: Vec<(String, u32, String, Provider)>,
 }
 
 impl Hub {
@@ -79,6 +83,8 @@ impl Hub {
             own: OwnSessions::at(OwnSessions::default_path()),
             client_name: crate::origin::CLIENT_NAME.to_string(),
             ancestors: Default::default(),
+            shells: Default::default(),
+            shell_targets: Vec::new(),
         }
     }
 
@@ -234,6 +240,7 @@ impl Hub {
             }
         }
         self.link_children(&mut all);
+        self.attach_shells(&mut all);
 
         if live_only {
             all.retain(|s| s.status != Status::Ended || s.managed.is_some() || s.chat.is_some());
@@ -278,6 +285,42 @@ impl Hub {
         for s in all.iter_mut() {
             s.live_children = live.get(&s.id).copied().unwrap_or(0);
         }
+    }
+
+    /// `Session::shells` for every live session with a process.
+    fn attach_shells(&mut self, all: &mut [Session]) {
+        self.shell_targets = all
+            .iter()
+            .filter(|s| s.status != Status::Ended)
+            .filter_map(|s| Some((s.id.clone(), s.pid?, s.cwd.clone(), s.provider)))
+            .collect();
+        let found = if self.shells.due() {
+            let targets = shell_scan_targets(&self.shell_targets, &self.claude);
+            self.shells.scan(&targets, false)
+        } else {
+            self.shells.scan(&[], false)
+        };
+        for s in all.iter_mut() {
+            s.shells = match (s.status, s.pid) {
+                (Status::Ended, _) | (_, None) => Vec::new(),
+                (_, Some(pid)) => found.get(&pid).cloned().unwrap_or_default(),
+            };
+        }
+    }
+
+    /// Sessions on screen (ids): only their shells get output tails.
+    pub fn set_shell_focus(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.shells.set_focus(ids);
+    }
+
+    /// Stops a background shell: only a pid that a fresh scan still lists as
+    /// a shell of a live session. SIGTERM to its process group (when it leads
+    /// its own) or to the pid, SIGKILL after 3 s if it is still there.
+    pub fn stop_shell(&mut self, pid: u32) -> Result<()> {
+        let targets = shell_scan_targets(&self.shell_targets, &self.claude);
+        let t = self.shells.verify(&targets, pid).context("that process is not a background shell of a live session")?;
+        crate::shells::stop(t, Duration::from_secs(3)).context("couldn't signal the shell")?;
+        Ok(())
     }
 
     /// True until every session found at startup has been fully parsed (as of
@@ -430,6 +473,13 @@ impl Hub {
             c.escalate_kill(Some(Duration::ZERO));
         }
     }
+}
+
+/// What the shell scan needs per live session; Claude sessions bring their recent Bash calls.
+fn shell_scan_targets<'a>(live: &'a [(String, u32, String, Provider)], claude: &ClaudeSource) -> Vec<crate::shells::Target<'a>> {
+    live.iter()
+        .map(|(id, pid, cwd, p)| crate::shells::Target { id, pid: *pid, cwd, calls: if *p == Provider::Claude { claude.bash_calls(id) } else { Vec::new() } })
+        .collect()
 }
 
 /// The session id in `resume <id>` (codex) / `--resume <id>` (claude) args.

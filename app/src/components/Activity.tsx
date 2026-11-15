@@ -10,6 +10,7 @@ import { MoodGlyph } from "./MoodGlyph";
 import { useStore, type Since } from "../store";
 import { useNow } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
+import { liveJobs } from "../lib/live";
 import { IAlert, IChevron, ICheck, toolIcon } from "./icons";
 import { Elapsed, JumpToBottom, LiveClock, cx, ease, StatusDot } from "./primitives";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
@@ -187,7 +188,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
         <AnimatePresence>
           {busy && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
-              <LiveIndicator since={lt.approx ? null : lt.at} mood={agentsRunning > 0 && !session.current ? "delegate" : now.mood} detail={now.detail} agents={agentsRunning} jobs={session.live_children ?? 0} mainActive={mainActive} timerSince={turn.startMs} timerTitle={turn.approxStart ? "since the earliest step shown" : undefined} />
+              <LiveIndicator since={lt.approx ? null : lt.at} mood={agentsRunning > 0 && !session.current ? "delegate" : now.mood} detail={now.detail} agents={agentsRunning} jobs={liveJobs(session)} mainActive={mainActive} timerSince={turn.startMs} timerTitle={turn.approxStart ? "since the earliest step shown" : undefined} />
             </motion.div>
           )}
         </AnimatePresence>

@@ -255,11 +255,11 @@ export function orderCards(cards: AgentCardData[]): AgentCardData[] {
 
 export const isLive = (c: AgentCardData) => c.state === "running" || c.state === "needs";
 
-/** "3 running · 1 failed · 5 done". */
-export function countsText(cards: AgentCardData[]): string {
+/** "3 running · 1 failed · 5 done"; running counts the session's background shells too. */
+export function countsText(cards: AgentCardData[], shells = 0): string {
   const n = (f: (c: AgentCardData) => boolean) => cards.filter(f).length;
   const parts = [
-    [n(isLive), "running"],
+    [n(isLive) + shells, "running"],
     [n((c) => c.state === "failed" && !c.stopped), "failed"],
     [n((c) => c.state === "failed" && c.stopped), "stopped"],
     [n((c) => c.state === "done"), "done"],

@@ -533,6 +533,7 @@ mod tests {
             live_children: 0,
             background_tasks: false,
             waiting_for: None,
+            shells: Vec::new(),
         }
     }
 

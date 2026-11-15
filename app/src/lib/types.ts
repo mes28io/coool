@@ -93,6 +93,8 @@ export interface Session {
   live_children?: number;
   /** The CLI reports background tasks still running while it waits (a flag; no count is known). */
   background_tasks?: boolean;
+  /** Background shells this live session runs (APP_SPEC "Background shells"); missing = none. */
+  shells?: Shell[];
   /** The CLI reports it is blocked on the person (e.g. a permission prompt). */
   waiting_for?: string | null;
   /** UI only: listed under its parent's row rather than on its own. */
@@ -102,6 +104,28 @@ export interface Session {
 }
 
 export type Origin = "user" | "coool" | "automation";
+
+/** A command a live session runs in the background (or a foreground one running for a while). */
+export interface Shell {
+  /** The wrapper shell's pid: what Stop signals. */
+  pid: number;
+  /** The command as the agent wrote it. */
+  command: string;
+  /** The Bash call's description, when the transcript call was matched. */
+  description?: string;
+  /** Process start, epoch ms. */
+  started: number;
+  /** CPU % of the shell and what it started. */
+  cpu: number;
+  /** Background output file the transcript named. */
+  output?: string;
+  /** Last lines of that file (only while the session is on screen). */
+  tail?: string[];
+  /** A sleep / until poll loop sitting at ~0% CPU for a while. */
+  idle_loop?: boolean;
+  /** Started with run_in_background (else a long foreground command). */
+  background?: boolean;
+}
 
 export interface PtyInfo {
   id: number;

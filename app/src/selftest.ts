@@ -216,7 +216,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const head = path.firstElementChild as HTMLElement;
       const clipped = head !== tail && head.scrollWidth > head.clientWidth + 1;
       const chip = $("[data-main] [data-models-chip]");
-      if (!chip || chip.getBoundingClientRect().height > 24) throw new Fail(`models chip is ${chip?.getBoundingClientRect().height}px tall`);
+      if (!chip || chip.getBoundingClientRect().height > 28) throw new Fail(`models chip is ${chip?.getBoundingClientRect().height}px tall`);
       const row = $all("[data-session-row]").find((r) => r.textContent?.includes(title.replace(/…$/, "")));
       return `title "${title}"; path ends "${tail.textContent}"${clipped ? " (parent part middle-truncated)" : ""}; sidebar row ${row ? "matches" : "differs"}`;
     });

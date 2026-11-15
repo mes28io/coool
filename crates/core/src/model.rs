@@ -242,6 +242,10 @@ pub struct Session {
     /// The CLI says it is blocked on the person (Claude registry status
     /// `waiting`): what for (e.g. a permission prompt), as the CLI names it.
     pub waiting_for: Option<String>,
+    /// Background shells this live session runs (see [`crate::shells`]);
+    /// filled by [`crate::hub::Hub::refresh`]. Left out of the JSON when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shells: Vec<crate::shells::Shell>,
 }
 
 pub const MAX_ACTIVITY: usize = 300;

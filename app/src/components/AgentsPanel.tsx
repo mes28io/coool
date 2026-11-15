@@ -2,7 +2,7 @@
 // Takes plain cards (lib/agentCards.ts); knows nothing about where they came from.
 
 import { AnimatePresence, motion } from "motion/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { countsText, isLive, orderCards, type AgentCardData } from "../lib/agentCards";
 import { useNow } from "../lib/clock";
 import { fmtClock, fmtElapsed } from "../lib/format";
@@ -15,6 +15,8 @@ import { ICheck, IChevron, toolIcon } from "./icons";
 import { MoodGlyph } from "./MoodGlyph";
 import { cx, ease, spring, StatusDot } from "./primitives";
 import { reducedMotion } from "./StepRail";
+import type { Shell } from "../lib/types";
+import { useStore } from "../store";
 
 /** Finished cards shown before "Show N more". */
 const DONE_CAP = 6;
@@ -23,7 +25,20 @@ const RECENT = 3;
 /** Segments of the bar: the most recent steps; older ones merge into one leading segment. */
 const SEGMENTS = 24;
 
-export function AgentsBody({ cards, onOpenCard, onStop }: { cards: AgentCardData[]; onOpenCard: (c: AgentCardData) => void; onStop: (c: AgentCardData) => void }) {
+export function AgentsBody({
+  cards,
+  shells = [],
+  onOpenCard,
+  onStop,
+  onStopShell,
+}: {
+  cards: AgentCardData[];
+  /** Background shells of the session (APP_SPEC "Background shells"): listed between running and finished agents. */
+  shells?: Shell[];
+  onOpenCard: (c: AgentCardData) => void;
+  onStop: (c: AgentCardData) => void;
+  onStopShell?: (pid: number) => Promise<void>;
+}) {
   const [hover, setHover] = useState(false);
   const [all, setAll] = useState(false);
   const ordered = useStableOrder(orderCards(cards), (c) => c.id, hover);
@@ -38,12 +53,30 @@ export function AgentsBody({ cards, onOpenCard, onStop }: { cards: AgentCardData
       <div className="flex h-[44px] shrink-0 items-center gap-2 pl-4 pr-2">
         <span className="text-base font-semibold text-fg">Agents</span>
         <span className="min-w-0 flex-1 truncate text-small text-dim tnum" data-agents-count>
-          {countsText(cards)}
+          {countsText(cards, shells.length)}
         </span>
       </div>
       <div className="scroll min-h-0 flex-1 px-3 pb-3" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
         <AnimatePresence initial={false}>
-          {[...rest, ...shownDone].map((c) => (
+          {rest.map((c) => (
+            <motion.div
+              key={c.id}
+              layout="position"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: reducedMotion() ? 0 : 0.3, ease, layout: reducedMotion() ? { duration: 0 } : spring }}
+              className="overflow-hidden"
+            >
+              <div className="pb-2">
+                <Card card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+        <ShellsSection shells={shells} onStop={onStopShell} />
+        <AnimatePresence initial={false}>
+          {shownDone.map((c) => (
             <motion.div
               key={c.id}
               layout="position"
@@ -254,6 +287,139 @@ function Recent({ card }: { card: AgentCardData }) {
             </motion.div>
           );
         })}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ---------- background shells ----------
+
+/** A small uppercase "SHELLS" label, then one compact card per shell; a finished shell fades out (no history). */
+function ShellsSection({ shells, onStop }: { shells: Shell[]; onStop?: (pid: number) => Promise<void> }) {
+  const t = { duration: reducedMotion() ? 0 : 0.3, ease };
+  return (
+    <AnimatePresence initial={false}>
+      {shells.length > 0 && (
+        <motion.div key="shells" layout="position" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={t} className="overflow-hidden" data-shells-section>
+          <div className="px-1 pb-1.5 pt-1 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Shells</div>
+          <AnimatePresence initial={false}>
+            {shells.map((sh) => (
+              <motion.div key={`${sh.pid}:${sh.started}`} layout="position" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0, transition: { duration: reducedMotion() ? 0 : 0.45, ease } }} transition={t} className="overflow-hidden">
+                <div className="pb-2">
+                  <ShellCard shell={sh} onStop={onStop} />
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          <div className="h-1" />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function ShellElapsed({ since }: { since: number }) {
+  const now = useNow();
+  return (
+    <span className="shrink-0 text-small leading-[18px] text-faint tnum" title="Running for">
+      {fmtElapsed(Math.max(0, now - since))}
+    </span>
+  );
+}
+
+/** Stop with a one-step confirm: the button turns into "Stop?" for 3 s; a second click stops. */
+function StopShell({ pid, onStop }: { pid: number; onStop?: (pid: number) => Promise<void> }) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  if (!onStop) return null;
+  const click = (e: { stopPropagation(): void }) => {
+    e.stopPropagation();
+    if (busy) return;
+    if (!armed) return setArmed(true);
+    setArmed(false);
+    setBusy(true);
+    onStop(pid)
+      .catch((err) => useStore.getState().toast(`Couldn't stop the shell: ${err instanceof Error ? err.message : String(err)}`, "error"))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <button
+      type="button"
+      onClick={click}
+      data-stop-shell={pid}
+      data-armed={armed || undefined}
+      title={armed ? "Click again to stop this shell" : "Stop this shell"}
+      className={cx("-my-px -mr-1.5 h-[22px] shrink-0 rounded-[6px] px-1.5 text-small transition-colors duration-150", armed ? "font-medium text-err-text hover:bg-hover" : "text-dim hover:bg-hover hover:text-fg", busy && "opacity-50")}
+    >
+      {busy ? "Stopping…" : armed ? "Stop?" : "Stop"}
+    </button>
+  );
+}
+
+function ShellCard({ shell, onStop }: { shell: Shell; onStop?: (pid: number) => Promise<void> }) {
+  const el = useRef<HTMLDivElement>(null);
+  const tail = shell.tail ?? [];
+  const [open, toggle] = useFold(`shell:${shell.pid}:${shell.started}`, true, el);
+  const expandable = tail.length > 0;
+  const described = !!shell.description;
+  const meta = [`pid ${shell.pid}`, `${shell.cpu}% CPU`, shell.background ? null : "foreground"].filter(Boolean).join(" · ");
+  return (
+    <div ref={el} className="overflow-hidden rounded-[12px] border border-hairline bg-bg shadow-card" data-shell-card={shell.pid} data-open={expandable && open}>
+      <div
+        role={expandable ? "button" : undefined}
+        tabIndex={expandable ? 0 : undefined}
+        onClick={expandable ? toggle : undefined}
+        onKeyDown={expandable ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()) : undefined}
+        className="flex cursor-default items-start gap-2 px-3 py-2"
+        title={meta}
+      >
+        <MoodGlyph mood="run" size={13} className="mt-[2.5px] text-dim" />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className={cx("min-w-0 truncate leading-[18px] text-fg", described ? "text-base font-medium" : "font-mono text-mono-small")} title={shell.description ?? shell.command}>
+              {shell.description ?? shell.command}
+            </span>
+            {shell.idle_loop && (
+              <span className="shrink-0 rounded-[5px] border border-hairline px-1 text-[11px] leading-[15px] text-faint" title="A polling loop that has been waiting at ~0% CPU" data-idle-loop>
+                idle loop
+              </span>
+            )}
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={cx("min-w-0 flex-1 truncate leading-[18px]", described ? "font-mono text-mono-small text-dim" : "text-small text-faint")} title={described ? shell.command : meta}>
+              {described ? shell.command : meta}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-col items-end">
+          <span className="flex items-center gap-1">
+            <ShellElapsed since={shell.started} />
+            {expandable && (
+              <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="-mr-1 flex size-[18px] items-center justify-center text-faint" title={open ? "Hide output" : "Show output"}>
+                <IChevron size={13} />
+              </motion.span>
+            )}
+          </span>
+          <StopShell pid={shell.pid} onStop={onStop} />
+        </div>
+      </div>
+      <AnimatePresence initial={false}>
+        {expandable && open && (
+          <motion.div key="tail" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reducedMotion() ? 0 : 0.22, ease }} className="overflow-hidden">
+            <div className="mx-3 mb-2.5 rounded-[8px] bg-raised px-2.5 py-1.5 font-mono text-[11px] leading-[17px] text-dim" data-shell-tail>
+              {tail.map((l, i) => (
+                <div key={i} className="truncate" title={l}>
+                  {l}
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );

@@ -59,12 +59,17 @@ export function runningAgents(s: Session): Agent[] {
   return s.status === "ended" ? [] : s.agents.filter((a) => !a.finished);
 }
 
+/** Jobs a live session runs beside its own turn: child runs plus background shells (when the backend lists them). */
+export function liveJobs(s: Session): number {
+  return s.status === "ended" ? 0 : (s.live_children ?? 0) + (s.shells?.length ?? 0);
+}
+
 /** "4 agents, 2 jobs running" / "Background tasks running" for an idle session with live subagents, child runs or shells; else null. */
 export function backgroundLabel(s: Session, status: Status, agents = 0): string | null {
   if (status !== "idle") return null;
-  const n = s.live_children ?? 0;
+  const n = liveJobs(s);
   const parts = [agents > 0 && plural(agents, "agent", "agents"), n > 0 && plural(n, "job", "jobs"), n === 0 && !!s.background_tasks && "Background tasks"].filter(Boolean);
-  // The CLI only says that background tasks run, not how many.
+  // Without a shell list the CLI only says that background tasks run, not how many.
   return parts.length ? `${parts.join(", ")} running` : null;
 }
 

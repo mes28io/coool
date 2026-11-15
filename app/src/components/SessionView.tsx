@@ -21,6 +21,7 @@ import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from 
 import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark } from "./primitives";
 import { modelLabel } from "../lib/models";
+import { useShellFocus } from "../lib/shellFocus";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -79,13 +80,17 @@ export function SessionView({
   const agentsWidth = useStore((st) => st.agentsWidth);
   const setAgentsWidth = useStore((st) => st.setAgentsWidth);
   const [resizing, setResizing] = useState(false);
-  const liveCards = cards.filter(isLive).length;
+  // Background shells sit in the same panel (APP_SPEC "Background shells"); it shows for shells alone too.
+  const shells = useMemo(() => (r.session && r.session.status !== "ended" ? (r.session.shells ?? []) : []), [r.session]);
+  useShellFocus(r.session?.id);
+  const liveCards = cards.filter(isLive).length + shells.filter((s) => s.background).length;
   // First time something runs while the session is on screen: open it. Closing it is remembered.
   useEffect(() => {
     if (panelKey && wide && liveCards > 0 && panelState === undefined) setRightPanel(panelKey, "agents");
   }, [panelKey, wide, liveCards, panelState, setRightPanel]);
-  const panelOn = wide && cards.length > 0;
-  const showing: RightKind | null = !wide ? null : panelState === "agents" && cards.length > 0 ? "agents" : panelState === "models" ? "models" : null;
+  const hasAgents = cards.length > 0 || shells.length > 0;
+  const panelOn = wide && hasAgents;
+  const showing: RightKind | null = !wide ? null : panelState === "agents" && hasAgents ? "agents" : panelState === "models" ? "models" : null;
   const agentsOpen = showing === "agents";
   const modelsOpen = showing === "models";
   const toggleRight = (k: RightKind) => panelKey && setRightPanel(panelKey, showing === k ? "closed" : k);
@@ -197,7 +202,7 @@ export function SessionView({
             Resume
           </Button>
         )}
-        {panelOn && panelKey && <AgentsButton cards={cards} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
+        {panelOn && panelKey && <AgentsButton cards={cards} shells={shells.length} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
         {onClosePane && (
           <IconButton title="Close pane" onClick={onClosePane} className="-mr-1">
             <IClose size={14} />
@@ -253,7 +258,7 @@ export function SessionView({
           <RightPanel which={showing} width={agentsWidth} dragging={resizing} onWidth={setAgentsWidth} onDragging={setResizing} onClose={() => setRightPanel(panelKey, "closed")}>
             {(k) =>
               k === "agents" ? (
-                <AgentsBody cards={cards} onOpenCard={onOpenCard} onStop={onStopCard} />
+                <AgentsBody cards={cards} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
               ) : (
                 <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} />
               )

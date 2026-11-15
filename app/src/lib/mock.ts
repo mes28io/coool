@@ -4,7 +4,7 @@
 // fake terminal stream. Also the demo for coool.sh.
 
 import { NotAvailable, type Backend, type ChatBatch, type PtyChunk } from "./backend";
-import { AGENTS_DEMO_ID, AGENTS_JOBS_ID } from "./agentsDemo";
+import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
@@ -550,7 +550,7 @@ export function mockBackend(): Backend {
 
   // A session that started two live child jobs (and has one that crashed): the Agents panel lists them too.
   const lightId = AGENTS_JOBS_ID;
-  add(
+  const lightSession = add(
     session({
       provider: "claude",
       id: lightId,
@@ -588,6 +588,48 @@ export function mockBackend(): Backend {
   }
   add(session({ provider: "codex", id: "lightjob1", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the garden probe", status: "idle", pid: 40611, waiting_for: "Allow Bash: blender -b garden.blend -f 1", tokens: tok(9_000, 1_300, 22_000), activity: history("pixel", ["Bake the garden probe"], now - 90_000, 1, 5), updated: now - 20_000 }), "pixel", 5);
   add(session({ provider: "claude", id: "lightjob2", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the attic probe", status: "ended", tokens: tok(11_000, 1_700, 24_000), activity: [...history("pixel", ["Bake the attic probe"], now - 240_000, 1, 4), act("error", "blender exited with code 139: segfault in the denoiser", now - 200_000)], updated: now - 200_000 }), "pixel");
+
+  // Background shells (APP_SPEC "Background shells"): the lighting session runs two beside its jobs,
+  // and a session with shells only (no subagents, no jobs) serves the docs site.
+  const tmpTasks = (sid: string, id: string) => `/private/tmp/claude-501/-Users-you-code-project-3d/${sid}/tasks/${id}.output`;
+  lightSession.shells = [
+    { pid: 40620, command: "cargo watch -x 'test -p rig'", description: "Re-run the rig tests on change", started: now - 143_000, cpu: 14, background: true, output: tmpTasks(lightId, "b4k2"), tail: ["   Compiling rig v0.3.1 (/Users/you/code/project-3d/rig)", "    Finished `test` profile [unoptimized] in 4.21s", "test result: ok. 48 passed; 0 failed; 0 ignored"] },
+    { pid: 40624, command: "until [ -f probes/attic.exr ]; do sleep 5; done; echo attic baked", description: "Wait for the attic probe", started: now - 312_000, cpu: 0, idle_loop: true, background: true, output: tmpTasks(lightId, "b9q1"), tail: [] },
+  ];
+  const shellsId = AGENTS_SHELLS_ID;
+  const docs = add(
+    session({
+      provider: "claude",
+      id: shellsId,
+      cwd: `${HOME}/code/relay-docs`,
+      title: "Preview the docs site",
+      status: "idle",
+      pid: 40700,
+      background_tasks: true,
+      tokens: tok(21_000, 3_100, 31_000),
+      activity: history("coool", ["Start the docs dev server and the link checker in the background"], now - 8 * 60_000, 1, 3),
+      updated: now - 60_000,
+    }),
+    "coool",
+  );
+  docs.shells = [
+    { pid: 40710, command: "pnpm dev --port 4321", description: "Docs dev server", started: now - 7 * 60_000 - 12_000, cpu: 2, background: true, output: tmpTasks(shellsId, "bd01"), tail: ["  VITE v6.2.0  ready in 412 ms", "  ➜  Local:   http://localhost:4321/", "  [hmr] /guide/install.md updated"] },
+    { pid: 40716, command: "npx linkinator http://localhost:4321 --recurse --silent", started: now - 95_000, cpu: 31, background: true, output: tmpTasks(shellsId, "bd02"), tail: ["[200] /guide/install", "[200] /guide/agents", "[404] /guide/old-shells (from /changelog)"] },
+    { pid: 40722, command: "while ! curl -sf localhost:4321/health >/dev/null; do sleep 2; done", description: "Wait for the server", started: now - 6 * 60_000, cpu: 0, idle_loop: true, background: true },
+  ];
+  {
+    // The link checker prints a line now and then; the dev server reloads once in a while.
+    let n = 0;
+    const pages = ["/guide/sessions", "/guide/shells", "/reference/hub", "/reference/stop", "/blog/launch", "/guide/themes"];
+    setInterval(() => {
+      const lc = docs.shells?.find((x) => x.pid === 40716);
+      if (!lc) return;
+      lc.tail = [...(lc.tail ?? []), `[200] ${pages[n++ % pages.length]}`].slice(-3);
+      lc.cpu = 25 + ((n * 7) % 15);
+      docs.updated = Date.now();
+      emitSessions();
+    }, 1800);
+  }
 
   // ---------- event plumbing ----------
   const subs = {
@@ -1108,6 +1150,16 @@ export function mockBackend(): Backend {
       }
       emitSessions();
     },
+    async stopShell(pid) {
+      await delay(150);
+      const l = live.find((x) => x.s.shells?.some((sh) => sh.pid === pid));
+      if (!l) throw new Error("that process is not a background shell of a live session");
+      l.s.shells = l.s.shells!.filter((sh) => sh.pid !== pid);
+      if (!l.s.shells.length) l.s.background_tasks = false;
+      l.s.updated = Date.now();
+      emitSessions();
+    },
+    async shellsFocus() {},
     async pickFolder() {
       await delay(200);
       return `${HOME}/code/new-project`;

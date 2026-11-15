@@ -29,6 +29,9 @@ struct ParseState {
     /// A user turn was typed by a person (`turnOrigin` / `origin.kind` "human").
     #[serde(default)]
     human: bool,
+    /// Recent Bash tool calls, for matching background shells (see [`crate::shells`]).
+    #[serde(default)]
+    bash: Vec<crate::shells::BashCall>,
 }
 
 /// Everything parsed from one transcript (main session or subagent).
@@ -63,6 +66,7 @@ impl Parsed {
             activity: self.activity.clone(),
             models,
             origin: self.p.entrypoint.as_ref().map(|e| crate::origin::claude(Some(e), self.p.human)),
+            bash: self.p.bash.clone(),
             ..View::default()
         }
     }
@@ -196,6 +200,20 @@ impl ClaudeSource {
         self.entries.iter().map(|(id, e)| session(id, e)).collect()
     }
 
+    /// Recent Bash calls of a session and its subagents (they run in the same
+    /// process, so their shells are its children too) that may still run
+    /// (foreground calls that returned are left out), oldest first.
+    pub(crate) fn bash_calls(&self, id: &str) -> Vec<crate::shells::BashCall> {
+        let Some(e) = self.entries.get(id) else { return Vec::new() };
+        let open = |v: &[crate::shells::BashCall]| v.iter().filter(|c| !c.done).cloned().collect::<Vec<_>>();
+        let mut out = open(&e.slot.view().bash);
+        for a in &e.agents {
+            out.extend(open(&a.slot.view().bash));
+        }
+        out.sort_by_key(|c| c.at);
+        out
+    }
+
     fn read_registry(&self) -> HashMap<String, Live> {
         let mut out = HashMap::new();
         let Ok(entries) = fs::read_dir(self.root.join("sessions")) else { return out };
@@ -282,6 +300,7 @@ fn session(id: &str, e: &Entry) -> Session {
         live_children: 0,
         background_tasks: e.live.as_ref().is_some_and(|r| r.shell),
         waiting_for: e.live.as_ref().and_then(|r| r.waiting_for.clone()),
+        shells: Vec::new(),
     }
 }
 
@@ -429,6 +448,7 @@ fn parse_line(
                         Some("tool_result") => {
                             if let Some(id) = item["tool_use_id"].as_str() {
                                 st.open_tools.retain(|(t, _)| t != id);
+                                bash_result(st, id, &item["content"]);
                             }
                             if item["is_error"].as_bool() == Some(true) {
                                 let txt = result_text(&item["content"]).unwrap_or_else(|| "tool error".into());
@@ -496,6 +516,22 @@ fn parse_line(
                                 st.open_tools.retain(|(t, _)| t != id);
                                 st.open_tools.push((id.to_string(), sum.clone()));
                             }
+                            if name == "Bash"
+                                && let (Some(id), Some(cmd)) = (item["id"].as_str(), item["input"]["command"].as_str())
+                            {
+                                let input = &item["input"];
+                                let call = crate::shells::BashCall {
+                                    id: id.to_string(),
+                                    command: cmd.to_string(),
+                                    description: input["description"].as_str().map(str::to_string),
+                                    background: input["run_in_background"].as_bool() == Some(true),
+                                    at: v["timestamp"].as_str().and_then(parse_rfc3339).map(|s| (s.max(0) as u64) * 1000).unwrap_or(0),
+                                    output: None,
+                                    done: false,
+                                };
+                                st.bash.retain(|c| c.id != id);
+                                crate::shells::push_call(&mut st.bash, call);
+                            }
                             let kind = if name == "Agent" || name == "Task" { ActivityKind::Agent } else { ActivityKind::Tool };
                             push_activity(activity, Activity::line(ts.clone(), kind, sum.clone()));
                             *current = Some(sum);
@@ -528,6 +564,21 @@ fn session_models(own: Vec<ModelUse>, agents: &[Agent]) -> Vec<ModelUse> {
     }
     sort_model_use(&mut out);
     out
+}
+
+/// A Bash call's tool_result: a foreground call is over; a background one (or
+/// one the person moved to the background) names its output file.
+fn bash_result(st: &mut ParseState, id: &str, content: &Value) {
+    let Some(c) = st.bash.iter_mut().find(|c| c.id == id) else { return };
+    let text = result_text(content).unwrap_or_default();
+    match crate::shells::output_from_result(&text) {
+        Some(p) => {
+            c.output = Some(p);
+            c.background = true;
+        }
+        None if !c.background => c.done = true,
+        None => {}
+    }
 }
 
 /// A user text block: either a real prompt or Claude Code's interrupt marker.
@@ -758,6 +809,28 @@ mod tests {
         feed(&mut o, &tool_use("t1", "x"));
         feed(&mut o, &format!(r#"{{"type":"user",{TS},"message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{{"type":"text","text":"boom"}}]}}]}}}}"#));
         assert_eq!(o.activity.last().map(|a| (a.kind, a.text.as_str())), Some((ActivityKind::Error, "boom")));
+    }
+
+    /// Bash calls are kept for matching shells: description, background flag,
+    /// the output file named by a background call's result, done for a foreground one.
+    #[test]
+    fn bash_calls_are_recorded() {
+        let mut o = Out::default();
+        let bash = |id: &str, input: &str| format!(r#"{{"type":"assistant","timestamp":"2026-11-15T08:57:32.274Z","message":{{"id":"m-{id}","model":"claude-x","content":[{{"type":"tool_use","id":"{id}","name":"Bash","input":{input}}}]}}}}"#);
+        let result = |id: &str, text: &str| format!(r#"{{"type":"user",{TS},"message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}","content":{}}}]}}}}"#, serde_json::to_string(text).unwrap());
+        feed(&mut o, &bash("b1", r#"{"command":"until [ -s x ]; do sleep 5; done","description":"Wait for x","run_in_background":true}"#));
+        feed(&mut o, &result("b1", "Command running in background with ID: b9bainvwm. Output is being written to: /private/tmp/claude-501/-p/s1/tasks/b9bainvwm.output. You will be notified when it completes."));
+        feed(&mut o, &bash("f1", r#"{"command":"ls","description":"List"}"#));
+        feed(&mut o, &result("f1", "a\nb"));
+        feed(&mut o, &bash("f2", r#"{"command":"cargo build"}"#));
+        feed(&mut o, &tool_use("r1", "make"));
+        let b = &o.st.bash;
+        assert_eq!(b.len(), 4);
+        assert_eq!((b[0].command.as_str(), b[0].description.as_deref(), b[0].background, b[0].done), ("until [ -s x ]; do sleep 5; done", Some("Wait for x"), true, false));
+        assert_eq!(b[0].output.as_deref(), Some("/private/tmp/claude-501/-p/s1/tasks/b9bainvwm.output"));
+        assert_eq!(b[0].at, 1_794_733_052_000);
+        assert!(b[1].done && !b[1].background && b[1].output.is_none());
+        assert!(!b[2].done, "still running");
     }
 
     #[test]
