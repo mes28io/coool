@@ -709,7 +709,18 @@ html.theme-fade *::after {
   margin-top: -64px;
   padding-top: 64px;
   pointer-events: none;
-  background: linear-gradient(to bottom, color-mix(in oklab, var(--bg) 0%, transparent), var(--bg) 56px);
+  /* Eased stops: a straight linear ramp shows a visible edge (Mach band) where it starts and where it turns solid. */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--bg) 0%, transparent) 0px,
+    color-mix(in oklab, var(--bg) 6%, transparent) 10px,
+    color-mix(in oklab, var(--bg) 20%, transparent) 20px,
+    color-mix(in oklab, var(--bg) 42%, transparent) 30px,
+    color-mix(in oklab, var(--bg) 66%, transparent) 40px,
+    color-mix(in oklab, var(--bg) 86%, transparent) 50px,
+    color-mix(in oklab, var(--bg) 97%, transparent) 58px,
+    var(--bg) 64px
+  );
 }
 .composer-dock > * {
   pointer-events: auto;
