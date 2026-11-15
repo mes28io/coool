@@ -88,24 +88,6 @@ function CardTotal({ card }: { card: AgentCardData }) {
   );
 }
 
-function Pill({ card }: { card: AgentCardData }) {
-  const s = card.state;
-  return (
-    <span className="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full border border-line bg-raised pl-[7px] pr-2 text-small font-medium text-fg/85" data-card-status={s}>
-      {s === "running" ? (
-        <StatusDot status="busy" size={7} />
-      ) : s === "needs" ? (
-        <StatusDot status="needs" size={7} />
-      ) : s === "failed" ? (
-        <span className={cx("size-[7px] rounded-full", card.stopped ? "bg-faint" : "bg-err")} />
-      ) : (
-        <ICheck size={12} className="-ml-[2px] text-dim" />
-      )}
-      {s === "running" ? "Running" : s === "needs" ? "Needs you" : s === "failed" ? (card.stopped ? "Stopped" : "Failed") : "Done"}
-    </span>
-  );
-}
-
 function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => void; onStop: () => void }) {
   // Finished (done, failed, stopped): folded to the header and the result line; see lib/cardFold.ts.
   const el = useRef<HTMLDivElement>(null);
@@ -126,8 +108,8 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
           </div>
         </div>
         <span className="-mt-[2px] flex shrink-0 items-center gap-2">
+          {/* No status pill: the strip under the title already says Running / Done / Failed / Stopped / Needs you. */}
           <CardTotal card={card} />
-          <Pill card={card} />
         </span>
         <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="-mr-1 -mt-px flex size-[20px] shrink-0 items-center justify-center text-faint" title={collapsed ? "Expand" : "Collapse"}>
           <IChevron size={14} />
