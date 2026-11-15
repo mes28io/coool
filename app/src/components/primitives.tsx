@@ -405,7 +405,7 @@ export function Button({
       disabled={disabled}
       onClick={onClick}
       className={cx(
-        "inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-full px-3.5 text-base font-medium transition-[background-color,color,border-color,opacity,transform] duration-150 active:scale-[0.98] disabled:opacity-45 disabled:active:scale-100",
+        "inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[12px] px-3 text-base font-medium transition-[background-color,color,border-color,opacity,transform] duration-150 active:scale-[0.98] disabled:opacity-45 disabled:active:scale-100",
         variant === "primary" && "bg-fg text-bg hover:opacity-85",
         variant === "ghost" && "text-dim hover:bg-hover hover:text-fg",
         variant === "outline" && "border border-line bg-raised text-fg shadow-card hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))]",

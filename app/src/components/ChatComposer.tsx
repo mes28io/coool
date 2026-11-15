@@ -478,7 +478,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   transition={{ duration: 0.16, ease }}
                   onClick={interrupt}
                   title="Stop this turn (Esc)"
-                  className="flex h-[34px] items-center gap-1.5 rounded-full bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-small font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err-text"
+                  className="flex h-[34px] items-center gap-1.5 rounded-[12px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-small font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err-text"
                 >
                   <IStop size={14} />
                   Stop
@@ -496,7 +496,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   disabled={!can}
                   whileTap={can ? { scale: 0.92 } : undefined}
                   className={cx(
-                    "flex size-[32px] items-center justify-center rounded-full transition-[background-color,color] duration-150",
+                    "flex size-[32px] items-center justify-center rounded-[12px] transition-[background-color,color] duration-150",
                     can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
                   )}
                   title={working ? "Queue for after this turn" : "Send (Enter)"}
