@@ -203,7 +203,8 @@ export function ModelsChip({ data, current, open, onToggle }: { data: ModelsData
       )}
     >
       {modelLabel(shown)}
-      {others > 0 && <span className="rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1 font-sans text-small font-semibold text-dim">+{others}</span>}
+      {/* Plain text, no tag background: a tinted tag on the open (hover-tinted) chip read as a muddy box. */}
+      {others > 0 && <span className="text-small text-faint tnum">+{others}</span>}
     </button>
   );
 }
