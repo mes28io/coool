@@ -143,17 +143,46 @@ export function Elapsed({ since, approx, className }: { since: number | null; ap
  * when reported, else the family table, else an assumed 200k. Only a reported
  * window can turn the meter red; an estimate caps at the warning colour.
  */
+export function ContextRing({ context, model, window: reported, size = 13 }: { context: number; model?: string | null; window?: number | null; size?: number }) {
+  const w = contextWindow(model, reported);
+  const pct = Math.min(1, context / w.tokens);
+  const r = 5;
+  const c = 2 * Math.PI * r;
+  const known = w.source !== "assumed";
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden className="shrink-0 -rotate-90">
+      <circle cx="7" cy="7" r={r} fill="none" stroke="color-mix(in oklab, var(--dim) 30%, transparent)" strokeWidth="2" />
+      <motion.circle
+        cx="7"
+        cy="7"
+        r={r}
+        fill="none"
+        stroke={known && pct >= 1 ? "var(--error)" : known && pct >= 0.75 ? "var(--busy)" : "var(--dim)"}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={c}
+        initial={false}
+        animate={{ strokeDashoffset: c * (1 - Math.max(0.03, pct)) }}
+        transition={{ duration: typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 0.6, ease }}
+      />
+    </svg>
+  );
+}
+
 export function ContextMeter({
   context,
   model,
   window: reported,
   compact,
+  hideValues,
   className,
 }: {
   context: number;
   model?: string | null;
   window?: number | null;
   compact?: boolean;
+  /** Ring only (tight panes). */
+  hideValues?: boolean;
   className?: string;
 }) {
   const w = contextWindow(model, reported);
@@ -168,25 +197,34 @@ export function ContextMeter({
     (w.source === "reported" ? " (reported by the CLI)" : w.source === "family" ? ` (estimated for ${model})` : " (window unknown; 200k assumed)");
   return (
     <div className={cx("flex items-center gap-2", className)} title={tip}>
-      <div className={cx("relative h-[4px] overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--dim)_20%,transparent)]", compact ? "w-14" : "w-20")}>
-        <motion.div
-          className="absolute inset-y-0 left-0 rounded-full"
-          initial={false}
-          animate={{ width: `${Math.max(2, pct * 100)}%`, backgroundColor: color }}
-          transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-        />
-        {!exact && <span className="absolute inset-y-0 right-0 w-[3px] bg-[repeating-linear-gradient(90deg,var(--dim)_0_1px,transparent_1px_2px)] opacity-60" />}
-      </div>
-      <span className="text-small text-dim">
-        <Ticker value={context} className="text-fg/80" />
-        {!compact && (
-          <span className="text-faint">
-            {" / "}
-            {exact ? "" : "~"}
-            {fmtTokens(w.tokens)}
-          </span>
-        )}
-      </span>
+      {compact ? (
+        <>
+          <div className="relative h-[4px] w-14 overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--dim)_20%,transparent)]">
+            <motion.div
+              className="absolute inset-y-0 left-0 rounded-full"
+              initial={false}
+              animate={{ width: `${Math.max(2, pct * 100)}%`, backgroundColor: color }}
+              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+            />
+            {!exact && <span className="absolute inset-y-0 right-0 w-[3px] bg-[repeating-linear-gradient(90deg,var(--dim)_0_1px,transparent_1px_2px)] opacity-60" />}
+          </div>
+          <span className="tnum text-small text-fg/80">{Math.round(raw * 100)}%</span>
+        </>
+      ) : (
+        <>
+          <ContextRing context={context} model={model} window={reported} size={16} />
+          {!hideValues && (
+            <span className="whitespace-nowrap text-small text-dim">
+              <Ticker value={context} className="text-fg/80" />
+              <span className="text-faint">
+                {" / "}
+                {exact ? "" : "~"}
+                {fmtTokens(w.tokens)}
+              </span>
+            </span>
+          )}
+        </>
+      )}
     </div>
   );
 }

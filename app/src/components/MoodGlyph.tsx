@@ -18,13 +18,13 @@ const RING = Array.from({ length: 8 }, (_, k) => {
 });
 
 const GLYPHS: Record<Mood, ReactNode> = {
-  // A four-point spark breathing, a small star twinkling beside it.
+  // A thought bubble; its three dots light in turn.
   think: (
     <>
-      <g className="mg-think-spark">
-        <path d="M7.5 3.5C7.85 6.6 8.9 7.65 12 8C8.9 8.35 7.85 9.4 7.5 12.5C7.15 9.4 6.1 8.35 3 8C6.1 7.65 7.15 6.6 7.5 3.5Z" />
-      </g>
-      <Dot x={12.75} y={3.25} className="mg-think-star" />
+      <path d="M3.75 2.75h8.5a2 2 0 012 2v4.5a2 2 0 01-2 2H8.25L5 13.75V11.25H3.75a2 2 0 01-2-2v-4.5a2 2 0 012-2z" />
+      <Dot x={5.25} y={7} r={0.9} className="mg-think-dot mg-think-dot-0" />
+      <Dot x={8} y={7} r={0.9} className="mg-think-dot mg-think-dot-1" />
+      <Dot x={10.75} y={7} r={0.9} className="mg-think-dot mg-think-dot-2" />
     </>
   ),
   // Three rows; the marks tick in order, top to bottom.

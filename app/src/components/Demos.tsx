@@ -9,6 +9,7 @@ import { MOODS, type Mood } from "../lib/activityMood";
 import { Strip } from "./AgentsPanel";
 import { Ledger, type LedgerChange } from "./Ledger";
 import { PlanCard, type PlanPhase, type PlanStep } from "./PlanCard";
+import { AgentCube } from "./AgentCube";
 import { MoodGlyph, MoodSvg } from "./MoodGlyph";
 
 const m = (n: number) => Date.now() - n * 60_000;
@@ -304,6 +305,15 @@ function GlyphPanel({ dark }: { dark: boolean }) {
           </span>
         </div>
       ))}
+      <div className="mt-4 flex items-center gap-4 text-small" data-cube-row>
+        <span style={{ opacity: 0.55 }} className="w-[72px]">cube</span>
+        {(["live", "done", "failed", "stopped"] as const).map((st) => (
+          <span key={st} className="flex items-center gap-1.5" style={{ color: st === "live" ? green : st === "failed" ? "#ff6b6b" : faint }}>
+            <AgentCube size={14} state={st} className="!text-current" />
+            <span style={{ opacity: 0.6 }}>{st}</span>
+          </span>
+        ))}
+      </div>
       <div className="mt-3 flex items-center gap-2 text-[13px]" data-glyph-fade>
         <span style={{ opacity: 0.55 }} className="w-[72px]">cross-fade</span>
         <span style={{ color: green }} className="flex">

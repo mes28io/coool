@@ -145,10 +145,10 @@ interface State {
   /** A subagent to scroll to and open in its session's activity view (stamped; stale after a few seconds). */
   agentFocus: { id: string; at: number } | null;
   focusAgent(id: string): void;
-  /** The Agents side panel per session (key: session key, or `chat:<id>`): "open" / "closed" by the person or by its first auto-open; this run only. Absent = never opened. */
-  agentsPanel: Record<string, "open" | "closed">;
-  setAgentsPanel(key: string, v: "open" | "closed"): void;
-  /** Width of the Agents panel (min 300, max 440); this run only. */
+  /** The right side panel per session (key: session key, or `chat:<id>`): one at a time, set by the person or by the Agents panel's first auto-open; this run only. Absent = never opened. */
+  rightPanel: Record<string, "agents" | "models" | "closed">;
+  setRightPanel(key: string, v: "agents" | "models" | "closed"): void;
+  /** Width of the right panel (min 300, max 440); this run only. */
   agentsWidth: number;
   setAgentsWidth(w: number): void;
   toggleCollapsed(project: string): void;
@@ -288,8 +288,8 @@ export const useStore = create<State>((set, get) => ({
   setKidsOpen: (key, open) => set((s) => ({ kidsOpen: { ...s.kidsOpen, [key]: open } })),
   agentFocus: null,
   focusAgent: (id) => set({ agentFocus: { id, at: Date.now() } }),
-  agentsPanel: {},
-  setAgentsPanel: (key, v) => set((s) => ({ agentsPanel: { ...s.agentsPanel, [key]: v } })),
+  rightPanel: {},
+  setRightPanel: (key, v) => set((s) => ({ rightPanel: { ...s.rightPanel, [key]: v } })),
   agentsWidth: 340,
   setAgentsWidth: (w) => set({ agentsWidth: Math.round(Math.min(440, Math.max(300, w))) }),
   toggleCollapsed(project) {

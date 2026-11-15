@@ -13,11 +13,11 @@ import type { Activity, RememberOption } from "../lib/types";
 import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
-import { MoodGlyph } from "./MoodGlyph";
+import { AgentCube } from "./AgentCube";
+import { MoodSvg } from "./MoodGlyph";
 import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
 import { toolMood } from "../lib/activityMood";
-import { fmtOut } from "../lib/agentCards";
 import { LiveIndicator } from "./Activity";
 import { RailItem, RailList, reducedMotion, Reveal } from "./StepRail";
 import { deriveCheckpoints } from "../lib/checkpoints";
@@ -25,7 +25,7 @@ import { openChanges } from "../lib/infoRequest";
 import { isPlanTool, isSyntheticPlan, isTaskNoise, parsePlan, planForTurn } from "../lib/plan";
 import { PlanCard } from "./PlanCard";
 import { NoteRows } from "./SteerStrip";
-import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ISpark, ITerminal } from "./icons";
+import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
 import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot } from "./primitives";
@@ -492,7 +492,7 @@ export function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "think
             <ICheck size={14} />
           </motion.span>
         ) : (
-          <ISpark size={14} className="text-dim/80" />
+          <MoodSvg mood="think" size={14} live={false} className="text-dim/80" />
         )}
         <span className="text-dim group-hover:text-fg/85">
           <Reveal key={pop ? "pop" : "rest"} text={`Thought for ${fmtElapsed((item.endTs ?? item.ts) - item.ts)}`} fresh={pop} />
@@ -597,7 +597,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
                 );
               })}
             </RailList>
-            <AgentsSummary tools={tools} chat={chat} nested={nested} />
+            <AgentsSummary tools={tools} nested={nested} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -606,13 +606,12 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
 });
 
 /** After several subagents of one turn have all finished: one dim line with the wall-clock span (not the sum). */
-function AgentsSummary({ tools, chat, nested }: { tools: Tool[]; chat: Chat; nested: Map<string, ChatItem[]> }) {
+function AgentsSummary({ tools, nested }: { tools: Tool[]; nested: Map<string, ChatItem[]> }) {
   const agents = tools.filter((t) => t.agent);
   if (agents.length < 2 || agents.some((a) => a.endTs === null)) return null;
   const uses = agents.reduce((n, a) => n + (nested.get(a.id) ?? []).filter((k) => k.kind === "tool").length, 0);
-  const tokens = agents.reduce((n, a) => n + Object.values(chat.agents[a.id]?.models ?? {}).reduce((m, u) => m + u.output, 0), 0);
   const span = Math.max(...agents.map((a) => a.endTs ?? a.ts)) - Math.min(...agents.map((a) => a.ts));
-  const parts = [`${agents.length} agents finished`, uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `${fmtOut(tokens)} tokens`, span > 0 && fmtElapsed(span)].filter(Boolean);
+  const parts = [`${agents.length} agents finished`, uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, span > 0 && fmtElapsed(span)].filter(Boolean);
   return (
     <div className="ml-[34px] pb-1 pt-0.5 text-small text-faint tnum" data-agents-summary>
       {parts.join(" · ")}
@@ -668,7 +667,6 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const models = Object.keys(chat.agents[tool.id]?.models ?? {});
   const fromText = [...new Set(texts.map((t) => t.model).filter(Boolean) as string[])];
   const modelIds = models.length ? models : fromText;
-  const outTokens = Object.values(chat.agents[tool.id]?.models ?? {}).reduce((n, u) => n + u.output, 0);
   const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
   const card = useRef<HTMLDivElement>(null);
   const focus = useStore((st) => st.agentFocus);
@@ -686,7 +684,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
-        <MoodGlyph mood="delegate" size={14} live={running} />
+        <AgentCube size={14} state={running ? "live" : end} />
       </span>
       <div
         ref={card}
@@ -711,7 +709,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
             <FoldChevron open={open} />
           </div>
         ) : (
-          <FinishedAgentHead end={end} title={title} parts={agentResultParts(steps.length, outTokens, (tool.endTs ?? tool.ts) - tool.ts)} reason={end === "done" ? null : reason} open={open} onToggle={toggle} />
+          <FinishedAgentHead end={end} title={title} parts={agentResultParts(steps.length, (tool.endTs ?? tool.ts) - tool.ts)} reason={end === "done" ? null : reason} open={open} onToggle={toggle} />
         )}
         <FoldBody open={open}>
           {!running && (
@@ -1114,7 +1112,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
     }
   }
   const verb = item.failed ? "Failed after" : item.ok ? "Worked for" : "Stopped after";
-  const parts = [item.tools > 0 && `${item.tools} tool ${item.tools === 1 ? "use" : "uses"}`, item.tokens !== null && `${fmtOut(item.tokens)} tokens`, model && modelLabel(model)].filter(Boolean) as string[];
+  const parts = [item.tools > 0 && `${item.tools} tool ${item.tools === 1 ? "use" : "uses"}`, model && modelLabel(model)].filter(Boolean) as string[];
   return (
     <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
       {item.failed ? <IAlert size={13} className="text-err-text" /> : item.ok ? <ICheck size={13} className="text-faint" /> : <IReturn size={13} />}

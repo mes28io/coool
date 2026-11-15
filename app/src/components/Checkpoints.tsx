@@ -9,7 +9,6 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Chat } from "../lib/chat";
 import { chatTitle } from "../lib/chat";
 import type { Checkpoint, Checkpoints as Derived } from "../lib/checkpoints";
-import { fmtTokens } from "../lib/format";
 import { IAlert, IBranch, IChevron, IFolder, ISpark, toolIcon } from "./icons";
 import { cx, ease } from "./primitives";
 import { DOT, RAIL, Reveal, reducedMotion } from "./StepRail";
@@ -41,31 +40,6 @@ function Tick({ v }: { v: number | string }) {
       </motion.span>
     </span>
   );
-}
-
-/** Eases toward `target` so a token total counts up rather than jumping. */
-function useTween(target: number): number {
-  const [v, setV] = useState(target);
-  const cur = useRef(target);
-  useEffect(() => {
-    if (reducedMotion()) {
-      cur.current = target;
-      setV(target);
-      return;
-    }
-    const from = cur.current;
-    const t0 = performance.now();
-    let raf = 0;
-    const step = (t: number) => {
-      const k = Math.min(1, (t - t0) / 500);
-      cur.current = from + (target - from) * (1 - Math.pow(1 - k, 3));
-      setV(Math.round(cur.current));
-      if (k < 1) raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [target]);
-  return v;
 }
 
 interface Edge {
@@ -128,7 +102,6 @@ export function CheckpointsCard({ chat, cps, onJump, onFiles }: { chat: Chat; cp
     if (open && capped && el) el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
   }, [list.length, open, capped]);
 
-  const out = useTween(chat.tokens.output);
   const title = chatTitle(chat) ?? "";
   const width = X0 + 2 * STEP + 10;
 
@@ -156,12 +129,6 @@ export function CheckpointsCard({ chat, cps, onJump, onFiles }: { chat: Chat; cp
                 <Tick v={attempts} />
                 attempts
               </span>
-            </>
-          )}
-          {out > 0 && (
-            <>
-              <span>·</span>
-              <span>{fmtTokens(out)} out</span>
             </>
           )}
         </span>

@@ -3,9 +3,9 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type React
 import type { Activity, Agent, Session } from "../lib/types";
 import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { MOODS, moodOfCurrent, toolMood, type Mood } from "../lib/activityMood";
-import { fmtOut } from "../lib/agentCards";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
+import { AgentCube } from "./AgentCube";
 import { MoodGlyph } from "./MoodGlyph";
 import { useStore, type Since } from "../store";
 import { useNow } from "../lib/clock";
@@ -611,10 +611,10 @@ export function useFocusLit(asked: boolean, card: { current: HTMLElement | null 
   return lit;
 }
 
-/** How a finished subagent ended, and its one-line result: "Done · 3 tool uses · 53 tokens · 5s". */
+/** How a finished subagent ended, and its one-line result: "Done · 3 tool uses · 5s". */
 export type AgentEnd = "done" | "failed" | "stopped";
-export function agentResultParts(uses: number, tokens: number, ms: number | null): string[] {
-  return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `${fmtOut(tokens)} tokens`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
+export function agentResultParts(uses: number, ms: number | null): string[] {
+  return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
 }
 
 /** The chevron of a foldable card: › folded, ⌄ open. */
@@ -675,7 +675,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   const end: AgentEnd = failedEnd ? (isStopReason(reason) ? "stopped" : "failed") : "done";
   const t0 = all.length ? tsToMs(all[0].ts) : null;
   const t1 = last ? tsToMs(last.ts) : null;
-  const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, agent?.tokens.output ?? 0, t0 !== null && t1 !== null ? t1 - t0 : null);
+  const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, t0 !== null && t1 !== null ? t1 - t0 : null);
   const [open, toggle] = useFold(`agent:${agent?.id ?? a.text}`, !running, card);
   useEffect(() => {
     if (asked && !open) toggle();
@@ -685,7 +685,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
-        <MoodGlyph mood="delegate" size={14} live={running} />
+        <AgentCube size={14} state={running ? "live" : end} />
       </span>
       <div
         ref={card}

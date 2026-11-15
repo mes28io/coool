@@ -11,14 +11,14 @@ import { api } from "../lib/backend";
 import { type Chat, useChats } from "../lib/chat";
 import { score } from "../lib/fuzzy";
 import { fmtTokens } from "../lib/format";
-import { contextWindow, modelColor, modelLabel, tokTotal } from "../lib/models";
+import { modelColor, modelLabel, tokTotal } from "../lib/models";
 import type { CommandKind } from "../lib/types";
 import { IArrowUp, ICheck, IStop, ITerminal } from "./icons";
 import { InfoPanel, type InfoTab } from "./InfoPanel";
 import { useInfoRequest } from "../lib/infoRequest";
 import { flushLocal, steer } from "../lib/steer";
 import { SteerStrip } from "./SteerStrip";
-import { Chip, cx, ease, Kbd, Popover } from "./primitives";
+import { Chip, ContextRing, cx, ease, Kbd, Popover } from "./primitives";
 
 type Native = "model" | "clear" | "context" | "status" | "usage" | "mode" | "changes";
 /** Handled here and never sent (CHAT_SPEC "Slash commands"). `only`: for one provider. */
@@ -479,7 +479,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             {/* info panel (context / status / usage) */}
             <div className="relative">
               <Chip active={pop === "info"} onClick={() => openPop(pop === "info" ? null : "info")} title="Context, status and usage (/context, /status, /usage)">
-                <ContextRing chat={chat} />
+                <ContextRing context={chat.context} model={chat.model} window={chat.contextWindow} />
                 <span className="tnumtext-small">{fmtTokens(chat.context)}</span>
               </Chip>
               <Popover open={pop === "info"} onClose={() => setPop(null)} side="top" width={400}>
@@ -585,31 +585,6 @@ function Hi({ text, q }: { text: string; q: string }) {
 function ModeGlyph({ id }: { id: string | null }) {
   const c = id === "bypassPermissions" || id === "never" ? "var(--error)" : id === "plan" ? "var(--dim)" : id === "acceptEdits" || id === "on-failure" ? "var(--busy)" : "var(--dim)";
   return <span className="inline-block size-[7px] rounded-[4px]" style={{ background: c }} />;
-}
-
-function ContextRing({ chat }: { chat: Chat }) {
-  const w = contextWindow(chat.model, chat.contextWindow);
-  const pct = Math.min(1, chat.context / w.tokens);
-  const r = 5;
-  const c = 2 * Math.PI * r;
-  return (
-    <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden className="-rotate-90">
-      <circle cx="7" cy="7" r={r} fill="none" stroke="color-mix(in oklab, var(--dim) 30%, transparent)" strokeWidth="2" />
-      <motion.circle
-        cx="7"
-        cy="7"
-        r={r}
-        fill="none"
-        stroke={w.source !== "assumed" && pct >= 1 ? "var(--error)" : w.source !== "assumed" && pct >= 0.75 ? "var(--busy)" : "var(--dim)"}
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeDasharray={c}
-        initial={false}
-        animate={{ strokeDashoffset: c * (1 - Math.max(0.03, pct)) }}
-        transition={{ duration: 0.6, ease }}
-      />
-    </svg>
-  );
 }
 
 function ModelPicker({ chat, current, onPick }: { chat: Chat; current: string | null; onPick: (m: string) => void }) {

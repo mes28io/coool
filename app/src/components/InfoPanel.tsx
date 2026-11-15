@@ -151,7 +151,6 @@ function UsageTab({ chat }: { chat: Chat }) {
     return { main: m.main, agents: m.agents.map((a) => ({ key: a.tool, label: a.label, models: a.models })) };
   }, [chat]);
   const turns = chat.items.filter((i) => i.kind === "turn").length;
-  const t = chat.tokens;
   const planUsage = useStore((s) => s.usage[chat.provider]);
   return (
     <div>
@@ -159,23 +158,11 @@ function UsageTab({ chat }: { chat: Chat }) {
       <div className="border-b border-hairline px-3 pb-1 pt-1.5">
         <UsageBlock provider={chat.provider} usage={planUsage} bare />
       </div>
-      <div className="grid grid-cols-4 gap-px border-b border-hairline bg-hairline">
-        {[
-          ["Input", t.input],
-          ["Cached", t.cached],
-          ["Output", t.output],
-          ["Turns", turns],
-        ].map(([k, v]) => (
-          <div key={k as string} className="bg-raised px-3 py-2">
-            <div className="text-small text-faint">{k}</div>
-            <div className=" text-base font-semibold text-fg tnum">{k === "Turns" ? v : fmtTokens(v as number)}</div>
-          </div>
-        ))}
+      <div className="border-b border-hairline bg-raised px-3 py-2">
+        <div className="text-small text-faint">Turns</div>
+        <div className=" text-base font-semibold text-fg tnum">{turns}</div>
       </div>
-      <ModelsBreakdown data={data} current={chat.model} />
-      {(
-        <div className="border-t border-hairline px-3.5 py-2 text-small text-faint">Token counts come straight from the CLI. coool doesn't estimate dollar cost.</div>
-      )}
+      <ModelsBreakdown data={data} current={chat.model} history={chat.usageHistory} />
     </div>
   );
 }

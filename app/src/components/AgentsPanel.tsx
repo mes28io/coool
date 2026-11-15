@@ -3,7 +3,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useRef, useState } from "react";
-import { countsText, fmtOut, orderCards, type AgentCardData } from "../lib/agentCards";
+import { countsText, orderCards, type AgentCardData } from "../lib/agentCards";
 import { useNow } from "../lib/clock";
 import { fmtClock, fmtElapsed } from "../lib/format";
 import { MOODS, toolMood } from "../lib/activityMood";
@@ -13,7 +13,7 @@ import { useStableOrder } from "../lib/stable";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { ICheck, IChevron, toolIcon } from "./icons";
 import { MoodGlyph } from "./MoodGlyph";
-import { cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
+import { cx, ease, spring, StatusDot } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
 /** Finished cards shown before "Show N more". */
@@ -23,25 +23,7 @@ const RECENT = 3;
 /** Segments of the bar: the most recent steps; older ones merge into one leading segment. */
 const SEGMENTS = 24;
 
-export function AgentsPanel({
-  cards,
-  open,
-  width,
-  dragging,
-  onWidth,
-  onDragging,
-  onOpenCard,
-  onStop,
-}: {
-  cards: AgentCardData[];
-  open: boolean;
-  width: number;
-  dragging: boolean;
-  onWidth: (w: number) => void;
-  onDragging: (d: boolean) => void;
-  onOpenCard: (c: AgentCardData) => void;
-  onStop: (c: AgentCardData) => void;
-}) {
+export function AgentsBody({ cards, onOpenCard, onStop }: { cards: AgentCardData[]; onOpenCard: (c: AgentCardData) => void; onStop: (c: AgentCardData) => void }) {
   const [hover, setHover] = useState(false);
   const [all, setAll] = useState(false);
   const ordered = useStableOrder(orderCards(cards), (c) => c.id, hover);
@@ -49,67 +31,40 @@ export function AgentsPanel({
   const rest = ordered.filter((c) => c.state !== "done");
   const shownDone = all ? done : done.slice(0, DONE_CAP);
   const more = done.length - shownDone.length;
-  const start = useRef<{ x: number; w: number } | null>(null);
 
   return (
-    <motion.aside
-      initial={false}
-      animate={{ width: open ? width : 0 }}
-      transition={dragging || reducedMotion() ? { duration: 0 } : spring}
-      className="relative h-full shrink-0 overflow-hidden"
-      aria-hidden={!open}
-      inert={!open}
-      data-agents-panel={open ? "open" : "closed"}
-    >
-      <div className="absolute inset-y-0 left-0 flex flex-col border-l border-hairline bg-panel" style={{ width }}>
-        <div className="flex h-[44px] shrink-0 items-center gap-2 pl-4 pr-2">
-          <span className="text-base font-semibold text-fg">Agents</span>
-          <span className="min-w-0 flex-1 truncate text-small text-dim tnum" data-agents-count>
-            {countsText(cards)}
-          </span>
-        </div>
-        <div className="scroll min-h-0 flex-1 px-3 pb-3" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
-          <AnimatePresence initial={false}>
-            {[...rest, ...shownDone].map((c) => (
-              <motion.div
-                key={c.id}
-                layout="position"
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: reducedMotion() ? 0 : 0.3, ease, layout: reducedMotion() ? { duration: 0 } : spring }}
-                className="overflow-hidden"
-              >
-                <div className="pb-2">
-                  <Card card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-          {(more > 0 || (all && done.length > DONE_CAP)) && (
-            <button type="button" onClick={() => setAll(!all)} className="flex h-[28px] w-full items-center justify-center rounded-[8px] text-small text-dim transition-colors duration-150 hover:bg-hover hover:text-fg">
-              {all ? "Show fewer" : `Show ${more} more`}
-            </button>
-          )}
-        </div>
-        {/* Drag the left edge to resize. */}
-        <div
-          className="group absolute inset-y-0 left-0 z-10 w-[6px] cursor-col-resize"
-          onPointerDown={(e) => {
-            start.current = { x: e.clientX, w: width };
-            onDragging(true);
-            (e.target as HTMLElement).setPointerCapture(e.pointerId);
-          }}
-          onPointerMove={(e) => start.current && onWidth(start.current.w + start.current.x - e.clientX)}
-          onPointerUp={() => {
-            start.current = null;
-            onDragging(false);
-          }}
-        >
-          <div className="h-full w-[2px] bg-fg opacity-0 transition-opacity duration-150 group-hover:opacity-40" />
-        </div>
+    <div className="flex h-full flex-col" data-agents-panel="open">
+      <div className="flex h-[44px] shrink-0 items-center gap-2 pl-4 pr-2">
+        <span className="text-base font-semibold text-fg">Agents</span>
+        <span className="min-w-0 flex-1 truncate text-small text-dim tnum" data-agents-count>
+          {countsText(cards)}
+        </span>
       </div>
-    </motion.aside>
+      <div className="scroll min-h-0 flex-1 px-3 pb-3" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
+        <AnimatePresence initial={false}>
+          {[...rest, ...shownDone].map((c) => (
+            <motion.div
+              key={c.id}
+              layout="position"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: reducedMotion() ? 0 : 0.3, ease, layout: reducedMotion() ? { duration: 0 } : spring }}
+              className="overflow-hidden"
+            >
+              <div className="pb-2">
+                <Card card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+        {(more > 0 || (all && done.length > DONE_CAP)) && (
+          <button type="button" onClick={() => setAll(!all)} className="flex h-[28px] w-full items-center justify-center rounded-[8px] text-small text-dim transition-colors duration-150 hover:bg-hover hover:text-fg">
+            {all ? "Show fewer" : `Show ${more} more`}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -159,20 +114,21 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
 
   return (
     <div ref={el} className="overflow-hidden rounded-[14px] border border-hairline bg-bg shadow-card" data-agent-panel-card={card.id} data-state={card.stopped ? "stopped" : card.state} data-open={open}>
-      <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-center gap-2 px-3 pb-1 pt-2.5">
-        <ProviderMark provider={card.provider} size={16} />
+      <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-start gap-2 px-3 pb-1 pt-2.5">
         <div className="min-w-0 flex-1">
           {/* The task is what tells agents apart, so it is the title; the model and kind sit under it. */}
-          <div className="truncate text-base font-medium leading-[18px] text-fg" title={card.description || undefined}>
+          <div className="line-clamp-2 text-base font-medium leading-[18px] text-fg" title={card.description || undefined}>
             {card.description || (card.model ? modelLabel(card.model) : "Agent")}
           </div>
           <div className="truncate text-small leading-[16px] text-dim" title={full}>
             {[card.model ? modelLabel(card.model) : null, card.kind].filter(Boolean).join(" · ")}
           </div>
         </div>
-        <CardTotal card={card} />
-        <Pill card={card} />
-        <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="-mr-1 flex size-[20px] shrink-0 items-center justify-center text-faint" title={collapsed ? "Expand" : "Collapse"}>
+        <span className="-mt-[2px] flex shrink-0 items-center gap-2">
+          <CardTotal card={card} />
+          <Pill card={card} />
+        </span>
+        <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="-mr-1 -mt-px flex size-[20px] shrink-0 items-center justify-center text-faint" title={collapsed ? "Expand" : "Collapse"}>
           <IChevron size={14} />
         </motion.span>
       </div>
@@ -188,7 +144,6 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
               <div className="mt-1.5 flex h-[24px] items-center gap-2 text-small text-faint">
                 <span className="tnum">
                   {card.steps.length} {card.steps.length === 1 ? "step" : "steps"}
-                  {card.tokens > 0 && <> · {fmtOut(card.tokens)} tokens</>}
                 </span>
                 <span className="flex-1" />
                 {card.stoppable && (

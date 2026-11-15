@@ -18,23 +18,16 @@
   opacity: 0.4;
 }
 
-/* think: the spark breathes in; as it does, the small star beside it lights. */
-.mg-think-spark {
-  transform-origin: 7.5px 8px;
-  animation: mg-think 2.4s;
+/* think: the bubble's three dots light in turn (equal dim weight when still). */
+.mg-think-dot {
+  opacity: 0.55;
 }
-.mg-think-star {
-  opacity: 0.35;
-  animation: mg-twinkle 2.4s;
-}
-@keyframes mg-think {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(0.78); }
-}
-@keyframes mg-twinkle {
-  0%, 30% { opacity: 0.35; }
-  50% { opacity: 1; }
-  75%, 100% { opacity: 0.35; }
+.mg-think-dot-0 { animation: mg-think-dot 1.8s; }
+.mg-think-dot-1 { animation: mg-think-dot 1.8s 0.3s; }
+.mg-think-dot-2 { animation: mg-think-dot 1.8s 0.6s; }
+@keyframes mg-think-dot {
+  0%, 60%, 100% { opacity: 0.35; }
+  25% { opacity: 1; }
 }
 
 /* plan: ticks replace the dots one row at a time, then the list resets. */
@@ -220,5 +213,44 @@
 @media (prefers-reduced-motion: reduce) {
   .mg.mg-in {
     animation: none;
+  }
+}
+
+/* AgentCube (AgentCube.tsx): while running the faces light in turn, 2.4 s loop; the top lifts and settles. */
+.ac .ac-face {
+  opacity: 0;
+  animation-duration: 2.4s;
+  animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  animation-iteration-count: infinite;
+}
+.ac .ac-top {
+  animation-name: ac-top;
+}
+.ac .ac-left {
+  animation-name: ac-left;
+}
+.ac .ac-right {
+  animation-name: ac-right;
+}
+@keyframes ac-top {
+  0%, 100% { opacity: 0.05; transform: translateY(0); }
+  12% { opacity: 0.22; transform: translateY(-0.5px); }
+  30% { opacity: 0.22; transform: translateY(0); }
+  45% { opacity: 0.05; }
+}
+@keyframes ac-left {
+  0%, 25% { opacity: 0.05; }
+  42%, 58% { opacity: 0.22; }
+  75%, 100% { opacity: 0.05; }
+}
+@keyframes ac-right {
+  0%, 58% { opacity: 0.05; }
+  75%, 90% { opacity: 0.22; }
+  100% { opacity: 0.05; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ac .ac-face {
+    animation: none;
+    opacity: 0.18;
   }
 }

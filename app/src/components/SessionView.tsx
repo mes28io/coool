@@ -11,15 +11,16 @@ import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { resolveTarget, useStore, type Target, type ViewMode } from "../store";
 import { liveTime, Timeline, ThinkingRow } from "./Activity";
-import { AgentsChip } from "./AgentsChip";
-import { AgentsPanel } from "./AgentsPanel";
+import { AgentsButton } from "./AgentsButton";
+import { AgentsBody } from "./AgentsPanel";
+import { RightPanel, type RightKind } from "./RightPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IPlay, ISidebar, ITerminal } from "./icons";
-import { ModelsChip, sessionModelsData, type ModelsData } from "./Models";
+import { IActivity, IArrowUp, IClose, IPlay, ITerminal } from "./icons";
+import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
-import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark, StatusPill, Ticker, type UiStatus } from "./primitives";
+import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark, type UiStatus } from "./primitives";
 import { modelLabel } from "../lib/models";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
@@ -75,18 +76,21 @@ export function SessionView({
   }, [root]);
   const cards = useAgentCards(r.session, chat);
   const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
-  const panelState = useStore((st) => (panelKey ? st.agentsPanel[panelKey] : undefined));
-  const setAgentsPanel = useStore((st) => st.setAgentsPanel);
+  const panelState = useStore((st) => (panelKey ? st.rightPanel[panelKey] : undefined));
+  const setRightPanel = useStore((st) => st.setRightPanel);
   const agentsWidth = useStore((st) => st.agentsWidth);
   const setAgentsWidth = useStore((st) => st.setAgentsWidth);
   const [resizing, setResizing] = useState(false);
   const liveCards = cards.filter(isLive).length;
   // First time something runs while the session is on screen: open it. Closing it is remembered.
   useEffect(() => {
-    if (panelKey && wide && liveCards > 0 && panelState === undefined) setAgentsPanel(panelKey, "open");
-  }, [panelKey, wide, liveCards, panelState, setAgentsPanel]);
+    if (panelKey && wide && liveCards > 0 && panelState === undefined) setRightPanel(panelKey, "agents");
+  }, [panelKey, wide, liveCards, panelState, setRightPanel]);
   const panelOn = wide && cards.length > 0;
-  const panelOpen = panelOn && panelState === "open";
+  const showing: RightKind | null = !wide ? null : panelState === "agents" && cards.length > 0 ? "agents" : panelState === "models" ? "models" : null;
+  const agentsOpen = showing === "agents";
+  const modelsOpen = showing === "models";
+  const toggleRight = (k: RightKind) => panelKey && setRightPanel(panelKey, showing === k ? "closed" : k);
 
   const { session, pty, starting, startingChat } = r;
   const isChat = r.chat !== null;
@@ -144,8 +148,6 @@ export function SessionView({
   const external = !!session && !hasTerm && !isChat;
   const model = chat?.model ?? session?.model ?? null;
   const context = chat && chat.context ? chat.context : (session?.tokens.context ?? 0);
-  const tokIn = chat && chat.tokens.input ? chat.tokens.input + chat.tokens.cached : session ? session.tokens.input + session.tokens.cached : 0;
-  const tokOut = chat && chat.tokens.output ? chat.tokens.output : (session?.tokens.output ?? 0);
   const showTokens = !!session || !!chat?.tokens.output;
   // The agents chip speaks for subagents; the text beside the pill keeps jobs / shells.
   const jobs = session?.live_children ?? 0;
@@ -170,50 +172,24 @@ export function SessionView({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-base font-semibold tracking-[-0.005em] text-fg">{title}</h2>
-            <StatusPill status={status} background={status === "needs" ? null : att?.background} />
-            {(session || panelOn) && (
-              <AgentsChip
-                session={session ?? null}
-                panel={panelOn && panelKey ? { cards, open: panelOpen, onToggle: () => setAgentsPanel(panelKey, panelOpen ? "closed" : "open") } : null}
-              />
-            )}
             {bgText && status !== "needs" && <span className="hidden shrink-0 text-small text-dim sm:inline">{bgText}</span>}
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
             <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />
-            {models && (models.main.length > 0 || model) && (
-              <>
-                <span className="text-faint">·</span>
-                <ModelsChip data={models} current={model} compact={compact} />
-              </>
-            )}
           </div>
         </div>
-        {session?.loaded === false && !chat && !compact && (
-          <div className="hidden items-center gap-4 xl:flex" title="Reading this session's transcript…">
-            <span className="flex items-center gap-2">
-              <Skel w={80} h={4} />
+        {session?.loaded === false && !chat ? (
+          !compact && (
+            <div className="hidden items-center gap-2.5 xl:flex" title="Reading this session's transcript…">
+              <Skel w={64} h={9} />
+              <Skel w={16} h={16} />
               <Skel w={56} h={9} />
-            </span>
-            <span className="flex items-center gap-2.5">
-              <Skel w={44} h={9} />
-              <Skel w={44} h={9} />
-            </span>
-          </div>
-        )}
-        {showTokens && !compact && !(session?.loaded === false && !chat) && (
-          <div className="hidden items-center gap-4 xl:flex">
-            <ContextMeter context={context} model={model} window={chat?.contextWindow} />
-            <div className="flex items-center gap-2.5 text-small text-dim" title="Tokens in / out">
-              <span>
-                <span className="text-faint">in </span>
-                <Ticker value={tokIn} className="text-fg/80" />
-              </span>
-              <span>
-                <span className="text-faint">out </span>
-                <Ticker value={tokOut} className="text-fg/80" />
-              </span>
             </div>
+          )
+        ) : (
+          <div className="mr-2.5 flex shrink-0 items-center gap-2.5">
+            {!compact && wide && models && (models.main.length > 0 || model) && <ModelsChip data={models} current={model} open={modelsOpen} onToggle={() => toggleRight("models")} />}
+            {showTokens && <ContextMeter context={context} model={model} window={chat?.contextWindow} hideValues={compact} />}
           </div>
         )}
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
@@ -223,22 +199,13 @@ export function SessionView({
             {!compact && "Open in terminal"}
           </Button>
         )}
-        {/* The agents panel toggle sits where Stop used to be (Stop lives in the composer and the palette). */}
-        {panelOn && panelKey && (
-          <IconButton
-            title={panelOpen ? "Hide agents" : "Show agents"}
-            onClick={() => setAgentsPanel(panelKey, panelOpen ? "closed" : "open")}
-            className={panelOpen ? "bg-hover text-fg" : ""}
-          >
-            <ISidebar size={17} className="-scale-x-100" />
-          </IconButton>
-        )}
         {canResume && (
           <Button variant="outline" onClick={() => resumeSession(session!, leaf)} title="Resume this session inside coool">
             <IPlay size={14} />
             Resume
           </Button>
         )}
+        {panelOn && panelKey && <AgentsButton cards={cards} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
         {onClosePane && (
           <IconButton title="Close pane" onClick={onClosePane} className="-mr-1">
             <IClose size={14} />
@@ -290,17 +257,16 @@ export function SessionView({
             <ExternalNotice session={session!} leaf={leaf} compact={compact} />
           ) : null}
         </div>
-        {panelOn && panelKey && (
-          <AgentsPanel
-            cards={cards}
-            open={panelOpen}
-            width={agentsWidth}
-            dragging={resizing}
-            onWidth={setAgentsWidth}
-            onDragging={setResizing}
-            onOpenCard={onOpenCard}
-            onStop={onStopCard}
-          />
+        {wide && panelKey && (
+          <RightPanel which={showing} width={agentsWidth} dragging={resizing} onWidth={setAgentsWidth} onDragging={setResizing} onClose={() => setRightPanel(panelKey, "closed")}>
+            {(k) =>
+              k === "agents" ? (
+                <AgentsBody cards={cards} onOpenCard={onOpenCard} onStop={onStopCard} />
+              ) : (
+                <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} />
+              )
+            }
+          </RightPanel>
         )}
       </div>
     </div>

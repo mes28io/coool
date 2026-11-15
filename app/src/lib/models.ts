@@ -81,6 +81,52 @@ export function modelColor(id: string | null | undefined): string {
 export const tokTotal = (u: Pick<ModelUse, "input" | "cached" | "output">) => u.input + u.cached + u.output;
 
 /**
+ * List API prices, USD per million tokens (in = input incl. cache writes, read = cache reads, out = output).
+ * Source: the claude-api skill's model table, cached 2026-11-03. Cache reads are quoted there for Fable 5.2,
+ * Opus 5.5 and Sonnet 5.5; the other cache-read prices are assumed at 0.1x input. Claude Code's `input` does not
+ * separate cache writes, so those are priced at the input rate. Only used to weight shares, never shown.
+ * Entries are matched top to bottom; a model id with an unknown version falls to its family's latest row.
+ */
+const PRICES: { re: RegExp; in: number; read: number; out: number }[] = [
+  { re: /(fable|mythos)-5-2/, in: 8, read: 0.2, out: 40 },
+  { re: /(fable|mythos)/, in: 10, read: 1, out: 50 },
+  { re: /opus-5-5/, in: 4, read: 0.2, out: 20 },
+  { re: /opus-(5|4)/, in: 5, read: 0.5, out: 25 },
+  { re: /sonnet-5/, in: 2, read: 0.1, out: 10 },
+  { re: /sonnet-4/, in: 3, read: 0.3, out: 15 },
+  { re: /haiku-5/, in: 0.1, read: 0.01, out: 0.5 },
+  { re: /haiku-4/, in: 1, read: 0.1, out: 5 },
+  // Family fallbacks (latest generation).
+  { re: /opus/, in: 4, read: 0.2, out: 20 },
+  { re: /sonnet/, in: 2, read: 0.1, out: 10 },
+  { re: /haiku/, in: 0.1, read: 0.01, out: 0.5 },
+];
+
+/** Price-weighted usage of one row, or null when the model has no known price. */
+export function usageWeight(u: Pick<ModelUse, "model" | "input" | "cached" | "output">): number | null {
+  const p = PRICES.find((x) => x.re.test(u.model.toLowerCase()));
+  return p ? (u.input * p.in + u.cached * p.read + u.output * p.out) / 1e6 : null;
+}
+
+/**
+ * Shares (0..1) within a group of rows: price-weighted when every row has a price; else, for a group with
+ * no priced model at all (Codex / GPT: no prices in the repo), output tokens; else plain token share (`approx`).
+ */
+export function usageShares(rows: Pick<ModelUse, "model" | "input" | "cached" | "output">[]): { shares: number[]; approx: boolean } {
+  const w = rows.map(usageWeight);
+  let vals: number[];
+  let approx = false;
+  if (w.every((x) => x !== null)) vals = w as number[];
+  else if (w.every((x) => x === null)) vals = rows.map((r) => r.output);
+  else {
+    vals = rows.map(tokTotal);
+    approx = true;
+  }
+  const sum = vals.reduce((n, v) => n + v, 0);
+  return { shares: vals.map((v) => (sum > 0 ? v / sum : 1 / rows.length)), approx };
+}
+
+/**
  * Models a session used, most first. Prefers `Session.models` from the
  * backend; falls back to one row from `model` + `tokens` so older backends
  * still show something truthful.
