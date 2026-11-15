@@ -136,11 +136,11 @@ function CardModel({ s }: { s: Session }) {
   );
 }
 
-/** State at the top right of a card: just a dot ("Needs you" keeps its word, in green). */
+/** State at the top right of a card: just a dot ("Needs you" keeps its word, in blue). */
 function StateLabel({ status, needs }: { status: "busy" | "idle" | "starting" | "ended"; needs?: boolean }) {
   if (needs)
     return (
-      <span className="flex shrink-0 items-center gap-1.5 text-small font-medium text-accent-text">
+      <span className="flex shrink-0 items-center gap-1.5 text-small font-medium text-needs-text">
         <StatusDot status="needs" size={7} />
         Needs you
       </span>
@@ -177,7 +177,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       whileHover={{ y: -1, transition: { duration: 0.18 } }}
       className={cx(
         cardCls,
-        needs ? "attn-card border-[color-mix(in_oklab,var(--accent)_35%,var(--border))]" : "border-hairline hover:border-[color-mix(in_oklab,var(--dim)_40%,var(--border))]",
+        needs ? "attn-card border-[color-mix(in_oklab,var(--status-needs)_35%,var(--border))]" : "border-hairline hover:border-[color-mix(in_oklab,var(--dim)_40%,var(--border))]",
       )}
     >
       <div className="flex h-[22px] items-center gap-1.5">
@@ -191,10 +191,10 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       <div className="mt-2.5 flex h-[22px] items-center gap-2 text-base">
         {needs ? (
           <>
-            <span className="min-w-0 flex-1 truncate text-accent-text" title={needs}>
+            <span className="min-w-0 flex-1 truncate text-needs-text" title={needs}>
               {needs}
             </span>
-            <span className="shrink-0 text-small text-accent-text/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review →" : "Open →"}</span>
+            <span className="shrink-0 text-small text-needs-text/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review →" : "Open →"}</span>
           </>
         ) : busy ? (
           <>

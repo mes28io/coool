@@ -18,7 +18,7 @@ export function cx(...c: (string | false | null | undefined)[]) {
 }
 
 export function StatusDot({ status, size = 7, className }: { status: UiStatus; size?: number; className?: string }) {
-  const color = status === "busy" || status === "starting" ? "var(--busy)" : status === "idle" || status === "needs" ? "var(--accent)" : "var(--dim)";
+  const color = status === "busy" ? "var(--status-working)" : status === "idle" ? "var(--status-waiting)" : status === "needs" ? "var(--status-needs)" : "var(--dim)";
   return (
     <span className={cx("relative inline-flex shrink-0", status === "needs" && "mx-[2px]", className)} style={{ width: size, height: size }}>
       {(status === "busy" || status === "starting") && (
@@ -169,12 +169,12 @@ export function ContextMeter({
   );
 }
 
-/** The distinct "blocked on you" badge: solid accent, so it reads differently from "Waiting". */
+/** The distinct "blocked on you" badge: solid blue with white ink, so it reads differently from "Waiting". */
 export function NeedsBadge({ small, className }: { small?: boolean; className?: string }) {
   return (
     <span
       className={cx(
-        "needs-badge inline-flex shrink-0 items-center gap-1 rounded-full bg-accent font-semibold text-accent-ink",
+        "needs-badge inline-flex shrink-0 items-center gap-1 rounded-full bg-needs font-semibold text-needs-ink",
         small ? "h-[15px] px-1.5 font-mono text-micro uppercase tracking-[0.06em]" : "h-[24px] pl-[6px] pr-2 text-small",
         className,
       )}

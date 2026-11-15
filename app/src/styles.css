@@ -32,6 +32,14 @@
   --accent-text: #28c840;
   --busy-text: #febc2e;
   --error-text: #ff5f57;
+  /* session status: green working, green working, yellow your turn, blue needs you */
+  --status-working: #28c840;
+  --status-working-text: #28c840;
+  --status-waiting: #febc2e;
+  --status-waiting-text: #febc2e;
+  --status-needs: #0a84ff; /* blue: blocked on you */
+  --status-needs-text: #4da3ff;
+  --status-needs-ink: #ffffff; /* text on the filled blue badge */
   --claude: #d97757; /* logo only */
   --codex: var(--text);
   --shadow-card: none;
@@ -60,6 +68,13 @@
   --accent-text: #1a7f37;
   --busy-text: #9a6700;
   --error-text: #d92d20;
+  --status-working: #28c840;
+  --status-working-text: #1a7f37;
+  --status-waiting: #febc2e;
+  --status-waiting-text: #9a6700;
+  --status-needs: #007aff;
+  --status-needs-text: #0064d2;
+  --status-needs-ink: #ffffff;
   --claude: #d97757;
   --codex: var(--text);
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
@@ -90,6 +105,13 @@
   --color-accent-soft: var(--accent-soft);
   --color-accent-ink: var(--accent-ink);
   --color-busy: var(--busy);
+  --color-working: var(--status-working);
+  --color-working-text: var(--status-working-text);
+  --color-waiting: var(--status-waiting);
+  --color-waiting-text: var(--status-waiting-text);
+  --color-needs: var(--status-needs);
+  --color-needs-text: var(--status-needs-text);
+  --color-needs-ink: var(--status-needs-ink);
   --color-err: var(--error);
   --color-claude: var(--claude);
   --color-codex: var(--codex);
@@ -287,7 +309,7 @@ html.theme-fade *::after {
 
 /* A light travelling along a 1px line: busy cards' top edge. */
 .edge-run {
-  background: linear-gradient(90deg, transparent, var(--busy), transparent);
+  background: linear-gradient(90deg, transparent, var(--status-working), transparent);
   background-size: 40% 100%;
   background-repeat: no-repeat;
   animation: edge-run 2.6s cubic-bezier(0.5, 0, 0.3, 1) infinite;
@@ -368,7 +390,7 @@ html.theme-fade *::after {
 
 /* "Needs you": a slow accent ring, calmer than the working pulse. */
 .needs-ring {
-  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--accent) 70%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--status-needs) 70%, transparent);
   animation: needs-ring 2.4s ease-in-out infinite;
 }
 @keyframes needs-ring {
@@ -383,16 +405,16 @@ html.theme-fade *::after {
   }
 }
 .needs-badge {
-  box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent);
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--status-needs) 45%, transparent);
   animation: needs-glow 2.4s ease-in-out infinite;
 }
 @keyframes needs-glow {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 0%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--status-needs) 0%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 18%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--status-needs) 18%, transparent);
   }
 }
 
@@ -420,10 +442,10 @@ html.theme-fade *::after {
   padding: 1px;
   background: conic-gradient(
     from var(--attn-a, 0deg),
-    color-mix(in oklab, var(--accent) 70%, transparent),
-    color-mix(in oklab, var(--accent) 12%, transparent) 25%,
-    color-mix(in oklab, var(--accent) 12%, transparent) 75%,
-    color-mix(in oklab, var(--accent) 70%, transparent)
+    color-mix(in oklab, var(--status-needs) 70%, transparent),
+    color-mix(in oklab, var(--status-needs) 12%, transparent) 25%,
+    color-mix(in oklab, var(--status-needs) 12%, transparent) 75%,
+    color-mix(in oklab, var(--status-needs) 70%, transparent)
   );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -528,7 +550,7 @@ html.theme-fade *::after {
     animation: none;
   }
   .edge-run {
-    background: var(--busy);
+    background: var(--status-working);
     opacity: 0.5;
   }
   .breathe {

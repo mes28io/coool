@@ -282,8 +282,8 @@ const rowMotion = {
 };
 
 /**
- * One session: title only. State is a single dot at the right edge (yellow working,
- * green needs you, nothing otherwise); hovering swaps it for the provider mark and the age.
+ * One session: title only. State is a single dot at the right edge (green working,
+ * blue needs you, nothing otherwise); hovering swaps it for the provider mark and the age.
  * Rows are opaque so rows that trade places slide past each other.
  */
 function Row({

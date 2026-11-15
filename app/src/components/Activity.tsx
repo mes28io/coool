@@ -335,16 +335,16 @@ export function StepLine({
         onClick && "hover:bg-hover",
         open && "bg-hover",
       )}
-      style={active ? { ["--sweep" as string]: "var(--text)" } : undefined}
+      style={active ? { ["--sweep" as string]: "var(--status-working)" } : undefined}
     >
       <span
         className={cx(
           "relative z-[1] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg",
-          waiting ? "text-accent-text" : active ? "text-busy-text" : failed ? "text-err-text" : "text-faint",
+          waiting ? "text-needs-text" : active ? "text-working-text" : failed ? "text-err-text" : "text-faint",
         )}
       >
         {waiting ? (
-          <span className="size-[7px] rounded-full bg-accent breathe" />
+          <span className="size-[7px] rounded-full bg-needs breathe" />
         ) : active ? (
           <svg width="13" height="13" viewBox="0 0 16 16" className="spin">
             <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
@@ -370,7 +370,7 @@ export function StepLine({
       )}
       {!detail && <span className="flex-1" />}
       {waiting ? (
-        <span className="shrink-0 text-small text-dim">waiting for you</span>
+        <span className="shrink-0 text-small text-needs-text">waiting for you</span>
       ) : active ? (
         <Elapsed since={since ?? null} approx={approx} className="shrink-0 text-small text-faint" />
       ) : (

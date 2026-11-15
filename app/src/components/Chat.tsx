@@ -653,11 +653,11 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, scale: 0.985, transition: { duration: 0.14 } }}
           transition={{ type: "spring", stiffness: 420, damping: 32 }}
-          className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--accent)_30%,var(--border))] bg-raised shadow-card"
+          className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
           data-approval={item.requestId}
         >
           <div className="flex items-center gap-2 px-3.5 pb-1.5 pt-3.5">
-            <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-accent-soft text-accent-text">
+            <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-needs-text">
               <ITerminal size={15} />
             </span>
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
@@ -743,11 +743,11 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, scale: 0.985, transition: { duration: 0.14 } }}
           transition={{ type: "spring", stiffness: 420, damping: 32 }}
-          className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--accent)_30%,var(--border))] bg-raised shadow-card"
+          className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
           data-question={item.requestId}
         >
           <div className="flex items-center gap-2 px-3.5 pb-1 pt-3.5">
-            <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-accent-soft text-base font-bold text-accent-text">?</span>
+            <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-base font-bold text-needs-text">?</span>
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
               {who} has {item.questions.length === 1 ? "a question" : `${item.questions.length} questions`}
             </span>

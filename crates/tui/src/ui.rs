@@ -61,8 +61,8 @@ fn provider_color(t: Theme, p: Provider) -> ratatui::style::Color {
 fn status_span(app: &App, s: Status) -> Span<'static> {
     let t = app.theme;
     match s {
-        Status::Busy => Span::styled(SPINNER[app.tick as usize % SPINNER.len()], Style::default().fg(t.busy)),
-        Status::Idle => Span::styled("●", Style::default().fg(t.accent)),
+        Status::Busy => Span::styled(SPINNER[app.tick as usize % SPINNER.len()], Style::default().fg(t.working)),
+        Status::Idle => Span::styled("●", Style::default().fg(t.waiting)),
         Status::Ended => Span::styled("○", Style::default().fg(t.dim)),
     }
 }
@@ -85,7 +85,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let sep = || Span::styled("  ", Style::default());
     spans.push(Span::styled(format!("{live} live"), Style::default().fg(t.fg)));
     spans.push(sep());
-    spans.push(Span::styled(format!("{busy} working"), Style::default().fg(if busy > 0 { t.busy } else { t.dim })));
+    spans.push(Span::styled(format!("{busy} working"), Style::default().fg(if busy > 0 { t.working } else { t.dim })));
     spans.push(sep());
     spans.push(Span::styled(format!("{agents} subagents"), Style::default().fg(if agents > 0 { t.accent2 } else { t.dim })));
     spans.push(sep());
@@ -132,7 +132,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                 };
                 let l2 = Line::from(vec![
                     Span::raw("         "),
-                    Span::styled(truncate(&l2_text, width.saturating_sub(9)), Style::default().fg(if now.is_empty() { t.dim } else { t.busy })),
+                    Span::styled(truncate(&l2_text, width.saturating_sub(9)), Style::default().fg(if now.is_empty() { t.dim } else { t.working })),
                 ]);
                 ListItem::new(Text::from(vec![Line::from(l1), l2]))
             }
@@ -151,7 +151,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
             Row::Pending(m) => {
                 let label = app.hub.managed.get(m).and_then(|x| x.as_ref()).map(|x| format!("{} · starting in {}", x.provider.label(), home_short(&x.cwd))).unwrap_or_default();
                 ListItem::new(Line::from(vec![
-                    Span::styled(SPINNER[app.tick as usize % 10], Style::default().fg(t.busy)),
+                    Span::styled(SPINNER[app.tick as usize % 10], Style::default().fg(t.working)),
                     Span::raw(" "),
                     Span::styled(label, Style::default().fg(t.fg)),
                     Span::styled(" ◆", Style::default().fg(t.accent2)),
@@ -212,7 +212,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         let (icon, color) = match a.kind {
             ActivityKind::Prompt => ("❯", t.accent),
             ActivityKind::Text => ("◆", t.fg),
-            ActivityKind::Tool => ("▸", t.busy),
+            ActivityKind::Tool => ("▸", t.working),
             ActivityKind::Agent => ("⑂", t.accent2),
             ActivityKind::Error => ("✗", t.err),
         };
@@ -280,7 +280,7 @@ fn session_info(app: &App, s: &Session) -> Vec<Line<'static>> {
         kv(t, "tokens", tokens_line(&s.tokens)),
     ];
     if let Some(c) = &s.current {
-        v.push(Line::from(vec![Span::styled(format!("{:<8}", "now"), Style::default().fg(t.dim)), Span::styled(one_line(c, 90), Style::default().fg(t.busy))]));
+        v.push(Line::from(vec![Span::styled(format!("{:<8}", "now"), Style::default().fg(t.dim)), Span::styled(one_line(c, 90), Style::default().fg(t.working))]));
     }
     if !s.agents.is_empty() {
         let running = s.agents.iter().filter(|a| !a.finished).count();

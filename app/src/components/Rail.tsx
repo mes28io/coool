@@ -64,7 +64,7 @@ function RailButton({
         {children}
         {dot && <span className="absolute right-[8px] top-[8px] size-[7px] rounded-full ring-2 ring-panel" style={{ background: dot === "bad" ? "var(--error)" : "var(--busy)" }} />}
         {!!badge && badge > 0 && (
-          <span className="absolute right-[3px] top-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-accent px-1 text-micro font-semibold leading-none text-accent-ink tnum">{badge}</span>
+          <span className="absolute right-[3px] top-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-needs px-1 text-micro font-semibold leading-none text-needs-ink tnum">{badge}</span>
         )}
       </button>
       {!hideTip && (
