@@ -51,7 +51,7 @@ export function AgentsBody({
   return (
     <div className="flex h-full flex-col" data-agents-panel="open">
       <div className="flex h-[44px] shrink-0 items-center gap-2 pl-4 pr-2">
-        <span className="text-base font-semibold text-fg">Agents</span>
+        <span className="text-base font-semibold text-fg">Jobs</span>
         <span className="min-w-0 flex-1 truncate text-small text-dim tnum" data-agents-count>
           {countsText(cards, shells.length)}
         </span>
