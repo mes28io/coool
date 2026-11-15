@@ -8,7 +8,7 @@
 //!
 //! ```sh
 //! COOOL_SELFTEST=all COOOL_SELFTEST_DIR=/tmp/coool-selftest/demo-project \
-//!   COOOL_SELFTEST_SHOTS=app/docs/screenshots target/debug/coool-app
+//!   COOOL_SELFTEST_SHOTS=app/docs/screenshots target/debug/coool
 //! ```
 //!
 //! - `COOOL_SELFTEST`: a scenario name or `all` (see `app/src/selftest.ts`).

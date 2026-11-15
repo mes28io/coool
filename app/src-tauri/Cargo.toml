@@ -5,6 +5,12 @@ edition = "2024"
 description = "coool desktop app: a workspace for running many coding agents across many projects"
 license = "MIT"
 homepage = "https://coool.sh"
+# The desktop app's executable is `coool`, so macOS shows "coool" in the Dock in dev builds too.
+default-run = "coool"
+
+[[bin]]
+name = "coool"
+path = "src/main.rs"
 
 [lib]
 name = "coool_app_lib"

@@ -9,6 +9,11 @@ readme = "../../README.md"
 keywords = ["tui", "claude", "codex", "agents", "terminal"]
 categories = ["command-line-utilities"]
 
+# `coool` is the desktop app's executable; the terminal UI is `coool-tui`.
+[[bin]]
+name = "coool-tui"
+path = "src/main.rs"
+
 [dependencies]
 coool-core = { path = "../core" }
 anyhow = "1"

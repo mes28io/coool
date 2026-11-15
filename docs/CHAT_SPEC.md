@@ -193,7 +193,7 @@ Uses the Anthropic API with a key the person supplies (never bundled, never the 
 pnpm -C app build && cargo build -p coool-app --features tauri/custom-protocol
 mkdir -p /tmp/coool-selftest/demo-project
 COOOL_SELFTEST=all COOOL_SELFTEST_DIR=/tmp/coool-selftest/demo-project \
-  COOOL_SELFTEST_SHOTS=app/docs/screenshots target/debug/coool-app
+  COOOL_SELFTEST_SHOTS=app/docs/screenshots target/debug/coool
 cat /tmp/coool-selftest/demo-project/selftest.log
 ```
 

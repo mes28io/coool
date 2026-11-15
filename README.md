@@ -32,7 +32,7 @@ pnpm dev            # browser demo on mock data
 Terminal UI:
 
 ```sh
-cargo run --release -p coool
+cargo run --release -p coool   # builds the `coool-tui` binary
 ```
 
 Tested on macOS; Linux should work.
