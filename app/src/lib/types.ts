@@ -7,7 +7,12 @@ export type ActivityKind = "prompt" | "text" | "tool" | "error" | "agent";
 export interface Activity {
   ts: string; // HH:MM:SS local
   kind: ActivityKind;
+  /** One line, ~400 columns. */
   text: string;
+  /** The whole text with line breaks (prompts, replies, errors), when the one-line form loses anything. */
+  full?: string;
+  /** What is kept is not the whole message. */
+  shortened?: boolean;
 }
 
 export interface Tokens {
@@ -244,7 +249,7 @@ export type ChatEvent = Ev &
         agents: string[];
         context_window: number | null;
       }
-    | { type: "user_message"; id: string; text: string }
+    | { type: "user_message"; id: string; text: string; steer?: boolean; note_id?: string | null }
     | { type: "text_delta"; message_id: string; text: string; parent_tool_id: string | null }
     | { type: "thinking_delta"; message_id: string; text: string; parent_tool_id: string | null }
     | { type: "assistant_message"; id: string; text: string; model: string | null; parent_tool_id: string | null }

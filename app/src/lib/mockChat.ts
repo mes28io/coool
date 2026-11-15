@@ -503,7 +503,7 @@ export class MockChat {
   notes: { id: string; text: string }[] = [];
   runningTool: string | null = null;
   abortStep = false;
-  private emitSteer(note_id: string, text: string, state: "queued" | "picked_up" | "interrupted" | "unused", tool_id: string | null) {
+  private emitSteer(note_id: string, text: string, state: "queued" | "picked_up" | "interrupted" | "unused" | "cancelled", tool_id: string | null) {
     this.emit({ type: "steer", note_id, text, state, tool_id } as unknown as Draft);
   }
   /** `now: false` waits for the next step boundary; `now: true` cuts the running step short. */
@@ -512,7 +512,7 @@ export class MockChat {
     const id = `note_${rid()}`;
     if (now) {
       this.emitSteer(id, text, "interrupted", this.runningTool);
-      this.emit({ type: "user_message", id: `u_${rid()}`, text });
+      this.emit({ type: "user_message", id: `u_${rid()}`, text, steer: true, note_id: id });
       this.abortStep = this.runningTool !== null;
     } else {
       this.notes.push({ id, text });
@@ -521,6 +521,11 @@ export class MockChat {
     return id;
   }
   steerCancel(noteId: string) {
+    const n = this.notes.find((x) => x.id === noteId);
+    if (!n) throw new Error("that note was already taken in");
+    // Codex has no way to withdraw a note once handed over; coool holds it only while an approval is pending.
+    if (this.provider === "codex" && !this.asking && !this.waiting) throw new Error("Codex already has this note");
+    this.emitSteer(noteId, n.text, "cancelled", null);
     this.notes = this.notes.filter((n) => n.id !== noteId);
   }
   /** At a step boundary: queued notes are picked up by the step that starts. */
@@ -529,7 +534,7 @@ export class MockChat {
     this.notes = [];
     for (const n of due) {
       this.emitSteer(n.id, n.text, "picked_up", toolId);
-      this.emit({ type: "user_message", id: `u_${rid()}`, text: n.text });
+      this.emit({ type: "user_message", id: `u_${rid()}`, text: n.text, steer: true, note_id: n.id });
     }
   }
 
@@ -805,9 +810,19 @@ export class MockChat {
     const f = this.files();
     const items = ["Read the current queue implementation", "Add exponential backoff to the drain loop", "Keep the order intact on retry", "Write tests for the failure path", "Run the full suite"];
     const doing = ["Reading the current queue implementation", "Adding exponential backoff to the drain loop", "Keeping the order intact on retry", "Writing tests for the failure path", "Running the full suite"];
-    const write = (st: ("pending" | "in_progress" | "completed")[]) =>
+    // Claude's CLI works through TaskCreate / TaskUpdate; the driver adds a synthetic TodoWrite after each.
+    let calls = 0;
+    const write = async (st: ("pending" | "in_progress" | "completed")[]) => {
+      if (tool === "TodoWrite") {
+        const k = calls++;
+        if (k < items.length) await this.tool(gen, "TaskCreate", `Task: ${items[k]}`, { subject: items[k], description: items[k], activeForm: doing[k] }, 80, `Task #${k + 1} created successfully`);
+        else await this.tool(gen, "TaskUpdate", "Update task", { taskId: String(calls % items.length), status: "in_progress" }, 80, "Updated task");
+      }
+      return writeList(st);
+    };
+    const writeList = (st: ("pending" | "in_progress" | "completed")[]) =>
       tool === "TodoWrite"
-        ? this.tool(gen, "TodoWrite", `${items.length} todos`, { todos: items.map((content, i) => ({ content, status: st[i], activeForm: doing[i] })) }, 120, "Todos have been modified successfully.")
+        ? this.tool(gen, "TodoWrite", `${items.length} todos`, { todos: items.map((content, i) => ({ content, status: st[i], activeForm: doing[i] })), _synthetic: true }, 120, "Todos have been modified successfully.")
         : this.tool(gen, "update_plan", `${items.length} steps`, { explanation: "Working through the queue change.", plan: items.map((step, i) => ({ step, status: st[i] })) }, 120, "Plan updated");
     const st: ("pending" | "in_progress" | "completed")[] = items.map(() => "pending");
     await this.say("I'll track this as a short list and work through it.", gen);
@@ -833,9 +848,11 @@ export class MockChat {
   /** Plan mode: the agent proposes a plan with ExitPlanMode and waits for approval. */
   private async planApproval(gen: number) {
     const f = this.files();
+    if (this.provider === "claude") this.setMode("plan"); // plan mode: approval switches to default, denial keeps it
     await this.say("I've read enough to propose a plan.", gen);
     const plan = `# Add retry with backoff\n\n1. **Read the queue**: find where \`drain()\` stops on the first failure\n2. **Add backoff**: exponential, capped at 60s\n   - keep a per-mutation attempt count\n3. **Keep the order**: a failed mutation blocks the ones behind it\n4. **Test the failure path**: drop the connection mid-drain in ${f.tests}\n5. **Run the suite**: \`${f.test}\``;
     const ok = await this.tool(gen, "ExitPlanMode", "Add retry with backoff", { plan }, 300, "User has approved your plan. You can now start coding.", { ask: true });
+    if (ok && this.provider === "claude") this.setMode("default");
     if (!ok) {
       await this.say("Understood, I'll keep planning. What should change?", gen);
       return;

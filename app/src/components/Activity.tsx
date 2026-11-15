@@ -119,7 +119,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
               {b.type === "error" && (
                 <div className="flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-base text-err-text bg-[color-mix(in_oklab,var(--error)_7%,transparent)]">
                   <IAlert size={16} className="mt-[2px] shrink-0" />
-                  <span className="selectable min-w-0 break-words">{b.a.text}</span>
+                  <span className="selectable min-w-0 whitespace-pre-wrap break-words">{bodyOf(b.a)}{shortenedOf(b.a) && <span className="text-faint"> … shortened</span>}</span>
                 </div>
               )}
               {b.type === "steps" && (
@@ -156,7 +156,7 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
           {b.type === "error" && (
             <div className="flex items-start gap-2 rounded-[8px] bg-[color-mix(in_oklab,var(--error)_7%,transparent)] px-2.5 py-1.5 text-base text-err-text">
               <IAlert size={16} className="mt-[2px] shrink-0" />
-              <span className="selectable min-w-0 break-words">{b.a.text}</span>
+              <span className="selectable min-w-0 whitespace-pre-wrap break-words">{bodyOf(b.a)}{shortenedOf(b.a) && <span className="text-faint"> … shortened</span>}</span>
             </div>
           )}
           {b.type === "steps" && <StepGroup items={b.items} agents={[]} active={false} latest={false} live={STILL} />}
@@ -166,12 +166,9 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
   );
 }
 
-/**
- * The text of a transcript reply. Today the core sends one flattened line (~400 chars); when it sends
- * the full text, change `bodyOf` (and `shortenedOf`) here: nothing else needs to move.
- */
-const bodyOf = (a: Activity): string => a.text;
-const shortenedOf = (_a: Activity): boolean => false;
+/** The text of a transcript entry: the full text when the core sends it, else the one-line form. */
+const bodyOf = (a: Activity): string => a.full ?? a.text;
+const shortenedOf = (a: Activity): boolean => !!a.shortened;
 
 function ActivityText({ a }: { a: Activity }) {
   return (
@@ -183,14 +180,15 @@ function ActivityText({ a }: { a: Activity }) {
 }
 
 function PromptBlock({ a }: { a: Activity }) {
-  return <PromptBubble text={a.text} stamp={a.ts} />;
+  return <PromptBubble text={bodyOf(a)} stamp={a.ts} shortened={shortenedOf(a)} />;
 }
 
-export function PromptBubble({ text, stamp }: { text: string; stamp?: string }) {
+export function PromptBubble({ text, stamp, shortened }: { text: string; stamp?: string; shortened?: boolean }) {
   return (
     <div className="flex flex-col items-end gap-1 pt-1">
       <div className="selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[18px] rounded-br-[6px] border border-hairline bg-raised px-4 py-3 text-prose text-fg shadow-card">
         {text}
+        {shortened && <div className="mt-1 text-small text-faint">… shortened</div>}
       </div>
       {stamp && <span className="pr-1 font-mono text-mono-small text-faint tnum">{stamp}</span>}
     </div>

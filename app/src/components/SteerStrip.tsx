@@ -3,7 +3,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import type { Chat, Note } from "../lib/chat";
-import { cancelNote, discardUnused, noteNow, sendUnused } from "../lib/steer";
+import { canCancel, cancelNote, discardUnused, noteNow, sendUnused } from "../lib/steer";
 import { IBolt, ICheck, IClose, IReturn } from "./icons";
 import { cx, ease } from "./primitives";
 import { reducedMotion } from "./StepRail";
@@ -39,14 +39,16 @@ export function SteerStrip({ chat }: { chat: Chat }) {
                       <span className="min-w-0 flex-1 truncate text-fg/85" title={n.text}>
                         {n.text}
                       </span>
-                      {!local && (
+                      {!local && canCancel(chat, n) && (
                         <button type="button" onClick={() => void noteNow(chat, n.id)} title="Deliver now: interrupt the current step" data-note-now className="flex h-[24px] shrink-0 items-center gap-1 rounded-[7px] px-1.5 text-small font-medium text-dim hover:bg-hover hover:text-fg">
                           <IBolt size={12} /> Now
                         </button>
                       )}
-                      <button type="button" onClick={() => void cancelNote(chat, n.id)} title="Remove" data-note-remove className="flex size-[24px] shrink-0 items-center justify-center rounded-[7px] text-faint hover:bg-hover hover:text-fg">
-                        <IClose size={13} />
-                      </button>
+                      {canCancel(chat, n) && (
+                        <button type="button" onClick={() => void cancelNote(chat, n.id)} title="Remove" data-note-remove className="flex size-[24px] shrink-0 items-center justify-center rounded-[7px] text-faint hover:bg-hover hover:text-fg">
+                          <IClose size={13} />
+                        </button>
+                      )}
                     </div>
                   </motion.div>
                 ))}

@@ -13,6 +13,11 @@ type Tool = Extract<ChatItem, { kind: "tool" }>;
 
 export const isPlanTool = (name: string) => /^(TodoWrite|update_plan)$/i.test(name);
 
+/** Claude's raw task-list tools: noise next to the card once the driver's synthetic `TodoWrite` carries the list. */
+export const isTaskNoise = (name: string) => /^Task(Create|Update|List|Get)$/.test(name);
+/** The driver's synthetic `TodoWrite` (built from TaskCreate / TaskUpdate). */
+export const isSyntheticPlan = (t: { name: string; input: unknown }) => /^TodoWrite$/i.test(t.name) && !!(t.input as { _synthetic?: unknown } | null)?._synthetic;
+
 const STATUS: Record<string, PlanStatus> = { pending: "pending", in_progress: "active", inprogress: "active", completed: "done", complete: "done", done: "done" };
 
 interface Item {
@@ -36,6 +41,8 @@ function itemsOf(t: Tool): Item[] | null {
 
 export interface TurnPlan {
   title: string;
+  /** Codex's `explanation`, when the latest call has one. */
+  subtitle?: string;
   steps: PlanStep[];
   phase: PlanPhase;
   startedAt: number;
@@ -49,6 +56,7 @@ export interface TurnPlan {
  */
 export function planForTurn(calls: Tool[], prompt: string, end: { ts: number; ok: boolean } | null, live: boolean): TurnPlan | null {
   let latest: Item[] | null = null;
+  let subtitle: string | undefined;
   // Step -> when it became active, from call timestamps: only steps seen going active get a duration.
   const activeAt = new Map<string, number>();
   const took = new Map<string, number>();
@@ -56,6 +64,8 @@ export function planForTurn(calls: Tool[], prompt: string, end: { ts: number; ok
     const its = itemsOf(c);
     if (!its) continue;
     latest = its;
+    const ex = (c.input as { explanation?: unknown } | null)?.explanation;
+    subtitle = typeof ex === "string" && ex.trim() ? ex.trim() : undefined;
     for (const it of its) {
       if (it.status === "active" && !activeAt.has(it.text)) activeAt.set(it.text, c.ts);
       if (it.status === "done" && activeAt.has(it.text) && !took.has(it.text)) took.set(it.text, Math.max(0, c.ts - activeAt.get(it.text)!));
@@ -71,7 +81,7 @@ export function planForTurn(calls: Tool[], prompt: string, end: { ts: number; ok
     status: it.status === "active" && ended ? (failedTurn ? "failed" : "pending") : it.status,
     durationMs: took.get(it.text),
   }));
-  return { title: shortTitle(prompt, 64) || "Plan", steps, phase, startedAt: calls[0].ts, endedAt: finished ? (calls[calls.length - 1].endTs ?? calls[calls.length - 1].ts) : end?.ts };
+  return { title: shortTitle(prompt, 64) || "Plan", subtitle, steps, phase, startedAt: calls[0].ts, endedAt: finished ? (calls[calls.length - 1].endTs ?? calls[calls.length - 1].ts) : end?.ts };
 }
 
 // ---------- plan approval (ExitPlanMode) ----------

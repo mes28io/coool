@@ -16,7 +16,7 @@ import { CheckpointsCard } from "./Checkpoints";
 import { RailItem, RailList, reducedMotion } from "./StepRail";
 import { deriveCheckpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
-import { isPlanTool, parsePlan, planForTurn } from "../lib/plan";
+import { isPlanTool, isSyntheticPlan, isTaskNoise, parsePlan, planForTurn } from "../lib/plan";
 import { PlanCard } from "./PlanCard";
 import { NoteRows } from "./SteerStrip";
 import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ISpark, ITerminal } from "./icons";
@@ -45,6 +45,14 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
   const blocks: Block[] = [];
   let prompt = "";
   let plan: Extract<Block, { type: "plan" }> | null = null;
+  // Turns whose task list comes from the driver's synthetic TodoWrite: their raw Task* steps are hidden.
+  const synthetic = new Set<number>();
+  for (let i = 0, turn = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === "prompt") turn++;
+    else if (it.kind === "tool" && !it.parent && isSyntheticPlan(it)) synthetic.add(turn);
+  }
+  let turnNo = 0;
   for (const it of items) {
     const parent = "parent" in it ? it.parent : null;
     if (parent) {
@@ -54,7 +62,9 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
       continue;
     }
     if (it.kind === "tool" && QUESTION_TOOLS.test(it.name)) continue;
+    if (it.kind === "tool" && isTaskNoise(it.name) && synthetic.has(turnNo)) continue;
     if (it.kind === "prompt") {
+      turnNo++;
       prompt = it.text;
       plan = null;
     }
@@ -95,6 +105,7 @@ export function ChatTimeline({
   if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const working = chat.state !== "idle" && chat.running;
   // Checkpoints card (one per turn), shown from two checkpoints on.
@@ -106,7 +117,7 @@ export function ChatTimeline({
     const block = el?.querySelector<HTMLElement>(`[data-block="${CSS.escape(key)}"]`);
     if (!el || !block) return;
     stick.current = false;
-    const delta = block.getBoundingClientRect().top - el.getBoundingClientRect().top - 64;
+    const delta = block.getBoundingClientRect().top - el.getBoundingClientRect().top - ((bar.current?.offsetHeight ?? 0) + 16);
     el.scrollTo({ top: el.scrollTop + delta, behavior: reducedMotion() ? "auto" : "smooth" });
     const target = (block.firstElementChild as HTMLElement | null) ?? block;
     const ring = "color-mix(in oklab, var(--text) 40%, transparent)";
@@ -212,14 +223,17 @@ export function ChatTimeline({
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }}
     >
-      {showCps && (
-        <div className="pointer-events-none sticky top-0 z-20 mx-auto h-0 w-full max-w-[700px]">
-          <div className="pointer-events-auto">
-            <CheckpointsCard chat={chat} cps={cps} onJump={jump} onFiles={(k) => openChanges(chat.id, k)} inset={compact ? "left-4 right-4" : "left-8 right-8"} />
+      <div ref={content}>
+        {showCps && (
+          // Opaque from the header's bottom edge to the bar's bottom edge, then a short fade; in flow, so an expanded bar pushes the timeline down.
+          <div ref={bar} className="sticky -top-1 z-20 bg-bg pt-1" data-checkpoints-sticky>
+            <div className={cx("mx-auto max-w-[700px] pb-2 pt-2", compact ? "px-4" : "px-8")}>
+              <CheckpointsCard chat={chat} cps={cps} onJump={jump} onFiles={(k) => openChanges(chat.id, k)} />
+            </div>
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 top-full h-5" style={{ background: "linear-gradient(to bottom, var(--bg), transparent)" }} />
           </div>
-        </div>
-      )}
-      <div ref={content} className={cx("mx-auto flex max-w-[700px] flex-col pb-8", showCps ? "pt-[60px]" : "pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
+        )}
+        <div className={cx("mx-auto flex max-w-[700px] flex-col pb-8", showCps ? "pt-3" : "pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
         {earlier && earlier.length > 0 && <Earlier rows={earlier} />}
         {!chat.ready && blocks.length === 0 && (
           <div className="flex min-h-[40vh] items-center justify-center">
@@ -249,6 +263,7 @@ export function ChatTimeline({
             </motion.div>
           )}
         </AnimatePresence>
+        </div>
       </div>
     </div>
   );
@@ -258,7 +273,7 @@ function PlanBlock({ b, chat }: { b: Extract<Block, { type: "plan" }>; chat: Cha
   const live = chat.running && chat.state !== "idle" && !b.end;
   const p = planForTurn(b.calls, b.prompt, b.end, live);
   if (!p) return null;
-  return <PlanCard title={p.title} steps={p.steps} phase={p.phase} startedAt={p.startedAt} endedAt={p.endedAt} data-turn-plan={p.phase} />;
+  return <PlanCard title={p.title} subtitle={p.subtitle} steps={p.steps} phase={p.phase} startedAt={p.startedAt} endedAt={p.endedAt} data-turn-plan={p.phase} />;
 }
 
 /** Claude's plan-mode proposal (the ExitPlanMode permission request) as a plan card. */
@@ -267,7 +282,13 @@ function PlanApproval({ item, chat }: { item: Perm; chat: Chat }) {
   const md = typeof raw === "string" ? raw : item.summary;
   const p = useMemo(() => parsePlan(md), [md]);
   const open = item.answer === null && chat.running;
-  const phase = open ? "proposed" : item.answer === "deny" ? "declined" : "approved";
+  // Answered elsewhere (a replay): the ExitPlanMode result says whether the plan was approved.
+  let settled: "approved" | "kept" = item.answer === "deny" ? "kept" : "approved";
+  if (item.answer === "answered") {
+    const t = chat.items.find((x) => x.kind === "tool" && x.name === "ExitPlanMode" && x.ts >= item.ts - 50) as Tool | undefined;
+    if (t?.endTs && !/has approved your plan/i.test(t.output)) settled = "kept";
+  }
+  const phase = open ? "proposed" : settled;
   return (
     <PlanCard
       title={p.title}

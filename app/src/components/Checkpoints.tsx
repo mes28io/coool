@@ -91,7 +91,7 @@ function edgesOf(list: Checkpoint[]): Edge[] {
   return out;
 }
 
-export function CheckpointsCard({ chat, cps, onJump, onFiles, inset }: { chat: Chat; cps: Derived; onJump: (key: string) => void; onFiles: (key: string) => void; inset: string }) {
+export function CheckpointsCard({ chat, cps, onJump, onFiles }: { chat: Chat; cps: Derived; onJump: (key: string) => void; onFiles: (key: string) => void }) {
   const { list, attempts } = cps;
   const [open, setOpen] = useState(() => remembered.get(chat.id) ?? false);
   const toggle = () => {
@@ -137,7 +137,7 @@ export function CheckpointsCard({ chat, cps, onJump, onFiles, inset }: { chat: C
       initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reducedMotion() ? 0 : 0.28, ease }}
-      className={cx("absolute top-2 z-20 overflow-hidden rounded-[14px] border border-hairline bg-raised shadow-card", inset)}
+      className={cx("relative overflow-hidden rounded-[14px] border border-hairline bg-raised shadow-card")}
       data-checkpoints={list.length}
     >
       <button type="button" onClick={toggle} aria-expanded={open} className="group flex h-[36px] w-full items-center gap-2 pl-3.5 pr-3 text-left text-base transition-colors duration-150 hover:bg-hover">

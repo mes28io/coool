@@ -11,7 +11,7 @@ import { Button, cx, ease } from "./primitives";
 import { RAIL, reducedMotion } from "./StepRail";
 
 export type PlanStatus = "pending" | "active" | "done" | "failed" | "skipped";
-export type PlanPhase = "proposed" | "running" | "stopped" | "done" | "approved" | "declined";
+export type PlanPhase = "proposed" | "running" | "stopped" | "done" | "approved" | "kept";
 
 export interface PlanStep {
   title: string;
@@ -153,6 +153,7 @@ export function PlanCard({
   steps,
   phase,
   body,
+  subtitle,
   startedAt,
   endedAt,
   onApprove,
@@ -165,6 +166,8 @@ export function PlanCard({
   phase: PlanPhase;
   /** Shown instead of steps when the plan has no list to number. */
   body?: ReactNode;
+  /** A dim line under the title (Codex's explanation of the plan). */
+  subtitle?: string;
   startedAt?: number;
   endedAt?: number;
   /** Proposed phase only: when absent, no buttons are shown. */
@@ -251,6 +254,11 @@ export function PlanCard({
           <span>Plan{steps.length > 0 ? ` · ${steps.length} ${steps.length === 1 ? "step" : "steps"}` : ""}</span>
         </div>
         <div className="mt-1 text-title font-medium tracking-[-0.01em] text-fg">{title}</div>
+        {subtitle && (
+          <div className="mt-0.5 line-clamp-2 text-small text-dim" title={subtitle} data-plan-subtitle>
+            {subtitle}
+          </div>
+        )}
       </div>
       <div className="px-3.5 pb-1 pt-1.5">
         {steps.length > 0 ? (

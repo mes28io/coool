@@ -1,11 +1,12 @@
 // Steering: notes sent to the agent while a turn runs.
 //
-// Client calls (the backend contract, coded against; absent => local fallback):
+// Client calls (CHAT_SPEC "Steering"; if the backend lacks chat_steer the local fallback below is used):
 //   chat_steer({ id, text, now }) -> noteId   now=false: deliver at the next step boundary;
 //                                             now=true: interrupt the current step and deliver at once
 //   chat_steer_cancel({ id, noteId })
 // Events (the source of truth for note state, reconciled by note_id; see chat.ts):
-//   { type: "steer", note_id, text, state: "queued"|"picked_up"|"interrupted"|"unused", tool_id }
+//   { type: "steer", note_id, text, state: "queued"|"picked_up"|"interrupted"|"unused"|"cancelled", tool_id }
+// plus user_message { steer, note_id } echoing a delivered note (handled in chat.ts).
 // Fallback when chat_steer is not available: now=false keeps the note in the client and sends
 // it as the next prompt when the turn ends; now=true interrupts (chat_interrupt), waits for the
 // turn to end, then sends the note as a prompt.
@@ -47,7 +48,8 @@ export async function steer(chat: Chat, text: string, now: boolean): Promise<voi
   if (!missing) {
     try {
       const id = await api().chatSteer(chat.id, t, now);
-      st.noteAdd(chat.id, { id, text: t, state: now ? "interrupted" : "queued", toolId: now ? toolNow(chat) : null, ts: Date.now() });
+      // The events decide the state (a `now` note acts like a queued one while an approval is pending).
+      st.noteAdd(chat.id, { id, text: t, state: "queued", toolId: null, ts: Date.now() });
       return;
     } catch (e) {
       if (!isNotAvailable(e)) {
@@ -67,17 +69,33 @@ export async function steer(chat: Chat, text: string, now: boolean): Promise<voi
   whenIdle(chat.id, () => void chatCall(chat.id, () => api().chatSend(chat.id, t)));
 }
 
-export async function cancelNote(chat: Chat, noteId: string) {
+/** Withdraw a note. False when the backend refused (the note stays queued and a toast says why). */
+export async function cancelNote(chat: Chat, noteId: string): Promise<boolean> {
   const note = chat.notes.find((x) => x.id === noteId);
-  useChats.getState().noteDrop(chat.id, noteId);
-  if (note && !note.local) await api().chatSteerCancel(chat.id, noteId).catch(() => {});
+  if (!note) return true;
+  if (note.local) {
+    useChats.getState().noteDrop(chat.id, noteId);
+    return true;
+  }
+  try {
+    await api().chatSteerCancel(chat.id, noteId);
+    useChats.getState().noteDrop(chat.id, noteId); // the `cancelled` event removes it too
+    return true;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    useStore.getState().toast(chat.provider === "codex" ? "Codex already has this note" : /taken in|already|not queued|no such/i.test(msg) ? "The agent already took this note in" : msg, "info");
+    return false;
+  }
 }
+
+/** Codex can withdraw a note only while coool holds it: while an approval or a question is pending. */
+export const canCancel = (chat: Chat, n: { local?: boolean }) => chat.provider !== "codex" || !!n.local || !!chat.pendingPermission || !!chat.pendingQuestion;
 
 /** Deliver a queued note immediately: cancel it and send its text again with now=true. */
 export async function noteNow(chat: Chat, noteId: string) {
   const note = chat.notes.find((x) => x.id === noteId);
   if (!note) return;
-  await cancelNote(chat, noteId);
+  if (!(await cancelNote(chat, noteId))) return;
   await steer(chat, note.text, true);
 }
 

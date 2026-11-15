@@ -203,7 +203,7 @@ export function mockBackend(): Backend {
   });
   s1.activity.push(act("agent", "Agent · Audit xterm resize handling", now - 34_000));
 
-  add(
+  const c7 = add(
     session({
       provider: "codex",
       id: "c7d1e9",
@@ -215,6 +215,19 @@ export function mockBackend(): Backend {
       updated: now - 4 * 60_000,
     }),
     "coool",
+  );
+  // Full text for a read-only session: a multi-line prompt, a long Markdown reply with a table, and a cut one.
+  const oneLine = (t: string) => t.replace(/\s+/g, " ").trim();
+  const fullAct = (kind: ActivityKind, full: string, t: number, shortened?: boolean): Activity => ({ ...act(kind, oneLine(full).slice(0, 400), t), full, ...(shortened ? { shortened: true } : {}) });
+  c7.activity.push(
+    fullAct("prompt", "Why does the drain loop stall after a failed mutation?\n\nContext:\n- it only happens offline\n- the queue is ordered, so a failure blocks the rest\n\nPlease check src/sync/queue.rs and tell me what to change.", now - 150_000),
+    fullAct(
+      "text",
+      "The loop stops on the first `Err` because `drain()` returns early instead of scheduling a retry.\n\nWhat I checked:\n\n| File | Line | Finding |\n|---|---:|---|\n| `src/sync/queue.rs` | 88 | `?` leaves the loop on any error |\n| `src/sync/retry.rs` | 14 | backoff exists but is never called |\n\nSuggested change:\n\n1. Catch the error in `drain()` and record the attempt.\n2. Wait `min(2^n, 60)` seconds before the next try.\n3. Keep the failed item at the head so order is preserved.\n\n```rust\nif let Err(e) = send(&m).await {\n    m.attempts += 1;\n    sleep(backoff(m.attempts)).await;\n    continue;\n}\n```\n\nNothing was changed; this is read-only analysis.",
+      now - 140_000,
+    ),
+    fullAct("prompt", "Now paste the whole retry module with comments so I can review it offline.", now - 100_000),
+    fullAct("text", "Here is the start of the module. The reply is long, so only the first part is kept:\n\n```rust\n// retry.rs\npub fn backoff(n: u32) -> Duration {\n    Duration::from_secs(2u64.pow(n.min(6)))\n}\n```\n\n(the rest of the module follows in the original transcript)", now - 90_000, true),
   );
 
   add(

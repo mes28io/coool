@@ -50,7 +50,7 @@ export type ChatItem =
   | { kind: "exited"; key: string; ts: number; code: number | null };
 
 /** A steering note: text sent to the agent while it works (see lib/steer.ts). */
-export type NoteState = "queued" | "picked_up" | "interrupted" | "unused";
+export type NoteState = "queued" | "picked_up" | "interrupted" | "unused" | "cancelled";
 export interface Note {
   id: string;
   text: string;
@@ -60,11 +60,13 @@ export interface Note {
   ts: number;
   /** Fallback only: held in the client until the turn ends (the backend has no chat_steer). */
   local?: boolean;
-  /** The matching `user_message` echo was already swallowed. */
+  /** The matching `user_message` echo was already handled. */
   echoed?: boolean;
+  /** Delivered as an ordinary prompt (idle chat, a missed step boundary, or no step to attach to): its echo is a normal prompt bubble. */
+  asPrompt?: boolean;
 }
 
-/** The backend's `steer` event (CHAT_SPEC addition, not yet in lib/types.ts). */
+/** The backend's `steer` event (CHAT_SPEC "Steering"). */
 export interface SteerEvent {
   seq: number;
   ts: number;
@@ -126,6 +128,8 @@ export interface Chat {
   pendingQuestion: string | null;
   /** Steering notes for this chat, oldest first. */
   notes: Note[];
+  /** Notes withdrawn with chat_steer_cancel: never shown again, even if a late reply re-adds them. */
+  cancelled: string[];
   /** Parent of the most recent assistant output, to attribute the next `usage`. */
   lastParent: string | null;
   replayed: boolean;
@@ -165,6 +169,7 @@ export function emptyChat(id: number, info?: Partial<ChatInfo>): Chat {
     pendingPermission: null,
     pendingQuestion: null,
     notes: [],
+    cancelled: [],
     lastParent: null,
     replayed: false,
   };
@@ -204,18 +209,29 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
     const key = `${e.type}:${e.seq}`;
     if ((e as { type: string }).type === "steer") {
       const s = e as unknown as SteerEvent;
-      // The step it attached to; unknown -> the last top-level step so far.
+      if (s.state === "cancelled") {
+        c = { ...c, notes: c.notes.filter((n) => n.id !== s.note_id), cancelled: c.cancelled.includes(s.note_id) ? c.cancelled : [...c.cancelled, s.note_id] };
+        continue;
+      }
+      if (c.cancelled.includes(s.note_id)) continue;
+      const delivered = s.state === "picked_up" || s.state === "interrupted";
+      // The step it attached to; `interrupted` with none (the model was writing text) -> the turn's last
+      // top-level step. `picked_up` with none is an ordinary prompt (idle chat, or a missed step boundary).
       let toolId = s.tool_id;
-      if (!toolId && s.state !== "queued" && s.state !== "unused") {
-        const a = items ?? c.items;
-        for (let i = a.length - 1; i >= 0 && !toolId; i--) {
-          const it = a[i];
-          if (it.kind === "tool" && !it.parent) toolId = it.id;
-          if (it.kind === "prompt") break;
+      let asPrompt = false;
+      if (delivered && !toolId) {
+        if (s.state === "interrupted") {
+          const a = items ?? c.items;
+          for (let i = a.length - 1; i >= 0 && !toolId; i--) {
+            const it = a[i];
+            if (it.kind === "tool" && !it.parent) toolId = it.id;
+            if (it.kind === "prompt" || it.kind === "turn") break;
+          }
         }
+        asPrompt = !toolId;
       }
       const cur = c.notes.find((n) => n.id === s.note_id);
-      const note: Note = { ...(cur ?? { id: s.note_id, ts: s.ts }), text: s.text || cur?.text || "", state: s.state, toolId: toolId ?? cur?.toolId ?? null, local: false };
+      const note: Note = { ...(cur ?? { id: s.note_id, ts: s.ts }), text: s.text || cur?.text || "", state: s.state, toolId: toolId ?? (delivered ? null : (cur?.toolId ?? null)), asPrompt, local: false };
       c = { ...c, notes: cur ? c.notes.map((n) => (n.id === s.note_id ? note : n)) : [...c.notes, note] };
       continue;
     }
@@ -236,23 +252,12 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         };
         break;
       case "user_message": {
-        // A steering note arrives as a user message too; it is shown under its step, not as a prompt.
-        if (c.turnStart !== null) {
-          const a = items ?? c.items;
-          let hasStep = false;
-          for (let i = a.length - 1; i >= 0; i--) {
-            const it = a[i];
-            if (it.kind === "prompt") break;
-            if (it.kind === "tool" && !it.parent) {
-              hasStep = true;
-              break;
-            }
-          }
-          const n = hasStep ? c.notes.find((x) => !x.echoed && x.text.trim() === e.text.trim() && x.state !== "unused") : undefined;
-          if (n) {
-            c = { ...c, notes: c.notes.map((x) => (x === n ? { ...x, echoed: true } : x)) };
-            break;
-          }
+        // A delivered steering note is echoed as a user message too (`steer: true`, with its note id): it is
+        // shown under its step, not as a prompt, unless it was delivered as an ordinary prompt.
+        const n = e.note_id ? c.notes.find((x) => x.id === e.note_id) : undefined;
+        if (n) {
+          c = { ...c, notes: c.notes.map((x) => (x === n ? { ...x, echoed: true } : x)) };
+          if (!n.asPrompt && e.steer !== false) break;
         }
         its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts });
         c = { ...c, prompts: c.prompts[c.prompts.length - 1] === e.text ? c.prompts : [...c.prompts, e.text].slice(-200), turnStart: c.turnStart ?? e.ts };
@@ -403,8 +408,8 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           }
         }
         its().push({ kind: "turn", key, ts: e.ts, durationMs: e.duration_ms, ok: e.ok });
-        // Notes the agent never reached are neither sent nor dropped: they wait for the person.
-        c = { ...c, turnStart: null, notes: c.notes.some((n) => n.state === "queued" && !n.local) ? c.notes.map((n) => (n.state === "queued" && !n.local ? { ...n, state: "unused" as const } : n)) : c.notes };
+        // Notes the agent never reached arrive as `steer` events with state "unused" (they wait for the person).
+        c = { ...c, turnStart: null };
         break;
       case "notice":
         its().push({ kind: "notice", key, level: e.level, text: e.text, needsTerminal: e.needs_terminal, ts: e.ts });
@@ -546,7 +551,7 @@ export const useChats = create<ChatStore>((set) => ({
       const c = s.chats[id];
       if (!c) return s;
       // An event may have beaten the command's reply: keep the event's state.
-      return { chats: { ...s.chats, [id]: { ...c, notes: c.notes.some((x) => x.id === n.id) ? c.notes : [...c.notes, n] } } };
+      return { chats: { ...s.chats, [id]: { ...c, notes: c.notes.some((x) => x.id === n.id) || c.cancelled.includes(n.id) ? c.notes : [...c.notes, n] } } };
     }),
   noteDrop: (id, noteId) =>
     set((s) => {

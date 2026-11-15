@@ -5,7 +5,7 @@
 // (see app/src-tauri/src/selftest.rs for how to run it).
 //
 // Scenarios (COOOL_SELFTEST=all, or a comma list): stream, approval, interrupt,
-// model, slash, question, resume, codex, insights, quit.
+// model, slash, question, steer, markdown, resume, codex, insights, quit.
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { newChat } from "./lib/actions";
@@ -22,7 +22,7 @@ interface Config {
 }
 
 const PROMPT_BLUE = "Write three short sentences about the colour blue. Plain text, no lists, and keep every sentence under twelve words so the whole reply stays brief.";
-const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "origins", "pty", "usage", "insights", "quit"];
+const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "steer", "markdown", "resume", "codex", "origins", "pty", "usage", "insights", "quit"];
 const CLAUDE_MODEL = "haiku";
 const CODEX_MODEL = "gpt-5.6-luna";
 
@@ -108,8 +108,8 @@ function type(text: string) {
   set.call(el, text);
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
-function key(k: string, el: Element = composer()) {
-  el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+function key(k: string, el: Element = composer(), mods: KeyboardEventInit = {}) {
+  el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...mods }));
 }
 async function say(text: string) {
   type(text);
@@ -502,6 +502,111 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (!/Apple, Pear/.test(out) || !/Medium/.test(out)) throw new Fail(`tool result: ${out.slice(0, 120)}`);
       await shot("question-answered");
       return out.slice(0, 110);
+    });
+  },
+
+  /** Steering notes against the real Claude CLI: queued -> picked up under a step, "now" -> interrupted, unused after Stop. */
+  async steer(ctx) {
+    const note = (s: string) => $all("[data-chat-timeline]").map((t) => t.textContent ?? "").join(" ").split(s).length - 1;
+    const running = (id: number) => items(id).find((i) => i.kind === "tool" && !i.parent && i.endTs === null) as Extract<ChatItem, { kind: "tool" }> | undefined;
+    const prompts = (id: number) => items(id).filter((i) => i.kind === "prompt").length;
+    const notes = (id: number) => chat(id)?.notes ?? [];
+    // Bash asks; answer every approval with Allow once so the steps are not blocked.
+    const allow = setInterval(() => {
+      const c = $("[data-approval]");
+      if (c) button("Allow once", c)?.click();
+    }, 300);
+    try {
+      let id = 0;
+      const N1 = "Keep the final reply to one word.";
+      await step("a note sent during a step is queued under 'Queued for the next step'", async () => {
+        id = await startClaude(ctx, "Run these three shell commands one at a time, each as its own tool call, never in parallel: sleep 3; sleep 3; sleep 3. Then reply done.");
+        await waitFor("the first step to run", () => running(id), 90_000);
+        await say(N1);
+        const strip = await waitFor("the queued strip", () => $("[data-steer-queued]"), 5_000);
+        if (!/Queued for the next step/.test(strip.textContent ?? "")) throw new Fail(`strip reads "${strip.textContent?.trim()}"`);
+        if (!strip.textContent?.includes(N1)) throw new Fail("the strip does not show the note");
+        await shot("steer-queued");
+        return `strip: "${strip.textContent?.trim().slice(0, 60)}"`;
+      });
+      await step("it leaves the strip and appears under a step as Picked up, with no prompt bubble of its own", async () => {
+        const n = await waitFor("the note to be picked up", () => notes(id).find((x) => x.state === "picked_up"), 30_000);
+        await waitFor("the strip to empty", () => !$("[data-steer-queued]"), 5_000);
+        const row = await waitFor("the Picked up row", () => $all('[data-note="picked_up"]').find((r) => r.textContent?.includes(N1)), 8_000);
+        if (!/Picked up/.test(row.textContent ?? "")) throw new Fail(`row reads "${row.textContent}"`);
+        if (!n.toolId) throw new Fail("the note is not attached to a step");
+        await shot("steer-picked-up");
+        await sleep(1500); // the echo has arrived by now
+        if (prompts(id) !== 1) throw new Fail(`${prompts(id)} prompt bubbles in the store`);
+        if (note(N1) !== 1) throw new Fail(`the note text appears ${note(N1)}x in the timeline`);
+        return `attached to step ${n.toolId.slice(0, 10)}…, ${prompts(id)} prompt bubble`;
+      });
+      await step("a note sent with Cmd+Enter during a step interrupts it ('Interrupted')", async () => {
+        // A later step must be running (the chat may already be past the three commands).
+        if (!(await waitFor("a step to run", () => running(id) ?? (chat(id)?.state === "idle" ? true : null), 45_000).then((v) => v !== true)))
+          await say("Run the shell command sleep 8, then reply done.");
+        await waitFor("a step to run", () => running(id), 60_000);
+        const N2 = "Stop that and reply with only the word halted.";
+        type(N2);
+        await sleep(60);
+        key("Enter", composer(), { metaKey: true });
+        const row = await waitFor("the Interrupted row", () => $all('[data-note="interrupted"]').find((r) => r.textContent?.includes(N2)), 20_000);
+        if (!/Interrupted/.test(row.textContent ?? "")) throw new Fail(`row reads "${row.textContent}"`);
+        await shot("steer-interrupted");
+        await waitFor("the note's own turn to answer", () => chat(id)?.state === "idle" && /halted/i.test(lastText(id)?.text ?? ""), 120_000);
+        return `row: "${row.textContent?.trim().slice(0, 60)}"`;
+      });
+      await step("a withdrawn note leaves the strip for good; a note still queued at Stop is not sent ('weren't used': Send now / Discard)", async () => {
+        const n = turnEnds(id).length;
+        await say("Run the shell command sleep 12, then reply done.");
+        await waitFor("the step to run", () => running(id), 90_000);
+        const A = "First note, to be withdrawn.";
+        await say(A);
+        await waitFor("the first note queued", () => $("[data-steer-queued]")?.textContent?.includes(A), 5_000);
+        $("[data-note-remove]")!.click();
+        await waitFor("the strip to empty", () => !$("[data-steer-queued]"), 5_000);
+        if (note(A)) throw new Fail("a withdrawn note is in the timeline");
+        const B = "Second note, never reached.";
+        await say(B);
+        await waitFor("the second note queued", () => $("[data-steer-queued]")?.textContent?.includes(B), 5_000);
+        $('button[title="Stop this turn (Esc)"]')!.click();
+        const strip = await waitFor("the unused strip", () => $("[data-steer-unused]"), 30_000);
+        if (!/n't used/.test(strip.textContent ?? "") || !button("Send now", strip) || !button("Discard", strip)) throw new Fail(`strip reads "${strip.textContent}"`);
+        await waitFor("the chat to be idle", () => chat(id)?.state === "idle", 30_000);
+        await shot("steer-unused");
+        if (notes(id).some((x) => x.text === A)) throw new Fail("the withdrawn note came back");
+        button("Discard", strip)!.click();
+        await waitFor("the strip to go", () => !$("[data-steer-unused]"), 5_000);
+        if (turnEnds(id).length !== n + 1) throw new Fail(`${turnEnds(id).length - n} turns ended, expected 1`);
+        return `"${strip.textContent?.trim().slice(0, 50)}"; discarded; nothing sent`;
+      });
+    } finally {
+      clearInterval(allow);
+    }
+  },
+
+  /** Markdown in a real reply: bold with numbers, a table, a code block. */
+  async markdown(ctx) {
+    await step("a reply is rendered as Markdown: strong, table, code block, no literal syntax", async () => {
+      const doc = "Only **2.5 GB free of 460 GB**.\n\n| Item | Size |\n|---|---|\n| Cache | 10 GB |\n| Logs | 2 GB |\n\n```sh\ndu -sh .\n```";
+      const id = await startClaude(ctx, `Reply with exactly this markdown and nothing else:\n\n${doc}`);
+      await nextTurn(id, 0);
+      const find = () => {
+        const strong = $all("[data-chat-timeline] strong").find((e) => e.textContent === "2.5 GB free of 460 GB");
+        const block = strong?.closest("[data-block]") as HTMLElement | null;
+        const table = block?.querySelector("table");
+        return strong && block && table && table.querySelectorAll("th, td").length === 6 && block.querySelector("pre") ? { strong, block, cells: 6 } : null;
+      };
+      const got = await waitFor("a rendered reply (strong, 6-cell table, pre)", find, 10_000).catch(async (e) => {
+        const strong = $all("[data-chat-timeline] strong").find((x) => x.textContent === "2.5 GB free of 460 GB");
+        const html = ((strong?.closest("[data-block]") as HTMLElement | null)?.innerHTML ?? "").slice(-500);
+        throw new Fail(`${e.message}; strong ${strong ? "present" : "missing"}; html tail ${JSON.stringify(html)}; reply ${JSON.stringify(lastText(id)?.text)}; timeline ${JSON.stringify(($("[data-chat-timeline]")?.textContent ?? "").slice(-300))}`);
+      });
+      const { strong, block, cells } = got;
+      const txt = block.textContent ?? "";
+      if (txt.includes("**") || txt.includes("|---|")) throw new Fail(`literal markdown left: "${txt.slice(0, 80)}"`);
+      await shot("markdown");
+      return `strong "${strong.textContent}", table ${cells} cells, pre present, no ** or |---|`;
     });
   },
 
