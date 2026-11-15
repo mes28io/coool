@@ -222,9 +222,16 @@ html.theme-fade *::after {
    Custom ::-webkit-scrollbar rules otherwise force an always-visible bar in WKWebView. */
 .scroll {
   overflow: auto;
+  /* Reserve the scrollbar's width up front: otherwise content that starts to overflow (a card expanding)
+     makes the bar appear, the content narrows by its width and every truncated line re-wraps. */
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
   transition: scrollbar-color 0.3s;
+}
+/* Horizontal-only scrollers (code blocks) don't need a vertical gutter. */
+.scroll.overflow-x-auto {
+  scrollbar-gutter: auto;
 }
 .scroll:hover,
 .scroll.is-scrolling {
