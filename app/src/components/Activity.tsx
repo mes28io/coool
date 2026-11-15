@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, Session } from "../lib/types";
-import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
+import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, thinkingWord, tsToMs } from "../lib/format";
 import { useStore, type Since } from "../store";
 import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
 import { Elapsed, cx, ease, StatusDot } from "./primitives";
@@ -185,7 +185,10 @@ export function PromptBubble({ text, stamp, shortened }: { text: string; stamp?:
   );
 }
 
-export function ThinkingRow({ since, approx, label = "Thinking" }: { since: number | null; approx?: boolean; label?: string }) {
+export function ThinkingRow({ since, approx, label: given }: { since: number | null; approx?: boolean; label?: string }) {
+  // A fresh word per thinking stretch, held for as long as that stretch lasts.
+  const word = useMemo(() => thinkingWord(since), [since]);
+  const label = given ?? word;
   return (
     <div className="flex items-center gap-2.5 py-1 text-base">
       <span className="relative flex size-[22px] items-center justify-center">

@@ -134,3 +134,22 @@ export function shortDetail(detail: string): string {
   const parts = detail.split("/").filter(Boolean);
   return parts.length <= 2 ? detail : parts.slice(-2).join("/");
 }
+
+
+/**
+ * A word for "the model is thinking", in the spirit of the CLIs' own spinners. One word per
+ * thinking stretch: pass something stable for that stretch (its start time, the session's
+ * last update) so the word does not change while it lasts.
+ */
+const THINKING_WORDS = [
+  "Thinking", "Pondering", "Musing", "Architecting", "Brewing", "Mulling", "Sketching", "Plotting", "Untangling", "Weighing",
+  "Noodling", "Composing", "Mapping", "Distilling", "Tinkering", "Conjuring", "Scheming", "Reasoning", "Percolating", "Simmering",
+  "Wrangling", "Chiselling", "Assembling", "Puzzling", "Ruminating", "Deliberating", "Charting", "Forging", "Crafting", "Deciphering",
+  "Marinating", "Contemplating", "Orchestrating", "Sifting", "Calibrating", "Whittling",
+];
+export function thinkingWord(seed: number | string | null | undefined): string {
+  const str = String(seed ?? 0);
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+  return THINKING_WORDS[(h >>> 0) % THINKING_WORDS.length];
+}

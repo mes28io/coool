@@ -16,10 +16,11 @@ import { AgentsPanel } from "./AgentsPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IClose, IPlay, ISidebar, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IPlay, ISidebar, ITerminal } from "./icons";
 import { ModelsChip, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark, StatusPill, Ticker, type UiStatus } from "./primitives";
+import { modelLabel } from "../lib/models";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -343,24 +344,43 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
 
 function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: string; compact: boolean }) {
   const ended = session.status === "ended";
+  const model = session.model ? modelLabel(session.model) : null;
+  // The same box as the chat composer, shown unavailable: coool can read this session but not type into it.
   return (
     <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
-      <div className="mx-auto flex max-w-[700px] items-center gap-3 rounded-[14px] border border-dashed border-line px-4 py-2.5">
-        <span className="min-w-0 flex-1 text-base text-dim">
-          {ended ? <>This session has ended. Resume it here to keep going in a chat.</> : <>Running outside coool. When it ends you can resume it here.</>}
-        </span>
-        {ended && session.id && (
-          <>
-            <Button variant="ghost" onClick={() => resumeSession(session, leaf, { terminal: true })} title="Resume in the CLI's own terminal UI">
-              <ITerminal size={15} />
-              In terminal
-            </Button>
-            <Button variant="primary" onClick={() => resumeSession(session, leaf)}>
-              <IPlay size={14} />
-              Resume here
-            </Button>
-          </>
-        )}
+      <div
+        aria-disabled="true"
+        className="mx-auto max-w-[700px] cursor-not-allowed rounded-[20px] border border-line bg-raised/60 px-3.5 pb-2.5 pt-3.5 shadow-card"
+        title={ended ? "This session has ended" : "This session runs outside coool, so you can't type into it here"}
+      >
+        <div className="min-h-[26px] select-none px-0.5 text-prose text-faint">
+          {ended ? "This session has ended. Resume it to keep going." : "Running outside coool. When it ends you can resume it here."}
+        </div>
+        <div className="mt-2 flex h-[34px] items-center gap-2">
+          {model && (
+            <span className="inline-flex h-[28px] items-center gap-1.5 rounded-[8px] px-2 text-small font-medium text-faint">
+              <span className="size-[6px] rounded-full bg-current opacity-60" />
+              {model}
+            </span>
+          )}
+          <span className="flex-1" />
+          {ended && session.id ? (
+            <>
+              <Button variant="ghost" onClick={() => resumeSession(session, leaf, { terminal: true })} title="Resume in the CLI's own terminal UI">
+                <ITerminal size={15} />
+                In terminal
+              </Button>
+              <Button variant="primary" onClick={() => resumeSession(session, leaf)}>
+                <IPlay size={14} />
+                Resume here
+              </Button>
+            </>
+          ) : (
+            <span className="flex size-[32px] items-center justify-center rounded-[12px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] text-faint" aria-hidden>
+              <IArrowUp size={17} strokeWidth={1.9} />
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

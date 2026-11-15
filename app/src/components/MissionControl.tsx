@@ -2,7 +2,7 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
 import { useNow } from "../lib/clock";
 import { useChats } from "../lib/chat";
-import { ago, displayTitle, folderName, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool } from "../lib/format";
+import { ago, displayTitle, folderName, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, thinkingWord } from "../lib/format";
 import { attention, useChatDigest, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
@@ -226,7 +226,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
               ) : pending ? (
                 <Skel w="60%" h={9} className="inline-block align-middle" />
               ) : (
-                <span className="shimmer font-medium">Thinking</span>
+                <span className="shimmer font-medium">{thinkingWord(s.updated)}</span>
               )}
             </span>
             {!pending && <Elapsed since={since.at} approx={since.approx} className="shrink-0 text-small text-faint" />}

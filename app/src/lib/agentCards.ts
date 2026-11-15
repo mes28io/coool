@@ -7,7 +7,7 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import type { Chat, ChatItem } from "./chat";
-import { displayTitle, homeShort, isThinking, shortDetail, splitTool, stripToolName, tsToMs } from "./format";
+import { displayTitle, homeShort, isThinking, shortDetail, splitTool, stripToolName, thinkingWord, tsToMs } from "./format";
 import { attention, useChatDigest, type ChatDigest } from "./live";
 import type { Activity, Agent, Provider, Session } from "./types";
 import { sessionKey } from "./types";
@@ -104,7 +104,7 @@ function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provi
   const lastTool = lastOf(list, (a) => a.kind === "tool" || a.kind === "agent");
   const cur = o.current;
   const text = cur && !isThinking(cur) ? cur : isThinking(cur) || !lastTool ? null : lastTool.text;
-  const now = text ? stepLabel(text) : { name: null as string | null, label: "Thinking" };
+  const now = text ? stepLabel(text) : { name: null as string | null, label: thinkingWord(list.length) };
   const lastText = lastOf(list, (a) => a.kind === "text");
   const first = list.length ? tsToMs(list[0].ts) : null;
   const end = last ? tsToMs(last.ts) : null;
@@ -168,7 +168,7 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
   const lastEnd = lastTool ? (lastTool.endTs ?? lastTool.ts) : tool.ts;
   const end = tool.endTs ?? lastEnd;
   const state: CardState = failed ? "failed" : live ? "running" : "done";
-  const label = run >= 0 ? steps[run].label : "Thinking";
+  const label = run >= 0 ? steps[run].label : thinkingWord(steps.length);
   return {
     id: `chat:${tool.id}`,
     source: "chat",
