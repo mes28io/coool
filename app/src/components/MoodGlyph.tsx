@@ -4,11 +4,9 @@
 // caps), one colour (currentColor). Motion is CSS keyframes in moodGlyph.css, only on transform,
 // opacity and dash offset. `live={false}` and reduced motion show the first frame, which is a
 // complete icon on its own. A change of mood cross-fades inside a fixed box (no layout shift).
-import { AnimatePresence, motion } from "motion/react";
 import type { ReactNode } from "react";
 import type { Mood } from "../lib/activityMood";
 import { cx } from "./primitives";
-import { reducedMotion } from "./StepRail";
 import "./moodGlyph.css";
 
 /** A filled dot (the family's "point": 2 units across). */
@@ -129,16 +127,11 @@ export function MoodSvg({ mood, size = 14, live = true, className }: { mood: Moo
   );
 }
 
-/** The glyph for a mood in a fixed `size` box; a new mood cross-fades over the old one. */
+/** The glyph for a mood in a fixed `size` box. A new mood replaces the old one outright (keyed, so never two at once, nothing to get stuck) and fades in over ~180 ms. */
 export function MoodGlyph({ mood, size = 14, live = true, className }: { mood: Mood; size?: 13 | 14 | number; live?: boolean; className?: string }) {
-  const fade = reducedMotion() ? 0 : 0.22;
   return (
     <span className={cx("relative inline-block shrink-0", className)} style={{ width: size, height: size }} data-mood-glyph={mood}>
-      <AnimatePresence initial={false}>
-        <motion.span key={mood} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: fade, ease: "easeInOut" }}>
-          <MoodSvg mood={mood} size={size} live={live} className="block" />
-        </motion.span>
-      </AnimatePresence>
+      <MoodSvg key={mood} mood={mood} size={size} live={live} className="mg-in absolute inset-0 block" />
     </span>
   );
 }

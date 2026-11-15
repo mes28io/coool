@@ -207,3 +207,18 @@
     animation: none !important;
   }
 }
+
+/* A new mood's glyph fades in (the old one is gone at once: glyph and word never disagree). */
+.mg.mg-in {
+  animation: mg-in 0.18s ease-out both;
+}
+@keyframes mg-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mg.mg-in {
+    animation: none;
+  }
+}

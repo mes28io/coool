@@ -249,11 +249,11 @@ function NowStrip({ card, className }: { card: AgentCardData; className: string 
   const [mounted] = useState(() => Date.now());
   const detail = card.labelTool ? card.label.replace(new RegExp(`^${card.labelTool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i"), "") : "";
   return (
-    <div className={className}>
+    <div className={className} data-now-strip>
       {/* Subagents get words, not orbs: a small glyph of what it is doing keeps the slot. */}
       <MoodGlyph mood={mood} size={14} className="text-working-text" />
       <span className="flex min-w-0 flex-1 items-baseline">
-        <span className="inline-flex shrink-0 font-medium">
+        <span className="inline-flex shrink-0 font-medium" data-word-mood={mood}>
           <ThinkingWord seed={seed} origin={card.since ?? mounted} words={MOODS[mood].words} cycle={card.since !== null} />
           <ThinkingDots />
         </span>
