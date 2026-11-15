@@ -183,7 +183,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                 data-i={i}
                 onMouseMove={() => sel !== i && setSel(i)}
                 onClick={it.run}
-                className={cx("relative flex h-[40px] w-full items-center gap-2.5 rounded-[8px] px-2.5 text-left text-base", i === sel ? "text-fg" : "text-fg/85")}
+                className={cx("relative flex h-[36px] w-full items-center gap-2.5 rounded-[8px] px-2.5 text-left text-base", i === sel ? "text-fg" : "text-fg/85")}
               >
                 {i === sel && <motion.span layoutId="pal-sel" transition={{ type: "spring", stiffness: 700, damping: 45 }} className="absolute inset-0 rounded-[8px] bg-hover" />}
                 <span className="relative flex w-[30px] shrink-0 items-center text-dim">{it.icon}</span>

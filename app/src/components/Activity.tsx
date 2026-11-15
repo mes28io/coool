@@ -304,7 +304,6 @@ export function StepLine({
   name,
   detail,
   active,
-  dense,
   stamp,
   since,
   approx,
@@ -331,7 +330,7 @@ export function StepLine({
       onClick={onClick}
       className={cx(
         "group relative -ml-[19px] flex items-center gap-2.5 rounded-[7px] pr-2",
-        dense ? "h-[28px]" : "h-[34px]",
+        "h-[28px]",
         active && !waiting && "sweep",
         onClick && "hover:bg-hover",
         open && "bg-hover",

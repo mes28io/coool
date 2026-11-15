@@ -551,8 +551,35 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await shot("usage");
       const text = (pop.textContent ?? "").replace(/\s+/g, " ");
       if (!/%/.test(text)) throw new Fail(`popover shows no percentages: ${text.slice(0, 160)}`);
-      btn.click();
-      return `claude ${u.claude ? "yes" : "no"}, codex ${u.codex ? "yes" : "no"}; popover: ${text.slice(0, 220)}`;
+      // Refresh: only meaningful when the backend may probe (COOOL_SELFTEST_PROBES=1).
+      type U = { claude: { fetched_ms: number } | null; codex: { fetched_ms: number } | null };
+      const cur = () => (useStore.getState() as unknown as { usage: U }).usage;
+      const results: string[] = [];
+      for (const prov of ["claude", "codex"] as const) {
+        const before = cur()[prov]?.fetched_ms ?? 0;
+        const rb = ([...pop.querySelectorAll("button[title]")] as HTMLElement[]).find((x) => x.title.toLowerCase().includes(`refresh ${prov}`));
+        if (!rb) { results.push(`${prov}: no refresh button`); continue; }
+        rb.click();
+        const t0 = Date.now();
+        const newer = await waitFor(`${prov} newer reading`, () => ((cur()[prov]?.fetched_ms ?? 0) > before ? true : null), 20_000).catch(() => false);
+        await sleep(400);
+        const foot = (pop.textContent ?? "").replace(/\s+/g, " ").match(/(Updated[^.]*?ago|Updated just now|Checking…|Couldn't refresh[^.]*)/g);
+        results.push(`${prov}: ${newer ? `newer reading after ${Date.now() - t0}ms` : "NO newer reading in 20s"}; footer says ${JSON.stringify(foot)}`);
+      }
+      await shot("usage-refreshed");
+      // Dark theme in the real window.
+      const themeBtn = ([...document.querySelectorAll("button[aria-label]")] as HTMLElement[]).find((x) => / theme$/.test(x.getAttribute("aria-label") ?? ""));
+      if (themeBtn) {
+        themeBtn.click();
+        await sleep(700);
+        await shot("usage-other-theme");
+        btn.click();
+        await sleep(400);
+        await shot("home-other-theme");
+        themeBtn.click();
+        await sleep(300);
+      } else btn.click();
+      return `claude ${u.claude ? "yes" : "no"}, codex ${u.codex ? "yes" : "no"}; ${results.join(" | ")}`;
     });
   },
 

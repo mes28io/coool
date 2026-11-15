@@ -125,7 +125,7 @@ export function SessionView({
   return (
     <div className="flex h-full min-w-0 flex-col">
       {/* header */}
-      <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[56px] px-3" : "h-[64px] px-5")}>
+      <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[48px] px-3" : "h-[52px] px-4")}>
         <ProviderMark provider={provider} size={17} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">

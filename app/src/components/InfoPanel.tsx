@@ -19,7 +19,7 @@ export type InfoTab = "context" | "status" | "usage";
 export function InfoPanel({ chat, tab, onTab }: { chat: Chat; tab: InfoTab; onTab: (t: InfoTab) => void }) {
   return (
     <div data-info-panel={tab}>
-      <div className="flex items-center justify-between border-b border-hairline px-3 py-2">
+      <div className="flex items-center justify-between border-b border-hairline px-3 py-1.5">
         <Segmented<InfoTab>
           size="sm"
           value={tab}
@@ -162,7 +162,7 @@ function UsageTab({ chat }: { chat: Chat }) {
           ["Output", t.output],
           ["Turns", turns],
         ].map(([k, v]) => (
-          <div key={k as string} className="bg-raised px-3 py-2.5">
+          <div key={k as string} className="bg-raised px-3 py-2">
             <div className="text-small text-faint">{k}</div>
             <div className=" text-base font-semibold text-fg tnum">{k === "Turns" ? v : fmtTokens(v as number)}</div>
           </div>

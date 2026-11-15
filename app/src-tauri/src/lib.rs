@@ -729,7 +729,8 @@ pub fn run() {
     ins.set_enabled(settings::load(selftest.as_ref()).insights);
     let mut usage = UsageMonitor::new();
     // Self-test runs stay off the person's accounts: free file reads only.
-    usage.set_probes(selftest.is_none());
+    // Probes send no prompt and spend no model usage; the self-test turns them on only when asked.
+    usage.set_probes(selftest.is_none() || std::env::var_os("COOOL_SELFTEST_PROBES").is_some());
     let core = Arc::new(Core {
         hub: Mutex::new(Hub::new(Duration::from_secs(24 * 3600))),
         // Until the first refresh lands, a `list_sessions` caller sees "loading".

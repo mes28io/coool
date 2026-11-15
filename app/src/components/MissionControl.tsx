@@ -185,10 +185,10 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
         <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(s.cwd)}</span>
         <StateLabel status={att.status} needs={!!needs} />
       </div>
-      <div className="mt-2.5 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">{displayTitle(s)}</div>
+      <div className="mt-2 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">{displayTitle(s)}</div>
 
       {/* One line: what is happening now. */}
-      <div className="mt-3 flex h-[22px] items-center gap-2 text-base">
+      <div className="mt-2.5 flex h-[22px] items-center gap-2 text-base">
         {needs ? (
           <>
             <span className="min-w-0 flex-1 truncate text-accent-text" title={needs}>
@@ -222,13 +222,13 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       </div>
 
       {pending ? (
-        <div className="mt-auto flex h-[18px] items-center gap-3 pt-4 box-content" title="Reading this session's transcript…">
+        <div className="mt-auto flex h-[18px] items-center gap-3 pt-2.5 box-content" title="Reading this session's transcript…">
           <Pending w="56px" h={4} />
           <Pending w="30px" h={9} />
           <Pending w="56px" h={9} className="ml-auto" />
         </div>
       ) : (
-        <div className="mt-auto flex h-[18px] items-center gap-3 box-content pt-4 text-small text-dim">
+        <div className="mt-auto flex h-[18px] items-center gap-3 box-content pt-2.5 text-small text-dim">
           <ContextMeter context={s.tokens.context} model={s.model} compact />
           <CardModel s={s} />
           {agents > 0 && (
@@ -258,10 +258,10 @@ function StartingCard({ p, chat, i, stagger }: { p?: PtyInfo; chat?: ChatInfo; i
         <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(info.cwd)}</span>
         <StateLabel status={ready ? "idle" : "starting"} />
       </div>
-      <div className="mt-2.5 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">
+      <div className="mt-2 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">
         New {info.provider === "claude" ? "Claude Code" : "Codex"} {chat ? "chat" : "session"}
       </div>
-      <div className="mt-3 flex h-[22px] items-center gap-2 text-base">
+      <div className="mt-2.5 flex h-[22px] items-center gap-2 text-base">
         {ready ? (
           <span className="text-dim">Ready for a first prompt</span>
         ) : (
@@ -282,7 +282,7 @@ function RecentRow({ s, first }: { s: Session; first: boolean }) {
   const open = useStore((st) => st.open);
   const now = useNow();
   return (
-    <div className={cx("group flex h-[48px] items-center gap-3 px-1 transition-colors duration-150", !first && "border-t border-hairline")}>
+    <div className={cx("group flex h-[40px] items-center gap-3 px-1 transition-colors duration-150", !first && "border-t border-hairline")}>
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={() => open({ kind: "session", key: sessionKey(s) })}>
         <ProviderMark provider={s.provider} size={15} />
         <span className="truncate text-base text-fg/85 group-hover:text-fg">{displayTitle(s)}</span>

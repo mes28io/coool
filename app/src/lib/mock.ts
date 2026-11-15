@@ -378,7 +378,7 @@ export function mockBackend(): Backend {
       provider: "claude", plan: "Max 5x", source: "claude.get_usage", fetched_ms: fetched, stale, error: null, reset_credits: null,
       credits: { enabled: true, unlimited: false, balance: null, used: 20, limit: 50, used_percent: 40, currency: "USD", detail: "20.00 of 50.00" },
       windows: [
-        win("session", "Current session", "session", 91, t + (60 + 54) * 60_000, 300, { severity: "critical", binding: true }),
+        win("session", "Current session", "session", usageMode === "warn" ? 80 : 91, t + (60 + 54) * 60_000, 300, { severity: usageMode === "warn" ? "warning" : "critical", binding: true }),
         win("weekly_all", "Weekly (all models)", "weekly", 24, nextMonday(), 10080, { severity: "normal", binding: false }),
         win("weekly_scoped:Fable", "Weekly (Fable)", "weekly", 10, nextMonday(), 10080, { severity: "normal", model: "Fable", binding: false }),
       ],
@@ -776,7 +776,7 @@ export function mockBackend(): Backend {
     async usageRefresh(provider) {
       await delay(900);
       const u = usage[provider];
-      if (!u || u.error) return;
+      if (!u || u.error || usageMode === "norefresh") return;
       u.fetched_ms = Date.now();
       u.stale = false;
       u.windows = u.windows.map((w) => (w.used_percent === null ? w : { ...w, used_percent: Math.min(100, w.used_percent + 1), as_of_ms: u.fetched_ms }));

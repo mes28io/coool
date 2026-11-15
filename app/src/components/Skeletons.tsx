@@ -70,7 +70,7 @@ export function CardSkeleton({ i = 0, label }: { i?: number; label?: string }) {
         <Skel w={v[0]} h={10} i={k} />
         <Skel w={8} h={8} i={k + 1} className="ml-auto mr-1" />
       </div>
-      <div className="mt-2.5 flex flex-col gap-0">
+      <div className="mt-2 flex flex-col gap-0">
         <div className="flex h-[24px] items-center">
           <Skel w={v[1]} h={14} i={k + 1} />
         </div>
@@ -78,11 +78,11 @@ export function CardSkeleton({ i = 0, label }: { i?: number; label?: string }) {
           <Skel w={v[2]} h={14} i={k + 2} />
         </div>
       </div>
-      <div className="mt-3 flex h-[22px] items-center gap-2">
+      <div className="mt-2.5 flex h-[22px] items-center gap-2">
         <Skel w={15} h={13} r={3} i={k + 2} />
         <Skel w={v[3] / 1.4} h={10} i={k + 3} className="opacity-70" />
       </div>
-      <div className="mt-4 flex h-[18px] items-center gap-3">
+      <div className="mt-auto box-content flex h-[18px] items-center gap-3 pt-2.5">
         <Skel w={56} h={4} i={k + 4} />
         <Skel w={30} h={9} i={k + 4} />
         <Skel w={v[4]} h={9} i={k + 5} />
@@ -102,7 +102,7 @@ export function RecentSkeleton({ rows = 4 }: { rows?: number }) {
       </div>
       <div>
         {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className={cx("flex h-[48px] items-center gap-3 px-1", i > 0 && "border-t border-hairline")}>
+          <div key={i} className={cx("flex h-[40px] items-center gap-3 px-1", i > 0 && "border-t border-hairline")}>
             <Skel w={15} h={15} i={i} />
             <Skel w={ws[i % ws.length]} h={11} i={i} />
             <Skel w={52} h={9} i={i} className="opacity-70" />

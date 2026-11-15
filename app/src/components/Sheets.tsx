@@ -112,11 +112,11 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
         }
       }}
     >
-      <div className="px-5 pb-4 pt-5">
+      <div className="px-4 pb-3 pt-4">
         <div className="text-title font-semibold tracking-[-0.01em]">New session</div>
         <div className="mt-0.5 text-base text-dim">Runs the official CLI as a chat coool drives. Your own login, your own subscription.</div>
       </div>
-      <div className="flex flex-col gap-4 px-5 pb-5">
+      <div className="flex flex-col gap-4 px-4 pb-4">
         <Field label="Agent">
           <div className="grid grid-cols-2 gap-2">
             {(["claude", "codex"] as Provider[]).map((p) => {
@@ -191,7 +191,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
           />
         </Field>
       </div>
-      <div className="flex items-center gap-2 border-t border-hairline bg-panel/60 px-5 py-3">
+      <div className="flex items-center gap-2 border-t border-hairline bg-panel/60 px-4 py-3">
         {missing ? (
           <span className="text-small text-err-text">Install the {provider} CLI first.</span>
         ) : (
@@ -234,11 +234,11 @@ function Confirm({ title, body, action, danger, onConfirm, close }: { title: str
   }, [onConfirm, close]);
   return (
     <div>
-      <div className="px-5 pb-4 pt-5">
+      <div className="px-4 pb-3 pt-4">
         <div className="text-title font-semibold tracking-[-0.01em]">{title}</div>
         <div className="mt-1 text-base text-dim">{body}</div>
       </div>
-      <div className="flex justify-end gap-2 border-t border-hairline bg-panel/60 px-5 py-3">
+      <div className="flex justify-end gap-2 border-t border-hairline bg-panel/60 px-4 py-3">
         <Button variant="ghost" onClick={close}>
           Cancel
         </Button>
@@ -355,10 +355,10 @@ function Settings({ close }: { close: () => void }) {
 
   return (
     <div>
-      <div className="px-5 pb-3 pt-5">
+      <div className="px-4 pb-3 pt-4">
         <div className="text-title font-semibold tracking-[-0.01em]">Settings</div>
       </div>
-      <div className="flex flex-col gap-5 px-5 pb-5">
+      <div className="flex flex-col gap-4 px-4 pb-4">
         <Field label="Theme">
           <Segmented<ThemePref>
             value={themePref}
@@ -443,7 +443,7 @@ function Settings({ close }: { close: () => void }) {
           {avail && st && !st.has_key && <div className="text-small text-faint">Stored in the macOS Keychain. coool can't show it again; you can only replace or remove it.</div>}
         </div>
       </div>
-      <div className="flex justify-end border-t border-hairline bg-panel/60 px-5 py-3">
+      <div className="flex justify-end border-t border-hairline bg-panel/60 px-4 py-3">
         <Button variant="ghost" onClick={close} title="Close settings">
           Done
         </Button>

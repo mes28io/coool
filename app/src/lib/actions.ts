@@ -104,13 +104,9 @@ export async function chatCall(chat: number, f: () => Promise<unknown>): Promise
   }
 }
 
-/** Ask the backend for a fresh plan-usage reading; it arrives with a later `sessions` payload. */
+/** Ask the backend for a fresh plan-usage reading; it arrives with a later `sessions` payload. Rejects if the command fails. */
 export function usageRefresh(provider: Provider): Promise<void> {
-  return api()
-    .usageRefresh(provider)
-    .catch((e) => {
-      if (!isNotAvailable(e)) toast(String(e), "error");
-    });
+  return api().usageRefresh(provider);
 }
 
 /** Answer a question card: per question, the picked labels and/or typed text; null declines. */

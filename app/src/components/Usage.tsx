@@ -65,35 +65,44 @@ export function UsageRow({ w, now }: { w: UsageWindow; now: number }) {
   );
 }
 
-/** Refresh button: spins until a newer reading arrives or 8 s pass. */
-function RefreshButton({ provider, fetched }: { provider: Provider; fetched: number | null }) {
-  const [since, setSince] = useState<{ fetched: number | null; until: number } | null>(null);
+type Refresh = { state: "idle" } | { state: "checking"; base: number | null } | { state: "failed" } | { state: "error"; text: string };
+
+/**
+ * Refresh state for one provider. It only ever claims what happened: "checking" until a reading with
+ * a newer `fetched_ms` arrives (then back to idle, so the footer is computed from `fetched_ms`), or
+ * "failed" after 8 s without one, or "error" if the command itself was rejected.
+ */
+function useRefresh(provider: Provider, fetched: number | null) {
+  const [st, setSt] = useState<Refresh>({ state: "idle" });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const spinning = since !== null && (fetched ?? 0) <= (since.fetched ?? 0);
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  };
   useEffect(() => {
-    if (since && (fetched ?? 0) > (since.fetched ?? 0)) setSince(null);
-  }, [fetched, since]);
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  return (
-    <IconButton
-      title={`Refresh ${provider === "claude" ? "Claude" : "Codex"} usage`}
-      onClick={() => {
-        setSince({ fetched, until: Date.now() + 8000 });
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setSince(null), 8000);
-        void usageRefresh(provider);
-      }}
-      className="-mr-1 text-faint"
-    >
-      <IRefresh size={16} className={cx(spinning && "spin")} />
-    </IconButton>
-  );
+    if (st.state === "checking" && (fetched ?? 0) > (st.base ?? 0)) {
+      clear();
+      setSt({ state: "idle" });
+    }
+  }, [fetched, st]);
+  useEffect(() => clear, []);
+  const start = () => {
+    clear();
+    setSt({ state: "checking", base: fetched });
+    timer.current = setTimeout(() => setSt((cur) => (cur.state === "checking" ? { state: "failed" } : cur)), 8000);
+    usageRefresh(provider).catch((e) => {
+      clear();
+      setSt({ state: "error", text: e instanceof Error ? e.message : String(e) });
+    });
+  };
+  return { st, start };
 }
 
 const NAME = { claude: "Claude", codex: "Codex" } as const;
 
 export function UsageBlock({ provider, usage, bare }: { provider: Provider; usage: PlanUsage | null; bare?: boolean }) {
   const now = useNow();
+  const { st, start } = useRefresh(provider, usage?.fetched_ms ?? null);
   const hasWindows = !!usage && usage.windows.length > 0;
   const credit = usage?.credits?.enabled ? (usage.credits.detail ?? creditLine(usage.credits)) : null;
   return (
@@ -103,11 +112,16 @@ export function UsageBlock({ provider, usage, bare }: { provider: Provider; usag
         <span className="text-base font-medium text-fg">{NAME[provider]}</span>
         {usage?.plan && <span className="min-w-0 truncate text-small text-dim">{usage.plan}</span>}
         <span className="ml-auto">
-          <RefreshButton provider={provider} fetched={usage?.fetched_ms ?? null} />
+          <IconButton title={`Refresh ${NAME[provider]} usage`} onClick={start} className="-mr-1 text-faint">
+            <IRefresh size={16} className={cx(st.state === "checking" && "spin")} />
+          </IconButton>
         </span>
       </div>
       {!usage ? (
-        <div className="py-1.5 text-small text-dim">No usage data yet</div>
+        <>
+          <div className="py-1.5 text-small text-dim">No usage data yet</div>
+          <RefreshNote st={st} usage={null} now={now} />
+        </>
       ) : (
         <>
           {usage.error && <div className={cx("pb-0.5 pt-1 text-small", hasWindows ? "text-dim" : "text-err-text")}>{usage.error}</div>}
@@ -120,14 +134,22 @@ export function UsageBlock({ provider, usage, bare }: { provider: Provider; usag
               {usage.reset_credits} free {usage.reset_credits === 1 ? "reset" : "resets"} available
             </div>
           )}
-          <div className="pt-2 text-small text-faint">
-            Updated {ago(usage.fetched_ms, now)}
-            {usage.stale && " · may be out of date"}
-          </div>
+          <RefreshNote st={st} usage={usage} now={now} />
         </>
       )}
     </section>
   );
+}
+
+/** Footer line: what is known, computed from `fetched_ms`, and what the last refresh did. */
+function RefreshNote({ st, usage, now }: { st: Refresh; usage: PlanUsage | null; now: number }) {
+  let text: string;
+  if (st.state === "checking") text = "Checking…";
+  else if (st.state === "error") text = st.text;
+  else if (st.state === "failed") text = usage ? `Couldn't refresh · last updated ${ago(usage.fetched_ms, now)}` : "Couldn't refresh";
+  else if (!usage) return null;
+  else text = `Updated ${ago(usage.fetched_ms, now)}${usage.stale ? " · may be out of date" : ""}`;
+  return <div className="pt-2 text-small text-faint">{text}</div>;
 }
 
 function creditLine(c: NonNullable<PlanUsage["credits"]>): string | null {

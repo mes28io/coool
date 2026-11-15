@@ -9,6 +9,25 @@ import { cx, ease, ProviderMark } from "./primitives";
 import { useProjects } from "./Sidebar";
 import { UsagePanel, usageHighest, useUsageProviders } from "./Usage";
 
+const RAIL = 56;
+
+/**
+ * Popovers open over the main area, detached from their button: the left edge sits 8px right of
+ * the sidebar panel (or of the rail when the panel is collapsed). Vertical anchor is the button's
+ * top or bottom edge, measured when it opens.
+ */
+function usePopoverPos(anchor: HTMLElement | null, open: boolean, edge: "top" | "bottom") {
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const width = useStore((s) => s.sidebarWidth);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  useEffect(() => {
+    if (open && anchor) setRect(anchor.getBoundingClientRect());
+  }, [open, anchor]);
+  const left = RAIL + 1 + (sidebarOpen ? width : 0) + 8;
+  if (!rect) return { left } as const;
+  return edge === "bottom" ? ({ left, bottom: window.innerHeight - rect.bottom } as const) : ({ left, top: rect.top } as const);
+}
+
 /** One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. */
 function RailButton({
   label,
@@ -67,6 +86,7 @@ function NeedsYou() {
   const open = useStore((s) => s.open);
   const [show, setShow] = useState(false);
   const box = useRef<HTMLDivElement>(null);
+  const pos = usePopoverPos(box.current, show, "top");
   const list = projects.flatMap((p) => p.live.map((s) => ({ s, a: attention(s, digest) })).filter((x) => x.a.needs));
 
   useEffect(() => {
@@ -89,12 +109,12 @@ function NeedsYou() {
       <AnimatePresence>
         {show && (
           <motion.div
-            initial={{ opacity: 0, x: -6, scale: 0.98 }}
-            animate={{ opacity: 1, x: 0, scale: 1 }}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, transition: { duration: 0.12 } }}
-            transition={{ duration: 0.18, ease }}
-            style={{ transformOrigin: "left top" }}
-            className="absolute left-full top-0 z-50 ml-2 w-[340px] rounded-[12px] border border-line bg-raised p-1.5 shadow-pop"
+            transition={{ duration: 0.16, ease }}
+            style={pos}
+            className="fixed z-50 w-[280px] rounded-[12px] border border-line bg-raised p-1.5 shadow-pop"
             data-needs-popover
           >
             <div className="px-2.5 pb-1 pt-1.5 text-small text-dim">{list.length ? "Waiting for you" : "Nothing needs you right now."}</div>
@@ -130,6 +150,7 @@ function UsageButton() {
   const usage = useStore((s) => s.usage);
   const providers = useUsageProviders();
   const box = useRef<HTMLDivElement>(null);
+  const pos = usePopoverPos(box.current, open, "bottom");
   const hide = (["claude", "codex"] as const).filter((p) => !providers.includes(p));
   const high = usageHighest(usage, [...hide]);
 
@@ -153,12 +174,12 @@ function UsageButton() {
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, x: -6, scale: 0.98 }}
-            animate={{ opacity: 1, x: 0, scale: 1 }}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, transition: { duration: 0.12 } }}
-            transition={{ duration: 0.18, ease }}
-            style={{ transformOrigin: "left bottom" }}
-            className="absolute bottom-0 left-full z-50 ml-2 max-h-[calc(100vh-140px)] w-[340px] overflow-y-auto rounded-[12px] border border-line bg-raised shadow-pop scroll"
+            transition={{ duration: 0.16, ease }}
+            style={pos}
+            className="scroll fixed z-50 max-h-[calc(100vh-140px)] w-[280px] overflow-y-auto rounded-[12px] border border-line bg-raised shadow-pop"
             data-usage-popover
             role="dialog"
             aria-label="Plan usage"

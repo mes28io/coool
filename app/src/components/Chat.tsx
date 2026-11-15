@@ -424,7 +424,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
           opened.current = false;
           setOpen(!isOpen);
         }}
-        className="group flex w-full items-center gap-2 rounded-[8px] py-1 pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
+        className="group flex w-full items-center gap-2 rounded-[8px] py-[3px] pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
       >
         <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint group-hover:text-dim">
           <IChevron size={14} />
@@ -619,7 +619,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
       onClick={onPick}
       title={option.rules.length ? option.rules.join("\n") : undefined}
       className={cx(
-        "group flex w-full items-start gap-2.5 rounded-[9px] border px-3 py-2 text-left transition-[background-color,border-color] duration-150 active:scale-[0.995]",
+        "group flex w-full items-start gap-2.5 rounded-[9px] border px-3 py-1.5 text-left transition-[background-color,border-color] duration-150 active:scale-[0.995]",
         "border-line hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))] hover:bg-hover",
       )}
     >
@@ -656,7 +656,7 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
           className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--accent)_30%,var(--border))] bg-raised shadow-card"
           data-approval={item.requestId}
         >
-          <div className="flex items-center gap-2 px-3.5 pb-2 pt-3">
+          <div className="flex items-center gap-2 px-3.5 pb-1.5 pt-3.5">
             <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-accent-soft text-accent-text">
               <ITerminal size={15} />
             </span>
@@ -669,7 +669,7 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
             <pre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90">{homeShort(d.body)}</pre>
             {d.note && <div className="mt-1.5 text-small text-dim">{d.note}</div>}
           </div>
-          <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3 pt-3">
+          <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-2.5">
             <Button variant="primary" onClick={() => answerPermission(chat.id, item.requestId, "allow")} title="Allow this once (⌘↵)" data-allow-once>
               Allow once
               <Kbd className="ml-0.5 border-transparent bg-[color-mix(in_oklab,var(--bg)_16%,transparent)] text-current">⌘↵</Kbd>
@@ -680,7 +680,7 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
             <span className="ml-auto text-small text-faint">The turn is paused until you answer</span>
           </div>
           {item.remember.length > 0 && (
-            <div className="border-t border-hairline px-3.5 pb-3 pt-2.5" data-remember-options>
+            <div className="border-t border-hairline px-3.5 pb-3.5 pt-2.5" data-remember-options>
               <div className="mb-1.5 font-mono text-micro font-medium uppercase tracking-[0.06em] text-faint">Allow and don't ask again</div>
               <div className="flex flex-col gap-1.5">
                 {item.remember.map((o) => (
@@ -746,7 +746,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
           className="attn-card rounded-[12px] border border-[color-mix(in_oklab,var(--accent)_30%,var(--border))] bg-raised shadow-card"
           data-question={item.requestId}
         >
-          <div className="flex items-center gap-2 px-3.5 pb-1 pt-3">
+          <div className="flex items-center gap-2 px-3.5 pb-1 pt-3.5">
             <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-accent-soft text-base font-bold text-accent-text">?</span>
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
               {who} has {item.questions.length === 1 ? "a question" : `${item.questions.length} questions`}
@@ -824,7 +824,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
               );
             })}
           </div>
-          <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3 pt-3">
+          <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-2.5">
             {!(single && !drafts[0].other.trim()) && (
               <Button variant="primary" onClick={() => submit()} disabled={!complete} data-submit-question title="Send the answer">
                 Answer
