@@ -100,7 +100,7 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
       <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-start gap-2 px-3 pb-1 pt-2.5">
         <div className="min-w-0 flex-1">
           {/* The task is what tells agents apart, so it is the title; the model and kind sit under it. */}
-          <div className="line-clamp-2 text-base font-medium leading-[18px] text-fg" title={card.description || undefined}>
+          <div className="truncate text-base font-medium leading-[18px] text-fg" title={card.description || undefined}>
             {card.description || (card.model ? modelLabel(card.model) : "Agent")}
           </div>
           <div className="truncate text-small leading-[16px] text-dim" title={full}>
