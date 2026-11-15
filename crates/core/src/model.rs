@@ -82,7 +82,47 @@ pub enum ActivityKind {
 pub struct Activity {
     pub ts: String, // HH:MM:SS (local-ish; transcript timestamps are UTC, see util::short_time)
     pub kind: ActivityKind,
+    /// One line: whitespace collapsed, cut to ~400 columns (errors ~200; tool
+    /// summaries are one line by design). For lists, the TUI and insight prompts.
     pub text: String,
+    /// Prompts, replies and errors: the whole text with its line breaks, when
+    /// `text` loses anything; at most [`MAX_FULL`] characters. Only the newest
+    /// [`FULL_RECENT`] such entries of a timeline keep it (see [`push_activity`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full: Option<String>,
+    /// What is kept (`full`, else `text`) is not the whole message: it was cut
+    /// at [`MAX_FULL`], or the entry is older than the newest [`FULL_RECENT`]
+    /// full texts and kept only its one-line form.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shortened: bool,
+}
+
+/// Characters of `Activity::full` kept per entry.
+pub const MAX_FULL: usize = 24_000;
+/// Entries with a full text (see [`Activity::full`]) a timeline keeps, newest
+/// first: at most `FULL_RECENT * MAX_FULL` characters per timeline.
+pub const FULL_RECENT: usize = 50;
+
+impl Activity {
+    /// A step (tool call, subagent) or a fixed note: one line says it all.
+    pub fn line(ts: String, kind: ActivityKind, text: impl Into<String>) -> Self {
+        Self { ts, kind, text: text.into(), full: None, shortened: false }
+    }
+
+    /// A prompt, reply or error: its one-line form (`max` columns) and, when
+    /// that loses anything (line breaks, length), the full text beside it.
+    pub fn message(ts: String, kind: ActivityKind, s: &str, max: usize) -> Self {
+        let text = crate::util::one_line(s, max);
+        let s = s.trim();
+        if text == s {
+            return Self::line(ts, kind, text);
+        }
+        let (full, cut) = match s.char_indices().nth(MAX_FULL) {
+            Some((end, _)) => (format!("{}…", &s[..end]), true),
+            None => (s.to_string(), false),
+        };
+        Self { ts, kind, text, full: Some(full), shortened: cut }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -201,8 +241,18 @@ pub struct Session {
 
 pub const MAX_ACTIVITY: usize = 300;
 
+/// Appends to a timeline: keeps its newest [`MAX_ACTIVITY`] entries, and full
+/// texts on the newest [`FULL_RECENT`] that have one (an older entry keeps its
+/// one line and is marked `shortened`).
 pub fn push_activity(list: &mut Vec<Activity>, a: Activity) {
+    let has_full = a.full.is_some();
     list.push(a);
+    if has_full
+        && let Some(old) = list.iter_mut().rev().filter(|e| e.full.is_some()).nth(FULL_RECENT)
+    {
+        old.full = None;
+        old.shortened = true;
+    }
     if list.len() > MAX_ACTIVITY {
         let drop = list.len() - MAX_ACTIVITY;
         list.drain(..drop);

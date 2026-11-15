@@ -468,7 +468,7 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
             let role = p["role"].as_str().unwrap_or("");
             let text: String = p["content"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join(" "))
+                .map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n"))
                 .unwrap_or_default();
             if text.trim().is_empty() || text.trim_start().starts_with('<') {
                 return;
@@ -476,10 +476,10 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
             match role {
                 "user" => {
                     s.last_prompt = Some(one_line(&text, 400));
-                    push_activity(&mut s.activity, Activity { ts, kind: ActivityKind::Prompt, text: one_line(&text, 400) });
+                    push_activity(&mut s.activity, Activity::message(ts, ActivityKind::Prompt, &text, 400));
                 }
                 "assistant" => {
-                    push_activity(&mut s.activity, Activity { ts, kind: ActivityKind::Text, text: one_line(&text, 400) });
+                    push_activity(&mut s.activity, Activity::message(ts, ActivityKind::Text, &text, 400));
                 }
                 _ => {}
             }
@@ -491,7 +491,7 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
                 .and_then(|a| serde_json::from_str(a).ok())
                 .unwrap_or_else(|| p["input"].clone());
             let sum = tool_summary(name, &input);
-            push_activity(&mut s.activity, Activity { ts, kind: ActivityKind::Tool, text: sum.clone() });
+            push_activity(&mut s.activity, Activity::line(ts, ActivityKind::Tool, sum.clone()));
             s.current = Some(sum);
         }
         _ => {}
@@ -520,6 +520,25 @@ mod tests {
         assert_eq!((s.id.as_str(), s.cwd.as_str()), ("child", "/work"));
         let want = SystemTime::UNIX_EPOCH + Duration::from_secs(parse_rfc3339("2026-11-08T11:17:56Z").unwrap() as u64);
         assert_eq!(st.started, Some(want));
+    }
+
+    #[test]
+    fn messages_keep_their_full_text() {
+        let (_, s) = run(r#"
+{"timestamp":"2026-11-14T08:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first part"},{"type":"input_text","text":"second\npart"}]}}
+{"timestamp":"2026-11-14T08:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"**Done**\n\n- a\n- b"}]}}
+{"timestamp":"2026-11-14T08:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}
+"#);
+        let a: Vec<_> = s.activity.iter().map(|a| (a.kind, a.text.as_str(), a.full.as_deref())).collect();
+        assert_eq!(
+            a,
+            [
+                (ActivityKind::Prompt, "first part second part", Some("first part\nsecond\npart")),
+                (ActivityKind::Text, "**Done** - a - b", Some("**Done**\n\n- a\n- b")),
+                (ActivityKind::Text, "ok", None),
+            ]
+        );
+        assert_eq!(s.last_prompt.as_deref(), Some("first part second part"));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! `COOOL_LIVE_TRACE_DIR=<dir>` writes one protocol trace per chat there
 //! (that is how `src/chat/fixtures/` were captured, then scrubbed).
 
-use coool_core::chat::{ChatEventKind, ChatOptions};
+use coool_core::chat::{ChatEventKind, ChatOptions, SteerState};
 use coool_core::hub::Hub;
 use coool_core::model::Provider;
 use std::path::PathBuf;
@@ -176,6 +176,156 @@ fn live_claude() {
     }
     w.until(&hub, id, 10, "doctor notice", |e| matches!(e, ChatEventKind::Notice { needs_terminal: true, text, .. } if text.starts_with("/doctor")));
     hub.kill_all();
+}
+
+const SLEEPS: &str = "Run these three shell commands, strictly one at a time (one tool call each, wait for each to finish): `sleep 3; echo one`, then `sleep 3; echo two`, then `sleep 3; echo three`. Then reply with the single word done.";
+
+fn steer_state(e: &ChatEventKind, note: &str) -> Option<(SteerState, Option<String>)> {
+    match e {
+        ChatEventKind::Steer { note_id, state, tool_id, .. } if note_id == note && *state != SteerState::Queued => Some((*state, tool_id.clone())),
+        _ => None,
+    }
+}
+
+/// Steering (traces `claude_steer`, `codex_steer`): a note for the next step
+/// is taken in after the running step; a `now` note cuts the step and starts
+/// the next turn; Claude can withdraw a note the CLI holds, Codex cannot.
+fn live_steer(provider: Provider, model: &str, trace: &str) {
+    let (mut hub, cwd) = plans_hub();
+    let mode = (provider == Provider::Codex).then(|| "never".to_string());
+    let id = start(&mut hub, trace, ChatOptions { provider, cwd, resume: None, model: Some(model.into()), permission_mode: mode });
+    let mut w = Watch::new();
+    w.until(&hub, id, 60, "ready", is_ready);
+    let step = |w: &mut Watch, hub: &Hub| match w.until(hub, id, 120, "a step", |e| matches!(e, ChatEventKind::ToolStart { parent_tool_id: None, .. })) {
+        ChatEventKind::ToolStart { id, .. } => id,
+        _ => unreachable!(),
+    };
+
+    // 1. Next step.
+    hub.chat_mut(id).unwrap().send(SLEEPS).unwrap();
+    let first = step(&mut w, &hub);
+    let note = hub.chat_mut(id).unwrap().steer("Also: after the commands, say the word banana.", false).unwrap();
+    let gone = hub.chat_mut(id).unwrap().steer("Also say apple.", false).unwrap();
+    let cancel = hub.chat_mut(id).unwrap().cancel_steer(&gone);
+    let got = w.until(&hub, id, 120, "note taken in", |e| steer_state(e, &note).is_some());
+    assert_eq!(steer_state(&got, &note), Some((SteerState::PickedUp, Some(first.clone()))), "taken in after the step it was sent during");
+    assert!(w.turn_end(&hub, id));
+    match provider {
+        Provider::Claude => {
+            cancel.unwrap();
+            assert!(w.all.iter().any(|e| steer_state(e, &gone) == Some((SteerState::Cancelled, None))), "withdrawn");
+        }
+        Provider::Codex => assert!(cancel.is_err(), "Codex can't take a note back"),
+    }
+    assert!(w.all.iter().any(|e| matches!(e, ChatEventKind::UserMessage { steer: true, note_id: Some(n), .. } if *n == note)));
+
+    // 2. Now: the running step is cut, the note starts the next turn.
+    hub.chat_mut(id).unwrap().send(SLEEPS).unwrap();
+    let cut = step(&mut w, &hub);
+    let note = hub.chat_mut(id).unwrap().steer("Stop the commands. Just reply with the word cherry.", true).unwrap();
+    assert!(!w.turn_end(&hub, id), "the cut turn ends not ok");
+    let got = w.until(&hub, id, 120, "note delivered", |e| steer_state(e, &note).is_some());
+    assert_eq!(steer_state(&got, &note), Some((SteerState::Interrupted, Some(cut))));
+    assert!(w.turn_end(&hub, id));
+    assert_eq!(hub.chat(id).unwrap().state(), coool_core::chat::ChatState::Idle);
+    hub.kill_all();
+}
+
+#[test]
+#[ignore]
+fn live_claude_steer() {
+    live_steer(Provider::Claude, "haiku", "claude_steer");
+}
+
+#[test]
+#[ignore]
+fn live_codex_steer() {
+    live_steer(Provider::Codex, "gpt-5.6-luna", "codex_steer");
+}
+
+fn plans_hub() -> (Hub, String) {
+    let d = dir().join("plans");
+    std::fs::create_dir_all(&d).unwrap();
+    let mut hub = Hub::new(Duration::from_secs(600));
+    hub.set_own_sessions_file(None);
+    hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
+    (hub, d.to_string_lossy().into_owned())
+}
+
+/// Allows every permission request until the turn ends.
+fn answer_all(w: &mut Watch, hub: &mut Hub, id: usize) {
+    while let ChatEventKind::PermissionRequest { request_id, .. } = w.until(hub, id, 240, "turn_end", |e| matches!(e, ChatEventKind::TurnEnd { .. } | ChatEventKind::PermissionRequest { .. })) {
+        hub.chat_mut(id).unwrap().respond_permission(&request_id, true, false).unwrap();
+    }
+}
+
+/// The task list (trace `claude_tasks`). Claude Code 2.1.325 offers its task
+/// tools only on older models, and `TaskCreate`/`TaskUpdate` rather than
+/// `TodoWrite` (unless CLAUDE_CODE_ENABLE_TASKS=0): the driver adds a
+/// `TodoWrite` view of the whole list after each change.
+#[test]
+#[ignore]
+fn live_claude_tasks() {
+    let (mut hub, cwd) = plans_hub();
+    let opts = ChatOptions { provider: Provider::Claude, cwd, resume: None, model: Some("claude-haiku-4-5-20251001".into()), permission_mode: None };
+    let id = start(&mut hub, "claude_tasks", opts);
+    let mut w = Watch::new();
+    w.until(&hub, id, 60, "ready", is_ready);
+    hub.chat_mut(id).unwrap().send("Use the TaskCreate tool to make a 3-item todo list for writing a haiku, then do the items one by one, marking each in_progress and then completed with TaskUpdate. Keep everything very short and do not create files.").unwrap();
+    answer_all(&mut w, &mut hub, id);
+    hub.kill_all();
+    let views: Vec<&serde_json::Value> = w.all.iter().filter_map(|e| match e { ChatEventKind::ToolStart { name, input, .. } if name == "TodoWrite" => Some(input), _ => None }).collect();
+    assert!(views.last().is_some_and(|v| v["_synthetic"] == true && v["todos"].as_array().is_some_and(|t| !t.is_empty() && t.iter().all(|t| t["status"] == "completed"))), "{views:?}");
+}
+
+/// Plan mode (trace `claude_plan_mode`): ExitPlanMode asks with the plan;
+/// denied once (keep planning), then approved.
+#[test]
+#[ignore]
+fn live_claude_plan_mode() {
+    let (mut hub, cwd) = plans_hub();
+    let opts = ChatOptions { provider: Provider::Claude, cwd, resume: None, model: Some("haiku".into()), permission_mode: Some("plan".into()) };
+    let id = start(&mut hub, "claude_plan_mode", opts);
+    let mut w = Watch::new();
+    w.until(&hub, id, 60, "ready", is_ready);
+    hub.chat_mut(id).unwrap().send("Plan how you would add a README to this folder; do not write anything. Keep the plan to three short bullet points, then present it with the ExitPlanMode tool.").unwrap();
+    let mut asked = 0;
+    let mut turns = 0;
+    while turns < 3 && asked < 2 {
+        match w.until(&hub, id, 240, "turn_end", |e| matches!(e, ChatEventKind::TurnEnd { .. } | ChatEventKind::PermissionRequest { .. } | ChatEventKind::Question { .. })) {
+            // After approval it may ask what the folder is for: declined.
+            ChatEventKind::Question { request_id, .. } => hub.chat_mut(id).unwrap().respond_permission(&request_id, false, false).unwrap(),
+            ChatEventKind::PermissionRequest { request_id, tool, input, .. } if tool == "ExitPlanMode" => {
+                asked += 1;
+                assert!(input["plan"].as_str().is_some_and(|p| !p.is_empty()), "{input}");
+                hub.chat_mut(id).unwrap().respond_permission(&request_id, asked > 1, false).unwrap();
+            }
+            ChatEventKind::PermissionRequest { request_id, .. } => hub.chat_mut(id).unwrap().respond_permission(&request_id, false, false).unwrap(),
+            _ => {
+                turns += 1;
+                if asked == 1 {
+                    hub.chat_mut(id).unwrap().send("Make it two bullet points and present it with ExitPlanMode again. Still write nothing.").unwrap();
+                }
+            }
+        }
+    }
+    hub.kill_all();
+    assert_eq!(asked, 2, "asked twice");
+}
+
+/// Codex's plan tool (trace `codex_plan`) becomes `update_plan` tool events.
+#[test]
+#[ignore]
+fn live_codex_plan() {
+    let (mut hub, cwd) = plans_hub();
+    let opts = ChatOptions { provider: Provider::Codex, cwd, resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("never".into()) };
+    let id = start(&mut hub, "codex_plan", opts);
+    let mut w = Watch::new();
+    w.until(&hub, id, 60, "ready", is_ready);
+    hub.chat_mut(id).unwrap().send("Use your plan tool to make a 3-step plan for writing a haiku, then do the steps one by one (just think, no commands), updating the plan as each is done. Then reply with the haiku.").unwrap();
+    answer_all(&mut w, &mut hub, id);
+    hub.kill_all();
+    assert!(w.all.iter().any(|e| matches!(e, ChatEventKind::ToolStart { name, input, .. } if name == "update_plan" && input["plan"].is_array())), "plan updates reach the chat");
 }
 
 #[test]

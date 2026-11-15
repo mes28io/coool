@@ -505,7 +505,7 @@ mod tests {
     use crate::model::Tokens;
 
     fn act(kind: ActivityKind, text: &str) -> Activity {
-        Activity { ts: "00:00:00".into(), kind, text: text.into() }
+        Activity::line("00:00:00".into(), kind, text)
     }
 
     fn session(id: &str, n: usize) -> Session {

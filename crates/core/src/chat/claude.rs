@@ -4,7 +4,13 @@
 //! - stdin: `{"type":"user","message":{"role":"user","content":"..."}}` per turn, and
 //!   `{"type":"control_request","request_id","request":{"subtype": "initialize" |
 //!   "interrupt" | "set_model" | "set_permission_mode" | "get_context_usage"}}`.
-//!   Messages sent mid-turn are queued by the CLI and each gets its own `result`.
+//!   Every user line carries a `uuid`; the CLI reports its fate with
+//!   `command_lifecycle` (`queued` -> `started` -> `completed` | `cancelled` |
+//!   `discarded` | `refused`). A line sent while a turn runs is queued by the
+//!   CLI and taken into that same turn after the next tool result (no `result`
+//!   of its own; the turn's `result.user_message_uuids` lists it); one still
+//!   queued when the turn ends starts a turn of its own right after. A queued
+//!   line can be withdrawn with `control_request` `cancel_async_message`.
 //! - stdout: `control_response` to those, `system` (`init` per turn, `status`, ...),
 //!   `stream_event` (raw API stream, only for the main thread), complete
 //!   `assistant` messages (one per content block, subagents' carry
@@ -32,9 +38,33 @@ enum Pending {
     SetModel(String),
     SetMode(String),
     Interrupt,
+    /// The interrupt for a `now` steering note.
+    SteerCut,
+    /// `cancel_async_message` for a note; `true` when the person asked.
+    CancelNote(String, bool),
+}
+
+/// An interrupt sent for `now` notes: they go out once the CLI answered it
+/// and the cut turn's `result` arrived.
+#[derive(Default)]
+struct Cut {
+    acked: bool,
+    ended: bool,
+    /// The turn ended by the interrupt (not on its own just before).
+    cut: bool,
+}
+
+/// One entry of the CLI's task list (`TaskCreate` / `TaskUpdate`).
+#[derive(Clone)]
+struct Task {
+    id: String,
+    subject: String,
+    active_form: Option<String>,
+    status: String,
 }
 
 struct Perm {
+    tool: String,
     input: Value,
     /// Remember options with the `updatedPermissions` each one sends.
     remember: Vec<(RememberOption, Value)>,
@@ -248,9 +278,24 @@ pub(crate) struct Claude {
     final_blocks: HashMap<String, u32>,
     totals: Tokens,
     user_n: u64,
-    /// Turns sent and not yet answered by a `result`.
-    queued: u32,
+    /// uuids of user lines written and not yet answered (by a `result` or a
+    /// terminal `command_lifecycle`): the chat is working while any is left.
+    cmds: Vec<String>,
     interrupted: bool,
+    /// A turn is running (`command_lifecycle` `started` seen, no `result` yet).
+    turn_live: bool,
+    /// Main-thread tool calls without their result, oldest first.
+    open_tools: Vec<String>,
+    /// The main-thread tool whose result came last this turn.
+    last_tool_end: Option<String>,
+    notes: Notes,
+    cut: Option<Cut>,
+    /// `interrupt()` (Stop) was called: notes held for this turn end unused.
+    stopping: bool,
+    /// The task list as `TaskCreate` / `TaskUpdate` left it.
+    tasks: Vec<Task>,
+    /// Task tool calls waiting for their result: tool_use id -> (name, input).
+    task_calls: HashMap<String, (String, Value)>,
     /// Last error shown this turn, so the turn's `result` doesn't repeat it.
     last_error: Option<String>,
 }
@@ -288,8 +333,16 @@ impl Claude {
             final_blocks: HashMap::new(),
             totals: Tokens::default(),
             user_n: 0,
-            queued: 0,
+            cmds: Vec::new(),
             interrupted: false,
+            turn_live: false,
+            open_tools: Vec::new(),
+            last_tool_end: None,
+            notes: Notes::default(),
+            cut: None,
+            stopping: false,
+            tasks: Vec::new(),
+            task_calls: HashMap::new(),
             last_error: None,
         }
     }
@@ -385,7 +438,7 @@ impl Claude {
     fn working_or_idle(&self) -> ChatState {
         if !self.perms.is_empty() {
             ChatState::WaitingPermission
-        } else if self.queued > 0 {
+        } else if !self.cmds.is_empty() {
             ChatState::Working
         } else {
             ChatState::Idle
@@ -411,6 +464,15 @@ impl Claude {
                 Pending::SetModel(m) => format!("switch to model {m}"),
                 Pending::SetMode(m) => format!("switch to permission mode {m}"),
                 Pending::Interrupt => "interrupt".to_string(),
+                Pending::SteerCut => {
+                    // The turn goes on; the notes go out when it ends.
+                    if let Some(c) = self.cut.as_mut() {
+                        c.acked = true;
+                    }
+                    self.flush_cut(o);
+                    "interrupt the step for the note".to_string()
+                }
+                Pending::CancelNote(..) => "withdraw the note".to_string(),
             };
             let err = r["error"].as_str().unwrap_or("unknown error");
             o.ev(ChatEventKind::notice(NoticeLevel::Error, format!("Could not {what}: {err}")));
@@ -485,6 +547,169 @@ impl Claude {
                 self.ready(o);
             }
             Pending::Interrupt => {}
+            Pending::SteerCut => {
+                if let Some(c) = self.cut.as_mut() {
+                    c.acked = true;
+                }
+                self.flush_cut(o);
+            }
+            Pending::CancelNote(id, asked) => {
+                if res["cancelled"] == true {
+                    // (The `cancelled` lifecycle frame says the same; whichever comes first.)
+                    let state = if asked { SteerState::Cancelled } else { SteerState::Unused };
+                    self.notes.settle(&id, state, None, &mut self.user_n, o);
+                } else if let Some(n) = self.notes.get(&id) {
+                    n.cancelling = false;
+                    if asked {
+                        o.ev(ChatEventKind::notice(NoticeLevel::Warn, "Too late to withdraw the note: the agent already has it"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// A `TaskCreate` / `TaskUpdate` call succeeded: update the list and show
+    /// all of it as a `TodoWrite` step (`input._synthetic: true`), the shape
+    /// the CLI's older `TodoWrite` tool has, so a UI needs no task ids.
+    fn on_task_result(&mut self, call: &str, name: &str, input: &Value, result: &Value, text: &str, o: &mut Out) {
+        let s = |v: &Value| v.as_str().map(str::to_string);
+        if name == "TaskCreate" {
+            // Observed (2.1.325): `tool_use_result.task.id`, and "Task #1 created successfully: ..." as text.
+            let id = s(&result["task"]["id"])
+                .or_else(|| text.strip_prefix("Task #").and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next()).filter(|d| !d.is_empty()).map(str::to_string));
+            let Some(id) = id else { return };
+            let subject = s(&input["subject"]).or_else(|| s(&result["task"]["subject"])).unwrap_or_default();
+            self.tasks.retain(|t| t.id != id);
+            self.tasks.push(Task { id, subject, active_form: s(&input["activeForm"]), status: "pending".into() });
+        } else {
+            let id = s(&input["taskId"]).or_else(|| input["taskId"].as_u64().map(|n| n.to_string())).unwrap_or_default();
+            let Some(i) = self.tasks.iter().position(|t| t.id == id) else { return };
+            if let Some(st) = s(&input["status"]).or_else(|| s(&result["statusChange"]["to"])) {
+                if st == "deleted" {
+                    self.tasks.remove(i);
+                } else {
+                    self.tasks[i].status = st;
+                }
+            }
+            if let Some(t) = self.tasks.get_mut(i).filter(|t| t.id == id) {
+                if let Some(x) = s(&input["subject"]) {
+                    t.subject = x;
+                }
+                if let Some(x) = s(&input["activeForm"]) {
+                    t.active_form = Some(x);
+                }
+            }
+        }
+        let todos: Vec<Value> = self
+            .tasks
+            .iter()
+            .map(|t| json!({"content": t.subject, "status": t.status, "activeForm": t.active_form.clone().unwrap_or_else(|| t.subject.clone())}))
+            .collect();
+        let done = self.tasks.iter().filter(|t| t.status == "completed").count();
+        let id = format!("{call}:todos");
+        o.ev(ChatEventKind::ToolStart {
+            id: id.clone(),
+            name: "TodoWrite".into(),
+            summary: format!("TodoWrite · {done}/{} done", todos.len()),
+            input: json!({"todos": todos, "_synthetic": true}),
+            parent_tool_id: None,
+        });
+        o.ev(ChatEventKind::ToolEnd { id, ok: true, output: String::new() });
+    }
+
+    /// Notes held while the person was asked go out once nobody is asked.
+    fn after_answer(&mut self, o: &mut Out) {
+        self.start_cut(o);
+        self.flush_notes(o);
+    }
+
+    /// One user line with a uuid the CLI reports on.
+    fn write_user(&mut self, uuid: &str, text: &str, o: &mut Out) {
+        o.write(&json!({"type": "user", "message": {"role": "user", "content": text}, "parent_tool_use_id": null, "session_id": "", "uuid": uuid}));
+        self.cmds.push(uuid.to_string());
+    }
+
+    /// Hands held `next` notes to the CLI once a main-thread step is in
+    /// flight: the CLI takes them in after that step's result. Held while a
+    /// permission request or question is open, while `now` notes wait, and
+    /// while no step runs (a turn that ends without another step leaves them unused).
+    fn flush_notes(&mut self, o: &mut Out) {
+        if !self.perms.is_empty() || self.cut.is_some() || self.open_tools.is_empty() || self.stopping {
+            return;
+        }
+        let ids: Vec<(String, String)> = self.notes.list.iter().filter(|n| !n.sent && !n.now).map(|n| (n.id.clone(), n.text.clone())).collect();
+        for (id, text) in ids {
+            self.write_user(&id, &text, o);
+            if let Some(n) = self.notes.get(&id) {
+                n.sent = true;
+            }
+        }
+    }
+
+    /// Interrupt for held `now` notes (not while the person is being asked).
+    fn start_cut(&mut self, o: &mut Out) {
+        if self.cut.is_some() || !self.perms.is_empty() || self.cmds.is_empty() || !self.notes.list.iter().any(|n| n.now && !n.sent) {
+            return;
+        }
+        let step = self.open_tools.last().cloned();
+        for n in self.notes.list.iter_mut().filter(|n| n.now && !n.sent) {
+            n.cut = step.clone();
+        }
+        self.interrupted = true;
+        self.cut = Some(Cut::default());
+        self.request(json!({"subtype": "interrupt"}), Pending::SteerCut, o);
+    }
+
+    /// The cut turn is over and the interrupt answered: every held note goes
+    /// out now, `now` ones first; the first starts the next turn.
+    fn flush_cut(&mut self, o: &mut Out) {
+        let Some(c) = self.cut.as_ref() else { return };
+        if !(c.acked && c.ended) {
+            return;
+        }
+        let cut = c.cut;
+        self.cut = None;
+        let mut held: Vec<(String, String, bool)> = self.notes.list.iter().filter(|n| !n.sent).map(|n| (n.id.clone(), n.text.clone(), n.now)).collect();
+        held.sort_by_key(|h| !h.2);
+        for (id, text, _) in held {
+            self.write_user(&id, &text, o);
+            if let Some(n) = self.notes.get(&id) {
+                n.sent = true;
+                n.own_turn = true;
+                // Ended on its own before the interrupt landed: nothing was cut.
+                n.now = n.now && cut;
+            }
+        }
+        o.ev(ChatEventKind::State { state: self.working_or_idle() });
+    }
+
+    fn on_lifecycle(&mut self, v: &Value, o: &mut Out) {
+        let Some(uuid) = v["command_uuid"].as_str() else { return };
+        match v["state"].as_str().unwrap_or("") {
+            "started" => {
+                let fold = self.turn_live;
+                self.turn_live = true;
+                let Some(n) = self.notes.get(uuid) else { return };
+                let (state, tool) = if fold {
+                    (SteerState::PickedUp, self.last_tool_end.clone())
+                } else if n.now {
+                    (SteerState::Interrupted, n.cut.clone())
+                } else {
+                    (SteerState::PickedUp, None)
+                };
+                self.notes.settle(uuid, state, tool, &mut self.user_n, o);
+            }
+            "queued" => {}
+            terminal => {
+                self.cmds.retain(|c| c != uuid);
+                if let Some(n) = self.notes.get(uuid) {
+                    // Withdrawn, swept by an interrupt, or dropped with the session.
+                    let state = if n.cancelling && terminal == "cancelled" { SteerState::Cancelled } else { SteerState::Unused };
+                    let _ = n;
+                    self.notes.settle(uuid, state, None, &mut self.user_n, o);
+                }
+                o.ev(ChatEventKind::State { state: self.working_or_idle() });
+            }
         }
     }
 
@@ -525,8 +750,15 @@ impl Claude {
                 Some("tool_use") => {
                     let name = b["name"].as_str().unwrap_or("tool").to_string();
                     let input = b["input"].clone();
+                    let tid = b["id"].as_str().unwrap_or("").to_string();
+                    if parent.is_none() && !tid.is_empty() {
+                        self.open_tools.push(tid.clone());
+                        if name == "TaskCreate" || name == "TaskUpdate" {
+                            self.task_calls.insert(tid.clone(), (name.clone(), input.clone()));
+                        }
+                    }
                     o.ev(ChatEventKind::ToolStart {
-                        id: b["id"].as_str().unwrap_or("").to_string(),
+                        id: tid,
                         summary: tool_summary(&name, &input),
                         name,
                         input,
@@ -535,6 +767,9 @@ impl Claude {
                 }
                 _ => {}
             }
+        }
+        if parent.is_none() {
+            self.flush_notes(o);
         }
     }
 
@@ -600,7 +835,25 @@ impl Claude {
     }
 
     fn on_result(&mut self, v: &Value, o: &mut Out) {
-        self.queued = self.queued.saturating_sub(1);
+        // The lines this turn answered; older CLIs (and our fixtures) list none
+        // of ours: then the oldest.
+        let mut answered: Vec<String> = v["user_message_uuids"].as_array().map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        if let Some(u) = v["user_message_uuid"].as_str() {
+            answered.push(u.to_string());
+        }
+        let before = self.cmds.len();
+        self.cmds.retain(|c| !answered.contains(c));
+        if self.cmds.len() == before && !self.cmds.is_empty() {
+            self.cmds.remove(0);
+        }
+        // Without lifecycle frames, a note listed here was answered by this turn.
+        let listed: Vec<String> = answered.into_iter().filter(|u| self.notes.list.iter().any(|n| n.sent && n.id == *u)).collect();
+        for id in listed {
+            self.notes.settle(&id, SteerState::PickedUp, None, &mut self.user_n, o);
+        }
+        self.turn_live = false;
+        self.open_tools.clear();
+        self.last_tool_end = None;
         let ok = v["is_error"].as_bool() != Some(true);
         if !ok && !self.interrupted {
             let text = v["result"]
@@ -615,7 +868,7 @@ impl Claude {
             }
         }
         self.last_error = None;
-        if self.queued == 0 {
+        if self.cmds.is_empty() {
             self.interrupted = false;
         }
         if let Some(mu) = v["modelUsage"].as_object() {
@@ -628,6 +881,18 @@ impl Claude {
         }
         o.ev(ChatEventKind::TurnEnd { duration_ms: v["duration_ms"].as_u64().unwrap_or(0), ok });
         self.perms.clear();
+        if self.stopping {
+            self.stopping = false;
+            self.cut = None;
+            self.notes.unused(|n| !n.sent, o);
+        } else if let Some(c) = self.cut.as_mut() {
+            c.ended = true;
+            c.cut = !ok;
+            self.flush_cut(o);
+        } else {
+            // Still held: the turn ended before another step took them.
+            self.notes.unused(|n| !n.sent, o);
+        }
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
         self.stream_blocks.clear();
         self.final_blocks.clear();
@@ -713,7 +978,7 @@ impl Backend for Claude {
                     let question = !questions.is_empty();
                     let remember = if question { Vec::new() } else { remember_options(&req["permission_suggestions"], &self.cwd) };
                     let options: Vec<RememberOption> = remember.iter().map(|(o, _)| o.clone()).collect();
-                    self.perms.insert(rid.clone(), Perm { input: input.clone(), remember, question });
+                    self.perms.insert(rid.clone(), Perm { tool: tool.clone(), input: input.clone(), remember, question });
                     if question {
                         o.ev(ChatEventKind::Question { request_id: rid, questions });
                     } else {
@@ -731,6 +996,7 @@ impl Backend for Claude {
                 if let Some(id) = v["request_id"].as_str() {
                     self.perms.remove(id);
                 }
+                self.after_answer(o);
                 o.ev(ChatEventKind::State { state: self.working_or_idle() });
             }
             Some("system") => match v["subtype"].as_str() {
@@ -781,15 +1047,23 @@ impl Backend for Claude {
                 }
                 for b in v["message"]["content"].as_array().into_iter().flatten() {
                     if b["type"] == "tool_result" {
-                        o.ev(ChatEventKind::ToolEnd {
-                            id: b["tool_use_id"].as_str().unwrap_or("").to_string(),
-                            ok: b["is_error"].as_bool() != Some(true),
-                            output: clip(&result_text(&b["content"]), MAX_OUTPUT),
-                        });
+                        let tid = b["tool_use_id"].as_str().unwrap_or("").to_string();
+                        if let Some(i) = self.open_tools.iter().position(|t| *t == tid) {
+                            self.open_tools.remove(i);
+                            self.last_tool_end = Some(tid.clone());
+                        }
+                        let ok = b["is_error"].as_bool() != Some(true);
+                        o.ev(ChatEventKind::ToolEnd { id: tid.clone(), ok, output: clip(&result_text(&b["content"]), MAX_OUTPUT) });
+                        if let Some((name, input)) = self.task_calls.remove(&tid)
+                            && ok
+                        {
+                            self.on_task_result(&tid, &name, &input, &v["tool_use_result"], &result_text(&b["content"]), o);
+                        }
                     }
                 }
             }
             Some("result") => self.on_result(&v, o),
+            Some("command_lifecycle") => self.on_lifecycle(&v, o),
             Some("rate_limit_event") => {
                 crate::usage::observe_claude_rate_limit_event(&v);
                 let info = &v["rate_limit_info"];
@@ -809,17 +1083,55 @@ impl Backend for Claude {
             return Ok(());
         }
         self.user_n += 1;
-        o.write(&json!({"type": "user", "message": {"role": "user", "content": text}, "parent_tool_use_id": null, "session_id": ""}));
-        o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string() });
-        self.queued += 1;
+        self.write_user(&uuid_v4(), text, o);
+        o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string(), steer: false, note_id: None });
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
         Ok(())
     }
 
-    fn interrupt(&mut self, o: &mut Out) -> Result<()> {
-        if self.queued == 0 {
+    fn steer(&mut self, note_id: &str, text: &str, now: bool, o: &mut Out) -> Result<()> {
+        // While the person is asked, nothing is cut: the note waits for the answer.
+        let now = now && self.perms.is_empty();
+        self.notes.add(note_id, text, now, o);
+        if self.cmds.is_empty() {
+            // Idle: the note is the next prompt.
+            self.write_user(note_id, text, o);
+            if let Some(n) = self.notes.get(note_id) {
+                n.sent = true;
+                n.own_turn = true;
+                n.now = false;
+            }
+            o.ev(ChatEventKind::State { state: self.working_or_idle() });
+        } else if now {
+            self.start_cut(o);
+        } else {
+            self.flush_notes(o);
+        }
+        Ok(())
+    }
+
+    fn cancel_steer(&mut self, note_id: &str, o: &mut Out) -> Result<()> {
+        let Some(n) = self.notes.get(note_id) else { bail!("no queued note {note_id} (already delivered or gone)") };
+        if !n.sent {
+            self.notes.settle(note_id, SteerState::Cancelled, None, &mut self.user_n, o);
             return Ok(());
         }
+        n.cancelling = true;
+        self.request(json!({"subtype": "cancel_async_message", "message_uuid": note_id}), Pending::CancelNote(note_id.to_string(), true), o);
+        Ok(())
+    }
+
+    fn interrupt(&mut self, o: &mut Out) -> Result<()> {
+        if self.cmds.is_empty() {
+            return Ok(());
+        }
+        // Stop means stop: notes the CLI holds are withdrawn (they end unused),
+        // the ones coool holds end unused with the turn.
+        let queued: Vec<String> = self.notes.list.iter().filter(|n| n.sent && !n.cancelling).map(|n| n.id.clone()).collect();
+        for id in queued {
+            self.request(json!({"subtype": "cancel_async_message", "message_uuid": id}), Pending::CancelNote(id.clone(), false), o);
+        }
+        self.stopping = true;
         self.interrupted = true;
         self.request(json!({"subtype": "interrupt"}), Pending::Interrupt, o);
         // The CLI abandons its open permission prompts with the turn.
@@ -844,6 +1156,7 @@ impl Backend for Claude {
         let answer = json!({"behavior": "allow", "updatedInput": p.input, "updatedPermissions": updated});
         self.perms.remove(request_id);
         o.write(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": answer}}));
+        self.after_answer(o);
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
         Ok(())
     }
@@ -859,10 +1172,14 @@ impl Backend for Claude {
             json!({"behavior": "allow", "updatedInput": p.input})
         } else if p.question {
             json!({"behavior": "deny", "message": "The user declined to answer."})
+        } else if p.tool == "ExitPlanMode" {
+            // The plain denial ends the turn ("you declined the plan"); the UI's deny means "keep planning".
+            json!({"behavior": "deny", "message": "The user did not approve this plan yet and wants to keep planning. Stay in plan mode: ask what to change if it is unclear, then present a revised plan with ExitPlanMode."})
         } else {
             json!({"behavior": "deny", "message": "The user denied this tool call."})
         };
         o.write(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": answer}}));
+        self.after_answer(o);
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
         Ok(())
     }
@@ -891,14 +1208,16 @@ impl Backend for Claude {
         self.perms.remove(request_id);
         let answer = json!({"behavior": "allow", "updatedInput": input});
         o.write(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": request_id, "response": answer}}));
+        self.after_answer(o);
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
         Ok(())
     }
 
     fn on_exit(&mut self, o: &mut Out) {
         self.perms.clear();
-        if self.queued > 0 {
-            self.queued = 0;
+        self.notes.unused(|_| true, o);
+        if !self.cmds.is_empty() {
+            self.cmds.clear();
             o.ev(ChatEventKind::TurnEnd { duration_ms: 0, ok: false });
         }
     }
@@ -1006,7 +1325,7 @@ mod tests {
         assert_eq!(model, "claude-haiku-5-5");
         assert!(tokens.output > 0 && tokens.context > 0);
         assert_eq!(window, Some(1_000_000));
-        assert_eq!(c.queued, 0);
+        assert!(c.cmds.is_empty());
         assert_eq!(c.working_or_idle(), ChatState::Idle);
     }
 
@@ -1233,6 +1552,168 @@ mod tests {
         let kind = |n: &str| cmds.iter().find(|c| c.name == n).map(|c| c.kind);
         assert_eq!(kind("dataviz"), Some(CommandKind::Skill));
         assert_eq!(kind("compact"), Some(CommandKind::Command));
+    }
+
+    fn steers(evs: &[ChatEventKind]) -> Vec<(String, SteerState, Option<String>)> {
+        evs.iter()
+            .filter_map(|e| match e {
+                ChatEventKind::Steer { text, state, tool_id, .. } => Some((text.clone(), *state, tool_id.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tool_ids(evs: &[ChatEventKind], name: &str) -> Vec<String> {
+        evs.iter().filter_map(|e| if let ChatEventKind::ToolStart { id, name: n, parent_tool_id: None, .. } = e { (n == name).then(|| id.clone()) } else { None }).collect()
+    }
+
+    /// Real run (Claude Code 2.1.325, haiku): a note sent while the first
+    /// `sleep` ran is taken in after it (`command_lifecycle` `started` right
+    /// after that tool's result); a second one is withdrawn while the CLI holds
+    /// it; then a `now` note cuts the next turn's first step and starts a turn.
+    #[test]
+    fn fixture_steer() {
+        let mut c = Claude::new(&opts());
+        let (evs, writes) = crate::chat::testutil::replay_full(&mut c, include_str!("fixtures/claude_steer.jsonl"));
+        let bash = tool_ids(&evs, "Bash");
+        let s = steers(&evs);
+        let settled: Vec<_> = s.iter().filter(|x| x.1 != SteerState::Queued).collect();
+        assert_eq!(settled.len(), 3, "{s:?}");
+        assert_eq!((settled[0].0.as_str(), settled[0].1, settled[0].2.as_deref()), ("Also say apple.", SteerState::Cancelled, None));
+        assert_eq!((settled[1].1, settled[1].2.as_deref()), (SteerState::PickedUp, Some(bash[0].as_str())));
+        assert_eq!((settled[2].1, settled[2].2.as_deref()), (SteerState::Interrupted, Some(bash[3].as_str())));
+        // Delivered notes are echoed as user messages marked as notes.
+        let echoed: Vec<&str> = evs.iter().filter_map(|e| if let ChatEventKind::UserMessage { steer: true, text, .. } = e { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(echoed.len(), 2);
+        // Wire: uuid'd user lines, one cancel_async_message, one interrupt.
+        let w: Vec<Value> = writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
+        assert!(w.iter().filter(|w| w["type"] == "user").all(|w| w["uuid"].is_string()));
+        assert_eq!(w.iter().filter(|w| w["request"]["subtype"] == "cancel_async_message").count(), 1);
+        assert_eq!(w.iter().filter(|w| w["request"]["subtype"] == "interrupt").count(), 1);
+        // A folded note gets no result of its own: the chat still ends idle.
+        assert!(c.cmds.is_empty() && c.notes.list.is_empty());
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+        let ends: Vec<bool> = evs.iter().filter_map(|e| if let ChatEventKind::TurnEnd { ok, .. } = e { Some(*ok) } else { None }).collect();
+        assert_eq!(ends, [true, false, true]);
+        assert!(!evs.iter().any(|e| matches!(e, ChatEventKind::Notice { level: NoticeLevel::Error, .. })), "the cut is not an error");
+    }
+
+    fn line(v: Value) -> String {
+        v.to_string()
+    }
+
+    fn started(uuid: &str) -> String {
+        line(json!({"type": "command_lifecycle", "command_uuid": uuid, "state": "started"}))
+    }
+
+    /// Turn ends with no further step: the held note is not sent and ends
+    /// unused; while a permission is pending notes wait, then go out.
+    #[test]
+    fn notes_wait_for_a_step_and_for_answers() {
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("go", &mut o).unwrap();
+        let first = c.cmds[0].clone();
+        c.on_line(&started(&first), &mut o);
+        // Streaming text, no step in flight: held by coool.
+        c.steer("n1", "late note", false, &mut o).unwrap();
+        assert_eq!(o.writes.iter().filter(|w| w.contains("late note")).count(), 0);
+        let mut o = Out::default();
+        c.on_line(&line(json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 1, "user_message_uuids": [first]})), &mut o);
+        assert_eq!(steers(&o.events), [("late note".to_string(), SteerState::Unused, None)]);
+        assert!(!o.writes.iter().any(|w| w.contains("late note")), "never sent");
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+
+        // A step asks for permission: the note (even `now`) waits for the answer.
+        let mut o = Out::default();
+        c.send("again", &mut o).unwrap();
+        c.on_line(&started(&c.cmds[0].clone()), &mut o);
+        c.on_line(&line(json!({"type": "assistant", "message": {"id": "m", "model": "x", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "touch a"}}]}})), &mut o);
+        c.on_line(&line(json!({"type": "control_request", "request_id": "p1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "touch a"}}})), &mut o);
+        let mut o = Out::default();
+        c.steer("n2", "wait for it", true, &mut o).unwrap();
+        assert!(o.writes.is_empty(), "nothing sent, nothing interrupted");
+        c.respond_permission("p1", true, false, &mut o).unwrap();
+        let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
+        assert_eq!(w.len(), 2);
+        assert_eq!((w[1]["type"].as_str(), w[1]["uuid"].as_str()), (Some("user"), Some("n2")));
+        // Taken in after that step.
+        let mut o = Out::default();
+        c.on_line(&line(json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}})), &mut o);
+        c.on_line(&started("n2"), &mut o);
+        assert_eq!(steers(&o.events), [("wait for it".to_string(), SteerState::PickedUp, Some("t1".to_string()))]);
+        assert!(c.cancel_steer("n2", &mut o).is_err(), "delivered");
+    }
+
+    /// Stop withdraws the notes the CLI holds (they end unused) and the ones
+    /// coool holds end unused with the turn. An idle note is a prompt.
+    #[test]
+    fn stop_leaves_notes_unused_and_idle_note_is_a_prompt() {
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("go", &mut o).unwrap();
+        let first = c.cmds[0].clone();
+        c.on_line(&started(&first), &mut o);
+        c.on_line(&line(json!({"type": "assistant", "message": {"id": "m", "model": "x", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "sleep 9"}}]}})), &mut o);
+        c.steer("sent", "at the cli", false, &mut o).unwrap();
+        let mut o = Out::default();
+        c.interrupt(&mut o).unwrap();
+        let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
+        assert_eq!(w.iter().map(|w| w["request"]["subtype"].as_str().unwrap_or("")).collect::<Vec<_>>(), ["cancel_async_message", "interrupt"]);
+        let rid = w[0]["request_id"].as_str().unwrap();
+        let mut o = Out::default();
+        c.on_line(&line(json!({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {"cancelled": true}}})), &mut o);
+        c.on_line(&line(json!({"type": "command_lifecycle", "command_uuid": "sent", "state": "cancelled"})), &mut o);
+        assert_eq!(steers(&o.events), [("at the cli".to_string(), SteerState::Unused, None)], "once");
+        c.on_line(&line(json!({"type": "result", "subtype": "error_during_execution", "is_error": true, "duration_ms": 1, "user_message_uuids": [first]})), &mut o);
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+
+        let mut o = Out::default();
+        c.steer("idle", "hello", false, &mut o).unwrap();
+        let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
+        assert_eq!((w["uuid"].as_str(), w["message"]["content"].as_str()), (Some("idle"), Some("hello")));
+        c.on_line(&started("idle"), &mut o);
+        assert_eq!(steers(&o.events).last().unwrap().1, SteerState::PickedUp);
+    }
+
+    /// Real run (claude-haiku-4-5, the CLI's task tools are off on newer
+    /// models): `TaskCreate` x3 and `TaskUpdate`s, each followed by a
+    /// synthetic `TodoWrite` step holding the whole list.
+    #[test]
+    fn fixture_tasks_become_a_todo_list() {
+        let mut c = Claude::new(&opts());
+        let evs = replay(&mut c, include_str!("fixtures/claude_tasks.jsonl"));
+        let views: Vec<&Value> = evs.iter().filter_map(|e| if let ChatEventKind::ToolStart { name, input, .. } = e { (name == "TodoWrite").then_some(input) } else { None }).collect();
+        assert_eq!(views.len(), tool_ids(&evs, "TaskCreate").len() + tool_ids(&evs, "TaskUpdate").len());
+        assert_eq!(views.len(), 9);
+        assert!(views.iter().all(|v| v["_synthetic"] == true));
+        let first = &views[0]["todos"];
+        assert_eq!(first, &json!([{"content": "Choose haiku theme", "status": "pending", "activeForm": "Choosing theme"}]));
+        let statuses = |v: &Value| v["todos"].as_array().unwrap().iter().map(|t| t["status"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(statuses(views[3]), ["in_progress", "pending", "pending"]);
+        assert_eq!(statuses(views[8]), ["completed", "completed", "completed"]);
+        assert_eq!(views[8]["todos"][1]["content"], "Write the haiku");
+        // Every synthetic step is complete, and the raw Task* steps still flow.
+        let ends = evs.iter().filter(|e| matches!(e, ChatEventKind::ToolEnd { id, ok: true, .. } if id.ends_with(":todos"))).count();
+        assert_eq!(ends, 9);
+        assert_eq!(tool_ids(&evs, "TaskCreate").len(), 3);
+    }
+
+    /// Real run in plan mode: `ExitPlanMode` asks with `input.plan` (and
+    /// `planFilePath`); approving switches the mode to `default` (a new
+    /// `ready`) and the turn goes on; denying ends that turn.
+    #[test]
+    fn fixture_plan_mode_approval() {
+        let mut c = Claude::new(&ChatOptions { permission_mode: Some("plan".into()), ..opts() });
+        let (evs, writes) = crate::chat::testutil::replay_full(&mut c, include_str!("fixtures/claude_plan_mode.jsonl"));
+        let asks: Vec<&Value> = evs.iter().filter_map(|e| if let ChatEventKind::PermissionRequest { tool, input, .. } = e { (tool == "ExitPlanMode").then_some(input) } else { None }).collect();
+        assert_eq!(asks.len(), 2);
+        assert!(asks.iter().all(|i| i["plan"].as_str().is_some_and(|p| p.starts_with("# Plan")) && i["planFilePath"].is_string()));
+        let modes: Vec<&str> = evs.iter().filter_map(|e| if let ChatEventKind::Ready { permission_mode, .. } = e { Some(permission_mode.as_str()) } else { None }).collect();
+        assert_eq!((modes.first().copied(), modes.last().copied()), (Some("plan"), Some("default")));
+        // The denial asks to keep planning rather than a plain "denied".
+        let deny = writes.iter().map(|w| serde_json::from_str::<Value>(w).unwrap()).find(|w| w["response"]["response"]["behavior"] == "deny").unwrap();
+        assert!(deny["response"]["response"]["message"].as_str().unwrap().contains("keep planning"));
     }
 
     #[test]

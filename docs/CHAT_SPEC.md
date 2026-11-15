@@ -37,6 +37,8 @@ impl Chat {
     pub fn set_permission_mode(&mut self, mode: &str) -> Result<()>;
     pub fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool) -> Result<()>;
     pub fn respond_permission_remember(&mut self, request_id: &str, remember: &str) -> Result<()>; // allow + apply one remember option
+    pub fn steer(&mut self, text: &str, now: bool) -> Result<String>;   // a note for the running turn -> note id (see "Steering")
+    pub fn cancel_steer(&mut self, note_id: &str) -> Result<()>;      // withdraw a note that is still queued
     pub fn stop(&mut self);                                   // end the process
     pub fn events_since(&self, seq: u64) -> (Vec<ChatEvent>, u64); // full history is kept (bounded), so a late UI can replay
     pub fn info(&self) -> ChatInfo;                           // provider, cwd, session_id, model, state, running
@@ -52,7 +54,7 @@ Every event also carries `seq: u64` and `ts: u64` (epoch ms). This JSON is exact
 | type | fields | meaning |
 |---|---|---|
 | `ready` | `session_id`, `model`, `cwd`, `permission_mode`, `slash_commands: [{name, description}]`, `models: [{id, label}]`, `agents: [string]`, `context_window: number \| null` | CLI started; drives autocomplete and pickers. May be re-sent when any of it changes. |
-| `user_message` | `id`, `text` | echo of what was sent |
+| `user_message` | `id`, `text`, `steer: bool`, `note_id: string \| null` | echo of what was sent; `steer: true` (with the note's id) for a steering note the agent took in, shown with its step rather than as a prompt |
 | `text_delta` | `message_id`, `text`, `parent_tool_id: string \| null` | streamed assistant text |
 | `thinking_delta` | `message_id`, `text`, `parent_tool_id` | streamed reasoning, when the provider exposes it |
 | `assistant_message` | `id`, `text`, `model`, `parent_tool_id` | a completed text block (authoritative; replaces deltas) |
@@ -65,6 +67,7 @@ Every event also carries `seq: u64` and `ts: u64` (epoch ms). This JSON is exact
 | `notice` | `level: "info" \| "warn" \| "error"`, `text`, `needs_terminal: bool` | CLI output with no better home, errors, and "this command only works in the terminal" |
 | `exited` | `code: number \| null` | process ended |
 | `question` | `request_id`, `questions: [Question]` | the agent asks the person something; see "Questions" |
+| `steer` | `note_id`, `text`, `state: "queued" \| "picked_up" \| "interrupted" \| "unused" \| "cancelled"`, `tool_id: string \| null` | a steering note changed state; see "Steering" |
 | `commands` | `commands: [{name, description, argument_hint, aliases, kind}]` | the slash commands with `kind`: `command` (runs in the chat), `skill` (sent to the model) or `terminal` (TUI only). Sent right after `ready` whenever it changes; `ready.slash_commands` stays as it was |
 
 ### Remember options ("don't ask again")
@@ -102,6 +105,33 @@ Question = { id: string, header: string, question: string,
 - Codex wire format (`codex app-server generate-ts`, experimental in 0.145): the response is `{"answers": {"<question id>": {"answers": [..]}}}`; a decline is an empty `answers` map.
 - The UI shows a question card in the timeline (same design language as the approval card), the session counts as "Needs you", and the tool step for the question itself is not listed separately.
 
+### Steering
+
+While a turn runs, the person can send a note. `Chat::steer(text, now)` returns a note id; everything after that arrives as `steer` events (the source of truth, replayed like all events):
+
+- `queued`, right away. Then exactly one of:
+- `picked_up`: the agent took the note in at a step boundary of the running turn. `tool_id` is the step after whose result it came in (the step running when the note was sent, or a later one). On an idle chat a note is simply the next prompt: `picked_up` with `tool_id: null`.
+- `interrupted` (`now: true`): the current step was cut and the note started the next turn. `tool_id` is the step that was running when the interrupt went out (`null` if the model was writing text). If the turn ended on its own just before the interrupt landed, the note is `picked_up` with `tool_id: null` instead.
+- `unused`: the turn ended (or was stopped) before the agent took the note in. It was **not** sent; the UI offers "Send now" (a normal `send`) / "Discard".
+- `cancelled`: withdrawn with `cancel_steer` (additive to the original contract, so a replay does not bring back a discarded note).
+
+A delivered note (`picked_up` / `interrupted`) is also echoed as `user_message` with `steer: true` and its `note_id`, right after its `steer` event. While a permission request or question is pending, notes wait until it is answered (a `now` note then acts like `now: false`: the step is the one waiting for the person, so nothing is cut). Stop (`interrupt`) leaves every undelivered note `unused`.
+
+What "next step" truly means, per CLI (observed with Claude Code 2.1.325 and codex-cli 0.145, `sleep 3` steps, haiku / gpt-5.6-luna):
+
+- **Claude Code.** A user line written to stdin mid-turn is queued by the CLI and taken into the *same* turn after the next tool result (`command_lifecycle` `started` arrives right after that `tool_result`; the model sees "The user sent a new message while you were working"; the transcript records a `queued_command` attachment and `queue-operation remove reason:absorbed_mid_turn`; the turn's `result.user_message_uuids` lists it and it gets no `result` of its own). A line still queued when the turn ends is run by the CLI as a turn of its own immediately after the `result`, too fast to withdraw. So coool holds a note itself until a main-thread step is in flight (a `tool_use` without its result) and only then writes it (with `uuid` = note id): it is taken in after that step. A turn that ends without another step leaves the held note `unused`. `cancel_steer` on a note the CLI holds sends `control_request` `cancel_async_message` (answer `{cancelled}` and a `cancelled` lifecycle frame); once taken in it fails. `now: true` sends `interrupt` and, once the cut turn's `result` arrived, writes the note as the next turn. (The CLI's own `priority: "now"` does not cut the running tool: it lets it finish and then restarts the turn, so it is not used.) Residual race: a note written while a very short step finishes can miss that step's boundary; if no further step follows, the CLI runs it as its own turn: reported `picked_up` with `tool_id: null`.
+- **Codex.** `turn/steer {threadId, input, expectedTurnId, clientUserMessageId}` is accepted at once (`{turnId}`) and the input is taken in at the next model request, after the running command's output; delivery is the `item/started` `userMessage` whose `clientId` is the note id. A steer that arrives while the agent writes its final answer extends the turn (the agent answers it), so an accepted steer is always delivered. A rejected one (the turn just ended; `activeTurnNotSteerable` during review/compact) ends `unused` with a notice. Codex has **no way to withdraw** a steer: `cancel_steer` works only while coool still holds the note (a pending approval, or before the turn has an id) and fails afterwards. `now: true` sends `turn/interrupt` (the turn ends `interrupted` at once) and starts the next turn with the note (`turn/start` with `clientUserMessageId`).
+
+Tauri: `chat_steer({id, text, now}) -> string` (note id), `chat_steer_cancel({id, noteId})`. Re-check with `cargo test -p coool-core --test chat_live live_claude_steer live_codex_steer -- --ignored` (fixtures `claude_steer.jsonl`, `codex_steer.jsonl`).
+
+### Plans and task lists
+
+Both arrive as ordinary `tool_start` / `tool_end` pairs.
+
+- **Codex** plan tool: every `turn/plan/updated` becomes one pair named `update_plan` (id `plan-<turn>-<n>`), `input: {plan: [{step, status}], explanation?}` with `status` `pending | in_progress | completed` (Codex's `inProgress` mapped). The whole plan each time; there is no plan item in the turn, so nothing is shown twice. (Codex's `plan` thread item, a plan-mode proposal, is not shown.)
+- **Claude** task list: Claude Code 2.1.325 offers `TaskCreate` / `TaskUpdate` / `TaskGet` / `TaskList` (deferred, loaded through `ToolSearch`), not `TodoWrite` (only with `CLAUDE_CODE_ENABLE_TASKS=0`), and only on older models (e.g. `claude-haiku-4-5`, the 4.x Sonnet/Opus) or with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`: on current models (Haiku 5.5, ...) there is no task tool at all. Observed: `TaskCreate {subject, description, activeForm}` -> result "Task #1 created successfully: …", `tool_use_result.task.id = "1"`; `TaskUpdate {taskId, status}` (`pending | in_progress | completed`, `deleted`) -> `tool_use_result.statusChange {from, to}`. The driver keeps the list and, after each successful call, adds a synthetic pair named `TodoWrite` (id `<call id>:todos`) with `input: {todos: [{content /* subject */, status, activeForm}], _synthetic: true}`, the whole current list. The raw `Task*` steps still flow.
+- **Claude plan mode** (`--permission-mode plan`): when the plan is ready, `permission_request` for `ExitPlanMode` with `input: {plan /* markdown */, planFilePath /* ~/.claude/plans/<name>.md, written by the CLI */}` (the remember list is empty). Allow: the tool result says "User has approved your plan…", the CLI switches to `default` mode (a new `ready` with `permission_mode: "default"`, not `acceptEdits`) and the same turn goes on to work. Deny: the driver answers "did not approve this plan yet and wants to keep planning…" (the plain denial made the agent stop: "You declined the plan, so I've stopped there"); the mode stays `plan`, and the agent revises or asks. Fixtures: `claude_tasks.jsonl`, `claude_plan_mode.jsonl`, `codex_plan.jsonl`.
+
 ### Slash commands
 
 The composer offers `ready.slash_commands` as autocomplete. A command is sent as plain text through `send`. What the structured mode executes shows up as normal events. For commands that have a native equivalent, the app handles them itself and never sends them: `/model` opens the model picker (`set_model`), `/clear` starts a fresh chat in the same folder, `/context`, `/status`, `/cost` and `/usage` open a native panel fed by `usage`, `ready` and the session's token data. For a command that only works in the interactive TUI (login, config screens and the like), the driver emits `notice` with `needs_terminal: true` and the UI offers "Open in terminal", which opens the same session in a PTY via resume.
@@ -126,10 +156,11 @@ pub struct ModelUse { pub model: String, pub input: u64, pub cached: u64, pub ou
 - **Header / inspector:** model in use, context meter against the real `context_window` when known (fall back per model family, never a blanket 200k), tokens, and a "Models" breakdown listing each model used by the session and by each subagent.
 - Titles: a session without a real title shows a short form of its prompt (first sentence, cut at a clause or word, ~56 characters), or the AI insight headline when insights are on; never the whole prompt.
 - Sessions running outside coool are unchanged: read-only Activity from the transcript, with Stop and (once ended) Resume here.
+- Read-only Activity text: each `session.activity[]` / `agent.activity[]` entry has `text` (one line, ~400 columns: lists, TUI, insights) and, for prompts, replies and errors whose one-line form loses anything, `full` (the whole text with line breaks, up to 24,000 characters). Render `full ?? text`. `shortened: true` means what is kept is not the whole message (cut at 24k, or an entry older than the newest 50 full texts of that timeline, which keeps only its one line): say so. Both fields are left out when empty/false. Messages typed mid-turn in Claude Code (`queued_command` attachments) appear as prompts.
 
 ## Tauri contract additions
 
-Commands: `start_chat({opts}) -> number`, `chat_send({id, text})`, `chat_interrupt({id})`, `chat_set_model({id, model})`, `chat_set_permission_mode({id, mode})`, `chat_respond_permission({id, requestId, allow, always, remember?})` (`remember`: a remember option id; allows and applies it), `chat_respond_question({id, requestId, answers: string[][]})`, `chat_stop({id})`, `chat_replay({id}) -> {events, seq}`, `open_in_terminal({id}) -> number` (PTY id).
+Commands: `start_chat({opts}) -> number`, `chat_send({id, text})`, `chat_interrupt({id})`, `chat_steer({id, text, now}) -> string`, `chat_steer_cancel({id, noteId})`, `chat_set_model({id, model})`, `chat_set_permission_mode({id, mode})`, `chat_respond_permission({id, requestId, allow, always, remember?})` (`remember`: a remember option id; allows and applies it), `chat_respond_question({id, requestId, answers: string[][]})`, `chat_stop({id})`, `chat_replay({id}) -> {events, seq}`, `open_in_terminal({id}) -> number` (PTY id).
 
 `chat_set_permission_mode` for Codex takes an approval policy (`untrusted`, `on-request`, `on-failure`, `never`) or a sandbox mode (`read-only`, `workspace-write`, `danger-full-access`); both apply from the next turn. `ready.permission_mode` reports the approval policy.
 

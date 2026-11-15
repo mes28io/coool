@@ -404,6 +404,15 @@ fn parse_line(
                 *last_prompt = Some(t.to_string());
             }
         }
+        // A message typed while the turn ran, taken in between two steps
+        // (Claude Code 2.1.x): it never appears as a `user` line of its own.
+        Some("attachment") if v["attachment"]["type"] == "queued_command" && v["attachment"]["commandMode"].as_str().is_none_or(|m| m == "prompt") => {
+            let p = &v["attachment"]["prompt"];
+            let s = p.as_str().map(str::to_string).or_else(|| result_text(p)).unwrap_or_default();
+            if !s.trim().is_empty() && !s.starts_with('<') {
+                push_activity(activity, Activity::message(ts, ActivityKind::Prompt, &s, 400));
+            }
+        }
         Some("system") if v["subtype"] == "turn_duration" => {
             *current = None;
             st.open_tools.clear();
@@ -422,8 +431,8 @@ fn parse_line(
                                 st.open_tools.retain(|(t, _)| t != id);
                             }
                             if item["is_error"].as_bool() == Some(true) {
-                                let txt = result_text(&item["content"]).map(|s| one_line(&s, 200)).unwrap_or_else(|| "tool error".into());
-                                push_activity(activity, Activity { ts: ts.clone(), kind: ActivityKind::Error, text: txt });
+                                let txt = result_text(&item["content"]).unwrap_or_else(|| "tool error".into());
+                                push_activity(activity, Activity::message(ts.clone(), ActivityKind::Error, &txt, 200));
                             }
                             // Still-running parallel calls take precedence; the most recent one wins.
                             *current = st.open_tools.last().map(|(_, s)| s.clone()).or(Some("thinking…".into()));
@@ -447,7 +456,7 @@ fn parse_line(
                 }
             if v["isApiErrorMessage"].as_bool() == Some(true) {
                 let txt = msg["content"][0]["text"].as_str().unwrap_or("API error");
-                push_activity(activity, Activity { ts: ts.clone(), kind: ActivityKind::Error, text: one_line(txt, 200) });
+                push_activity(activity, Activity::message(ts.clone(), ActivityKind::Error, txt, 200));
                 *current = None;
             }
             // Usage is repeated on every content block of a message; count it once.
@@ -486,13 +495,13 @@ fn parse_line(
                                 st.open_tools.push((id.to_string(), sum.clone()));
                             }
                             let kind = if name == "Agent" || name == "Task" { ActivityKind::Agent } else { ActivityKind::Tool };
-                            push_activity(activity, Activity { ts: ts.clone(), kind, text: sum.clone() });
+                            push_activity(activity, Activity::line(ts.clone(), kind, sum.clone()));
                             *current = Some(sum);
                         }
                         Some("text") if v["isApiErrorMessage"].as_bool() != Some(true) => {
                             let s = item["text"].as_str().unwrap_or("");
                             if !s.trim().is_empty() {
-                                push_activity(activity, Activity { ts: ts.clone(), kind: ActivityKind::Text, text: one_line(s, 400) });
+                                push_activity(activity, Activity::message(ts.clone(), ActivityKind::Text, s, 400));
                             }
                         }
                         Some("thinking") => {
@@ -525,10 +534,10 @@ fn user_text(s: &str, ts: String, st: &mut ParseState, current: &mut Option<Stri
         // The turn is over; calls that never got a result are abandoned.
         st.open_tools.clear();
         *current = None;
-        push_activity(activity, Activity { ts, kind: ActivityKind::Error, text: "interrupted by user".into() });
+        push_activity(activity, Activity::line(ts, ActivityKind::Error, "interrupted by user"));
         return;
     }
-    push_activity(activity, Activity { ts, kind: ActivityKind::Prompt, text: one_line(s, 400) });
+    push_activity(activity, Activity::message(ts, ActivityKind::Prompt, s, 400));
     *current = Some("thinking…".into());
 }
 
@@ -544,6 +553,7 @@ fn result_text(c: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[derive(Default)]
     struct Out {
@@ -571,6 +581,72 @@ mod tests {
 
     fn tool_result(id: &str) -> String {
         format!(r#"{{"type":"user",{TS},"message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}","content":"ok"}}]}}}}"#)
+    }
+
+    /// Prompts, replies and errors keep their whole text (line breaks
+    /// included) beside the one-line form; tool steps stay one line.
+    #[test]
+    fn messages_keep_their_full_text() {
+        let mut o = Out::default();
+        let reply = "| a | b |\n|---|---|\n| **1** | 2 |\n\nDone.";
+        let prompt = format!("fix it\n\n{}", "word ".repeat(200));
+        let rec = |ty: &str, content: &str| format!(r#"{{"type":"{ty}",{TS},"message":{{"id":"m1","model":"claude-x","content":{content}}}}}"#);
+        feed(&mut o, &rec("user", &serde_json::to_string(&prompt).unwrap()));
+        feed(&mut o, &tool_use("t1", "ls"));
+        feed(&mut o, &format!(r#"{{"type":"user",{TS},"message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"line one\nline two"}}]}}}}"#));
+        feed(&mut o, &rec("assistant", &serde_json::to_string(&json!([{"type": "text", "text": reply}])).unwrap()));
+        feed(&mut o, &rec("assistant", r#"[{"type":"text","text":"short"}]"#));
+        let a = &o.activity;
+        assert_eq!(a.len(), 5);
+        assert_eq!((a[0].kind, a[0].full.as_deref()), (ActivityKind::Prompt, Some(prompt.trim())));
+        assert!(!a[0].text.contains('\n') && a[0].text.ends_with('…'));
+        assert_eq!((a[1].kind, a[1].full.as_deref(), a[1].text.as_str()), (ActivityKind::Tool, None, "Bash · ls"));
+        assert_eq!((a[2].kind, a[2].full.as_deref()), (ActivityKind::Error, Some("line one\nline two")));
+        assert_eq!(a[3].full.as_deref(), Some(reply));
+        assert_eq!(a[3].text, "| a | b | |---|---| | **1** | 2 | Done.");
+        // Nothing lost in the one-line form: no separate copy.
+        assert_eq!((a[4].text.as_str(), a[4].full.as_deref(), a[4].shortened), ("short", None, false));
+        assert!(a.iter().all(|x| !x.shortened));
+    }
+
+    #[test]
+    fn full_text_is_bounded_and_kept_only_for_recent_entries() {
+        let mut o = Out::default();
+        let big = "x\n".repeat(MAX_FULL);
+        let msg = |t: &str| format!(r#"{{"type":"assistant",{TS},"message":{{"id":"m","model":"claude-x","content":{}}}}}"#, serde_json::to_string(&json!([{"type": "text", "text": t}])).unwrap());
+        feed(&mut o, &msg(&big));
+        let a = &o.activity[0];
+        assert!(a.shortened, "cut at the limit");
+        assert_eq!(a.full.as_deref().unwrap().chars().count(), MAX_FULL + 1, "the limit plus the ellipsis");
+        for i in 0..FULL_RECENT {
+            feed(&mut o, &msg(&format!("reply {i}\nsecond line")));
+            // Steps don't use up the window.
+            feed(&mut o, &tool_use(&format!("t{i}"), "ls"));
+        }
+        let a: Vec<&Activity> = o.activity.iter().filter(|a| a.kind == ActivityKind::Text).collect();
+        assert_eq!(a.len(), FULL_RECENT + 1);
+        // The oldest fell out of the recent window: one line only, marked.
+        assert!(a[0].full.is_none() && a[0].shortened && !a[0].text.is_empty());
+        assert!(a[1..].iter().all(|x| x.full.is_some() && !x.shortened));
+        // Serialized: the extra fields only when they say something.
+        let v = serde_json::to_value(a[0]).unwrap();
+        assert_eq!((v.get("full"), v["shortened"].as_bool()), (None, Some(true)));
+        let v = serde_json::to_value(Activity::line("t".into(), ActivityKind::Tool, "Bash · ls")).unwrap();
+        assert_eq!(v, json!({"ts": "t", "kind": "tool", "text": "Bash · ls"}));
+        let back: Activity = serde_json::from_value(v).unwrap();
+        assert!(back.full.is_none() && !back.shortened);
+    }
+
+    /// Claude Code 2.1.325 records a message typed mid-turn as a
+    /// `queued_command` attachment (no `user` line), as seen in a real run.
+    #[test]
+    fn mid_turn_message_is_a_prompt() {
+        let mut o = Out::default();
+        feed(&mut o, &tool_use("t1", "sleep 3"));
+        feed(&mut o, &format!(r#"{{"parentUuid":"p","isSidechain":false,"attachment":{{"type":"queued_command","prompt":"Also: say banana.","source_uuid":"d2ce","delivery_id":"805c","commandMode":"prompt","timestamp":"2026-11-15T07:52:59.943Z"}},"type":"attachment","uuid":"9f75",{TS}}}"#));
+        feed(&mut o, &format!(r#"{{"type":"attachment",{TS},"attachment":{{"type":"queued_command","prompt":"/compact","commandMode":"slash"}}}}"#));
+        let p: Vec<_> = o.activity.iter().filter(|a| a.kind == ActivityKind::Prompt).map(|a| a.text.as_str()).collect();
+        assert_eq!(p, ["Also: say banana."]);
     }
 
     #[test]

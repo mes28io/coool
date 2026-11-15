@@ -4,7 +4,9 @@
 //! - client -> server: `initialize` (then the `initialized` notification),
 //!   `model/list`, `thread/start` | `thread/resume`, `turn/start` (per-turn
 //!   overrides for model / approval policy / sandbox stick for later turns),
-//!   `turn/steer` (add input to the running turn), `turn/interrupt`,
+//!   `turn/steer` (add input to the running turn: taken in at its next model
+//!   request, reported as a `userMessage` item carrying the `clientUserMessageId`
+//!   it was sent with; it cannot be withdrawn), `turn/interrupt`,
 //!   `thread/compact/start`, `review/start`.
 //! - server -> client notifications: `turn/started|completed`,
 //!   `item/started|completed` (agentMessage, reasoning, commandExecution,
@@ -69,7 +71,10 @@ enum Req {
     Init,
     ModelList,
     Thread,
-    Turn,
+    /// `turn/start`; with the note it carries, if any.
+    Turn(Option<String>),
+    /// `turn/steer` for a note.
+    Steer(String),
     Other(&'static str),
 }
 
@@ -113,6 +118,15 @@ pub(crate) struct Codex {
     /// fileChange item -> paths, for approval summaries.
     file_changes: HashMap<String, Vec<String>>,
     user_n: u64,
+    notes: Notes,
+    /// The newest main-thread step of the running turn.
+    last_tool: Option<String>,
+    /// A `turn/interrupt` went out for `now` notes; they start the next turn.
+    cutting: bool,
+    /// `interrupt()` (Stop) was called: notes still held end unused.
+    stopping: bool,
+    /// `turn/plan/updated` seen, numbering the `update_plan` steps.
+    plans: u64,
     /// `clientInfo.name` in `initialize`; Codex records it as the rollout's
     /// `originator`, which is how a later launch recognises coool's own threads.
     pub(crate) client_name: String,
@@ -145,6 +159,11 @@ impl Codex {
             started_tools: HashSet::new(),
             file_changes: HashMap::new(),
             user_n: 0,
+            notes: Notes::default(),
+            last_tool: None,
+            cutting: false,
+            stopping: false,
+            plans: 0,
             client_name: crate::origin::CLIENT_NAME.to_string(),
         };
         if let Some(m) = &opts.permission_mode {
@@ -215,16 +234,29 @@ impl Codex {
         }
     }
 
-    fn start_turn(&mut self, text: &str, o: &mut Out) {
+    /// A turn for `text` (or, mid-turn, a steer). `note`: the steering note it
+    /// carries, sent as `clientUserMessageId` so its delivery can be seen.
+    fn start_turn(&mut self, text: &str, note: Option<&str>, o: &mut Out) {
         let Some(tid) = self.thread_id.clone() else { return };
         let input = json!([{"type": "text", "text": text, "text_elements": []}]);
         if self.in_turn
             && let Some(turn) = self.turn_id.clone()
         {
-            self.request("turn/steer", json!({"threadId": tid, "input": input, "expectedTurnId": turn}), Req::Other("add to the turn"), o);
+            let mut p = json!({"threadId": tid, "input": input, "expectedTurnId": turn});
+            let kind = match note {
+                Some(n) => {
+                    p["clientUserMessageId"] = json!(n);
+                    Req::Steer(n.to_string())
+                }
+                None => Req::Other("add to the turn"),
+            };
+            self.request("turn/steer", p, kind, o);
             return;
         }
         let mut p = json!({"threadId": tid, "input": input});
+        if let Some(n) = note {
+            p["clientUserMessageId"] = json!(n);
+        }
         if let Some(m) = self.next_model.take() {
             p["model"] = json!(m);
         }
@@ -235,7 +267,75 @@ impl Codex {
             p["sandboxPolicy"] = sandbox_policy(&s);
         }
         self.in_turn = true;
-        self.request("turn/start", p, Req::Turn, o);
+        self.request("turn/start", p, Req::Turn(note.map(str::to_string)), o);
+    }
+
+    /// Sends what held notes can be sent now: none while the person is asked
+    /// or the turn id is unknown; held `now` notes interrupt the turn (they
+    /// start the next one); `next` notes become `turn/steer`s; on an idle
+    /// thread the first note starts a turn.
+    fn flush_notes(&mut self, o: &mut Out) {
+        if !self.perms.is_empty() || self.thread_id.is_none() || self.stopping {
+            return;
+        }
+        if !self.in_turn {
+            if self.cutting {
+                return;
+            }
+            let Some((id, text)) = self.notes.list.iter().find(|n| !n.sent).map(|n| (n.id.clone(), n.text.clone())) else { return };
+            if let Some(n) = self.notes.get(&id) {
+                n.sent = true;
+                n.own_turn = true;
+            }
+            self.start_turn(&text, Some(&id), o);
+            return;
+        }
+        let Some(turn) = self.turn_id.clone() else { return };
+        if self.cutting {
+            return;
+        }
+        if self.notes.list.iter().any(|n| n.now && !n.sent) {
+            let step = self.last_tool.clone();
+            for n in self.notes.list.iter_mut().filter(|n| n.now && !n.sent) {
+                n.cut = step.clone();
+            }
+            self.cutting = true;
+            let tid = self.thread_id.clone().unwrap_or_default();
+            self.request("turn/interrupt", json!({"threadId": tid, "turnId": turn}), Req::Other("interrupt the step for the note"), o);
+            return;
+        }
+        let held: Vec<(String, String)> = self.notes.list.iter().filter(|n| !n.sent).map(|n| (n.id.clone(), n.text.clone())).collect();
+        for (id, text) in held {
+            if let Some(n) = self.notes.get(&id) {
+                n.sent = true;
+            }
+            self.start_turn(&text, Some(&id), o);
+        }
+    }
+
+    /// The main turn ended: notes that did not reach the agent end unused,
+    /// except those an interrupt was sent for (and the ones queued with
+    /// them), which start the next turn.
+    fn notes_at_turn_end(&mut self, interrupted: bool, o: &mut Out) {
+        self.last_tool = None;
+        // A steer Codex accepted but never took in (it normally extends the turn).
+        self.notes.unused(|n| n.sent, o);
+        if self.stopping {
+            self.stopping = false;
+            self.cutting = false;
+            self.notes.unused(|_| true, o);
+            return;
+        }
+        if !std::mem::take(&mut self.cutting) {
+            self.notes.unused(|_| true, o);
+            return;
+        }
+        // `now` first: it starts the turn; the rest are steered into it.
+        self.notes.list.sort_by_key(|n| !n.now);
+        for n in self.notes.list.iter_mut() {
+            n.now = n.now && interrupted;
+        }
+        self.flush_notes(o);
     }
 
     fn parent_for(&self, thread: &Value) -> Option<String> {
@@ -258,9 +358,17 @@ impl Codex {
                 Req::Init => "start Codex",
                 Req::ModelList => return,
                 Req::Thread => "open the thread",
-                Req::Turn => {
+                Req::Turn(note) => {
                     self.in_turn = false;
+                    if let Some(n) = note {
+                        self.notes.settle(&n, SteerState::Unused, None, &mut self.user_n, o);
+                    }
                     "start the turn"
+                }
+                Req::Steer(n) => {
+                    // Typically the turn ended just before (expectedTurnId no longer matches).
+                    self.notes.settle(&n, SteerState::Unused, None, &mut self.user_n, o);
+                    "add the note to the turn"
                 }
                 Req::Other(w) => w,
             };
@@ -301,16 +409,18 @@ impl Codex {
                 }
                 self.ready(o);
                 for text in std::mem::take(&mut self.queue) {
-                    self.start_turn(&text, o);
+                    self.start_turn(&text, None, o);
                 }
+                self.flush_notes(o);
                 o.ev(ChatEventKind::State { state: self.state() });
             }
-            Req::Turn => {
+            Req::Turn(_) => {
                 if let Some(t) = r["turn"]["id"].as_str() {
                     self.turn_id = Some(t.to_string());
                 }
+                self.flush_notes(o);
             }
-            Req::Other(_) => {}
+            Req::Steer(_) | Req::Other(_) => {}
         }
     }
 
@@ -388,6 +498,19 @@ impl Codex {
             self.file_changes.insert(id.clone(), paths);
         }
         match ty {
+            // A steering note reaching the agent (its clientUserMessageId comes back as clientId).
+            "userMessage" if started && parent.is_none() => {
+                let Some(cid) = item["clientId"].as_str() else { return };
+                let Some(n) = self.notes.get(cid) else { return };
+                let (state, tool) = if !n.own_turn {
+                    (SteerState::PickedUp, self.last_tool.clone())
+                } else if n.now {
+                    (SteerState::Interrupted, n.cut.clone())
+                } else {
+                    (SteerState::PickedUp, None)
+                };
+                self.notes.settle(cid, state, tool, &mut self.user_n, o);
+            }
             "agentMessage" if !started => {
                 let text = item["text"].as_str().unwrap_or("").to_string();
                 if !text.is_empty() {
@@ -397,6 +520,9 @@ impl Codex {
             "agentMessage" | "userMessage" | "reasoning" | "plan" | "hookPrompt" | "contextCompaction" | "enteredReviewMode" | "exitedReviewMode" => {}
             _ => {
                 let Some((name, summary, input)) = tool_view(item) else { return };
+                if started && parent.is_none() {
+                    self.last_tool = Some(id.clone());
+                }
                 if started || !self.started_tools.contains(&id) {
                     self.started_tools.insert(id.clone());
                     o.ev(ChatEventKind::ToolStart { id: id.clone(), name, summary, input, parent_tool_id: parent });
@@ -415,7 +541,18 @@ impl Codex {
             "turn/started" if self.is_main(&p["threadId"]) => {
                 self.turn_id = p["turn"]["id"].as_str().map(str::to_string);
                 self.in_turn = true;
+                self.last_tool = None;
+                self.flush_notes(o);
                 o.ev(ChatEventKind::State { state: self.state() });
+            }
+            // The plan tool's whole list after each change: shown as an `update_plan` step.
+            "turn/plan/updated" if self.is_main(&p["threadId"]) => {
+                self.plans += 1;
+                let id = format!("plan-{}-{}", p["turnId"].as_str().unwrap_or(""), self.plans);
+                let input = plan_input(p);
+                let n = input["plan"].as_array().map_or(0, Vec::len);
+                o.ev(ChatEventKind::ToolStart { id: id.clone(), name: "update_plan".into(), summary: format!("update_plan · {n} steps"), input, parent_tool_id: None });
+                o.ev(ChatEventKind::ToolEnd { id, ok: true, output: String::new() });
             }
             "turn/completed" if self.is_main(&p["threadId"]) => {
                 let t = &p["turn"];
@@ -429,6 +566,7 @@ impl Codex {
                 self.perms.clear();
                 self.remember.clear();
                 o.ev(ChatEventKind::TurnEnd { duration_ms: t["durationMs"].as_u64().unwrap_or(0), ok: status == "completed" });
+                self.notes_at_turn_end(status == "interrupted", o);
                 o.ev(ChatEventKind::State { state: self.state() });
             }
             "item/started" => self.on_item(true, p, o),
@@ -503,6 +641,7 @@ impl Codex {
                     other => other.to_string(),
                 };
                 if self.perms.remove(&rid).is_some() {
+                    self.flush_notes(o);
                     o.ev(ChatEventKind::State { state: self.state() });
                 }
             }
@@ -577,6 +716,29 @@ fn parse_questions(v: &Value) -> Vec<Question> {
             })
         })
         .collect()
+}
+
+/// `turn/plan/updated` -> `{plan: [{step, status}], explanation?}`, statuses
+/// as `pending | in_progress | completed` (Codex says `inProgress`).
+fn plan_input(p: &Value) -> Value {
+    let plan: Vec<Value> = p["plan"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|s| {
+            let status = match s["status"].as_str().unwrap_or("pending") {
+                "inProgress" | "in_progress" => "in_progress",
+                "completed" => "completed",
+                _ => "pending",
+            };
+            json!({"step": s["step"].as_str().unwrap_or(""), "status": status})
+        })
+        .collect();
+    let mut v = json!({"plan": plan});
+    if let Some(e) = p["explanation"].as_str().filter(|e| !e.is_empty()) {
+        v["explanation"] = json!(e);
+    }
+    v
 }
 
 fn approval_name(v: &Value) -> Option<String> {
@@ -809,7 +971,7 @@ impl Backend for Codex {
                         self.request("review/start", json!({"threadId": tid, "target": target}), Req::Other("start the review"), o);
                     }
                     self.user_n += 1;
-                    o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string() });
+                    o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string(), steer: false, note_id: None });
                     return Ok(());
                 }
                 "model" if !args.is_empty() => {
@@ -830,18 +992,43 @@ impl Backend for Codex {
             }
         }
         self.user_n += 1;
-        o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string() });
+        o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string(), steer: false, note_id: None });
         if self.thread_id.is_none() {
             self.queue.push(text.to_string());
         } else {
-            self.start_turn(text, o);
+            self.start_turn(text, None, o);
         }
         o.ev(ChatEventKind::State { state: self.state() });
         Ok(())
     }
 
+    fn steer(&mut self, note_id: &str, text: &str, now: bool, o: &mut Out) -> Result<()> {
+        // While the person is asked, nothing is cut: the note waits for the answer.
+        let now = now && self.perms.is_empty() && self.in_turn;
+        self.notes.add(note_id, text, now, o);
+        self.flush_notes(o);
+        o.ev(ChatEventKind::State { state: self.state() });
+        Ok(())
+    }
+
+    fn cancel_steer(&mut self, note_id: &str, o: &mut Out) -> Result<()> {
+        match self.notes.get(note_id) {
+            None => bail!("no queued note {note_id} (already delivered or gone)"),
+            Some(n) if n.sent => bail!("Codex already has the note and offers no way to take it back; it reaches the agent at its next step"),
+            Some(_) => {
+                self.notes.settle(note_id, SteerState::Cancelled, None, &mut self.user_n, o);
+                Ok(())
+            }
+        }
+    }
+
     fn interrupt(&mut self, o: &mut Out) -> Result<()> {
         self.queue.clear();
+        if self.in_turn {
+            self.stopping = true;
+        } else {
+            self.notes.unused(|_| true, o);
+        }
         if let (Some(tid), Some(turn)) = (self.thread_id.clone(), self.turn_id.clone())
             && self.in_turn
         {
@@ -886,6 +1073,7 @@ impl Backend for Codex {
         let Some((id, _)) = self.perms.remove(request_id) else { bail!("no pending permission request {request_id}") };
         self.remember.remove(request_id);
         o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"decision": decision}}));
+        self.flush_notes(o);
         o.ev(ChatEventKind::State { state: self.state() });
         Ok(())
     }
@@ -912,6 +1100,7 @@ impl Backend for Codex {
             (PermKind::Question(_), _) => unreachable!("handled above"),
         };
         o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"decision": decision}}));
+        self.flush_notes(o);
         o.ev(ChatEventKind::State { state: self.state() });
         Ok(())
     }
@@ -931,6 +1120,7 @@ impl Backend for Codex {
         }
         let (id, _) = self.perms.remove(request_id).expect("checked");
         o.write(&json!({"jsonrpc": "2.0", "id": id, "result": {"answers": map}}));
+        self.flush_notes(o);
         o.ev(ChatEventKind::State { state: self.state() });
         Ok(())
     }
@@ -939,6 +1129,7 @@ impl Backend for Codex {
         self.perms.clear();
         self.remember.clear();
         self.queue.clear();
+        self.notes.unused(|_| true, o);
         if self.in_turn {
             self.in_turn = false;
             o.ev(ChatEventKind::TurnEnd { duration_ms: 0, ok: false });
@@ -1072,7 +1263,7 @@ mod tests {
         assert!(c.set_permission_mode("bogus", &mut o).is_err());
         c.set_permission_mode("never", &mut o).unwrap();
         c.set_permission_mode("danger-full-access", &mut o).unwrap();
-        c.start_turn("go", &mut o);
+        c.start_turn("go", None, &mut o);
         let t: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
         assert_eq!((t["params"]["approvalPolicy"].as_str(), t["params"]["sandboxPolicy"]["type"].as_str(), t["params"]["model"].as_str()), (Some("never"), Some("dangerFullAccess"), Some("gpt-x")));
     }
@@ -1142,6 +1333,79 @@ mod tests {
         let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
         assert_eq!((w["id"].as_u64(), w["error"]["code"].as_i64()), (Some(9), Some(-32601)));
         assert!(matches!(o.events[0], ChatEventKind::Notice { needs_terminal: true, .. }));
+    }
+
+    fn steers(evs: &[ChatEventKind]) -> Vec<(SteerState, Option<String>)> {
+        evs.iter().filter_map(|e| if let ChatEventKind::Steer { state, tool_id, .. } = e { (*state != SteerState::Queued).then(|| (*state, tool_id.clone())) } else { None }).collect()
+    }
+
+    /// Real run (codex-cli 0.145, gpt-5.6-luna): two `turn/steer`s while the
+    /// first command ran, taken in at the next model request (their
+    /// `userMessage` items carry our ids); then a `now` note: `turn/interrupt`,
+    /// and the note starts the next turn.
+    #[test]
+    fn fixture_steer() {
+        let mut c = Codex::new(&ChatOptions { permission_mode: Some("never".into()), ..opts() });
+        let (evs, writes) = replay_full(&mut c, include_str!("fixtures/codex_steer.jsonl"));
+        let shells: Vec<String> = evs.iter().filter_map(|e| if let ChatEventKind::ToolStart { id, parent_tool_id: None, .. } = e { Some(id.clone()) } else { None }).collect();
+        let s = steers(&evs);
+        assert_eq!(s, [(SteerState::PickedUp, Some(shells[0].clone())), (SteerState::PickedUp, Some(shells[0].clone())), (SteerState::Interrupted, Some(shells[3].clone()))]);
+        let w: Vec<Value> = writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
+        let steer: Vec<&Value> = w.iter().filter(|w| w["method"] == "turn/steer").collect();
+        assert_eq!(steer.len(), 2);
+        assert!(steer.iter().all(|w| w["params"]["clientUserMessageId"].is_string() && w["params"]["expectedTurnId"].is_string()));
+        let starts: Vec<&Value> = w.iter().filter(|w| w["method"] == "turn/start").collect();
+        assert!(starts.last().unwrap()["params"]["clientUserMessageId"].is_string(), "the note's own turn");
+        assert_eq!(w.iter().filter(|w| w["method"] == "turn/interrupt").count(), 1);
+        assert!(c.notes.list.is_empty());
+        assert_eq!(c.state(), ChatState::Idle);
+    }
+
+    #[test]
+    fn notes_wait_for_answers_and_end_unused() {
+        let mut c = Codex::new(&opts());
+        c.thread_id = Some("t1".into());
+        let mut o = Out::default();
+        c.on_line(r#"{"method":"turn/started","params":{"threadId":"t1","turn":{"id":"turn1"}}}"#, &mut o);
+        c.on_line(r#"{"jsonrpc":"2.0","id":0,"method":"item/commandExecution/requestApproval","params":{"threadId":"t1","itemId":"e1","command":"touch a","availableDecisions":["accept","decline"]}}"#, &mut o);
+        let mut o = Out::default();
+        c.steer("n1", "after the answer", true, &mut o).unwrap();
+        assert!(o.writes.is_empty());
+        // Held by coool: still withdrawable.
+        c.steer("n2", "never mind", false, &mut o).unwrap();
+        c.cancel_steer("n2", &mut o).unwrap();
+        assert_eq!(steers(&o.events), [(SteerState::Cancelled, None)]);
+        let mut o = Out::default();
+        c.respond_permission("0", true, false, &mut o).unwrap();
+        let w: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!((w["method"].as_str(), w["params"]["clientUserMessageId"].as_str()), (Some("turn/steer"), Some("n1")), "a steer, not an interrupt");
+        assert!(c.cancel_steer("n1", &mut o).is_err(), "Codex has it");
+        // Rejected (the turn just ended): unused, with a notice.
+        let id = w["id"].as_u64().unwrap();
+        let mut o = Out::default();
+        c.on_line(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32600, "message": "no active turn"}}).to_string(), &mut o);
+        assert_eq!(steers(&o.events), [(SteerState::Unused, None)]);
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::Notice { .. })));
+    }
+
+    /// Real run: `turn/plan/updated` (no plan item in the turn) becomes one
+    /// `update_plan` step per update, statuses in snake case.
+    #[test]
+    fn fixture_plan_updates_are_steps() {
+        let mut c = Codex::new(&ChatOptions { permission_mode: Some("never".into()), ..opts() });
+        let evs = replay(&mut c, include_str!("fixtures/codex_plan.jsonl"));
+        let plans: Vec<(String, Value)> = evs.iter().filter_map(|e| if let ChatEventKind::ToolStart { id, name, input, .. } = e { (name == "update_plan").then(|| (id.clone(), input.clone())) } else { None }).collect();
+        assert_eq!(plans.len(), 4);
+        let st = |v: &Value| v["plan"].as_array().unwrap().iter().map(|s| s["status"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(st(&plans[0].1), ["in_progress", "pending", "pending"]);
+        assert_eq!(st(&plans[3].1), ["completed", "completed", "completed"]);
+        assert!(plans[0].1["plan"][0]["step"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(plans[0].1.get("explanation").is_none(), "null explanation left out");
+        for (id, _) in &plans {
+            assert!(evs.iter().any(|e| matches!(e, ChatEventKind::ToolEnd { id: i, ok: true, .. } if i == id)));
+        }
+        let ids: HashSet<&String> = plans.iter().map(|p| &p.0).collect();
+        assert_eq!(ids.len(), 4, "one pair per update");
     }
 
     #[test]

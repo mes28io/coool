@@ -190,6 +190,11 @@ pub enum ChatEventKind {
     UserMessage {
         id: String,
         text: String,
+        /// A steering note the agent took in (see [`ChatEventKind::Steer`]):
+        /// shown with its step, not as a prompt of its own.
+        steer: bool,
+        /// The note's id when `steer`.
+        note_id: Option<String>,
     },
     TextDelta {
         message_id: String,
@@ -262,6 +267,34 @@ pub enum ChatEventKind {
     Commands {
         commands: Vec<CommandInfo>,
     },
+    /// A steering note ([`Chat::steer`]) changed state. Sent `queued` when it
+    /// is made, then once with where it ended. `tool_id`: the step it attached
+    /// to (`picked_up`: the step after whose result the agent took it in;
+    /// `interrupted`: the step that was cut), when known.
+    Steer {
+        note_id: String,
+        text: String,
+        state: SteerState,
+        tool_id: Option<String>,
+    },
+}
+
+/// Where a steering note is. `queued` is the only state that changes again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SteerState {
+    /// Waiting for the agent's next step (held by coool or by the CLI).
+    Queued,
+    /// The agent took it in at a step boundary of the running turn (or, if
+    /// the chat was idle, it started a turn).
+    PickedUp,
+    /// Delivered by interrupting the current step; it starts the next turn.
+    Interrupted,
+    /// The turn ended (or was stopped) before the agent took it in. It was not
+    /// sent; the UI offers to send or discard it.
+    Unused,
+    /// Withdrawn with [`Chat::cancel_steer`].
+    Cancelled,
 }
 
 impl ChatEventKind {
@@ -318,6 +351,13 @@ pub(crate) trait Backend: Send {
     /// Allow, and apply one of the request's [`RememberOption`]s.
     fn respond_permission_remember(&mut self, request_id: &str, _remember: &str, _o: &mut Out) -> Result<()> {
         bail!("no pending permission request {request_id}")
+    }
+    /// A steering note for the running turn (see [`Chat::steer`]).
+    fn steer(&mut self, _note_id: &str, _text: &str, _now: bool, _o: &mut Out) -> Result<()> {
+        bail!("steering is not supported")
+    }
+    fn cancel_steer(&mut self, note_id: &str, _o: &mut Out) -> Result<()> {
+        bail!("no queued note {note_id}")
     }
     /// Answers to a `question` request, one list per question, in order.
     fn respond_question(&mut self, request_id: &str, _answers: &[Vec<String>], _o: &mut Out) -> Result<()> {
@@ -610,6 +650,27 @@ impl Chat {
         self.with_backend(json!({"call": "send", "text": text}), |b, o| b.send(text, o))
     }
 
+    /// A note for the running turn; returns its id. `now: false`: delivered at
+    /// the agent's next step boundary; `now: true`: the current step is
+    /// interrupted and the note starts the next turn. A pending permission
+    /// request or question holds every note until it is answered (`now` then
+    /// acts like `false`). On an idle chat the note is sent as a prompt. Its
+    /// fate arrives as [`ChatEventKind::Steer`] events.
+    pub fn steer(&mut self, text: &str, now: bool) -> Result<String> {
+        if text.trim().is_empty() {
+            bail!("empty note");
+        }
+        let id = uuid_v4();
+        self.with_backend(json!({"call": "steer", "note_id": id, "text": text, "now": now}), |b, o| b.steer(&id, text, now, o))?;
+        Ok(id)
+    }
+
+    /// Withdraw a note that is still `queued`. Fails once the agent has it
+    /// (and, for Codex, once it was handed to the CLI: see CHAT_SPEC).
+    pub fn cancel_steer(&mut self, note_id: &str) -> Result<()> {
+        self.with_backend(json!({"call": "cancel_steer", "note_id": note_id}), |b, o| b.cancel_steer(note_id, o))
+    }
+
     /// Stop the current turn; the chat stays usable.
     pub fn interrupt(&mut self) -> Result<()> {
         self.with_backend(json!({"call": "interrupt"}), |b, o| b.interrupt(o))
@@ -794,6 +855,61 @@ pub(crate) fn clip(s: &str, max: usize) -> String {
     format!("{}…", &s[..end])
 }
 
+/// A steering note until it is settled (both backends).
+pub(crate) struct Note {
+    pub id: String,
+    pub text: String,
+    /// Interrupt the current step for it.
+    pub now: bool,
+    /// Handed to the CLI (it can no longer be held back by coool).
+    pub sent: bool,
+    /// Sent as the first message of a turn of its own.
+    pub own_turn: bool,
+    /// The step running when the interrupt for it went out.
+    pub cut: Option<String>,
+    /// `cancel_steer` asked the CLI to withdraw it.
+    pub cancelling: bool,
+}
+
+/// The notes of one chat, in the order they were made.
+#[derive(Default)]
+pub(crate) struct Notes {
+    pub list: Vec<Note>,
+}
+
+impl Notes {
+    pub fn add(&mut self, id: &str, text: &str, now: bool, o: &mut Out) {
+        self.list.push(Note { id: id.into(), text: text.into(), now, sent: false, own_turn: false, cut: None, cancelling: false });
+        o.ev(ChatEventKind::Steer { note_id: id.into(), text: text.into(), state: SteerState::Queued, tool_id: None });
+    }
+
+    pub fn get(&mut self, id: &str) -> Option<&mut Note> {
+        self.list.iter_mut().find(|n| n.id == id)
+    }
+
+    /// Ends a note: its final `steer` event, and for a delivered one the
+    /// `user_message` echo (`steer: true`). False if there is no such note.
+    pub fn settle(&mut self, id: &str, state: SteerState, tool_id: Option<String>, user_n: &mut u64, o: &mut Out) -> bool {
+        let Some(i) = self.list.iter().position(|n| n.id == id) else { return false };
+        let n = self.list.remove(i);
+        o.ev(ChatEventKind::Steer { note_id: n.id.clone(), text: n.text.clone(), state, tool_id });
+        if matches!(state, SteerState::PickedUp | SteerState::Interrupted) {
+            *user_n += 1;
+            o.ev(ChatEventKind::UserMessage { id: format!("u{user_n}"), text: n.text, steer: true, note_id: Some(n.id) });
+        }
+        true
+    }
+
+    /// Every note `which` selects ends `unused`.
+    pub fn unused(&mut self, which: impl Fn(&Note) -> bool, o: &mut Out) {
+        let ids: Vec<String> = self.list.iter().filter(|n| which(n)).map(|n| n.id.clone()).collect();
+        let mut n = 0;
+        for id in ids {
+            self.settle(&id, SteerState::Unused, None, &mut n, o);
+        }
+    }
+}
+
 /// `/name args` -> ("name", "args").
 pub(crate) fn slash_command(text: &str) -> Option<(&str, &str)> {
     let t = text.trim_start();
@@ -826,13 +942,18 @@ pub(crate) mod testutil {
                         "set_permission_mode" => b.set_permission_mode(&s("mode"), &mut o),
                         "respond_permission" if line["remember"].is_string() => b.respond_permission_remember(&s("request_id"), &s("remember"), &mut o),
                         "respond_permission" => b.respond_permission(&s("request_id"), line["allow"] == true, line["always"] == true, &mut o),
+                        "steer" => b.steer(&s("note_id"), &s("text"), line["now"] == true, &mut o),
+                        "cancel_steer" => b.cancel_steer(&s("note_id"), &mut o),
                         "respond_question" => {
                             let answers: Vec<Vec<String>> = serde_json::from_value(line["answers"].clone()).unwrap();
                             b.respond_question(&s("request_id"), &answers, &mut o)
                         }
                         c => panic!("unknown call {c}"),
                     };
-                    r.unwrap();
+                    // Withdrawing a note can fail in a real run (too late); every other call must work.
+                    if line["call"] != "cancel_steer" {
+                        r.unwrap();
+                    }
                 }
                 _ => {}
             }
@@ -860,6 +981,10 @@ mod tests {
         assert_eq!(v, serde_json::json!({"seq": 3, "ts": 10, "type": "text_delta", "message_id": "m", "text": "hi", "parent_tool_id": null}));
         let e = ChatEvent { seq: 1, ts: 1, kind: ChatEventKind::State { state: ChatState::WaitingPermission } };
         assert_eq!(serde_json::to_value(&e).unwrap()["state"], "waiting_permission");
+        let e = ChatEvent { seq: 2, ts: 2, kind: ChatEventKind::Steer { note_id: "n".into(), text: "t".into(), state: SteerState::PickedUp, tool_id: Some("tool".into()) } };
+        assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({"seq": 2, "ts": 2, "type": "steer", "note_id": "n", "text": "t", "state": "picked_up", "tool_id": "tool"}));
+        let e = ChatEvent { seq: 3, ts: 3, kind: ChatEventKind::UserMessage { id: "u1".into(), text: "t".into(), steer: false, note_id: None } };
+        assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({"seq": 3, "ts": 3, "type": "user_message", "id": "u1", "text": "t", "steer": false, "note_id": null}));
         let e = ChatEvent { seq: 1, ts: 1, kind: ChatEventKind::needs_terminal("x") };
         let v = serde_json::to_value(&e).unwrap();
         assert_eq!((v["type"].as_str(), v["level"].as_str(), v["needs_terminal"].as_bool()), (Some("notice"), Some("info"), Some(true)));

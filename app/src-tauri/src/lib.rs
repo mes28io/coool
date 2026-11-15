@@ -404,6 +404,17 @@ fn chat_interrupt(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
     core.with_chat(id, |c| c.interrupt())
 }
 
+/// A steering note for the running turn; returns its id (see CHAT_SPEC "Steering").
+#[tauri::command(async)]
+fn chat_steer(core: State<'_, Arc<Core>>, id: usize, text: String, now: bool) -> Res<String> {
+    core.with_chat(id, |c| c.steer(&text, now))
+}
+
+#[tauri::command(async)]
+fn chat_steer_cancel(core: State<'_, Arc<Core>>, id: usize, note_id: String) -> Res<()> {
+    core.with_chat(id, |c| c.cancel_steer(&note_id))
+}
+
 #[tauri::command(async)]
 fn chat_set_model(core: State<'_, Arc<Core>>, id: usize, model: String) -> Res<()> {
     core.with_chat(id, |c| c.set_model(&model))
@@ -795,6 +806,8 @@ pub fn run() {
             start_chat,
             chat_send,
             chat_interrupt,
+            chat_steer,
+            chat_steer_cancel,
             chat_set_model,
             chat_set_permission_mode,
             chat_respond_permission,
