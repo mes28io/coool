@@ -1,6 +1,7 @@
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useEffect, useLayoutEffect } from "react";
 import { api } from "./lib/backend";
+import { openAgentsDemo } from "./lib/agentsDemo";
 import { rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
 import { syncWindow } from "./lib/boot";
@@ -77,6 +78,7 @@ function useBackendEvents() {
         })
         .catch((e) => st.toast(String(e), "error"));
     ask();
+    openAgentsDemo();
     b.environment()
       .then((env) => {
         setHome(env.home);

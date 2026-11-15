@@ -10,7 +10,7 @@ import { type Chat, type ChatItem, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { modelLabel } from "../lib/models";
 import type { Activity, RememberOption } from "../lib/types";
-import { HistoryBlocks, PromptBubble, StepLine, ThinkingRow } from "./Activity";
+import { HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit } from "./Activity";
 import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
 import { RailItem, RailList, reducedMotion } from "./StepRail";
@@ -23,6 +23,7 @@ import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ISpark, ITerminal } f
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
 import { Button, cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
+import { useStore } from "../store";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
 type Perm = Extract<ChatItem, { kind: "permission" }>;
@@ -439,6 +440,11 @@ function chipsFor(tools: Tool[]) {
 const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { tools: Tool[]; chat: Chat; nested: Map<string, ChatItem[]>; latest: boolean }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const active = tools.some((t) => t.endTs === null);
+  const focus = useStore((st) => st.agentFocus);
+  const holdsFocus = !!focus && Date.now() - focus.at < 6000 && tools.some((t) => t.agent && t.id === focus.id);
+  useEffect(() => {
+    if (holdsFocus) setOpen(true);
+  }, [holdsFocus]);
   const isOpen = open ?? (latest || active || tools.length <= 2);
   const mountKeys = useRef(new Set(tools.map((t) => t.key)));
   const failed = tools.filter((t) => t.ok === false).length;
@@ -547,15 +553,20 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const fromText = [...new Set(texts.map((t) => t.model).filter(Boolean) as string[])];
   const modelIds = models.length ? models : fromText;
   const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
+  const card = useRef<HTMLDivElement>(null);
+  const focus = useStore((st) => st.agentFocus);
+  const lit = useFocusLit(!!focus && focus.id === tool.id && Date.now() - focus.at < 6000, card);
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
         <ISpark size={14} />
       </span>
       <div
+        ref={card}
+        data-agent-card={tool.id}
         className={cx(
-          "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-300",
-          "border-hairline",
+          "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
+          lit ? "border-[color-mix(in_oklab,var(--status-working)_45%,var(--border))]" : "border-hairline",
         )}
       >
         <div className="flex items-center gap-2 px-3 pb-1.5 pt-2">

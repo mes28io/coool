@@ -2,6 +2,7 @@
 // opens a popover with each one (what it is, its model, what it does now).
 
 import { useState } from "react";
+import { isLive, type AgentCardData } from "../lib/agentCards";
 import { modelLabel } from "../lib/models";
 import { useStore } from "../store";
 import type { Agent } from "../lib/types";
@@ -16,7 +17,46 @@ const DONE_CAP = 8;
 /** Last thing an agent did (epoch-free: activity stamps are clock times), for "most recent first". */
 const lastStamp = (a: Agent) => a.activity[a.activity.length - 1]?.ts ?? "";
 
-export function AgentsChip({ session }: { session: Session }) {
+/** The chip while the Agents panel exists (pane at least 900px wide): it toggles the panel. */
+export interface PanelToggle {
+  cards: AgentCardData[];
+  open: boolean;
+  onToggle: () => void;
+}
+
+export function AgentsChip({ session, panel }: { session: Session | null; panel: PanelToggle | null }) {
+  if (panel) return <PanelChip panel={panel} />;
+  return session ? <PopoverChip session={session} /> : null;
+}
+
+function PanelChip({ panel }: { panel: PanelToggle }) {
+  const { cards, open, onToggle } = panel;
+  const live = cards.filter(isLive);
+  const agents = live.filter((c) => c.source !== "job").length;
+  const jobs = live.length - agents;
+  const label = live.length
+    ? `${live.length} ${jobs === 0 ? (live.length === 1 ? "agent" : "agents") : agents === 0 ? (live.length === 1 ? "job" : "jobs") : "working"}`
+    : `${cards.length} ${cards.length === 1 ? "agent" : "agents"}`;
+  return (
+    <button
+      type="button"
+      data-agents-chip
+      onClick={onToggle}
+      title={open ? "Hide the Agents panel" : "Show the Agents panel"}
+      aria-label={open ? "Hide the Agents panel" : "Show the Agents panel"}
+      aria-pressed={open}
+      className={cx(
+        "flex h-[24px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[8px] pl-[7px] pr-2 text-small font-medium transition-colors duration-150",
+        open ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
+      )}
+    >
+      <StatusDot status={live.length ? "busy" : "ended"} size={7} />
+      {label}
+    </button>
+  );
+}
+
+function PopoverChip({ session }: { session: Session }) {
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   const openSession = useStore((st) => st.open);

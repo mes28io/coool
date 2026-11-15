@@ -619,3 +619,36 @@ html.theme-fade *::after {
     opacity: 0.7;
   }
 }
+
+/* Agents panel: segmented step bar (active = green with a slow moving highlight, failed = hatched red). */
+.seg-run {
+  position: relative;
+  overflow: hidden;
+  background: var(--status-working);
+}
+.seg-run::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.6), transparent);
+  background-size: 55% 100%;
+  background-repeat: no-repeat;
+  animation: seg-run 2.6s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+}
+@keyframes seg-run {
+  0% {
+    background-position: -70% 0;
+  }
+  100% {
+    background-position: 170% 0;
+  }
+}
+.seg-fail {
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--error) 75%, transparent) 0 1.5px, color-mix(in oklab, var(--error) 22%, transparent) 1.5px 3px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .seg-run::after {
+    animation: none;
+    opacity: 0;
+  }
+}

@@ -384,21 +384,34 @@ const agentOf = (a: Activity, agents: Agent[]): Agent | null => {
 /** Asked (from the sidebar or the header chip) to show this subagent's card, and recent enough to still mean it. */
 const FOCUS_FRESH_MS = 6000;
 
+/** Scroll a card into view when it was asked for (sidebar, header chip, Agents panel) and keep it lit for a moment. */
+export function useFocusLit(asked: boolean, card: { current: HTMLElement | null }): boolean {
+  const [lit, setLit] = useState(false);
+  useEffect(() => {
+    if (!asked) return;
+    // After the group has opened and the timeline has settled at the bottom.
+    const t = setTimeout(() => {
+      card.current?.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+      useStore.setState({ agentFocus: null });
+      setLit(true);
+    }, 380);
+    return () => clearTimeout(t);
+  }, [asked, card]);
+  useEffect(() => {
+    if (!lit) return;
+    const t = setTimeout(() => setLit(false), 1800);
+    return () => clearTimeout(t);
+  }, [lit]);
+  return lit;
+}
+
 function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; active: boolean; live: LiveTime }) {
   const { detail } = splitTool(a.text);
   const agent = agentOf(a, agents);
   const card = useRef<HTMLDivElement>(null);
   const focus = useStore((st) => st.agentFocus);
-  const focused = !!agent && !!focus && focus.id === agent.id && Date.now() - focus.at < FOCUS_FRESH_MS;
-  useEffect(() => {
-    if (!focused) return;
-    // After the group has opened and the timeline has settled at the bottom.
-    const t = setTimeout(() => {
-      card.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-      useStore.setState({ agentFocus: null });
-    }, 380);
-    return () => clearTimeout(t);
-  }, [focused]);
+  const asked = !!agent && !!focus && focus.id === agent.id && Date.now() - focus.at < FOCUS_FRESH_MS;
+  const focused = useFocusLit(asked, card);
   const running = agent ? !agent.finished : active;
   const steps = agent?.activity.filter((x) => x.kind === "tool" || x.kind === "agent").slice(-5) ?? [];
   const agentSeen = useRef(new Set(steps.map((s) => `${s.ts}${s.text}`)));

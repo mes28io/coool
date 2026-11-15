@@ -4,6 +4,7 @@
 // fake terminal stream. Also the demo for coool.sh.
 
 import { NotAvailable, type Backend, type ChatBatch, type PtyChunk } from "./backend";
+import { AGENTS_DEMO_ID, AGENTS_JOBS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
@@ -98,7 +99,7 @@ const NEEDS: Record<string, string> = {
 };
 const INSIGHTS_KEY = "coool.mock.insights";
 /** Mock terminal session with running subagents (sidebar nesting, Home card, header chip). */
-const AGENTS_DEMO = "3d0a7e51-9c2b-4f1d-b6a8-5e4c3d2b1a09";
+const AGENTS_DEMO = AGENTS_DEMO_ID;
 const SHOW_AUTOMATION_KEY = "coool.mock.showAutomation";
 function readInsights(): InsightsStatus {
   try {
@@ -453,66 +454,131 @@ export function mockBackend(): Backend {
     }),
     "pixel",
   );
-  const mkAgent = (id: string, kind: string, description: string, finished: boolean, steps: string[], ageS: number): Agent => ({
+  const mkAgent = (id: string, kind: string, description: string, finished: boolean, steps: string[], ageS: number, result?: string): Agent => ({
     id,
     kind,
     description,
     finished,
     current: finished ? null : steps[0],
-    tokens: tok(9_000 + steps.length * 700, 1_200, 16_000),
-    activity: steps.map((x, i) => parseStep(x, now - (ageS - i * 6) * 1000)),
+    tokens: tok(9_000 + steps.length * 700, 1_200 + steps.length * 300, 16_000),
+    activity: [...steps.map((x, i) => parseStep(x, now - (ageS - i * 6) * 1000)), ...(result ? [act("text", result, now - (ageS - steps.length * 6) * 1000)] : [])],
+    model: kind === "Explore" ? "claude-haiku-5-5" : "claude-sonnet-5-5",
   });
+  // What each running agent does next, one step every few seconds. `!` marks a failed step; the
+  // last row of an agent that ends says how.
+  const P = "~/code/project-3d/src";
   const AGENT_STEPS: Record<string, string[]> = {
-    ag3d1: ["Read · ~/code/project-3d/src/uv/unwrap.rs", "Grep · seam_angle", "Edit · ~/code/project-3d/src/uv/unwrap.rs", "Bash · cargo test uv::", "Read · ~/code/project-3d/src/texture/image.rs"],
-    ag3d2: ["Glob · src/curves/**/*.rs", "Read · ~/code/project-3d/src/curves/bezier.rs", "Edit · ~/code/project-3d/src/text/outline.rs", "Bash · cargo test curves::", "thinking…"],
-    ag3d3: ["Grep · KHR_materials", "Read · ~/code/project-3d/src/gltf/import.rs", "Edit · ~/code/project-3d/src/ui/modifiers.tsx", "Bash · pnpm tsc --noEmit", "Edit · ~/code/project-3d/src/gltf/import.rs"],
-    ag3d4: ["Read · ~/code/project-3d/src/ui/Toolbar.tsx", "Edit · ~/code/project-3d/src/ui/Toolbar.tsx", "Bash · pnpm vitest run", "Grep · TODO polish"],
+    ag3d1: [`Read · ${P}/uv/unwrap.rs`, "Grep · seam_angle", `Edit · ${P}/uv/unwrap.rs`, "Bash · cargo test uv::", `Read · ${P}/texture/image.rs`, "Grep · ImageTexture", `Edit · ${P}/texture/image.rs`, `Edit · ${P}/uv/pack.rs`, "Bash · cargo test uv::pack", `Read · ${P}/texture/sampler.rs`, `Edit · ${P}/texture/sampler.rs`, "Bash · cargo clippy -p uv", `Read · ${P}/uv/mod.rs`, `Edit · ${P}/uv/mod.rs`, "Bash · cargo test texture::"],
+    ag3d2: [`Glob · src/curves/**/*.rs`, `Read · ${P}/curves/bezier.rs`, `Edit · ${P}/text/outline.rs`, "Bash · cargo test curves::", "!Bash · cargo test curves::bezier", `Read · ${P}/curves/bezier.rs`, `Edit · ${P}/curves/bezier.rs`, "Bash · cargo test curves::bezier", `Grep · glyph_cache`, `Edit · ${P}/text/glyph.rs`, "Bash · cargo test text::", `Read · ${P}/text/layout.rs`, `Edit · ${P}/text/layout.rs`, "Bash · cargo test text::layout"],
+    ag3d3: ["Grep · KHR_materials", `Read · ${P}/gltf/import.rs`, `Edit · ${P}/ui/modifiers.tsx`, "Bash · pnpm tsc --noEmit", `Edit · ${P}/gltf/import.rs`, "Web · KHR_materials_variants spec", "Grep · extensionsUsed", `Read · ${P}/gltf/extensions.rs`, `Edit · ${P}/gltf/extensions.rs`, "Bash · cargo test gltf::"],
+    ag3d4: [`Read · ${P}/ui/Toolbar.tsx`, `Edit · ${P}/ui/Toolbar.tsx`, "Bash · pnpm vitest run", "Grep · TODO polish", `Edit · ${P}/ui/Tooltip.tsx`, `Edit · ${P}/ui/Panel.tsx`, "Bash · pnpm vitest run", `Edit · ${P}/ui/theme.ts`],
   };
   ag3.agents.push(
-    mkAgent("ag3d1", "general-purpose", "UV unwrap and image textures", false, AGENT_STEPS.ag3d1, 70),
-    mkAgent("ag3d2", "general-purpose", "Curves and text objects", false, AGENT_STEPS.ag3d2, 64),
-    mkAgent("ag3d3", "Explore", "glTF import and modifier panel", false, AGENT_STEPS.ag3d3, 58),
-    mkAgent("ag3d4", "general-purpose", "App polish fixes", false, AGENT_STEPS.ag3d4, 40),
-    mkAgent("ag3d5", "Explore", "Survey the Blender operator API", true, ["Grep · bpy.ops", "Read · docs/operators.md"], 600),
-    mkAgent("ag3d6", "general-purpose", "Set up the add-on test harness", true, ["Write · tests/conftest.py", "Bash · pytest -q"], 420),
-    mkAgent("ag3d7", "Explore", "Find the mesh export hot path", true, ["Grep · export_mesh", "Read · src/export/mesh.rs"], 240),
+    mkAgent("ag3d1", "general-purpose", "UV unwrap and image textures", false, AGENT_STEPS.ag3d1.slice(0, 4), 24),
+    mkAgent("ag3d2", "general-purpose", "Curves and text objects", false, AGENT_STEPS.ag3d2.slice(0, 3), 18),
+    mkAgent("ag3d3", "Explore", "glTF import and modifier panel", false, AGENT_STEPS.ag3d3.slice(0, 5), 30),
+    mkAgent("ag3d4", "general-purpose", "App polish fixes", false, AGENT_STEPS.ag3d4.slice(0, 2), 10),
+    mkAgent("ag3d5", "Explore", "Survey the Blender operator API", true, ["Grep · bpy.ops", "Read · docs/operators.md", "Grep · register_class", "Read · docs/api/types.md"], 600, "Found 212 operators; the add-on needs 9 of them, all stable since Blender 3.6."),
+    mkAgent("ag3d6", "general-purpose", "Set up the add-on test harness", true, ["Write · tests/conftest.py", "Bash · pytest -q", "Edit · tests/conftest.py", "Bash · pytest -q"], 520, "Harness runs headless Blender; 14 tests collected and passing."),
+    mkAgent("ag3d7", "Explore", "Find the mesh export hot path", true, ["Grep · export_mesh", "Read · src/export/mesh.rs", "Bash · cargo flamegraph --bench export"], 440, "89% of export time is in normalize_normals; it recomputes per face."),
+    mkAgent("ag3d8", "Explore", "Check the keymap for conflicts", true, ["Read · src/ui/keymap.rs", "Grep · KM_PRESS"], 400, "No conflicts with Blender's default keymap."),
+    mkAgent("ag3d9", "general-purpose", "Write the add-on manifest", true, ["Write · blender_manifest.toml", "Bash · blender --command extension validate"], 360, "Manifest validates; permissions limited to files."),
+    mkAgent("ag3d10", "Explore", "List deprecated bmesh calls", true, ["Grep · bmesh.ops", "Read · src/mesh/edit.rs", "Grep · bm.faces.ensure_lookup_table"], 320, "Three calls change in 4.2; patch list is in the notes."),
+    mkAgent("ag3d11", "general-purpose", "Port the icon set to SVG", true, ["Glob · assets/icons/*.png", "Bash · inkscape --export-type=svg", "Write · assets/icons/index.json"], 280, "Converted 38 icons; two needed a manual trace."),
+    mkAgent("ag3d12", "Explore", "Audit the preferences panel", true, ["Read · src/ui/prefs.rs", "Grep · AddonPreferences"], 200, "Preferences panel is fine; one label is untranslated."),
   );
   for (const a of ag3.agents) ag3.activity.push(act("agent", `Agent · ${a.description}`, now - 200_000));
   {
     let t0 = 0;
-    let n = 0;
+    const cursor: Record<string, number> = { ag3d1: 4, ag3d2: 3, ag3d3: 5, ag3d4: 2 };
+    const due: Record<string, number> = { ag3d1: 1500, ag3d2: 2500, ag3d3: 3500, ag3d4: 4500 };
+    const gap: Record<string, number> = { ag3d1: 2600, ag3d2: 3100, ag3d3: 2300, ag3d4: 2000 };
     setInterval(() => {
       // The clock starts once the startup scan has filled this session in.
       if (!t0) {
         if (scanned(live.find((l) => l.s === ag3)!) === "full") t0 = Date.now();
         return;
       }
-      n++;
+      const el = Date.now() - t0;
       let changed = false;
       for (const a of ag3.agents) {
-        if (a.finished) continue;
         const steps = AGENT_STEPS[a.id];
-        // The polish agent wraps up about 15 s in.
-        if (a.id === "ag3d4" && Date.now() - t0 > 15_000) {
+        if (a.finished || !steps || el < due[a.id]) continue;
+        const t = Date.now();
+        // The UV agent wraps up about 16 s in; the glTF one fails about 34 s in.
+        if (a.id === "ag3d1" && el > 16_000) {
           a.finished = true;
           a.current = null;
-          a.activity.push(act("tool", "Bash · pnpm vitest run", Date.now()));
-          ag3.activity.push(act("text", "Subagent finished: app polish fixes.", Date.now()));
+          a.activity.push(act("tool", "Bash · cargo test uv::", t), act("text", "Unwrap now respects seam angles and image textures load through the sampler cache; 31 tests pass.", t + 1000));
+          ag3.activity.push(act("text", "Subagent finished: UV unwrap and image textures.", t));
           changed = true;
           continue;
         }
-        const next = steps[(n + a.id.charCodeAt(a.id.length - 1)) % steps.length];
-        if (next !== a.current) {
-          a.current = next;
-          a.activity.push(parseStep(next, Date.now()));
-          a.activity.splice(0, Math.max(0, a.activity.length - 12));
+        if (a.id === "ag3d3" && el > 34_000) {
+          a.finished = true;
+          a.current = null;
+          a.activity.push(act("error", "Could not read the KHR_materials_variants spec: 404 Not Found", t));
+          ag3.activity.push(act("text", "Subagent failed: glTF import and modifier panel.", t));
           changed = true;
+          continue;
         }
+        let next = steps[cursor[a.id] % steps.length];
+        cursor[a.id]++;
+        const failed = next.startsWith("!");
+        if (failed) next = next.slice(1);
+        a.current = next;
+        a.activity.push(parseStep(next, t));
+        if (failed) a.activity.push({ ts: hhmmss(t + 1000), kind: "error", text: "test curves::bezier::split_at_cusp failed: left 3, right 4", step: true });
+        a.tokens.output += 160 + Math.floor(Math.random() * 260);
+        a.tokens.input += 700;
+        due[a.id] = el + gap[a.id] + Math.random() * 1200 + (failed ? 1200 : 0);
+        changed = true;
       }
       ag3.updated = Date.now();
       if (changed) emitSessions();
-    }, 2800);
+    }, 500);
   }
+
+  // A session that started two live child jobs (and has one that crashed): the Agents panel lists them too.
+  const lightId = AGENTS_JOBS_ID;
+  add(
+    session({
+      provider: "claude",
+      id: lightId,
+      cwd: p3d,
+      title: "Bake the lighting rig",
+      status: "idle",
+      pid: 40601,
+      background_tasks: true,
+      tokens: tok(52_000, 7_400, 70_000),
+      activity: history("pixel", ["Bake the three light probes in the background and tell me which ones fail"], now - 5 * 60_000, 1, 4),
+      updated: now - 30_000,
+    }),
+    "pixel",
+  );
+  const lightScratch = `/private/tmp/claude-501/-Users-you-code-project-3d/${lightId}/scratchpad/jobs`;
+  const lj0 = add(session({ provider: "claude", id: "lightjob0", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the hall probe", status: "busy", pid: 40610, current: "Bash · blender -b rig.blend -f 1", tokens: tok(14_000, 2_100, 30_000), activity: history("coool", ["Bake the hall probe"], now - 40_000, 1, 4), updated: now - 2000 }), "coool", 4);
+  {
+    let n = 4;
+    setInterval(() => {
+      if (lj0.status !== "busy") return;
+      const t = Date.now();
+      if (n >= WORK.coool.length) {
+        lj0.status = "ended";
+        lj0.current = null;
+        lj0.activity.push(act("text", "Baked the hall probe: 12.4 MB written to probes/hall.exr.", t));
+      } else {
+        const a = parseStep(WORK.coool[n++], t);
+        lj0.activity.push(a);
+        lj0.current = a.kind === "tool" ? a.text : "thinking…";
+        lj0.tokens.output += 180;
+      }
+      lj0.updated = t;
+      emitSessions();
+    }, 2600);
+  }
+  add(session({ provider: "codex", id: "lightjob1", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the garden probe", status: "idle", pid: 40611, waiting_for: "Allow Bash: blender -b garden.blend -f 1", tokens: tok(9_000, 1_300, 22_000), activity: history("pixel", ["Bake the garden probe"], now - 90_000, 1, 5), updated: now - 20_000 }), "pixel", 5);
+  add(session({ provider: "claude", id: "lightjob2", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the attic probe", status: "ended", tokens: tok(11_000, 1_700, 24_000), activity: [...history("pixel", ["Bake the attic probe"], now - 240_000, 1, 4), act("error", "blender exited with code 139: segfault in the denoiser", now - 200_000)], updated: now - 200_000 }), "pixel");
 
   // ---------- event plumbing ----------
   const subs = {
@@ -803,6 +869,7 @@ export function mockBackend(): Backend {
   if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
   if (location.search.includes("plan=chat")) void import("./mockPlan").then((m) => m.runPlanChat(newChat("claude", coool, {}, 0))); // see mockPlan.ts
   if (location.search.includes("steer=demo")) void import("./mockPlan").then((m) => m.runSteerDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
+  if (location.search.includes("agents=chat")) void import("./mockAgents").then((m) => m.runAgentsChat(newChat("claude", `${HOME}/code/blender-addon`, {}, 0))); // see mockAgents.ts
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 
   const insights: InsightsStatus = readInsights();

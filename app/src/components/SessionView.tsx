@@ -1,7 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion } from "motion/react";
-import { lazy, Suspense, useEffect, useId, useMemo } from "react";
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
+import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
 import { chatModels, chatTitle, needsAnswer, pendingPermission, useChats } from "../lib/chat";
 import { displayTitle, folderName } from "../lib/format";
@@ -11,6 +12,7 @@ import { sessionKey } from "../lib/types";
 import { resolveTarget, useStore, type Target, type ViewMode } from "../store";
 import { liveTime, Timeline, ThinkingRow } from "./Activity";
 import { AgentsChip } from "./AgentsChip";
+import { AgentsPanel } from "./AgentsPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
@@ -59,6 +61,31 @@ export function SessionView({
   const chat = useChats((st) => (r.chat !== null ? st.chats[r.chat] : undefined));
   const att = useAttention(r.session);
   const scanning = useStore((st) => !st.ready || st.loading);
+
+  // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
+  const [root, setRoot] = useState<HTMLDivElement | null>(null);
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    if (!root) return;
+    const ro = new ResizeObserver(() => setWide(root.clientWidth >= 900));
+    ro.observe(root);
+    setWide(root.clientWidth >= 900);
+    return () => ro.disconnect();
+  }, [root]);
+  const cards = useAgentCards(r.session, chat);
+  const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
+  const panelState = useStore((st) => (panelKey ? st.agentsPanel[panelKey] : undefined));
+  const setAgentsPanel = useStore((st) => st.setAgentsPanel);
+  const agentsWidth = useStore((st) => st.agentsWidth);
+  const setAgentsWidth = useStore((st) => st.setAgentsWidth);
+  const [resizing, setResizing] = useState(false);
+  const liveCards = cards.filter(isLive).length;
+  // First time something runs while the session is on screen: open it. Closing it is remembered.
+  useEffect(() => {
+    if (panelKey && wide && liveCards > 0 && panelState === undefined) setAgentsPanel(panelKey, "open");
+  }, [panelKey, wide, liveCards, panelState, setAgentsPanel]);
+  const panelOn = wide && cards.length > 0;
+  const panelOpen = panelOn && panelState === "open";
 
   const { session, pty, starting, startingChat } = r;
   const isChat = r.chat !== null;
@@ -125,9 +152,19 @@ export function SessionView({
   const jobs = session?.live_children ?? 0;
   const bgText = att?.agents.length ? (jobs > 0 ? `${jobs} ${jobs === 1 ? "job" : "jobs"} running` : null) : att?.background;
   const openTerm = () => r.chat !== null && openChatInTerminal(r.chat, session);
+  const onOpenCard = (c: AgentCardData) => {
+    const st = useStore.getState();
+    if (c.source === "job") return st.open({ kind: "session", key: c.ref });
+    if (mode === "terminal") setMode(modeTarget, "activity");
+    st.focusAgent(c.ref);
+  };
+  const onStopCard = (c: AgentCardData) => {
+    const k = useStore.getState().sessions.find((x) => sessionKey(x) === c.ref);
+    if (k) askStop(k, k.managed, displayTitle(k), k.chat ?? null);
+  };
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div ref={setRoot} className="flex h-full min-w-0 flex-col">
       {/* header */}
       <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[48px] px-3" : "h-[52px] px-4")}>
         <ProviderMark provider={provider} size={17} />
@@ -135,7 +172,12 @@ export function SessionView({
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-title font-semibold tracking-[-0.01em] text-fg">{title}</h2>
             <StatusPill status={status} background={status === "needs" ? null : att?.background} />
-            {session && <AgentsChip session={session} />}
+            {(session || panelOn) && (
+              <AgentsChip
+                session={session ?? null}
+                panel={panelOn && panelKey ? { cards, open: panelOpen, onToggle: () => setAgentsPanel(panelKey, panelOpen ? "closed" : "open") } : null}
+              />
+            )}
             {bgText && status !== "needs" && <span className="hidden shrink-0 text-small text-dim sm:inline">{bgText}</span>}
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
@@ -201,47 +243,64 @@ export function SessionView({
         )}
       </div>
 
-      {/* body */}
-      <div className="relative min-h-0 flex-1">
-        <AnimatePresence initial={false} mode="popLayout">
-          {mode === "terminal" && pty !== null ? (
-            <motion.div key="term" className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18, ease }}>
-              <Suspense fallback={<div className="h-full bg-bg" />}>
-                <TerminalView pty={pty} focused={focused} />
-              </Suspense>
-            </motion.div>
-          ) : (
-            <motion.div key="act" className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18, ease }}>
-              {chat ? (
-                <ChatTimeline
-                  chat={chat}
-                  compact={compact}
-                  onOpenTerminal={openTerm}
-                  onSuggest={(t) => void chatCall(chat.id, () => api().chatSend(chat.id, t))}
-                  onResume={session && !chatLive && !running ? () => resumeSession(session, leaf) : undefined}
-                />
-              ) : session ? (
-                <Timeline session={session} compact={compact} live={liveTime(since, session.updated)} />
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* body */}
+          <div className="relative min-h-0 flex-1">
+            <AnimatePresence initial={false} mode="popLayout">
+              {mode === "terminal" && pty !== null ? (
+                <motion.div key="term" className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18, ease }}>
+                  <Suspense fallback={<div className="h-full bg-bg" />}>
+                    <TerminalView pty={pty} focused={focused} />
+                  </Suspense>
+                </motion.div>
               ) : (
-                <div className="flex h-full items-center justify-center">
-                  <ThinkingRow since={starting?.started ?? null} label={`Starting ${provider} in ${folderName(cwd)}`} />
-                </div>
+                <motion.div key="act" className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18, ease }}>
+                  {chat ? (
+                    <ChatTimeline
+                      chat={chat}
+                      compact={compact}
+                      onOpenTerminal={openTerm}
+                      onSuggest={(t) => void chatCall(chat.id, () => api().chatSend(chat.id, t))}
+                      onResume={session && !chatLive && !running ? () => resumeSession(session, leaf) : undefined}
+                    />
+                  ) : session ? (
+                    <Timeline session={session} compact={compact} live={liveTime(since, session.updated)} />
+                  ) : (
+                    <div className="flex h-full items-center justify-center">
+                      <ThinkingRow since={starting?.started ?? null} label={`Starting ${provider} in ${folderName(cwd)}`} />
+                    </div>
+                  )}
+                </motion.div>
               )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            </AnimatePresence>
+          </div>
 
-      {/* footer */}
-      {mode === "terminal" && hasTerm ? (
-        <Composer pty={pty!} provider={provider} disabled={!running} compact={compact} />
-      ) : chat ? (
-        <ChatComposer chat={chat} compact={compact} focused={focused} />
-      ) : hasTerm ? (
-        <Composer pty={pty!} provider={provider} disabled={!running} compact={compact} />
-      ) : external ? (
-        <ExternalNotice session={session!} leaf={leaf} compact={compact} />
-      ) : null}
+          {/* footer */}
+          {mode === "terminal" && hasTerm ? (
+            <Composer pty={pty!} provider={provider} disabled={!running} compact={compact} />
+          ) : chat ? (
+            <ChatComposer chat={chat} compact={compact} focused={focused} />
+          ) : hasTerm ? (
+            <Composer pty={pty!} provider={provider} disabled={!running} compact={compact} />
+          ) : external ? (
+            <ExternalNotice session={session!} leaf={leaf} compact={compact} />
+          ) : null}
+        </div>
+        {panelOn && panelKey && (
+          <AgentsPanel
+            cards={cards}
+            open={panelOpen}
+            width={agentsWidth}
+            dragging={resizing}
+            onWidth={setAgentsWidth}
+            onDragging={setResizing}
+            onClose={() => setAgentsPanel(panelKey, "closed")}
+            onOpenCard={onOpenCard}
+            onStop={onStopCard}
+          />
+        )}
+      </div>
     </div>
   );
 }
