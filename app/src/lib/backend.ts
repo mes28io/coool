@@ -67,6 +67,9 @@ export interface Backend {
   insightsSetKey(key: string): Promise<void>;
   insightsClearKey(): Promise<void>;
   insightsSetEnabled(enabled: boolean): Promise<void>;
+
+  /** Settings: "Show runs started by other tools" (persisted; echoed in `Snapshot.show_automation`). */
+  setShowAutomation(enabled: boolean): Promise<void>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -135,6 +138,7 @@ async function tauriBackend(): Promise<Backend> {
     insightsSetKey: (key) => soft("insights_set_key", { key }),
     insightsClearKey: () => soft("insights_clear_key"),
     insightsSetEnabled: (enabled) => soft("insights_set_enabled", { enabled }),
+    setShowAutomation: (enabled) => soft("set_show_automation", { enabled }),
     listSessions: () => invoke("list_sessions"),
     spawnSession: (req) => invoke("spawn_session", { req }),
     resumeSession: (req) => invoke("resume_session", { req }),

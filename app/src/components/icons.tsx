@@ -133,3 +133,21 @@ export function toolIcon(name: string) {
   if (/agent|task/.test(n)) return ISpark;
   return IStack;
 }
+
+/** Two nodes joined by a fork: checkpoints / branches. */
+export const IBranch = mk(
+  <>
+    <circle cx="4.5" cy="3.75" r="1.5" />
+    <circle cx="11.5" cy="12.25" r="1.5" />
+    <path d="M4.5 5.25v3.5a3 3 0 003 3h2.5" />
+  </>,
+);
+
+export const IList = mk(<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" />);
+export const ILock = mk(
+  <>
+    <rect x="3.5" y="7.25" width="9" height="6" rx="1.5" />
+    <path d="M5.5 7.25V5.5a2.5 2.5 0 015 0v1.75" />
+  </>,
+);
+export const IBolt = mk(<path d="M9 2L4 9h3.5L7 14l5-7H8.5z" />);

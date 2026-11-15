@@ -97,9 +97,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let left = Line::from(spans);
     let left_w = left.width();
     f.render_widget(Paragraph::new(left).style(Style::default().bg(t.panel)), area);
-    let right = if app.live_only { "live only " } else { "live + recent " };
+    let scope = if app.live_only { "live only" } else { "live + recent" };
+    let right = if app.hidden_automation > 0 { format!("{} by other tools hidden (a) · {scope} ", app.hidden_automation) } else { format!("{scope} ") };
     // Drawn on top of the same row: skip it rather than overwrite the counters.
-    if left_w + display_width(right) < area.width as usize {
+    if left_w + display_width(&right) < area.width as usize {
         f.render_widget(Paragraph::new(Span::styled(right, Style::default().fg(t.dim))).alignment(Alignment::Right), area);
     }
 }
@@ -406,6 +407,7 @@ fn draw_help(f: &mut Frame, t: Theme) {
         ("x", "stop a session (any live one)"),
         ("pgup/pgdn", "scroll activity"),
         ("f", "toggle live-only / live + recent"),
+        ("a", "show / hide runs started by other tools"),
         ("t", "dark / light theme"),
         ("q", "quit"),
     ];

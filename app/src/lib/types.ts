@@ -74,7 +74,27 @@ export interface Session {
   chat?: number | null;
   models?: ModelUse[];
   insight?: Insight | null;
+  /**
+   * Who started it: the person (terminal, IDE, desktop, phone), coool (its chats
+   * and terminals, remembered across restarts), or another tool / agent
+   * (`claude -p`, the Agent SDK, `codex exec`, ...). Missing = "user" (older backends).
+   */
+  origin?: Origin;
+  /** A programmatic run started from inside another session: that session's id. */
+  parent?: string | null;
+  /** Child runs of this session still alive. */
+  live_children?: number;
+  /** The CLI reports background tasks still running while it waits (a flag; no count is known). */
+  background_tasks?: boolean;
+  /** The CLI reports it is blocked on the person (e.g. a permission prompt). */
+  waiting_for?: string | null;
+  /** UI only: listed under its parent's row rather than on its own. */
+  nested?: boolean;
+  /** UI only: why a live child run of this session needs the person. */
+  child_needs?: string | null;
 }
+
+export type Origin = "user" | "coool" | "automation";
 
 export interface PtyInfo {
   id: number;
@@ -113,6 +133,8 @@ export interface Snapshot {
   chats?: ChatInfo[];
   /** Plan usage per provider (CHAT_SPEC "Plan usage"); missing = nothing known. */
   usage?: { claude: PlanUsage | null; codex: PlanUsage | null };
+  /** Settings: "Show runs started by other tools". Missing = false. */
+  show_automation?: boolean;
 }
 
 // ---------- plan usage ----------

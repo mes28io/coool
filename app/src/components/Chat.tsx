@@ -11,6 +11,12 @@ import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolNam
 import { modelLabel } from "../lib/models";
 import type { Activity, RememberOption } from "../lib/types";
 import { HistoryBlocks, PromptBubble, Prose, StepLine, ThinkingRow } from "./Activity";
+import { CheckpointsCard } from "./Checkpoints";
+import { RailItem, RailList, reducedMotion } from "./StepRail";
+import { deriveCheckpoints } from "../lib/checkpoints";
+import { openChanges } from "../lib/infoRequest";
+import { isPlanTool, parsePlan, planForTurn } from "../lib/plan";
+import { PlanCard } from "./PlanCard";
 import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ISpark, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
@@ -24,7 +30,9 @@ type Ask = Extract<ChatItem, { kind: "question" }>;
 const QUESTION_TOOLS = /^(AskUserQuestion|request_user_input)$/;
 type Block =
   | { type: "item"; key: string; item: ChatItem }
-  | { type: "steps"; key: string; tools: Tool[] };
+  | { type: "steps"; key: string; tools: Tool[] }
+  /** One task-list card per turn (TodoWrite / update_plan calls), updated in place. */
+  | { type: "plan"; key: string; calls: Tool[]; prompt: string; end: { ts: number; ok: boolean } | null };
 
 const enter = { opacity: 0, y: 10 };
 const shown = { opacity: 1, y: 0 };
@@ -33,6 +41,8 @@ const reduced = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-
 function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string, ChatItem[]> } {
   const children = new Map<string, ChatItem[]>();
   const blocks: Block[] = [];
+  let prompt = "";
+  let plan: Extract<Block, { type: "plan" }> | null = null;
   for (const it of items) {
     const parent = "parent" in it ? it.parent : null;
     if (parent) {
@@ -42,6 +52,17 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
       continue;
     }
     if (it.kind === "tool" && QUESTION_TOOLS.test(it.name)) continue;
+    if (it.kind === "prompt") {
+      prompt = it.text;
+      plan = null;
+    }
+    if (it.kind === "turn" && plan) plan.end = { ts: it.ts, ok: it.ok };
+    if (it.kind === "tool" && isPlanTool(it.name)) {
+      // The task list shows as its own card, not as step rows.
+      if (!plan) blocks.push((plan = { type: "plan", key: it.key, calls: [], prompt, end: null }));
+      plan.calls.push(it);
+      continue;
+    }
     if (it.kind === "tool") {
       const last = blocks[blocks.length - 1];
       if (last?.type === "steps") last.tools.push(it);
@@ -74,6 +95,24 @@ export function ChatTimeline({
   const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const working = chat.state !== "idle" && chat.running;
+  // Checkpoints card (one per turn), shown from two checkpoints on.
+  const cps = useMemo(() => deriveCheckpoints(chat), [chat.items, chat.running, chat.state]);
+  const showCps = cps.list.length >= 2;
+  // Scroll the timeline to a turn's prompt (below the pinned card) and flash it.
+  const jump = (key: string) => {
+    const el = scroller.current;
+    const block = el?.querySelector<HTMLElement>(`[data-block="${CSS.escape(key)}"]`);
+    if (!el || !block) return;
+    stick.current = false;
+    const delta = block.getBoundingClientRect().top - el.getBoundingClientRect().top - 64;
+    el.scrollTo({ top: el.scrollTop + delta, behavior: reducedMotion() ? "auto" : "smooth" });
+    const target = (block.firstElementChild as HTMLElement | null) ?? block;
+    const ring = "color-mix(in oklab, var(--text) 40%, transparent)";
+    if (reducedMotion()) {
+      target.style.boxShadow = `0 0 0 2px ${ring}`;
+      setTimeout(() => (target.style.boxShadow = ""), 1200);
+    } else target.animate([{ boxShadow: `0 0 0 2px ${ring}` }, { boxShadow: "0 0 0 2px transparent" }], { duration: 1400, easing: "ease-out" });
+  };
 
   // Pin to the bottom while the reader is there. A ResizeObserver catches every
   // growth (streamed lines, steps expanding) so the view follows without jumps.
@@ -171,7 +210,14 @@ export function ChatTimeline({
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }}
     >
-      <div ref={content} className={cx("mx-auto flex max-w-[700px] flex-col pb-8 pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
+      {showCps && (
+        <div className="pointer-events-none sticky top-0 z-20 mx-auto h-0 w-full max-w-[700px]">
+          <div className="pointer-events-auto">
+            <CheckpointsCard chat={chat} cps={cps} onJump={jump} onFiles={(k) => openChanges(chat.id, k)} inset={compact ? "left-4 right-4" : "left-8 right-8"} />
+          </div>
+        </div>
+      )}
+      <div ref={content} className={cx("mx-auto flex max-w-[700px] flex-col pb-8", showCps ? "pt-[60px]" : "pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
         {earlier && earlier.length > 0 && <Earlier rows={earlier} />}
         {!chat.ready && blocks.length === 0 && (
           <div className="flex min-h-[40vh] items-center justify-center">
@@ -183,8 +229,10 @@ export function ChatTimeline({
           const fresh = !initial.current!.has(b.key);
           const isLast = i === blocks.length - 1;
           return (
-            <motion.div key={b.key} className={cx(!isLast && i < blocks.length - 8 && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={{ duration: 0.32, ease }}>
-              {b.type === "steps" ? (
+            <motion.div key={b.key} data-block={b.key} className={cx(!isLast && i < blocks.length - 8 && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={{ duration: 0.32, ease }}>
+              {b.type === "plan" ? (
+                <PlanBlock b={b} chat={chat} />
+              ) : b.type === "steps" ? (
                 <ChatSteps tools={b.tools} chat={chat} nested={children} latest={isLast || i >= blocks.length - 2} />
               ) : (
                 <ItemView item={b.item} chat={chat} onOpenTerminal={onOpenTerminal} onResume={isLast ? onResume : undefined} />
@@ -201,6 +249,45 @@ export function ChatTimeline({
         </AnimatePresence>
       </div>
     </div>
+  );
+}
+
+function PlanBlock({ b, chat }: { b: Extract<Block, { type: "plan" }>; chat: Chat }) {
+  const live = chat.running && chat.state !== "idle" && !b.end;
+  const p = planForTurn(b.calls, b.prompt, b.end, live);
+  if (!p) return null;
+  return <PlanCard title={p.title} steps={p.steps} phase={p.phase} startedAt={p.startedAt} endedAt={p.endedAt} data-turn-plan={p.phase} />;
+}
+
+/** Claude's plan-mode proposal (the ExitPlanMode permission request) as a plan card. */
+function PlanApproval({ item, chat }: { item: Perm; chat: Chat }) {
+  const raw = (item.input as { plan?: unknown } | null)?.plan;
+  const md = typeof raw === "string" ? raw : item.summary;
+  const p = useMemo(() => parsePlan(md), [md]);
+  const open = item.answer === null && chat.running;
+  const phase = open ? "proposed" : item.answer === "deny" ? "declined" : "approved";
+  return (
+    <PlanCard
+      title={p.title}
+      steps={p.steps}
+      phase={phase}
+      attention={open}
+      data-approval={open ? item.requestId : undefined}
+      data-approval-done={open ? undefined : (item.answer ?? "")}
+      body={
+        p.body ? (
+          <div className="flex flex-col gap-2">
+            {p.body.split(/\n{2,}/).map((para, i) => (
+              <p key={i} className={cx("whitespace-pre-wrap", /^#/.test(para) && "font-medium text-fg")}>
+                {para.replace(/^#+\s+/, "")}
+              </p>
+            ))}
+          </div>
+        ) : undefined
+      }
+      onApprove={open ? () => answerPermission(chat.id, item.requestId, "allow") : undefined}
+      onReject={open ? () => answerPermission(chat.id, item.requestId, "deny") : undefined}
+    />
   );
 }
 
@@ -410,7 +497,6 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
   const active = tools.some((t) => t.endTs === null);
   const isOpen = open ?? (latest || active || tools.length <= 2);
   const mountKeys = useRef(new Set(tools.map((t) => t.key)));
-  const opened = useRef(isOpen);
   const failed = tools.filter((t) => t.ok === false).length;
   const end = Math.max(...tools.map((t) => t.endTs ?? t.ts));
   const span = end - tools[0].ts;
@@ -420,10 +506,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
     <div>
       <button
         type="button"
-        onClick={() => {
-          opened.current = false;
-          setOpen(!isOpen);
-        }}
+        onClick={() => setOpen(!isOpen)}
         className="group flex w-full items-center gap-2 rounded-[8px] py-[3px] pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
       >
         <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint group-hover:text-dim">
@@ -447,22 +530,21 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
       </button>
       <AnimatePresence initial={false}>
         {isOpen && (
-          <motion.div key="list" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.24, ease }} className="overflow-hidden">
-            <ol className="relative ml-[9px] mt-1 border-l border-hairline pb-1 pl-3">
+          <motion.div key="list" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reducedMotion() ? 0 : 0.24, ease }} className="overflow-hidden">
+            <RailList className="ml-[12px] mt-1 pb-1">
               {tools.map((t, i) => {
                 const fresh = !mountKeys.current.has(t.key);
-                const delay = !fresh && opened.current ? Math.min(i, 14) * 0.035 : 0;
                 return (
-                  <motion.li key={t.key} initial={fresh || opened.current ? { opacity: 0, y: 6 } : false} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease, delay }}>
+                  <RailItem key={t.key} first={i === 0} last={i === tools.length - 1} fresh={fresh} active={t.endTs === null} dotY={t.agent ? 20 : 14}>
                     {t.agent ? (
                       <AgentCard tool={t} chat={chat} kids={nested.get(t.id) ?? []} />
                     ) : (
-                      <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} />
+                      <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
                     )}
-                  </motion.li>
+                  </RailItem>
                 );
               })}
-            </ol>
+            </RailList>
           </motion.div>
         )}
       </AnimatePresence>
@@ -470,7 +552,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
   );
 });
 
-function ToolStep({ t, cwd, dense, waiting }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean }) {
+function ToolStep({ t, cwd, dense, waiting, fresh }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean; fresh?: boolean }) {
   const [open, setOpen] = useState(false);
   const hasOut = !!t.output && t.endTs !== null;
   return (
@@ -482,6 +564,7 @@ function ToolStep({ t, cwd, dense, waiting }: { t: Tool; cwd: string; dense?: bo
         waiting={waiting}
         failed={t.ok === false}
         dense={dense}
+        fresh={fresh}
         stamp={clockTime(t.ts)}
         since={t.ts}
         onClick={hasOut ? () => setOpen(!open) : undefined}
@@ -516,8 +599,9 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const models = Object.keys(chat.agents[tool.id]?.models ?? {});
   const fromText = [...new Set(texts.map((t) => t.model).filter(Boolean) as string[])];
   const modelIds = models.length ? models : fromText;
+  const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
   return (
-    <div className="-ml-[19px] flex gap-2.5 py-1">
+    <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
         <ISpark size={14} />
       </span>
@@ -546,16 +630,19 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
           )}
         </div>
         {shownSteps.length > 0 && (
-          <ol className="relative ml-[21px] border-l border-hairline pb-1.5 pl-3">
-            {hidden > 0 && <li className="-ml-[3px] pb-0.5 text-small text-faint">{hidden} earlier</li>}
-            <AnimatePresence initial={false}>
-              {shownSteps.map((s) => (
-                <motion.li key={s.key} layout="position" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24, ease }}>
-                  <ToolStep t={s} cwd={chat.cwd} dense />
-                </motion.li>
-              ))}
-            </AnimatePresence>
-          </ol>
+          <div className="pb-1.5 pl-[14px] pr-1">
+            {hidden > 0 && <div className="pb-0.5 pl-[20px] text-small text-faint">{hidden} earlier</div>}
+            <RailList>
+              {shownSteps.map((s, i) => {
+                const fresh = !agentSeen.current.has(s.key);
+                return (
+                  <RailItem key={s.key} first={i === 0} last={i === shownSteps.length - 1} fresh={fresh} active={s.endTs === null}>
+                    <ToolStep t={s} cwd={chat.cwd} dense fresh={fresh} />
+                  </RailItem>
+                );
+              })}
+            </RailList>
+          </div>
         )}
         {note && (
           <div className="border-t border-hairline px-3 py-2">
@@ -641,6 +728,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
 }
 
 function Approval({ item, chat }: { item: Perm; chat: Chat }) {
+  if (item.tool === "ExitPlanMode") return <PlanApproval item={item} chat={chat} />;
   const d = permDetail(item, chat.cwd);
   const who = chat.provider === "claude" ? "Claude" : "Codex";
   const quick = item.remember[0]?.scope === "chat" ? item.remember[0] : null;

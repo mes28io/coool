@@ -4,6 +4,7 @@
 import { create } from "zustand";
 import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
 import { sessionKey } from "./lib/types";
+import { api } from "./lib/backend";
 
 export type Target = { kind: "session"; key: string } | { kind: "pty"; id: number } | { kind: "chat"; id: number };
 export type Leaf = { type: "leaf"; id: string; target: Target | null };
@@ -88,7 +89,19 @@ interface State {
   ready: boolean;
   /** Backend is still parsing transcripts in the background (Snapshot.loading). */
   loading: boolean;
+  /**
+   * Sessions the UI lists: everything except runs other tools / agents started,
+   * unless `showAutomation` is on. A live automation run flagged "Needs you" is
+   * listed anyway, so nothing that waits on the person is hidden.
+   */
   sessions: Session[];
+  /** Every session the backend reported (for resolving open tabs). */
+  allSessions: Session[];
+  /** Automation runs left out of `sessions` right now. */
+  hiddenAutomation: number;
+  /** Settings: "Show runs started by other tools" (persisted by the backend). */
+  showAutomation: boolean;
+  setShowAutomation(v: boolean): void;
   pending: number[];
   ptys: Record<number, PtyInfo>;
   /** pty id -> session key, remembered after the PTY exits. */
@@ -118,6 +131,16 @@ interface State {
   toasts: Toast[];
   sidebarWidth: number;
   sidebarOpen: boolean;
+  /** Sidebar projects folded to one line, by project path (persisted). */
+  collapsed: Record<string, true>;
+  /**
+   * Extra ended chats revealed past the resting cap, by project path. This run
+   * only, never persisted, and cleared whenever the project is collapsed or
+   * expanded: a project always opens in its short version.
+   */
+  revealed: Record<string, number>;
+  toggleCollapsed(project: string): void;
+  setRevealed(project: string, n: number): void;
 
   setSnapshot(s: Snapshot): void;
   setEnv(e: Environment): void;
@@ -147,6 +170,18 @@ interface State {
   toggleSidebar(): void;
 }
 
+const COLLAPSED_KEY = "coool.collapsedProjects";
+function readCollapsed(): Record<string, true> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
+    const out: Record<string, true> = {};
+    if (Array.isArray(v)) for (const p of v) if (typeof p === "string") out[p] = true;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /** Swap pty / chat targets for the session they turned into, once the backend linked them. */
 function normalizeTabs(tabs: Tab[], owner: Record<number, string>, chatOwner: Record<number, string>): Tab[] {
   let changed = false;
@@ -167,10 +202,52 @@ function normalizeTabs(tabs: Tab[], owner: Record<number, string>, chatOwner: Re
   return changed ? next : tabs;
 }
 
+let showAutomationSetAt = 0;
+
+/** A live session blocked on the person, by what the CLI or an insight says. */
+const selfNeeds = (s: Session) => (s.status !== "ended" ? (s.waiting_for ? `Waiting for you: ${s.waiting_for}` : (s.insight?.needs_you ?? null)) : null);
+
+/**
+ * Who the UI lists (see State.sessions): everything the person or coool
+ * started; runs by other tools only when the setting is on, when one needs the
+ * person, or when it is a child run of a listed session (then shown nested
+ * under that session, never on its own).
+ */
+function visibleSessions(all: Session[], showAutomation: boolean): { sessions: Session[]; hidden: number } {
+  const top = all.filter((s) => s.origin !== "automation" || showAutomation || !!selfNeeds(s));
+  const ids = new Set(top.filter((s) => !s.parent).map((s) => s.id));
+  const isChild = (s: Session) => !!s.parent && ids.has(s.parent) && s.parent !== s.id;
+  const listed = all.filter((s) => top.includes(s) || isChild(s));
+  // A child's "needs you" surfaces on its parent.
+  const childNeeds = new Map<string, string>();
+  for (const s of listed) {
+    if (!isChild(s) || s.status === "ended" || childNeeds.has(s.parent!)) continue;
+    const n = s.waiting_for ? `A job is waiting for you: ${s.waiting_for}` : s.insight?.needs_you ? `A job needs you: ${s.insight.needs_you}` : null;
+    if (n) childNeeds.set(s.parent!, n);
+  }
+  const sessions = listed.map((s) => {
+    const nested = isChild(s);
+    const cn = childNeeds.get(s.id) ?? null;
+    return nested || cn ? { ...s, nested, child_needs: cn } : s;
+  });
+  return { sessions, hidden: all.length - sessions.length };
+}
+
 export const useStore = create<State>((set, get) => ({
   ready: false,
   loading: false,
   sessions: [],
+  allSessions: [],
+  hiddenAutomation: 0,
+  showAutomation: false,
+  setShowAutomation(v) {
+    showAutomationSetAt = Date.now();
+    const { sessions, hidden } = visibleSessions(get().allSessions, v);
+    set({ showAutomation: v, sessions, hiddenAutomation: hidden });
+    api()
+      .setShowAutomation(v)
+      .catch((e) => get().toast(`Couldn't save the setting: ${e instanceof Error ? e.message : String(e)}`, "error"));
+  },
   pending: [],
   ptys: {},
   ptyOwner: {},
@@ -193,6 +270,21 @@ export const useStore = create<State>((set, get) => ({
   sheet: null,
   toasts: [],
   sidebarWidth: readNum("coool.sidebar", 300),
+  collapsed: readCollapsed(),
+  revealed: {},
+  toggleCollapsed(project) {
+    const collapsed = { ...get().collapsed };
+    if (collapsed[project]) delete collapsed[project];
+    else collapsed[project] = true;
+    try {
+      // Bounded: only the most recent few hundred folders are remembered.
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify(Object.keys(collapsed).slice(-300)));
+    } catch {}
+    const revealed = { ...get().revealed };
+    delete revealed[project];
+    set({ collapsed, revealed });
+  },
+  setRevealed: (project, n) => set((s) => ({ revealed: { ...s.revealed, [project]: Math.max(0, n) } })),
   sidebarOpen: (() => {
     try {
       return localStorage.getItem("coool.sidebarOpen") !== "0";
@@ -249,10 +341,16 @@ export const useStore = create<State>((set, get) => ({
       const pm = modes[`p:${pid}`];
       if (pm && !modes[`s:${key}`]) modes[`s:${key}`] = pm;
     }
+    // A payload built before a local change of the setting still carries the old value.
+    const showAutomation = Date.now() - showAutomationSetAt < 3000 ? st.showAutomation : !!snap.show_automation;
+    const vis = visibleSessions(snap.sessions, showAutomation);
     set({
       ready: true,
       loading: !!snap.loading,
-      sessions: snap.sessions,
+      sessions: vis.sessions,
+      allSessions: snap.sessions,
+      hiddenAutomation: vis.hidden,
+      showAutomation,
       pending: snap.pending,
       ptys,
       ptyOwner,
@@ -405,11 +503,12 @@ export interface Resolved {
 
 const NONE: Resolved = { session: null, pty: null, starting: null, chat: null, startingChat: null };
 
-export function resolveTarget(t: Target | null, st: Pick<State, "sessions" | "ptyOwner" | "sessionPty" | "ptys" | "chatOwner" | "chatInfos">): Resolved {
+export function resolveTarget(t: Target | null, st: Pick<State, "allSessions" | "ptyOwner" | "sessionPty" | "ptys" | "chatOwner" | "chatInfos">): Resolved {
   if (!t) return NONE;
   const key = t.kind === "session" ? t.key : t.kind === "pty" ? st.ptyOwner[t.id] : st.chatOwner[t.id];
   if (key) {
-    const session = st.sessions.find((s) => sessionKey(s) === key) ?? null;
+    // Every session, so a tab stays open on a run that the setting now hides.
+    const session = st.allSessions.find((s) => sessionKey(s) === key) ?? null;
     const pty = session?.managed ?? st.sessionPty[key] ?? (t.kind === "pty" ? t.id : null);
     const chat = session?.chat ?? (t.kind === "chat" ? t.id : null);
     return { session, pty, starting: null, chat, startingChat: null };

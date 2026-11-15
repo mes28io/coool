@@ -528,6 +528,11 @@ mod tests {
             chat: None,
             models: vec![],
             loaded: true,
+            origin: Default::default(),
+            parent: None,
+            live_children: 0,
+            background_tasks: false,
+            waiting_for: None,
         }
     }
 

@@ -42,6 +42,16 @@ struct Fields {
     tokens: Tokens,
     activity: Vec<Activity>,
     models: Vec<ModelUse>,
+    /// From the first session_meta (see [`crate::origin`]).
+    #[serde(default)]
+    originator: String,
+    #[serde(default)]
+    source: String,
+    /// Subagent rollouts: the thread that spawned it, and its nickname / role.
+    #[serde(default)]
+    parent: Option<String>,
+    #[serde(default)]
+    agent_name: String,
 }
 
 /// Everything parsed from one rollout.
@@ -69,6 +79,9 @@ impl Parsed {
             models: s.models.clone(),
             in_turn: self.st.in_turn,
             started: self.st.started,
+            origin: self.st.meta_seen.then(|| crate::origin::codex(&s.originator, &s.source)),
+            parent: s.parent.clone(),
+            agent_name: s.agent_name.clone(),
             ..View::default()
         }
     }
@@ -83,6 +96,8 @@ const FULL_SCAN_EVERY: Duration = Duration::from_secs(30);
 struct Entry {
     slot: Arc<Slot>,
     mtime: SystemTime,
+    /// From the rollout's first line, for before the parse knows.
+    early_origin: Option<Origin>,
 }
 
 /// The walk of every day folder runs on the pool; its result lands here.
@@ -231,8 +246,11 @@ impl CodexSource {
         wanted.sort_by_key(|(_, _, t)| std::cmp::Reverse(*t));
 
         for (path, meta, mtime) in &wanted {
-            let e = self.entries.entry(path.clone()).or_insert_with(|| Entry { slot: Slot::new(Kind::Codex, path), mtime: *mtime });
+            let e = self.entries.entry(path.clone()).or_insert_with(|| Entry { slot: Slot::new(Kind::Codex, path), mtime: *mtime, early_origin: None });
             e.mtime = *mtime;
+            if e.early_origin.is_none() && !e.slot.view().loaded {
+                e.early_origin = Some(crate::origin::sniff(path, Provider::Codex).unwrap_or_default());
+            }
             let live = now.duration_since(*mtime).unwrap_or(Duration::ZERO) < Duration::from_secs(120);
             pool.sync(&e.slot, meta, loader::prio(live, true, *mtime), budget);
         }
@@ -276,9 +294,52 @@ impl CodexSource {
     }
 
     /// Sessions as currently known (cheap facts for what isn't parsed yet).
+    /// A subagent rollout whose parent thread is listed becomes one of the
+    /// parent's [`Agent`]s; one whose parent isn't listed stays a session of its
+    /// own, classed as automation.
     pub(crate) fn sessions(&self) -> Vec<Session> {
         let now = SystemTime::now();
-        self.entries.iter().map(|(path, e)| self.session(path, e, now)).collect()
+        let mut all: Vec<(Session, Option<String>, String, SystemTime)> = self
+            .entries
+            .iter()
+            .map(|(path, e)| {
+                let v = e.slot.view();
+                let s = self.session(path, e, now);
+                let started = v.started.unwrap_or(s.updated);
+                (s, v.parent.clone(), v.agent_name.clone(), started)
+            })
+            .collect();
+        // Oldest first, so agents keep a stable, spawn-like order.
+        all.sort_by_key(|x| x.3);
+        let (children, mut out): (Vec<_>, Vec<_>) = all.into_iter().map(|(s, p, n, _)| (s, p, n)).partition(|(_, parent, _)| parent.is_some());
+        for (child, parent, name) in children {
+            let parent = parent.unwrap_or_default();
+            match out.iter_mut().find(|(s, _, _)| s.id == parent) {
+                Some((p, _, _)) => {
+                    let finished = child.status == Status::Ended;
+                    p.agents.push(Agent {
+                        id: child.id.clone(),
+                        kind: if name.is_empty() { "subagent".into() } else { name },
+                        description: child.last_prompt.clone().map(|t| one_line(&t, 120)).unwrap_or_default(),
+                        finished,
+                        current: if finished { None } else { child.current.clone() },
+                        tokens: child.tokens.clone(),
+                        activity: child.activity.clone(),
+                        model: child.model.clone(),
+                        models: child.models.clone(),
+                    });
+                    for m in &child.models {
+                        add_model_use(&mut p.models, &ModelUse { via_agent: true, ..m.clone() });
+                    }
+                    sort_model_use(&mut p.models);
+                    if child.updated > p.updated {
+                        p.updated = child.updated;
+                    }
+                }
+                None => out.push((child, None, String::new())),
+            }
+        }
+        out.into_iter().map(|(s, _, _)| s).collect()
     }
 
     fn session(&self, path: &Path, e: &Entry, now: SystemTime) -> Session {
@@ -312,6 +373,11 @@ impl CodexSource {
             chat: None,
             models: v.models.clone(),
             loaded: v.loaded,
+            origin: v.origin.or(e.early_origin).unwrap_or_default(),
+            parent: None,
+            live_children: 0,
+            background_tasks: false,
+            waiting_for: None,
         }
     }
 }
@@ -341,6 +407,11 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
             st.meta_seen = true;
             s.id = p["id"].as_str().unwrap_or("").to_string();
             s.cwd = p["cwd"].as_str().unwrap_or("").to_string();
+            s.originator = p["originator"].as_str().unwrap_or("").to_string();
+            s.source = crate::origin::codex_source_kind(&p["source"]);
+            let spawn = &p["source"]["subagent"]["thread_spawn"];
+            s.parent = spawn["parent_thread_id"].as_str().or(p["parent_thread_id"].as_str()).filter(|_| s.source == "subagent").map(str::to_string);
+            s.agent_name = p["agent_nickname"].as_str().or(spawn["agent_nickname"].as_str()).or(spawn["agent_role"].as_str()).unwrap_or("").to_string();
             st.started = p["timestamp"].as_str().or(v["timestamp"].as_str()).and_then(parse_rfc3339).and_then(|t| {
                 SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(u64::try_from(t).ok()?))
             });

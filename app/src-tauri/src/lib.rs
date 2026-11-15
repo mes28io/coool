@@ -55,6 +55,8 @@ struct Core {
     /// Wakes the refresher early (a chat or PTY started or ended).
     kick: (Mutex<bool>, Condvar),
     selftest: Option<selftest::SelfTest>,
+    /// Settings sheet: "Show runs started by other tools" (persisted).
+    show_automation: AtomicBool,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -71,6 +73,9 @@ struct Snapshot {
     chats: Vec<ChatRow>,
     /// CHAT_SPEC "Plan usage".
     usage: UsageOut,
+    /// Additive: the "Show runs started by other tools" setting. Sessions keep
+    /// coming with their `origin`; the UI hides `automation` ones while this is off.
+    show_automation: bool,
 }
 
 /// Plan usage per provider; `null` until something is known.
@@ -210,7 +215,8 @@ impl Core {
         };
         self.usage.tick();
         let usage = UsageOut { claude: self.usage.get(Provider::Claude), codex: self.usage.get(Provider::Codex) };
-        let next = Snapshot { sessions, pending, ptys, loading, chats, usage };
+        let show_automation = self.show_automation.load(Ordering::Relaxed);
+        let next = Snapshot { sessions, pending, ptys, loading, chats, usage, show_automation };
         let mut cur = self.snapshot.lock().unwrap();
         // `updated` changes on every write, so a JSON compare is a cheap and exact "changed?".
         let changed = serde_json::to_string(&*cur).ok() != serde_json::to_string(&next).ok();
@@ -492,7 +498,20 @@ fn insights_clear_key(core: State<'_, Arc<Core>>) -> Res<()> {
 #[tauri::command(async)]
 fn insights_set_enabled(core: State<'_, Arc<Core>>, enabled: bool) -> Res<()> {
     core.insights.lock().unwrap().set_enabled(enabled);
-    settings::save(core.selftest.as_ref(), &settings::Settings { insights: enabled }).map_err(err)?;
+    let mut s = settings::load(core.selftest.as_ref());
+    s.insights = enabled;
+    settings::save(core.selftest.as_ref(), &s).map_err(err)?;
+    core.kick();
+    Ok(())
+}
+
+/// Settings sheet: show sessions started by other tools and agents (APP_SPEC "Who started it").
+#[tauri::command(async)]
+fn set_show_automation(core: State<'_, Arc<Core>>, enabled: bool) -> Res<()> {
+    core.show_automation.store(enabled, Ordering::Relaxed);
+    let mut s = settings::load(core.selftest.as_ref());
+    s.show_automation = enabled;
+    settings::save(core.selftest.as_ref(), &s).map_err(err)?;
     core.kick();
     Ok(())
 }
@@ -555,6 +574,9 @@ mod settings {
     pub struct Settings {
         #[serde(default)]
         pub insights: bool,
+        /// Show sessions started by other tools / agents (off: hidden).
+        #[serde(default)]
+        pub show_automation: bool,
     }
 
     fn path(t: Option<&super::selftest::SelfTest>) -> Option<PathBuf> {
@@ -730,14 +752,22 @@ pub fn run() {
     env::adopt_login_path();
 
     let selftest = selftest::SelfTest::from_env();
+    let prefs = settings::load(selftest.as_ref());
     let mut ins = Insights::new();
-    ins.set_enabled(settings::load(selftest.as_ref()).insights);
+    ins.set_enabled(prefs.insights);
+    let mut hub = Hub::new(Duration::from_secs(24 * 3600));
+    if let Some(t) = &selftest {
+        // Test chats are not the person's: remembered only inside the throwaway
+        // folder (so the test still sees them), and Codex threads carry a test name.
+        hub.set_own_sessions_file(Some(t.own_sessions_path()));
+        hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
+    }
     let mut usage = UsageMonitor::new();
     // Self-test runs stay off the person's accounts: free file reads only.
     // Probes send no prompt and spend no model usage; the self-test turns them on only when asked.
     usage.set_probes(selftest.is_none() || std::env::var_os("COOOL_SELFTEST_PROBES").is_some());
     let core = Arc::new(Core {
-        hub: Mutex::new(Hub::new(Duration::from_secs(24 * 3600))),
+        hub: Mutex::new(hub),
         // Until the first refresh lands, a `list_sessions` caller sees "loading".
         snapshot: Mutex::new(Snapshot { loading: true, ..Snapshot::default() }),
         streams: Mutex::new(HashMap::new()),
@@ -747,6 +777,7 @@ pub fn run() {
         allow_exit: AtomicBool::new(false),
         kick: (Mutex::new(false), Condvar::new()),
         selftest,
+        show_automation: AtomicBool::new(prefs.show_automation),
     });
 
     let app = tauri::Builder::default()
@@ -775,6 +806,7 @@ pub fn run() {
             insights_set_key,
             insights_clear_key,
             insights_set_enabled,
+            set_show_automation,
             usage_refresh,
             pick_folder,
             environment,

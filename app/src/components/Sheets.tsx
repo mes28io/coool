@@ -6,7 +6,7 @@ import { folderName, homeShort, projectOf } from "../lib/format";
 import { estimateSize } from "../lib/termlite";
 import type { InsightsStatus, Provider } from "../lib/types";
 import { useStore, type Sheet, type ThemePref } from "../store";
-import { IAlert, ICheck, IFolder, ISpark, ITerminal } from "./icons";
+import { IAlert, ICheck, IFolder, IGear, ISpark, ITerminal } from "./icons";
 import { Button, cx, Kbd, ProviderMark, Segmented } from "./primitives";
 
 export function Sheets() {
@@ -318,6 +318,9 @@ function Switch({ on, onChange, disabled, label }: { on: boolean; onChange: (v: 
 function Settings({ close }: { close: () => void }) {
   const themePref = useStore((s) => s.themePref);
   const setThemePref = useStore((s) => s.setThemePref);
+  const showAutomation = useStore((s) => s.showAutomation);
+  const setShowAutomation = useStore((s) => s.setShowAutomation);
+  const hiddenAutomation = useStore((s) => s.hiddenAutomation);
   const [st, setSt] = useState<InsightsStatus | null>(null);
   const [key, setKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -370,6 +373,20 @@ function Settings({ close }: { close: () => void }) {
             ]}
           />
         </Field>
+
+        <div className="flex items-start gap-3 rounded-[14px] border border-line p-4" data-setting="show-automation">
+          <span className="mt-[1px] flex size-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] text-dim">
+            <IGear size={16} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-base font-semibold">Show runs started by other tools</div>
+            <div className="mt-0.5 text-base text-dim">
+              Sessions that apps and agents launched programmatically (<span className="font-mono text-mono-small">claude -p</span>, the Agent SDK, <span className="font-mono text-mono-small">codex exec</span>). Off, only sessions you started, in a terminal, an editor or here, are listed.
+              {!showAutomation && hiddenAutomation > 0 && <span className="text-faint"> {hiddenAutomation} hidden right now.</span>}
+            </div>
+          </div>
+          <Switch label="Show runs started by other tools" on={showAutomation} onChange={setShowAutomation} />
+        </div>
 
         <div className="flex flex-col gap-3 rounded-[14px] border border-line p-4">
           <div className="flex items-start gap-3">

@@ -32,6 +32,31 @@ impl Provider {
     }
 }
 
+/// How a session was started (see `docs/APP_SPEC.md`, "Who started it").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    /// Started by the person: an interactive CLI in a terminal or IDE, a
+    /// desktop / phone / remote client. Also anything that can't be told apart.
+    #[default]
+    User,
+    /// Started or driven from coool (a chat or a coool terminal), this run or an earlier one.
+    Coool,
+    /// Started programmatically by another tool or agent (`claude -p`, the
+    /// Agent SDK, `codex exec`, Codex subagents whose parent isn't listed, ...).
+    Automation,
+}
+
+impl Origin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Origin::User => "user",
+            Origin::Coool => "coool",
+            Origin::Automation => "automation",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
@@ -156,6 +181,22 @@ pub struct Session {
     /// its recent activity before its totals: `tokens` (except `context`) and
     /// `models` may still be zero/empty for it until the backfill finishes.
     pub loaded: bool,
+    /// Who started it. Filled by the adapters from the transcript (Claude
+    /// `entrypoint`, Codex `originator` / `source`), then raised to
+    /// [`Origin::Coool`] by [`crate::hub::Hub::refresh`] for sessions coool
+    /// started (its chats and terminals, remembered across restarts).
+    pub origin: Origin,
+    /// For a programmatic run started from inside another session (see
+    /// [`crate::lineage`]): that session's id. Filled by [`crate::hub::Hub::refresh`].
+    pub parent: Option<String>,
+    /// Child runs of this session that are still alive (filled by the Hub).
+    pub live_children: u32,
+    /// The CLI says background tasks of this session are still running while it
+    /// waits for the person (Claude registry status `shell`; a flag, no count).
+    pub background_tasks: bool,
+    /// The CLI says it is blocked on the person (Claude registry status
+    /// `waiting`): what for (e.g. a permission prompt), as the CLI names it.
+    pub waiting_for: Option<String>,
 }
 
 pub const MAX_ACTIVITY: usize = 300;

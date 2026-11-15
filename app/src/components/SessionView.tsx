@@ -130,7 +130,8 @@ export function SessionView({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-title font-semibold tracking-[-0.01em] text-fg">{title}</h2>
-            <StatusPill status={status} />
+            <StatusPill status={status} background={status === "needs" ? null : att?.background} />
+            {att?.background && status !== "needs" && <span className="hidden shrink-0 text-small text-dim sm:inline">{att.background}</span>}
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
             <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />

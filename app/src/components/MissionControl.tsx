@@ -11,7 +11,7 @@ import { useStableOrder } from "../lib/stable";
 import { useStore, type Since } from "../store";
 import { IPlay, IPlus, ISpark, toolIcon } from "./icons";
 import { Wordmark } from "./Wordmark";
-import { Button, ContextMeter, cx, Elapsed, ease, Kbd, PathText, ProviderMark, softSpring, StatusDot, statusLabel } from "./primitives";
+import { AutoTag, Button, ContextMeter, cx, Elapsed, ease, Kbd, PathText, ProviderMark, softSpring, StatusDot, statusLabel } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { CardSkeleton, RecentSkeleton, Skel } from "./Skeletons";
 
@@ -30,12 +30,13 @@ export function MissionControl() {
     const att = new Map<Session, Attention>();
     for (const s of sessions) att.set(s, attention(s, digest));
     const rank = (s: Session) => (att.get(s)!.needs ? 0 : att.get(s)!.status === "busy" ? 1 : 2);
+    // Child runs show on their parent's card ("2 jobs running"), not as cards of their own.
     const live = sessions
-      .filter((s) => att.get(s)!.status !== "ended")
+      .filter((s) => !s.nested && att.get(s)!.status !== "ended")
       .sort((a, b) => rank(a) - rank(b) || folderName(projectOf(a)).localeCompare(folderName(projectOf(b))) || displayTitle(a).localeCompare(displayTitle(b)));
     return { live, att };
   }, [sessions, digest]);
-  const recent = useMemo(() => sessions.filter((s) => att.get(s)?.status === "ended").slice(0, 6), [sessions, att]);
+  const recent = useMemo(() => sessions.filter((s) => !s.nested && att.get(s)?.status === "ended").slice(0, 6), [sessions, att]);
   const starting = pending.map((id) => ptys[id]).filter(Boolean) as PtyInfo[];
   const startingChats = pendingChats.map((id) => chatInfos[id]).filter(Boolean) as ChatInfo[];
   // One ordered list ("Needs you", starting, the rest), held still while the pointer is over the grid.
@@ -137,7 +138,7 @@ function CardModel({ s }: { s: Session }) {
 }
 
 /** State at the top right of a card: just a dot ("Needs you" keeps its word, in blue). */
-function StateLabel({ status, needs }: { status: "busy" | "idle" | "starting" | "ended"; needs?: boolean }) {
+function StateLabel({ status, needs, background }: { status: "busy" | "idle" | "starting" | "ended"; needs?: boolean; background?: string | null }) {
   if (needs)
     return (
       <span className="flex shrink-0 items-center gap-1.5 text-small font-medium text-needs-text">
@@ -146,7 +147,7 @@ function StateLabel({ status, needs }: { status: "busy" | "idle" | "starting" | 
       </span>
     );
   // Dot only; the word lives in the tooltip and the accessible name.
-  const word = status === "idle" ? "Waiting for you" : statusLabel(status);
+  const word = background ? `Working in background · ${background}` : status === "idle" ? "Waiting for you" : statusLabel(status);
   return (
     <span role="img" aria-label={word} title={word} className="flex size-[16px] shrink-0 items-center justify-center">
       <StatusDot status={status} size={8} />
@@ -160,7 +161,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
   const open = useStore((st) => st.open);
   const now = useNow();
   const needs = att.needs;
-  const busy = att.status === "busy" && !needs;
+  const busy = att.status === "busy" && !needs && !att.background;
   const thinking = busy && (!s.current || isThinking(s.current));
   const cur = busy && !thinking && s.current ? splitTool(s.current) : null;
   const CurIcon = cur ? toolIcon(cur.name) : ISpark;
@@ -183,7 +184,8 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       <div className="flex h-[22px] items-center gap-1.5">
         <ProviderMark provider={s.provider} size={14} />
         <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(projectOf(s))}</span>
-        <StateLabel status={att.status} needs={!!needs} />
+        {s.origin === "automation" && <AutoTag />}
+        <StateLabel status={att.status} needs={!!needs} background={att.background} />
       </div>
       <div className="mt-2 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">{displayTitle(s)}</div>
 
@@ -196,6 +198,11 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
             </span>
             <span className="shrink-0 text-small text-needs-text/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review →" : "Open →"}</span>
           </>
+        ) : att.background ? (
+          <span className="flex min-w-0 flex-1 items-center gap-2 text-fg/90" data-card-background>
+            <StatusDot status="busy" size={7} />
+            <span className="truncate font-medium">{att.background}</span>
+          </span>
         ) : busy ? (
           <>
             <CurIcon size={15} className="shrink-0 text-dim" />
@@ -285,7 +292,8 @@ function RecentRow({ s, first }: { s: Session; first: boolean }) {
     <div className={cx("group flex h-[40px] items-center gap-3 px-1 transition-colors duration-150", !first && "border-t border-hairline")}>
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={() => open({ kind: "session", key: sessionKey(s) })}>
         <ProviderMark provider={s.provider} size={15} />
-        <span className="truncate text-base text-fg/85 group-hover:text-fg">{displayTitle(s)}</span>
+        <span className={cx("truncate text-base group-hover:text-fg", s.origin === "automation" ? "text-faint" : "text-fg/85")}>{displayTitle(s)}</span>
+        {s.origin === "automation" && <AutoTag />}
         <span className="shrink-0 text-small text-faint">{folderName(projectOf(s))}</span>
       </button>
       <Button variant="ghost" className="h-[30px] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100" onClick={() => resumeInto(s)} title="Resume inside coool">

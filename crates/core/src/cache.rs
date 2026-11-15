@@ -23,7 +23,9 @@ use std::time::{Duration, SystemTime};
 
 /// Bump whenever the parsers or [`Parsed`] change meaning: old entries are then
 /// ignored (and pruned), never misread.
-pub const VERSION: u32 = 1;
+/// v2: Claude state records `entrypoint` / human turns, Codex state `originator`,
+/// `source` and the subagent parent (session origin).
+pub const VERSION: u32 = 2;
 /// Bytes fingerprinted at the start and just before the saved offset.
 const PRINT: u64 = 4096;
 /// Total size the cache is kept under.

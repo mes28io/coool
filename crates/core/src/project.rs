@@ -36,6 +36,19 @@ fn resolve(cwd: &str, fs_root: &Path, home: Option<&Path>) -> String {
     git_root(Path::new(cwd), fs_root, home).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| cwd.to_string())
 }
 
+/// The session id in an agent scratch path `/tmp/claude-<uid>/<encoded>/<session-id>/...`:
+/// the session that owns that scratch folder (and so started what runs in it).
+/// Only a UUID-shaped segment counts.
+pub fn scratch_session(cwd: &str) -> Option<String> {
+    let comps: Vec<&str> = cwd.split('/').filter(|c| !c.is_empty()).collect();
+    let i = comps.iter().position(|c| c.strip_prefix("claude-").is_some_and(|u| !u.is_empty() && u.bytes().all(|b| b.is_ascii_digit())))?;
+    comps.get(i + 1)?.strip_prefix('-')?;
+    let id = comps.get(i + 2)?;
+    let b = id.as_bytes();
+    let uuid = b.len() == 36 && b.iter().enumerate().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { *c == b'-' } else { c.is_ascii_hexdigit() });
+    uuid.then(|| id.to_string())
+}
+
 /// `/tmp/claude-<uid>/<encoded>/<session-id>/...` (also under `/private`, or any
 /// `$TMPDIR` ending in `claude-<uid>`): the folder `<encoded>` stands for.
 fn scratch_owner(cwd: &str, fs_root: &Path) -> Option<PathBuf> {
@@ -195,6 +208,17 @@ mod tests {
         fs::write(sub.join(".git"), "gitdir: ../../.git/modules/sub\n").unwrap();
         assert_eq!(resolve(&s(&sub), &root, Some(&home)), s(&sub));
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn scratch_session_is_the_owning_session() {
+        let id = "b1cd1930-6f74-4abe-bf52-13f0eba84069";
+        assert_eq!(scratch_session(&format!("/private/tmp/claude-501/-Users-x-p/{id}/scratchpad/exp/cwd")).as_deref(), Some(id));
+        assert_eq!(scratch_session(&format!("/tmp/claude-501/-Users-x-p/{id}")).as_deref(), Some(id));
+        assert_eq!(scratch_session("/tmp/claude-501/-Users-x-p/not-a-session/scratchpad"), None);
+        assert_eq!(scratch_session(&format!("/tmp/claude-/-Users-x-p/{id}")), None);
+        assert_eq!(scratch_session(&format!("/Users/x/{id}/scratchpad")), None);
+        assert_eq!(scratch_session(""), None);
     }
 
     #[test]

@@ -6,6 +6,7 @@ import type { Since } from "../store";
 import { IAlert, IChevron, ICheck, ISpark, toolIcon } from "./icons";
 import { Elapsed, cx, ease, StatusDot } from "./primitives";
 import { ModelTag } from "./Models";
+import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
 import { TimelineSkeleton } from "./Skeletons";
 
 type Block =
@@ -222,7 +223,6 @@ const StepGroup = memo(function StepGroup({
   const [open, setOpen] = useState<boolean | null>(null);
   const isOpen = open ?? (latest || items.length <= 2);
   const mountKeys = useRef(new Set(items.map((i) => i.key)));
-  const opened = useRef(isOpen);
   const chips = summarize(items);
   const first = tsToMs(items[0].a.ts);
   const lastT = tsToMs(items[items.length - 1].a.ts);
@@ -232,10 +232,7 @@ const StepGroup = memo(function StepGroup({
     <div className="rounded-[10px]">
       <button
         type="button"
-        onClick={() => {
-          opened.current = false;
-          setOpen(!isOpen);
-        }}
+        onClick={() => setOpen(!isOpen)}
         className="group flex w-full items-center gap-2 rounded-[8px] py-1 pl-0.5 pr-2 text-left text-base transition-colors duration-150 hover:bg-hover"
       >
         <motion.span animate={{ rotate: isOpen ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex size-[22px] items-center justify-center text-faint group-hover:text-dim">
@@ -263,30 +260,24 @@ const StepGroup = memo(function StepGroup({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.24, ease }}
+            transition={{ duration: reducedMotion() ? 0 : 0.24, ease }}
             className="overflow-hidden"
           >
-            <ol className="relative ml-[9px] mt-1 border-l border-hairline pb-1 pl-3">
+            <RailList className="ml-[12px] mt-1 pb-1">
               {items.map((it, i) => {
                 const isActive = active && i === items.length - 1;
                 const fresh = !mountKeys.current.has(it.key);
-                const delay = !fresh && opened.current ? Math.min(i, 14) * 0.035 : 0;
                 return (
-                  <motion.li
-                    key={it.key}
-                    initial={fresh || opened.current ? { opacity: 0, y: 6 } : false}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.26, ease, delay }}
-                  >
+                  <RailItem key={it.key} first={i === 0} last={i === items.length - 1} fresh={fresh} active={isActive} dotY={it.a.kind === "agent" ? 20 : 14}>
                     {it.a.kind === "agent" ? (
                       <AgentStep a={it.a} agents={agents} active={isActive} live={live} />
                     ) : (
-                      <StepRow a={it.a} active={isActive} live={live} />
+                      <StepRow a={it.a} active={isActive} live={live} fresh={fresh} />
                     )}
-                  </motion.li>
+                  </RailItem>
                 );
               })}
-            </ol>
+            </RailList>
           </motion.div>
         )}
       </AnimatePresence>
@@ -294,9 +285,9 @@ const StepGroup = memo(function StepGroup({
   );
 });
 
-function StepRow({ a, active, dense, live }: { a: Activity; active: boolean; dense?: boolean; live: LiveTime }) {
+function StepRow({ a, active, dense, live, fresh }: { a: Activity; active: boolean; dense?: boolean; live: LiveTime; fresh?: boolean }) {
   const { name, detail } = splitTool(a.text);
-  return <StepLine name={name} detail={detail} active={active} dense={dense} stamp={a.ts} since={live.at} approx={live.approx} />;
+  return <StepLine name={name} detail={detail} active={active} dense={dense} fresh={fresh} stamp={a.ts} since={live.at} approx={live.approx} />;
 }
 
 /** One step: icon (or spinner), tool name, mono detail, timer or timestamp. Shared by Activity and Chat. */
@@ -309,6 +300,7 @@ export function StepLine({
   approx,
   failed,
   waiting,
+  fresh,
   onClick,
   open,
 }: {
@@ -321,6 +313,8 @@ export function StepLine({
   approx?: boolean;
   failed?: boolean;
   waiting?: boolean;
+  /** Arrived just now: reveal the label left to right. */
+  fresh?: boolean;
   onClick?: () => void;
   open?: boolean;
 }) {
@@ -329,7 +323,7 @@ export function StepLine({
     <div
       onClick={onClick}
       className={cx(
-        "group relative -ml-[19px] flex items-center gap-2.5 rounded-[7px] pr-2",
+        "group relative flex items-center gap-2.5 rounded-[7px] pr-2",
         "h-[28px]",
         active && !waiting && "sweep",
         onClick && "hover:bg-hover",
@@ -339,7 +333,7 @@ export function StepLine({
     >
       <span
         className={cx(
-          "relative z-[1] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg",
+          "relative flex size-[18px] shrink-0 items-center justify-center",
           waiting ? "text-needs-text" : active ? "text-working-text" : failed ? "text-err-text" : "text-faint",
         )}
       >
@@ -360,12 +354,12 @@ export function StepLine({
         className={cx("shrink-0 text-base font-medium", active && !waiting ? "shimmer" : waiting ? "text-fg/85" : failed ? "text-err-text/90" : "text-fg/80")}
         style={active && !waiting ? { ["--shimmer-base" as string]: "var(--text)", ["--shimmer-hi" as string]: "var(--dim)" } : undefined}
       >
-        {name}
+        <Reveal text={name} fresh={fresh} />
       </span>
       {detail && (
         <span className={cx("selectable min-w-0 flex-1 truncate font-mono text-mono-small", failed ? "text-err-text/70 line-through decoration-err/40" : "text-dim")} title={failed ? detail : undefined}>
           {/* A struck-through path is read at a glance: short, like the rest of the timeline. */}
-          {failed ? shortDetail(homeShort(detail)) : detail}
+          <Reveal text={failed ? shortDetail(homeShort(detail)) : detail} fresh={fresh} />
         </span>
       )}
       {!detail && <span className="flex-1" />}
@@ -385,8 +379,9 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   const agent = agents.find((g) => g.description && (g.description === detail || detail.startsWith(g.description))) ?? null;
   const running = agent ? !agent.finished : active;
   const steps = agent?.activity.filter((x) => x.kind === "tool" || x.kind === "agent").slice(-5) ?? [];
+  const agentSeen = useRef(new Set(steps.map((s) => `${s.ts}${s.text}`)));
   return (
-    <div className="-ml-[19px] flex gap-2.5 py-1">
+    <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
         <ISpark size={14} />
       </span>
@@ -411,15 +406,19 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
           )}
         </div>
         {steps.length > 0 && (
-          <ol className="relative ml-[21px] border-l border-hairline pb-1.5 pl-3">
-            <AnimatePresence initial={false}>
-              {steps.map((s, i) => (
-                <motion.li key={`${s.ts}${s.text}`} layout="position" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24, ease }}>
-                  <StepRow a={s} active={running && i === steps.length - 1} dense live={live} />
-                </motion.li>
-              ))}
-            </AnimatePresence>
-          </ol>
+          <div className="pb-1.5 pl-[14px] pr-1">
+            <RailList>
+              {steps.map((s, i) => {
+                const k = `${s.ts}${s.text}`;
+                const fresh = !agentSeen.current.has(k);
+                return (
+                  <RailItem key={k} first={i === 0} last={i === steps.length - 1} fresh={fresh} active={running && i === steps.length - 1}>
+                    <StepRow a={s} active={running && i === steps.length - 1} dense live={live} fresh={fresh} />
+                  </RailItem>
+                );
+              })}
+            </RailList>
+          </div>
         )}
         {running && steps.length === 0 && (
           <div className="px-3 pb-2">

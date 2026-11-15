@@ -13,6 +13,7 @@ use crate::claude::ClaudeSource;
 use crate::codex::CodexSource;
 use crate::loader::{INLINE_BUDGET, Pool};
 use crate::model::*;
+use crate::origin::OwnSessions;
 use crate::pty::Managed;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -43,6 +44,12 @@ pub struct Hub {
     /// Structured chats ([`crate::chat`]); ids are stable like `managed` indices.
     chats: Vec<Option<Chat>>,
     chat_exited_at: HashMap<usize, Instant>,
+    /// Sessions coool started or drove, remembered across restarts.
+    own: OwnSessions,
+    /// How chats introduce themselves to `codex app-server`.
+    client_name: String,
+    /// Live child run pid -> pid of the session above it (see [`crate::lineage`]).
+    ancestors: crate::lineage::AncestorCache,
 }
 
 impl Hub {
@@ -69,7 +76,23 @@ impl Hub {
             exited_at: HashMap::new(),
             chats: Vec::new(),
             chat_exited_at: HashMap::new(),
+            own: OwnSessions::at(OwnSessions::default_path()),
+            client_name: crate::origin::CLIENT_NAME.to_string(),
+            ancestors: Default::default(),
         }
+    }
+
+    /// Where the list of coool's own sessions is kept (default:
+    /// [`OwnSessions::default_path`]; None: memory only). A test run points it
+    /// into its throwaway folder so its chats are never remembered as the person's.
+    pub fn set_own_sessions_file(&mut self, path: Option<PathBuf>) {
+        self.own = OwnSessions::at(path);
+    }
+
+    /// The `clientInfo.name` new Codex chats send (default [`crate::origin::CLIENT_NAME`];
+    /// a test run uses [`crate::origin::TEST_CLIENT_NAME`]).
+    pub fn set_client_name(&mut self, name: &str) {
+        self.client_name = name.to_string();
     }
 
     /// Re-scan disk (cheaply) and return all sessions as known now, busiest first.
@@ -196,6 +219,22 @@ impl Hub {
             self.codex.scan_all_soon();
         }
 
+        // Whatever coool started or drives is the person's, now and after a restart.
+        for c in self.chats.iter().flatten() {
+            if let Some(sid) = c.session_id() {
+                self.own.record(c.provider, &sid);
+            }
+        }
+        for s in &mut all {
+            if s.chat.is_some() || s.managed.is_some() {
+                self.own.record(s.provider, &s.id);
+            }
+            if self.own.contains(s.provider, &s.id) {
+                s.origin = Origin::Coool;
+            }
+        }
+        self.link_children(&mut all);
+
         if live_only {
             all.retain(|s| s.status != Status::Ended || s.managed.is_some() || s.chat.is_some());
         }
@@ -204,6 +243,41 @@ impl Hub {
         }
         all.sort_by(|a, b| a.status.cmp(&b.status).then(b.updated.cmp(&a.updated)));
         all
+    }
+
+    /// Child runs: programmatic sessions started from inside another session
+    /// (see [`crate::lineage`]) get `parent`; parents get `live_children`.
+    fn link_children(&mut self, all: &mut [Session]) {
+        use crate::lineage::session_ancestor;
+        let live_pids: HashMap<u32, String> = all.iter().filter(|s| s.status != Status::Ended).filter_map(|s| Some((s.pid?, s.id.clone()))).collect();
+        for s in all.iter_mut() {
+            if s.origin != Origin::Automation {
+                continue;
+            }
+            let mut parent = None;
+            if let Some(pid) = s.pid.filter(|_| s.status != Status::Ended) {
+                let started = crate::util::process_start_ms(pid).unwrap_or(0);
+                let above = self.ancestors.get(pid, started, || session_ancestor(pid, crate::util::parent_pid, |p| p != pid && live_pids.contains_key(&p)));
+                if let Some(id) = above.and_then(|p| live_pids.get(&p)).filter(|id| **id != s.id) {
+                    self.own.record_parent(s.provider, &s.id, id);
+                    parent = Some(id.clone());
+                }
+            }
+            s.parent = parent
+                .or_else(|| self.own.parent_of(s.provider, &s.id).map(str::to_string))
+                .or_else(|| crate::project::scratch_session(&s.cwd))
+                .filter(|p| *p != s.id);
+        }
+        self.ancestors.retain(|p| live_pids.contains_key(&p) || all.iter().any(|s| s.pid == Some(p)));
+        let mut live: HashMap<String, u32> = HashMap::new();
+        for s in all.iter().filter(|s| s.status != Status::Ended) {
+            if let Some(p) = &s.parent {
+                *live.entry(p.clone()).or_default() += 1;
+            }
+        }
+        for s in all.iter_mut() {
+            s.live_children = live.get(&s.id).copied().unwrap_or(0);
+        }
     }
 
     /// True until every session found at startup has been fully parsed (as of
@@ -230,7 +304,12 @@ impl Hub {
     /// Start a structured chat (see [`crate::chat`]). Returns its id, stable for the process.
     pub fn start_chat(&mut self, opts: ChatOptions) -> Result<usize> {
         let id = self.chats.len();
-        let c = Chat::start(id, opts)?;
+        let c = Chat::start(id, opts, &self.client_name)?;
+        // Claude chats know their session id up front: remember it before the
+        // transcript exists, so a crash right away still leaves it marked.
+        if let Some(sid) = c.session_id() {
+            self.own.record(c.provider, &sid);
+        }
         self.chats.push(Some(c));
         Ok(id)
     }
@@ -395,12 +474,14 @@ mod tests {
 
     fn hub(d: &Path, cache: bool) -> Hub {
         let w = Duration::from_secs(3600);
-        Hub::with_sources(
+        let mut h = Hub::with_sources(
             ClaudeSource::with_root(d.join("claude"), w),
             CodexSource::with_root(d.join("codex"), w),
             cache.then(|| Cache::at(d.join("cache"))),
             3,
-        )
+        );
+        h.set_own_sessions_file(Some(d.join("own-sessions.json")));
+        h
     }
 
     fn reference(d: &Path) -> Vec<Session> {
@@ -470,6 +551,107 @@ mod tests {
         // Without a cache the result is the same.
         let mut h = hub(&d, false);
         assert_eq!(summary(&until_loaded(&mut h)), want);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn origin_from_transcripts_and_own_sessions_across_restart() {
+        let d = tmpdir("origin");
+        let proj = d.join("claude/projects/-w");
+        fs::create_dir_all(&proj).unwrap();
+        use crate::origin::tests::{KILN, PHONE, TERMINAL_IN_SCRATCH};
+        fs::write(proj.join("kiln.jsonl"), KILN).unwrap();
+        fs::write(proj.join("phone.jsonl"), PHONE).unwrap();
+        fs::write(proj.join("scratch-terminal.jsonl"), TERMINAL_IN_SCRATCH).unwrap();
+        // A chat coool started in an earlier run: as programmatic as Kiln's.
+        fs::write(proj.join("mine.jsonl"), KILN.replace("k1", "mine")).unwrap();
+        // A human turn later in an sdk run (e.g. resumed and typed into) counts.
+        fs::write(proj.join("big-human.jsonl"), format!("{KILN}{}", claude_transcript(5, 10)).replace("\"cwd\":\"/w\"", "\"cwd\":\"/w\",\"turnOrigin\":\"human\"")).unwrap();
+        let day = d.join("codex/sessions").join(crate::codex::date_path(std::time::SystemTime::now()));
+        fs::create_dir_all(&day).unwrap();
+        let rollout = |id: &str, meta: &str| {
+            let n = format!("rollout-2026-11-14T08-00-00-{id}.jsonl");
+            let body = format!("{{\"timestamp\":\"2026-11-14T08:00:00Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"cwd\":\"/c\",{meta}}}}}\n{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-a\"}}}}\n{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"total_token_usage\":{{\"input_tokens\":100,\"cached_input_tokens\":0,\"output_tokens\":5}}}}}}}}\n");
+            fs::write(day.join(n), body).unwrap();
+        };
+        let id = |n: u8| format!("01a1da0b-637d-7063-8d51-c27a6ae5f3{n:02x}");
+        rollout(&id(1), r#""originator":"codex_exec","source":"exec""#);
+        rollout(&id(2), r#""originator":"coool","source":"vscode""#);
+        rollout(&id(3), r#""originator":"Codex Desktop","source":"vscode""#);
+        rollout(&id(4), &format!(r#""originator":"Codex Desktop","source":{{"subagent":{{"thread_spawn":{{"parent_thread_id":"{}","agent_nickname":"Galileo"}}}}}},"agent_nickname":"Galileo""#, id(3)));
+        rollout(&id(5), r#""originator":"Codex Desktop","source":{"subagent":{"thread_spawn":{"parent_thread_id":"gone"}}}"#);
+        rollout(&id(6), r#""originator":"coool-selftest","source":"vscode""#);
+        OwnSessions::at(Some(d.join("own-sessions.json"))).record(Provider::Claude, "mine");
+
+        let mut h = hub(&d, false);
+        let all = until_loaded(&mut h);
+        let o = |sid: &str| all.iter().find(|s| s.id == sid).map(|s| s.origin);
+        assert_eq!(o("kiln"), Some(Origin::Automation));
+        assert_eq!(o("phone"), Some(Origin::User));
+        assert_eq!(o("scratch-terminal"), Some(Origin::User), "classified by how it started, not where");
+        assert_eq!(o("mine"), Some(Origin::Coool), "remembered from an earlier run");
+        assert_eq!(o("big-human"), Some(Origin::User));
+        assert_eq!(o(&id(1)), Some(Origin::Automation));
+        assert_eq!(o(&id(2)), Some(Origin::Coool));
+        assert_eq!(o(&id(3)), Some(Origin::User));
+        assert_eq!(o(&id(4)), None, "a subagent with a listed parent is not its own session");
+        assert_eq!(o(&id(5)), Some(Origin::Automation), "orphan subagent");
+        assert_eq!(o(&id(6)), Some(Origin::Automation), "self-test threads are not the person's");
+        let parent = all.iter().find(|s| s.id == id(3)).unwrap();
+        assert_eq!(parent.agents.len(), 1);
+        assert_eq!((parent.agents[0].id.as_str(), parent.agents[0].kind.as_str()), (id(4).as_str(), "Galileo"));
+        assert!(parent.models.iter().any(|m| m.via_agent), "the subagent's tokens show under the parent");
+
+        // Unparsed transcripts already know their origin from the head (no flash of automation rows).
+        let mut cold = hub(&d, false);
+        let first = cold.refresh(false);
+        assert_eq!(first.iter().find(|s| s.id == "kiln").map(|s| s.origin), Some(Origin::Automation));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn child_runs_link_to_their_parent_by_scratch_path_and_live_ancestry() {
+        use crate::origin::tests::{KILN, TERMINAL_IN_SCRATCH};
+        let d = tmpdir("lineage");
+        let proj = d.join("claude/projects/-w");
+        fs::create_dir_all(&proj).unwrap();
+        fs::create_dir_all(d.join("claude/sessions")).unwrap();
+        let parent_id = "b1cd1930-6f74-4abe-bf52-13f0eba84069";
+        // The person's terminal session...
+        fs::write(proj.join(format!("{parent_id}.jsonl")), TERMINAL_IN_SCRATCH.replace("/private/tmp/claude-501/-Users-x-p/s/scratchpad", "/w")).unwrap();
+        // ...and a run it left in its scratch folder (ended): attached by the path.
+        let scratch = format!("/private/tmp/claude-501/-w/{parent_id}/scratchpad/exp");
+        fs::write(proj.join("ended-child.jsonl"), KILN.replace("/Users/x/Library/Application Support/Kiln/agent", &scratch)).unwrap();
+        // A live run whose process descends from a live session process: this
+        // test process plays the child, its real parent process the parent session.
+        let (me, pp) = (std::process::id(), crate::util::parent_pid(std::process::id()).expect("parent pid"));
+        let reg = |pid: u32, sid: &str, ep: &str| {
+            let started = crate::util::process_start_ms(pid).unwrap_or(0);
+            fs::write(d.join(format!("claude/sessions/{pid}.json")), format!(r#"{{"pid":{pid},"sessionId":"{sid}","cwd":"/w","startedAt":{started},"kind":"interactive","entrypoint":"{ep}","status":"busy"}}"#)).unwrap();
+        };
+        let live_parent = "11111111-2222-4333-8444-555555555555";
+        fs::write(proj.join(format!("{live_parent}.jsonl")), TERMINAL_IN_SCRATCH.replace("t1", live_parent)).unwrap();
+        fs::write(proj.join("live-child.jsonl"), KILN.replace("k1", "live-child")).unwrap();
+        reg(pp, live_parent, "cli");
+        reg(me, "live-child", "sdk-cli");
+        // An automation run with no known parent stays a parent-less (hidden) run.
+        fs::write(proj.join("kiln.jsonl"), KILN).unwrap();
+
+        let mut h = hub(&d, false);
+        let all = until_loaded(&mut h);
+        let get = |id: &str| all.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("{id} listed"));
+        assert_eq!(get("ended-child").parent.as_deref(), Some(parent_id));
+        assert_eq!(get(parent_id).live_children, 0, "an ended child is not running");
+        assert_eq!(get("live-child").parent.as_deref(), Some(live_parent), "found through the process tree");
+        assert_eq!(get(live_parent).live_children, 1);
+        assert_eq!(get("kiln").parent, None);
+        assert_eq!(get(live_parent).parent, None, "the person's own session is nobody's child");
+        // The live link is remembered: once the process is gone, the child stays attached.
+        fs::remove_file(d.join(format!("claude/sessions/{me}.json"))).unwrap();
+        let mut h2 = hub(&d, false);
+        let all = until_loaded(&mut h2);
+        let child = all.iter().find(|s| s.id == "live-child").unwrap();
+        assert_eq!((child.status, child.parent.as_deref()), (Status::Ended, Some(live_parent)));
         let _ = fs::remove_dir_all(&d);
     }
 

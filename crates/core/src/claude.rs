@@ -23,6 +23,12 @@ struct ParseState {
     open_tools: Vec<(String, String)>,
     /// Tokens per model, counted once per message like `tokens`.
     models: Vec<ModelUse>,
+    /// First `entrypoint` in the transcript (how it was started, see [`crate::origin`]).
+    #[serde(default)]
+    entrypoint: Option<String>,
+    /// A user turn was typed by a person (`turnOrigin` / `origin.kind` "human").
+    #[serde(default)]
+    human: bool,
 }
 
 /// Everything parsed from one transcript (main session or subagent).
@@ -56,6 +62,7 @@ impl Parsed {
             tokens: self.tokens.clone(),
             activity: self.activity.clone(),
             models,
+            origin: self.p.entrypoint.as_ref().map(|e| crate::origin::claude(Some(e), self.p.human)),
             ..View::default()
         }
     }
@@ -79,6 +86,9 @@ struct Entry {
     /// transcript doesn't say (yet).
     reg_title: String,
     reg_cwd: String,
+    /// Origin from the registry's `entrypoint` or the transcript's first records,
+    /// for before the parse knows (see [`crate::origin::sniff`]).
+    early_origin: Option<Origin>,
     /// In first-seen order.
     agents: Vec<AgentEntry>,
 }
@@ -150,6 +160,7 @@ impl ClaudeSource {
                 live: None,
                 reg_title: String::new(),
                 reg_cwd: String::new(),
+                early_origin: None,
                 agents: Vec::new(),
             });
             e.mtime = mtime;
@@ -161,6 +172,11 @@ impl ClaudeSource {
                 if !r.cwd.is_empty() {
                     e.reg_cwd = r.cwd.clone();
                 }
+            }
+            if e.early_origin.is_none() && !e.slot.view().loaded {
+                // Once per transcript; the registry's `entrypoint` (no turn markers) as a fallback.
+                let reg = e.live.as_ref().and_then(|r| r.entrypoint.as_deref()).map(|ep| crate::origin::claude(Some(ep), false));
+                e.early_origin = Some(crate::origin::sniff(path, Provider::Claude).or(reg).unwrap_or_default());
             }
             let is_live = e.live.is_some();
             pool.sync(&e.slot, meta, loader::prio(is_live, true, mtime), budget);
@@ -200,6 +216,11 @@ impl ClaudeSource {
                     cwd: v["cwd"].as_str().unwrap_or("").to_string(),
                     name: v["name"].as_str().unwrap_or("").to_string(),
                     busy: v["status"].as_str() == Some("busy"),
+                    // `shell`: the turn is over but background tasks still run (the
+                    // CLI's own UI shows that as working). `waiting`: blocked on the person.
+                    shell: v["status"].as_str() == Some("shell"),
+                    waiting_for: (v["status"].as_str() == Some("waiting")).then(|| v["waitingFor"].as_str().unwrap_or("input").to_string()),
+                    entrypoint: v["entrypoint"].as_str().map(str::to_string),
                 },
             );
         }
@@ -256,6 +277,11 @@ fn session(id: &str, e: &Entry) -> Session {
         chat: None,
         models,
         loaded: v.loaded,
+        origin: v.origin.or(e.early_origin).unwrap_or_default(),
+        parent: None,
+        live_children: 0,
+        background_tasks: e.live.as_ref().is_some_and(|r| r.shell),
+        waiting_for: e.live.as_ref().and_then(|r| r.waiting_for.clone()),
     }
 }
 
@@ -332,6 +358,9 @@ struct Live {
     cwd: String,
     name: String,
     busy: bool,
+    shell: bool,
+    waiting_for: Option<String>,
+    entrypoint: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -352,6 +381,14 @@ fn parse_line(
     }
     let Ok(v) = serde_json::from_str::<Value>(line) else { return };
     let ts = v["timestamp"].as_str().map(short_time).unwrap_or_default();
+    if st.entrypoint.is_none()
+        && let Some(e) = v["entrypoint"].as_str()
+    {
+        st.entrypoint = Some(e.to_string());
+    }
+    if v["type"] == "user" && crate::origin::claude_human(&v) {
+        st.human = true;
+    }
     if let Some(c) = v["cwd"].as_str()
         && cwd.is_empty() {
             *cwd = c.to_string();

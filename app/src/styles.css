@@ -574,3 +574,21 @@ html.theme-fade *::after {
     opacity: 0.7;
   }
 }
+
+/* Left-to-right reveal of a newly arrived label (checkpoints, steps): one span per character. */
+.cp-ch {
+  animation: cp-ch 200ms ease-out both;
+}
+@keyframes cp-ch {
+  from {
+    opacity: 0.1;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cp-ch {
+    animation: none;
+  }
+}

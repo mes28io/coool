@@ -43,6 +43,9 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut hub = Hub::new(Duration::from_secs(3600));
+    // A smoke run is not the person's chat: don't remember it.
+    hub.set_own_sessions_file(None);
+    hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
     let id = hub.start_chat(ChatOptions { provider, cwd, resume, model, permission_mode: mode })?;
     hub.chat_mut(id).unwrap().send(&prompt)?;
 

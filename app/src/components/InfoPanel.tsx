@@ -3,6 +3,9 @@
 
 import { motion } from "motion/react";
 import { useMemo } from "react";
+import { deriveLedger } from "../lib/ledger";
+import { Ledger } from "./Ledger";
+import { chatTitle } from "../lib/chat";
 import { chatCall } from "../lib/actions";
 import { api } from "../lib/backend";
 import { chatModels, type Chat } from "../lib/chat";
@@ -14,9 +17,9 @@ import { cx, ease, Segmented } from "./primitives";
 import { UsageBlock } from "./Usage";
 import { useStore } from "../store";
 
-export type InfoTab = "context" | "status" | "usage";
+export type InfoTab = "context" | "status" | "usage" | "changes";
 
-export function InfoPanel({ chat, tab, onTab }: { chat: Chat; tab: InfoTab; onTab: (t: InfoTab) => void }) {
+export function InfoPanel({ chat, tab, onTab, turn, onTurn }: { chat: Chat; tab: InfoTab; onTab: (t: InfoTab) => void; turn?: string | null; onTurn?: (t: string | null) => void }) {
   return (
     <div data-info-panel={tab}>
       <div className="flex items-center justify-between border-b border-hairline px-3 py-1.5">
@@ -28,12 +31,13 @@ export function InfoPanel({ chat, tab, onTab }: { chat: Chat; tab: InfoTab; onTa
             { value: "context", label: "Context" },
             { value: "status", label: "Status" },
             { value: "usage", label: "Usage" },
+            { value: "changes", label: "Changes" },
           ]}
         />
         <span className="font-mono text-mono-small text-faint">/{tab}</span>
       </div>
       <motion.div key={tab} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease }}>
-        {tab === "context" ? <ContextTab chat={chat} /> : tab === "status" ? <StatusTab chat={chat} /> : <UsageTab chat={chat} />}
+        {tab === "context" ? <ContextTab chat={chat} /> : tab === "status" ? <StatusTab chat={chat} /> : tab === "changes" ? <ChangesTab chat={chat} turn={turn ?? null} onTurn={onTurn} /> : <UsageTab chat={chat} />}
       </motion.div>
     </div>
   );
@@ -172,6 +176,26 @@ function UsageTab({ chat }: { chat: Chat }) {
       {(
         <div className="border-t border-hairline px-3.5 py-2 text-small text-faint">Token counts come straight from the CLI. coool doesn't estimate dollar cost.</div>
       )}
+    </div>
+  );
+}
+
+function ChangesTab({ chat, turn, onTurn }: { chat: Chat; turn: string | null; onTurn?: (t: string | null) => void }) {
+  const all = useMemo(() => deriveLedger(chat), [chat.items, chat.cwd]);
+  const changes = turn ? all.filter((c) => c.group === turn) : all;
+  // Read-only on purpose: restoring files safely needs backend work that has not been
+  // designed yet, so no `onUndo` is passed here (the Ledger then offers no Undo at all).
+  return (
+    <div>
+      {turn && (
+        <div className="flex items-center gap-2 border-b border-hairline px-3.5 py-1.5 text-small text-dim">
+          <span>Showing one turn</span>
+          <button type="button" onClick={() => onTurn?.(null)} className="rounded-[6px] px-1.5 text-faint hover:bg-hover hover:text-fg">
+            Show all {all.length}
+          </button>
+        </div>
+      )}
+      <Ledger bare changes={changes} title={chatTitle(chat) ?? ""} maxHeight={340} />
     </div>
   );
 }

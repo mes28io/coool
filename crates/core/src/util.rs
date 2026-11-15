@@ -216,9 +216,49 @@ fn imp_start_ms(_: libc::pid_t) -> Option<u64> {
     None
 }
 
+/// The parent pid of `pid`, if it is alive and readable. No external commands.
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    let p = valid_pid(pid)?;
+    imp_ppid(p)
+}
+
+#[cfg(target_os = "macos")]
+fn imp_ppid(pid: libc::pid_t) -> Option<u32> {
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
+    unsafe {
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let n = libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, &mut info as *mut _ as *mut libc::c_void, size);
+        (n == size).then_some(info.pbi_ppid)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn imp_ppid(pid: libc::pid_t) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Field 4 (ppid); comm (field 2) may contain spaces.
+    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn imp_ppid(_: libc::pid_t) -> Option<u32> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parent_pid_of_this_process() {
+        let me = std::process::id();
+        let pp = parent_pid(me);
+        if cfg!(any(target_os = "macos", target_os = "linux")) {
+            assert!(pp.is_some_and(|p| p > 0 && p != me), "{pp:?}");
+        }
+        assert_eq!(parent_pid(0), None);
+        assert_eq!(parent_pid(1), None);
+    }
 
     #[test]
     fn rfc3339_parses_to_epoch() {

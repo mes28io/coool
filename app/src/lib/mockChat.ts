@@ -658,6 +658,11 @@ export class MockChat {
       return;
     }
 
+    // Plan scenarios: "todo" (agent task list; "todo stop" ends with steps left), "codex plan" (update_plan), "plan mode" (ExitPlanMode approval).
+    if (/\bcodex plan\b/.test(p)) return this.planDemo(gen, "update_plan");
+    if (/\btodo\b/.test(p)) return this.planDemo(gen, "TodoWrite", /\bstop\b/.test(p));
+    if (/\bplan mode\b/.test(p)) return this.planApproval(gen);
+
     const plan = this.mode === "plan";
     await this.say(`I'll start by reading how this works today, then make the change and run the ${f.lang} checks.`, gen, {
       think: `They want: "${prompt.slice(0, 80)}". First I need to see ${f.a} and how it's wired. Then decide whether this needs a new type or fits the existing one.`,
@@ -717,6 +722,50 @@ export class MockChat {
       return;
     }
     await this.say(f.done, gen);
+  }
+
+  /** A task list that progresses step by step, via TodoWrite (Claude) or update_plan (Codex). */
+  private async planDemo(gen: number, tool: "TodoWrite" | "update_plan", stopEarly = false) {
+    const f = this.files();
+    const items = ["Read the current queue implementation", "Add exponential backoff to the drain loop", "Keep the order intact on retry", "Write tests for the failure path", "Run the full suite"];
+    const doing = ["Reading the current queue implementation", "Adding exponential backoff to the drain loop", "Keeping the order intact on retry", "Writing tests for the failure path", "Running the full suite"];
+    const write = (st: ("pending" | "in_progress" | "completed")[]) =>
+      tool === "TodoWrite"
+        ? this.tool(gen, "TodoWrite", `${items.length} todos`, { todos: items.map((content, i) => ({ content, status: st[i], activeForm: doing[i] })) }, 120, "Todos have been modified successfully.")
+        : this.tool(gen, "update_plan", `${items.length} steps`, { explanation: "Working through the queue change.", plan: items.map((step, i) => ({ step, status: st[i] })) }, 120, "Plan updated");
+    const st: ("pending" | "in_progress" | "completed")[] = items.map(() => "pending");
+    await this.say("I'll track this as a short list and work through it.", gen);
+    await write(st);
+    const work = [
+      () => this.tool(gen, "Read", f.a, { file_path: `${this.cwd}/${f.a}` }, 1100, "214 lines"),
+      () => this.tool(gen, "Edit", f.b, { file_path: `${this.cwd}/${f.b}` }, 1400, "Updated 3 hunks"),
+      () => this.tool(gen, "Edit", f.a, { file_path: `${this.cwd}/${f.a}` }, 1200, "Updated 1 hunk"),
+      () => this.tool(gen, "Write", `${f.tests}/retry_test`, { file_path: `${this.cwd}/${f.tests}/retry_test` }, 1300, "Created"),
+      () => this.tool(gen, "Bash", f.test, { command: f.test }, 1800, "ok"),
+    ];
+    const upto = stopEarly ? 2 : items.length;
+    for (let k = 0; k < upto; k++) {
+      st[k] = "in_progress";
+      await write(st);
+      await work[k]();
+      st[k] = "completed";
+      await write(st);
+    }
+    await this.say(stopEarly ? "I'm stopping here: the remaining steps depend on whether you want retries capped. Tell me and I'll continue." : f.done, gen);
+  }
+
+  /** Plan mode: the agent proposes a plan with ExitPlanMode and waits for approval. */
+  private async planApproval(gen: number) {
+    const f = this.files();
+    await this.say("I've read enough to propose a plan.", gen);
+    const plan = `# Add retry with backoff\n\n1. **Read the queue**: find where \`drain()\` stops on the first failure\n2. **Add backoff**: exponential, capped at 60s\n   - keep a per-mutation attempt count\n3. **Keep the order**: a failed mutation blocks the ones behind it\n4. **Test the failure path**: drop the connection mid-drain in ${f.tests}\n5. **Run the suite**: \`${f.test}\``;
+    const ok = await this.tool(gen, "ExitPlanMode", "Add retry with backoff", { plan }, 300, "User has approved your plan. You can now start coding.", { ask: true });
+    if (!ok) {
+      await this.say("Understood, I'll keep planning. What should change?", gen);
+      return;
+    }
+    await this.tool(gen, "Edit", f.b, { file_path: `${this.cwd}/${f.b}` }, 900, "Updated 3 hunks");
+    await this.say("Plan approved and the first change is in.", gen);
   }
 
   /** Seed history instantly (virtual time ending near `until`). Permissions auto-allow. */

@@ -17,7 +17,10 @@
 //! - `COOOL_SELFTEST_SHOTS`: where `real-<name>.png` screenshots go (default: the folder).
 //! - `COOOL_SELFTEST_LOG`: the pass/fail log (default: `<folder>/selftest.log`).
 //!
-//! Settings (the insights toggle) are kept in the folder too, never in the real ones.
+//! Settings (the insights and "runs by other tools" toggles) and the list of
+//! sessions coool started are kept in the folder too, never in the real ones;
+//! Codex chats introduce themselves as `coool-selftest`, so a later normal launch
+//! never counts them as the person's.
 
 use crate::Core;
 use serde::Serialize;
@@ -68,6 +71,11 @@ impl SelfTest {
 
     pub fn settings_path(&self) -> PathBuf {
         self.dir.join(".coool-selftest-settings.json")
+    }
+
+    /// coool's list of its own sessions, kept here instead of the real one.
+    pub fn own_sessions_path(&self) -> PathBuf {
+        self.dir.join(".coool-selftest-own-sessions.json")
     }
 
     /// A fixed size, on top, so screenshots are comparable and unobstructed.

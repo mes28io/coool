@@ -113,6 +113,9 @@ pub(crate) struct Codex {
     /// fileChange item -> paths, for approval summaries.
     file_changes: HashMap<String, Vec<String>>,
     user_n: u64,
+    /// `clientInfo.name` in `initialize`; Codex records it as the rollout's
+    /// `originator`, which is how a later launch recognises coool's own threads.
+    pub(crate) client_name: String,
 }
 
 impl Codex {
@@ -142,6 +145,7 @@ impl Codex {
             started_tools: HashSet::new(),
             file_changes: HashMap::new(),
             user_n: 0,
+            client_name: crate::origin::CLIENT_NAME.to_string(),
         };
         if let Some(m) = &opts.permission_mode {
             if SANDBOX_MODES.contains(&m.as_str()) {
@@ -777,7 +781,7 @@ fn tool_result(item: &Value) -> (bool, String) {
 
 impl Backend for Codex {
     fn start(&mut self, o: &mut Out) {
-        let info = json!({"name": "coool", "title": "coool", "version": env!("CARGO_PKG_VERSION")});
+        let info = json!({"name": self.client_name, "title": "coool", "version": env!("CARGO_PKG_VERSION")});
         self.request("initialize", json!({"clientInfo": info, "capabilities": null}), Req::Init, o);
     }
 

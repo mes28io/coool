@@ -36,22 +36,43 @@ export function useChatDigest(): ChatDigest {
 }
 
 export interface Attention {
+  /** "busy" also for a session that waits for the person while its background work runs. */
   status: Status;
   /** Why the session is blocked on the person, or null. */
   needs: string | null;
-  /** "approval" = a pending permission request; "insight" = AI insight said so. */
-  source: "approval" | "insight" | null;
+  /**
+   * "approval" = a pending permission request in a coool chat; "cli" = the CLI
+   * says it waits on the person; "job" = one of its child runs does;
+   * "insight" = AI insight said so.
+   */
+  source: "approval" | "cli" | "job" | "insight" | null;
+  /** "Working in background": what still runs ("2 jobs running"), or null. */
+  background: string | null;
+}
+
+/** "2 jobs running" / "Background tasks running" for an idle session with live child runs or shells; else null. */
+export function backgroundLabel(s: Session, status: Status): string | null {
+  if (status !== "idle") return null;
+  const n = s.live_children ?? 0;
+  if (n > 0) return `${n} ${n === 1 ? "job" : "jobs"} running`;
+  // The CLI only says that background tasks run, not how many.
+  return s.background_tasks ? "Background tasks running" : null;
 }
 
 export function attention(s: Session, d: ChatDigest): Attention {
   const chat = s.chat ?? null;
   const cs = chat !== null ? d.status[chat] : undefined;
   // A chat that exited still leaves a live PTY (open in terminal), so only trust "ended" from discovery then.
-  const status: Status = cs && !(cs === "ended" && s.managed !== null) ? cs : s.status;
+  const raw: Status = cs && !(cs === "ended" && s.managed !== null) ? cs : s.status;
+  const background = backgroundLabel(s, raw);
+  const status: Status = background ? "busy" : raw;
   const approval = chat !== null ? (d.needs[chat] ?? null) : null;
-  if (approval) return { status, needs: approval, source: "approval" };
-  const ins = status !== "ended" ? (s.insight?.needs_you ?? null) : null;
-  return { status, needs: ins, source: ins ? "insight" : null };
+  if (approval) return { status, needs: approval, source: "approval", background };
+  const live = raw !== "ended";
+  if (live && s.waiting_for) return { status, needs: `Waiting for you: ${s.waiting_for}`, source: "cli", background };
+  if (live && s.child_needs) return { status, needs: s.child_needs, source: "job", background };
+  const ins = live ? (s.insight?.needs_you ?? null) : null;
+  return { status, needs: ins, source: ins ? "insight" : null, background };
 }
 
 export function useAttention(s: Session | null): Attention | null {

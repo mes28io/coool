@@ -81,6 +81,8 @@ interface Live {
   step: number;
   idleFor: number;
   chat?: MockChat;
+  /** Demo: cycles working -> waiting -> needs you on its own clock (the "relay" project). */
+  cycle?: number;
 }
 
 // What the AI-insights scheduler would say about each live session.
@@ -95,6 +97,7 @@ const NEEDS: Record<string, string> = {
   c7d1e9: "Asked whether to keep the old offset() API or update all 6 callers",
 };
 const INSIGHTS_KEY = "coool.mock.insights";
+const SHOW_AUTOMATION_KEY = "coool.mock.showAutomation";
 function readInsights(): InsightsStatus {
   try {
     const v = JSON.parse(localStorage.getItem(INSIGHTS_KEY) || "null");
@@ -151,6 +154,13 @@ function session(p: Partial<Session> & Pick<Session, "provider" | "id" | "cwd">)
 
 export function mockBackend(): Backend {
   const now = Date.now();
+  let showAutomation = (() => {
+    try {
+      return localStorage.getItem(SHOW_AUTOMATION_KEY) === "1";
+    } catch {
+      return false;
+    }
+  })();
   const live: Live[] = [];
   const add = (s: Session, script: string, step = 0) => {
     live.push({ s, script, step, idleFor: 0 });
@@ -314,6 +324,103 @@ export function mockBackend(): Backend {
     "coool",
   );
 
+  // A long-lived project: many ended chats, so the sidebar cap, "Show N more"
+  // paging and "Show less" can be seen.
+  const OLD_TITLES = [
+    "Sidebar: cap ended chats per project", "Keep the chat composer focused after send", "Fix the double-render on tab switch",
+    "Plan usage popover: show reset times", "Speed up the first refresh on a cold cache", "Approval card: short file paths",
+    "Palette: fuzzy match on folder names", "Make the theme follow the system", "Terminal: keep scrollback on resize",
+    "Subagent rows under their session", "Explain the loader's priority queue", "Codex: link resumed rollouts",
+    "Stop button for external sessions", "Self-test: screenshot every scenario", "Rename the mission control view",
+    "Tighter row spacing in the sidebar", "Model picker: group by provider", "Remember the sidebar width",
+    "Insights: hourly cap and backoff", "Fix the context meter for 1M windows", "Status colours: one dot per state",
+    "Persist splits across reloads", "Wordmark intro animation", "Quit confirmation lists what runs",
+    "Raw log: clamp the offset after drain", "Folder picker in the new-session sheet",
+  ];
+  OLD_TITLES.forEach((title, i) =>
+    add(
+      session({
+        provider: i % 4 === 3 ? "codex" : "claude",
+        id: `old${pad(i)}`,
+        cwd: coool,
+        title,
+        tokens: tok(8_000 + i * 900, 1_200 + i * 40, 20_000),
+        activity: history("coool", [title], now - (25 + i * 47) * 60_000, 1, 3),
+        updated: now - (25 + i * 47) * 60_000,
+      }),
+      "coool",
+    ),
+  );
+  // Runs other tools and agents started: hidden unless Settings says otherwise.
+  for (let i = 0; i < 7; i++) {
+    add(
+      session({
+        provider: "claude",
+        id: `auto${i}`,
+        cwd: `/private/tmp/claude-501/-Users-you-code-coool/7f3c${i}a10-1b2c-4d5e-8f90-a1b2c3d4e5f6/scratchpad/probe`,
+        project: coool,
+        origin: "automation",
+        title: rnd(["Probe the transcript format", "Check what `claude -p` writes", "Smoke test the chat protocol", "Reply with one word"]),
+        tokens: tok(2_000, 300, 4_000),
+        activity: history("coool", ["Reply with exactly: ok"], now - (10 + i * 70) * 60_000, 1, 2),
+        updated: now - (10 + i * 70) * 60_000,
+      }),
+      "coool",
+    );
+  }
+  for (let i = 0; i < 5; i++) {
+    add(
+      session({
+        provider: i === 4 ? "codex" : "claude",
+        id: `kiln${i}`,
+        cwd: `${HOME}/Library/Application Support/Kiln/agent`,
+        origin: "automation",
+        title: rnd(["Add a small green sphere named Dot", "Light it like a product shot", "Name the objects in the scene"]),
+        tokens: tok(3_000, 500, 6_000),
+        activity: history("pixel", ["Add a small green sphere named Dot"], now - (90 + i * 30) * 60_000, 1, 2),
+        updated: now - (90 + i * 30) * 60_000,
+      }),
+      "pixel",
+    );
+  }
+  // A terminal session that finished its turn while two jobs it launched in the
+  // background still work (child runs), plus some that already ended.
+  const parentId = "5e1f0a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+  add(
+    session({
+      provider: "claude",
+      id: parentId,
+      cwd: pixel,
+      title: "Render the turntable previews",
+      status: "idle",
+      pid: 40220,
+      background_tasks: true,
+      tokens: tok(88_000, 9_000, 97_000),
+      activity: history("pixel", ["Render the turntable previews in the background and tell me when they're done"], now - 6 * 60_000, 1, 5),
+      updated: now - 5 * 60_000,
+    }),
+    "pixel",
+  );
+  const jobScratch = `/private/tmp/claude-501/-Users-you-code-pixelforge/${parentId}/scratchpad/jobs`;
+  ["Render the turntable: hero model", "Render the turntable: props"].forEach((title, i) =>
+    add(session({ provider: i ? "codex" : "claude", id: `job${i}`, cwd: jobScratch, project: pixel, origin: "automation", parent: parentId, title, status: "busy", pid: 40300 + i, current: "Bash · blender -b scene.blend -a", activity: history("pixel", [title], now - 4 * 60_000, 1, 3), updated: now - 2000 }), "pixel", 2),
+  );
+  ["Bake the light probes", "Check the UV seams", "Export the LODs", "Compress the textures"].forEach((title, i) =>
+    add(session({ provider: "claude", id: `jobdone${i}`, cwd: jobScratch, project: pixel, origin: "automation", parent: parentId, title, activity: history("pixel", [title], now - (20 + i * 15) * 60_000, 1, 2), updated: now - (20 + i * 15) * 60_000 }), "pixel"),
+  );
+
+  // A project whose chats keep changing state (collapse it to see the live summary).
+  const relay = `${HOME}/code/relay`;
+  [
+    { id: "r1a001", title: "Retry webhooks with backoff", cycle: 0 },
+    { id: "r1a002", title: "Dedupe events by idempotency key", cycle: 3 },
+    { id: "r1a003", title: "Load-test the fan-out worker", cycle: 6 },
+  ].forEach(({ id, title, cycle }, i) => {
+    const phase = Math.floor((cycle % 15) / 5);
+    const s = session({ provider: i === 1 ? "codex" : "claude", id, cwd: relay, title, status: phase === 0 ? "busy" : "idle", current: phase === 0 ? "thinking…" : null, activity: history("atlas", [title], now - 60_000, 1, 3), updated: now - i * 1000 });
+    live.push({ s, script: "atlas", step: 0, idleFor: 0, cycle });
+  });
+
   // ---------- event plumbing ----------
   const subs = {
     sessions: new Set<(s: Snapshot) => void>(),
@@ -415,7 +522,11 @@ export function mockBackend(): Backend {
     const sessions = live
       .map((l) => [l, scanned(l)] as const)
       .filter(([, st]) => st !== "hidden")
-      .map(([l, st]) => (st === "cheap" ? cheap(structuredClone(l.s)) : { ...decorate(structuredClone(l.s), l), loaded: true }));
+      .map(([l, st]) => (st === "cheap" ? cheap(structuredClone(l.s)) : { ...decorate(structuredClone(l.s), l), loaded: true }))
+      // Like the backend: whatever coool runs is coool's.
+      .map((s) => (s.chat != null || s.managed !== null ? { ...s, origin: "coool" as const } : s));
+    // Like the backend: a parent counts its live child runs.
+    for (const s of sessions) s.live_children = sessions.filter((c) => c.parent === s.id && c.status !== "ended").length;
     const order = { busy: 0, idle: 1, ended: 2 } as const;
     sessions.sort((a, b) => order[a.status] - order[b.status] || b.updated - a.updated);
     const linked = new Set(sessions.map((s) => s.managed).filter((m) => m !== null));
@@ -426,6 +537,7 @@ export function mockBackend(): Backend {
       chats: chats.map((c) => c.info()),
       loading: scan.loading,
       usage,
+      show_automation: showAutomation,
     };
   };
   const emitSessions = () => {
@@ -595,6 +707,7 @@ export function mockBackend(): Backend {
   const chCoool = newChat("claude", coool, {}, 0);
   chCoool.always.add("Bash");
   setTimeout(() => chCoool.send("Add a slash command menu to the chat composer"), 2200);
+  if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
 
   const insights: InsightsStatus = readInsights();
   const saveInsights = () => {
@@ -603,6 +716,8 @@ export function mockBackend(): Backend {
     } catch {}
   };
   const decorate = (s: Session, l: Live | undefined): Session => {
+    // The relay demo flags "Needs you" on its own, insights on or off.
+    if (l?.cycle !== undefined && s.status === "idle" && l.cycle % 15 >= 10) return { ...s, insight: { headline: s.title, needs_you: "Asked whether to drop events older than 24h", generated_ms: s.updated } };
     if (!insights.enabled || !insights.has_key || s.status === "ended") return { ...s, insight: null };
     const c = l?.chat;
     let needs: string | null = NEEDS[s.id] ?? null;
@@ -635,6 +750,36 @@ export function mockBackend(): Backend {
     for (const l of live) {
       const s = l.s;
       if (l.chat) continue; // chats drive their own session
+      if (s.background_tasks) continue; // the demo parent waits for its jobs
+      if (s.parent) {
+        // Background jobs: keep working; the first one sometimes waits for an approval.
+        if (s.id === "job0") {
+          const waiting = Math.floor(t / 9000) % 3 === 2;
+          const was = !!s.waiting_for;
+          s.waiting_for = waiting ? "permission to run `rm -rf renders/tmp`" : null;
+          s.status = waiting ? "idle" : "busy";
+          if (was !== waiting) changed = true;
+        }
+        if (s.status === "busy" && Math.random() < 0.3) {
+          s.current = rnd(["Bash · blender -b scene.blend -a", "Read · renders/frame_0042.png", "thinking…"]);
+          s.updated = t;
+          changed = true;
+        }
+        continue;
+      }
+      if (l.cycle !== undefined) {
+        // 0-4 working, 5-9 waiting, 10-14 waiting on the person.
+        const before = Math.floor((l.cycle % 15) / 5);
+        l.cycle++;
+        const phase = Math.floor((l.cycle % 15) / 5);
+        if (phase !== before) {
+          s.status = phase === 0 ? "busy" : "idle";
+          s.current = phase === 0 ? "thinking…" : null;
+          s.updated = t;
+          changed = true;
+        }
+        continue;
+      }
       if (s.status === "busy") {
         if (Math.random() < 0.42) {
           const script = WORK[l.script];
@@ -908,6 +1053,13 @@ export function mockBackend(): Backend {
     async insightsSetEnabled(enabled) {
       insights.enabled = enabled;
       saveInsights();
+      emitSessions();
+    },
+    async setShowAutomation(enabled) {
+      showAutomation = enabled;
+      try {
+        localStorage.setItem(SHOW_AUTOMATION_KEY, enabled ? "1" : "0");
+      } catch {}
       emitSessions();
     },
   };

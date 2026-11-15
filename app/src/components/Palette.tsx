@@ -58,7 +58,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         id: `s:${sessionKey(s)}`,
         group: "Sessions",
         label: displayTitle(s),
-        hint: folderName(projectOf(s)),
+        hint: s.origin === "automation" ? `${folderName(projectOf(s))} · by another tool` : folderName(projectOf(s)),
         icon: (
           <span className="flex items-center gap-1.5">
             <StatusDot status={s.status} size={7} />

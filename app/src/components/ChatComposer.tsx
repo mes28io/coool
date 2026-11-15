@@ -15,9 +15,10 @@ import { contextWindow, modelColor, modelLabel, tokTotal } from "../lib/models";
 import type { CommandKind } from "../lib/types";
 import { IArrowUp, ICheck, IStop, ITerminal } from "./icons";
 import { InfoPanel, type InfoTab } from "./InfoPanel";
+import { useInfoRequest } from "../lib/infoRequest";
 import { Chip, cx, ease, Kbd, Popover } from "./primitives";
 
-type Native = "model" | "clear" | "context" | "status" | "usage" | "mode";
+type Native = "model" | "clear" | "context" | "status" | "usage" | "mode" | "changes";
 /** Handled here and never sent (CHAT_SPEC "Slash commands"). `only`: for one provider. */
 const NATIVE: Record<string, { native: Native; description: string; only?: "claude" | "codex" }> = {
   model: { native: "model", description: "Choose the model for this chat" },
@@ -27,6 +28,7 @@ const NATIVE: Record<string, { native: Native; description: string; only?: "clau
   status: { native: "status", description: "Session, model, mode and process status" },
   cost: { native: "usage", description: "Tokens used, by model and subagent" },
   usage: { native: "usage", description: "Tokens used, by model and subagent" },
+  changes: { native: "changes", description: "Files and commands the agent changed in this chat" },
   approvals: { native: "mode", description: "Choose what runs without asking", only: "codex" },
 };
 const nativeFor = (name: string, provider: string) => {
@@ -102,6 +104,15 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const [menuHidden, setMenuHidden] = useState(false);
   const [pop, setPop] = useState<null | "model" | "mode" | "info">(null);
   const [infoTab, setInfoTab] = useState<InfoTab>("context");
+  const [infoTurn, setInfoTurn] = useState<string | null>(null);
+  // "N files" on a checkpoint row asks this chat's panel to open on its Changes tab.
+  const req = useInfoRequest();
+  useEffect(() => {
+    if (req.seq === 0 || req.chat !== chat.id) return;
+    setInfoTab("changes");
+    setInfoTurn(req.turn);
+    setPop("info");
+  }, [req.seq]); // eslint-disable-line react-hooks/exhaustive-deps
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const hist = useRef<{ i: number | null; draft: string }>({ i: null, draft: "" });
   const ta = useRef<HTMLTextAreaElement>(null);
@@ -186,6 +197,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     else if (n === "clear") void newChat({ provider: chat.provider, cwd: chat.cwd, model: chat.model });
     else {
       setInfoTab(n === "usage" ? "usage" : n);
+      setInfoTurn(null);
       setPop("info");
     }
   };
@@ -457,7 +469,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                 <span className="tnumtext-small">{fmtTokens(chat.context)}</span>
               </Chip>
               <Popover open={pop === "info"} onClose={() => setPop(null)} side="top" width={400}>
-                <InfoPanel chat={chat} tab={infoTab} onTab={setInfoTab} />
+                <InfoPanel chat={chat} tab={infoTab} onTab={setInfoTab} turn={infoTurn} onTurn={setInfoTurn} />
               </Popover>
             </div>
             <span className="flex-1" />

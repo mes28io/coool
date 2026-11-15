@@ -53,6 +53,10 @@ pub struct App {
     pub hub: Hub,
     pub mode: Mode,
     pub live_only: bool,
+    /// Also list sessions other tools / agents started (`a`); off by default.
+    pub show_automation: bool,
+    /// How many were left out by that (for the header).
+    pub hidden_automation: usize,
     pub feed_scroll: u16,
     pub flash: Option<(String, Instant)>,
     pub tick: u64,
@@ -73,6 +77,8 @@ impl App {
             hub: Hub::new(window),
             mode: Mode::Normal,
             live_only: false,
+            show_automation: false,
+            hidden_automation: 0,
             feed_scroll: 0,
             flash: None,
             tick: 0,
@@ -141,6 +147,13 @@ impl App {
         let prev_key = self.selected_key();
 
         self.sessions = self.hub.refresh(self.live_only);
+        if !self.show_automation {
+            let before = self.sessions.len();
+            self.sessions.retain(|s| s.origin != Origin::Automation);
+            self.hidden_automation = before - self.sessions.len();
+        } else {
+            self.hidden_automation = 0;
+        }
 
         self.rows.clear();
         for (i, s) in self.sessions.iter().enumerate() {
@@ -362,6 +375,11 @@ impl App {
                 self.live_only = !self.live_only;
                 self.refresh();
                 self.flash(if self.live_only { "showing live sessions" } else { "showing live + recent" });
+            }
+            KeyCode::Char('a') => {
+                self.show_automation = !self.show_automation;
+                self.refresh();
+                self.flash(if self.show_automation { "showing runs by other tools" } else { "hiding runs by other tools" });
             }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('n') => {

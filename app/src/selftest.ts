@@ -22,7 +22,7 @@ interface Config {
 }
 
 const PROMPT_BLUE = "Write three short sentences about the colour blue. Plain text, no lists, and keep every sentence under twelve words so the whole reply stays brief.";
-const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "pty", "usage", "insights", "quit"];
+const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "resume", "codex", "origins", "pty", "usage", "insights", "quit"];
 const CLAUDE_MODEL = "haiku";
 const CODEX_MODEL = "gpt-5.6-luna";
 
@@ -228,7 +228,9 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (useStore.getState().pendingChats.includes(id)) throw new Fail("still listed as pending");
       const sidebarRows = $all(`[data-session-row="${sessionKey(s)}"]`).length;
       if (sidebarRows !== 1) throw new Fail(`${sidebarRows} sidebar rows for the session`);
-      return `session ${sid.slice(0, 8)}… linked, 1 sidebar row`;
+      // coool's own chat, even though the CLI records it as programmatic (sdk-cli).
+      if (s.origin !== "coool") throw new Fail(`origin ${s.origin}, not coool`);
+      return `session ${sid.slice(0, 8)}… linked, 1 sidebar row, origin coool`;
     });
   },
 
@@ -554,6 +556,25 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   // Free: starts the CLI's own terminal UI in the throwaway folder (no prompt is sent), then stops it.
+  /** Free: what every listed session's origin is (run after a restart to see coool's chats are still known). */
+  async origins() {
+    await step("sessions in the folder carry an origin; automation is hidden unless the setting is on", async () => {
+      const st = useStore.getState();
+      await waitFor("loading to finish", () => !useStore.getState().loading, 30_000).catch(() => {});
+      const all = useStore.getState().allSessions;
+      const counts: Record<string, number> = {};
+      for (const s of all) counts[s.origin ?? "missing"] = (counts[s.origin ?? "missing"] ?? 0) + 1;
+      for (const s of all) await log(`INFO origin ${s.origin} ${s.provider} ${s.id.slice(0, 8)} ${s.status} chat=${s.chat ?? "-"}`);
+      // Child runs of a listed session are shown nested under it; only parent-less ones must be hidden.
+      const listedAuto = useStore.getState().sessions.filter((s) => s.origin === "automation" && !s.nested && s.status === "ended").length;
+      if (!st.showAutomation && listedAuto) throw new Fail(`${listedAuto} ended automation sessions listed while the setting is off`);
+      const rows = $all("[data-session-row]").filter((r) => r.getAttribute("data-origin") === "automation" && !r.hasAttribute("data-nested")).length;
+      if (!st.showAutomation && rows) throw new Fail(`${rows} automation rows in the sidebar`);
+      return Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(", ") || "no sessions";
+    });
+    await shot("origins");
+  },
+
   async pty(ctx) {
     await step("a starting terminal session is grouped under its project", async () => {
       const id = (await invoke("spawn_session", { req: { provider: "claude", cwd: ctx.cfg.dir, rows: 30, cols: 100 } })) as number;

@@ -59,6 +59,16 @@ Commands (frontend to backend):
 
 Quitting the app stops the sessions it runs (confirm first if any are running).
 
+## Who started it
+
+Every `Session` carries `origin`: `user` (the person, in a terminal, IDE, desktop or phone client), `coool` (a chat or terminal coool started, remembered across restarts in `<data dir>/coool/own-sessions.json`), or `automation` (started programmatically by another tool or agent). Rules, from the CLIs' own records: Claude `entrypoint` `sdk-*`, `github-action`, `mcp` are automation unless a user turn was typed by a human (`turnOrigin` / `origin.kind` `human`); every other or unknown value is `user`. Codex `originator` `coool` is coool's, `codex_exec` and `source` `exec` / `mcp` are automation, subagent rollouts are attached to their parent thread as agents. Classified by how a session started, never by its folder.
+
+Automation is hidden by default everywhere (sidebar, Home, palette, needs-you, counts); Settings → "Show runs started by other tools" lists it, dimmed with an `auto` tag, and the sidebar ends with "N runs by other tools hidden · Show". A hidden run that is live and needs the person is listed anyway.
+
+Child runs: an automation session started from inside another session (found by walking its parent pids up to a registered session, or from the owner session id in an agent scratch path, and remembered) has `parent`; it is listed nested under that session (live ones always, two recent ended ones, then "Show N more jobs"), never as a row or card of its own, and its "Needs you" surfaces on the parent. A parent waiting for the person while children run (`live_children`) or while the CLI reports background tasks (`background_tasks`, registry status `shell`: a flag, no count) is "Working in background": green dot, "2 jobs running", a "Background" pill in its header. `waiting_for` (registry status `waiting`) means the CLI is blocked on the person.
+
+Sidebar cap: per project at most 5 rows at rest (every live chat, most urgent first, then the most recent ended ones); "Show N more" reveals 10 at a time, "Show less" returns to 5; the revealed amount lives for the app run only and resets when the project is collapsed or expanded. The open chat is always shown. Collapsed projects persist (localStorage) and show one dot per state inside (blue needs you, green working, yellow waiting; a count when more than one); clicking a blue summary opens the chat that needs the person.
+
 ## Engineering constraints
 
 - The frontend must also run in a plain browser (`pnpm dev`) with a built-in mock data source when Tauri is absent: realistic sessions that change over time (statuses flipping, steps arriving, a fake terminal stream). This is how the UI gets developed and screenshot-tested without the shell, and it is the demo for coool.sh later.

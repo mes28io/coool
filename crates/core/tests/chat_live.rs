@@ -90,6 +90,8 @@ fn live_claude() {
     std::fs::create_dir_all(&d).unwrap();
     let cwd = d.to_string_lossy().into_owned();
     let mut hub = Hub::new(Duration::from_secs(600));
+    hub.set_own_sessions_file(None);
+    hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
     let opts = |m: &str| ChatOptions { provider: Provider::Claude, cwd: cwd.clone(), resume: None, model: Some(m.into()), permission_mode: None };
 
     // 1. Permissions (allow once, deny, always) and a subagent.
@@ -183,6 +185,8 @@ fn live_codex() {
     std::fs::create_dir_all(&d).unwrap();
     let cwd = d.to_string_lossy().into_owned();
     let mut hub = Hub::new(Duration::from_secs(600));
+    hub.set_own_sessions_file(None);
+    hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
     let opts = ChatOptions { provider: Provider::Codex, cwd: cwd.clone(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()) };
     let id = start(&mut hub, "codex_approval_interrupt_model", opts);
     let mut w = Watch::new();

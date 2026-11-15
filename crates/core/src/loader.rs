@@ -62,6 +62,11 @@ pub(crate) struct View {
     pub models: Vec<ModelUse>,
     pub in_turn: bool,
     pub started: Option<SystemTime>,
+    /// How the transcript says it was started; None until that is known.
+    pub origin: Option<crate::model::Origin>,
+    /// Codex subagent rollouts: the thread that spawned it, and its name.
+    pub parent: Option<String>,
+    pub agent_name: String,
 }
 
 /// Parse state of one transcript (what the cache persists).
@@ -628,6 +633,7 @@ pub(crate) mod tests {
         assert_eq!(a.activity.len(), b.activity.len());
         assert!(a.activity.iter().zip(&b.activity).all(|(x, y)| x.text == y.text && x.kind == y.kind && x.ts == y.ts));
         assert_eq!((a.in_turn, a.started), (b.in_turn, b.started));
+        assert_eq!((a.origin, &a.parent, &a.agent_name), (b.origin, &b.parent, &b.agent_name));
     }
 
     fn load_with_pool(path: &Path, kind: Kind, threads: usize, cache: Option<Cache>) -> (Pool, Arc<Slot>) {

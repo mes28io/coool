@@ -42,8 +42,16 @@ export function StatusDot({ status, size = 7, className }: { status: UiStatus; s
 export const statusLabel = (s: UiStatus) =>
   s === "busy" ? "Working" : s === "idle" ? "Waiting" : s === "starting" ? "Starting" : s === "needs" ? "Needs you" : "Ended";
 
-export function StatusPill({ status }: { status: UiStatus }) {
+/** `background`: idle, but child runs or background shells still work ("Background", green dot; the detail in the tooltip). */
+export function StatusPill({ status, background }: { status: UiStatus; background?: string | null }) {
   if (status === "needs") return <NeedsBadge />;
+  if (background)
+    return (
+      <span className="inline-flex h-[24px] shrink-0 items-center gap-1.5 rounded-full border border-line bg-raised pl-[7px] pr-2 text-small font-medium text-fg/85" data-status-pill="background" title={`Working in background · ${background}`}>
+        <StatusDot status="busy" size={7} />
+        Background
+      </span>
+    );
   // Neutral pill; only the dot carries the state colour.
   const tone = status === "idle" || status === "busy" || status === "starting" ? "border border-line bg-raised text-fg/85" : "border border-hairline bg-raised text-dim";
   return (
@@ -166,6 +174,18 @@ export function ContextMeter({
         )}
       </span>
     </div>
+  );
+}
+
+/** Marks a session another tool or agent started (shown only when such runs are listed). */
+export function AutoTag({ className }: { className?: string }) {
+  return (
+    <span
+      title="Started by another tool or agent"
+      className={cx("inline-flex h-[15px] shrink-0 items-center rounded-[4px] border border-hairline px-1 font-mono text-micro uppercase tracking-[0.06em] text-faint", className)}
+    >
+      auto
+    </span>
   );
 }
 

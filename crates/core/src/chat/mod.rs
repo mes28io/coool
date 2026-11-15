@@ -442,14 +442,19 @@ pub struct Chat {
 }
 
 impl Chat {
-    pub(crate) fn start(id: usize, opts: ChatOptions) -> Result<Self> {
+    /// `client_name`: how coool introduces itself to `codex app-server` (see [`crate::origin`]).
+    pub(crate) fn start(id: usize, opts: ChatOptions, client_name: &str) -> Result<Self> {
         let (backend, program, args): (Box<dyn Backend>, &str, Vec<String>) = match opts.provider {
             Provider::Claude => {
                 let b = claude::Claude::new(&opts);
                 let args = b.args();
                 (Box::new(b), "claude", args)
             }
-            Provider::Codex => (Box::new(codex::Codex::new(&opts)), "codex", codex::args()),
+            Provider::Codex => {
+                let mut b = codex::Codex::new(&opts);
+                b.client_name = client_name.to_string();
+                (Box::new(b), "codex", codex::args())
+            }
         };
         Self::spawn(id, opts.provider, &opts.cwd, program, &args, backend)
     }
@@ -886,7 +891,7 @@ mod tests {
     #[test]
     fn missing_folder_is_an_error_not_a_spawn() {
         let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None };
-        assert!(Chat::start(0, opts).is_err());
+        assert!(Chat::start(0, opts, "coool").is_err());
     }
 
     /// A stand-in CLI (`/bin/sh` echoing stdin back) exercises the process
