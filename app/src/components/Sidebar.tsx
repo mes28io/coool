@@ -283,7 +283,7 @@ const rowMotion = {
 
 /**
  * One session: title only. State is a single dot at the right edge (green working,
- * blue needs you, nothing otherwise); hovering swaps it for the provider mark and the age.
+ * blue needs you, yellow waiting, nothing for ended); hovering swaps it for the provider mark and the age.
  * Rows are opaque so rows that trade places slide past each other.
  */
 function Row({
@@ -309,7 +309,7 @@ function Row({
   /** `data-*` hooks (self-test). */
   data?: Record<string, string | undefined>;
 }) {
-  const dot = status === "busy" || status === "starting" || status === "needs";
+  const dot = status === "busy" || status === "starting" || status === "needs" || status === "idle";
   return (
     <motion.button
       type="button"

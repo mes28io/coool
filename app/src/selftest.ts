@@ -254,6 +254,23 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (!opts.length || opts[0].dataset.rememberScope !== "chat" || !/Allow all edits in this chat/.test(opts[0].textContent ?? "")) throw new Fail(`unexpected options: ${labels.join(" | ")}`);
       if (button("Always allow", c)) throw new Fail("an unlabelled Always allow button is still there");
       await shot("approval");
+      // The Needs-you popover and the other theme, while the request is pending.
+      const bell = ([...document.querySelectorAll("button[aria-label]")] as HTMLElement[]).find((x) => x.getAttribute("aria-label")!.startsWith("Needs you"));
+      if (bell) {
+        bell.click();
+        await sleep(500);
+        await shot("needs-popover");
+        bell.click();
+        await sleep(200);
+      }
+      const themeBtn = ([...document.querySelectorAll("button[aria-label]")] as HTMLElement[]).find((x) => / theme$/.test(x.getAttribute("aria-label") ?? ""));
+      if (themeBtn) {
+        themeBtn.click();
+        await sleep(600);
+        await shot("approval-other-theme");
+        themeBtn.click();
+        await sleep(300);
+      }
       button("Allow once", c)!.click();
       await nextTurn(id, n);
       const tool = after(id, from).find((i) => i.kind === "tool" && i.name === "Write") as Extract<ChatItem, { kind: "tool" }> | undefined;

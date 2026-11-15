@@ -117,7 +117,7 @@ function NeedsYou() {
             className="fixed z-50 w-[280px] rounded-[12px] border border-line bg-raised p-1.5 shadow-pop"
             data-needs-popover
           >
-            <div className="px-2.5 pb-1 pt-1.5 text-small text-dim">{list.length ? "Waiting for you" : "Nothing needs you right now."}</div>
+            <div className="px-2.5 pb-1 pt-1.5 text-small text-dim">{list.length ? "Needs you" : "Nothing needs you right now."}</div>
             {list.map(({ s, a }) => (
               <button
                 key={sessionKey(s)}
