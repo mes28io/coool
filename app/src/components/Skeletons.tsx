@@ -62,7 +62,7 @@ export function CardSkeleton({ i = 0, label }: { i?: number; label?: string }) {
     <motion.div
       {...fade}
       layout
-      className="flex flex-col rounded-[22px] border border-hairline bg-bg p-4"
+      className="flex flex-col rounded-[18px] border border-hairline bg-bg p-4"
       aria-label={label ?? "Loading session"}
     >
       <div className="flex h-[22px] items-center gap-1.5">
@@ -121,7 +121,7 @@ export function TimelineSkeleton({ compact, label }: { compact?: boolean; label?
   return (
     <motion.div {...fade} className={cx("mx-auto flex max-w-[700px] flex-col pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")} aria-label={label ?? "Loading"}>
       <div className="flex flex-col items-end gap-1 pt-1">
-        <Skel w="44%" h={52} r={12} i={0} className="rounded-br-[6px]" />
+        <Skel w="44%" h={52} r={12} i={0} className="rounded-br-[4px]" />
         <Skel w={52} h={8} i={0} className="mr-1 opacity-60" />
       </div>
       <div className="flex flex-col gap-[16px] py-[8px]">
@@ -146,7 +146,7 @@ export function TimelineSkeleton({ compact, label }: { compact?: boolean; label?
         ))}
         <div className="-ml-[19px] flex gap-2.5 py-1">
           <Skel w={15} h={15} i={8} className="mt-[7px]" />
-          <div className="flex-1 rounded-[14px] border border-hairline px-3 pb-2.5 pt-2">
+          <div className="flex-1 rounded-[10px] border border-hairline px-3 pb-2.5 pt-2">
             <div className="flex h-[20px] items-center gap-2">
               <Skel w={58} h={18} r={5} i={8} />
               <Skel w={190} h={10} i={8} />
@@ -200,7 +200,7 @@ export function SessionSkeleton({ compact }: { compact?: boolean }) {
         <TimelineSkeleton compact={compact} />
       </div>
       <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
-        <div className="mx-auto flex max-w-[700px] flex-col gap-3 rounded-[26px] border border-line bg-raised/60 px-3.5 pb-2 pt-3.5">
+        <div className="mx-auto flex max-w-[700px] flex-col gap-3 rounded-[20px] border border-line bg-raised/60 px-3.5 pb-2 pt-3.5">
           <Skel w={200} h={12} i={4} className="opacity-70" />
           <div className="flex items-center gap-2">
             <Skel w={84} h={28} r={7} i={5} />

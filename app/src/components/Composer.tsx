@@ -38,7 +38,7 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
     <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
       <div
         className={cx(
-          "mx-auto flex max-w-[700px] items-end gap-2 rounded-[26px] border bg-raised py-2 pl-3.5 pr-2 shadow-card transition-[border-color,box-shadow] duration-200",
+          "mx-auto flex max-w-[700px] items-end gap-2 rounded-[20px] border bg-raised py-2 pl-3.5 pr-2 shadow-card transition-[border-color,box-shadow] duration-200",
           "border-line focus-within:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]",
           disabled && "opacity-60",
         )}
@@ -72,7 +72,7 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
             disabled={!can}
             whileTap={can ? { scale: 0.92 } : undefined}
             className={cx(
-              "flex size-[32px] items-center justify-center rounded-[12px] transition-[background-color,color] duration-150",
+              "flex size-[32px] items-center justify-center rounded-[9px] transition-[background-color,color] duration-150",
               can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
             )}
             title="Send (Enter)"

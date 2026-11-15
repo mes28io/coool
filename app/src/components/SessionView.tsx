@@ -247,7 +247,7 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
     { v: "terminal", icon: ITerminal, label: "Terminal" },
   ];
   return (
-    <div className="relative inline-flex h-[34px] rounded-[12px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]">
+    <div className="relative inline-flex h-[34px] rounded-[9px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]">
       {opts.map((o) => {
         const on = o.v === mode;
         const I = o.icon;
@@ -257,12 +257,12 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
             type="button"
             onClick={() => onChange(o.v)}
             title={o.label}
-            className={cx("relative z-0 flex items-center gap-1.5 rounded-[9px] px-2 text-small font-medium transition-colors duration-150", on ? "text-fg" : "text-dim hover:text-fg")}
+            className={cx("relative z-0 flex items-center gap-1.5 rounded-[6px] px-2 text-small font-medium transition-colors duration-150", on ? "text-fg" : "text-dim hover:text-fg")}
           >
             {on && (
               <motion.span
                 layoutId={`mode-${uid}`}
-                className="absolute inset-0 -z-10 rounded-[9px] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.12),0_0_0_0.5px_var(--border)]"
+                className="absolute inset-0 -z-10 rounded-[6px] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.12),0_0_0_0.5px_var(--border)]"
                 transition={{ type: "spring", stiffness: 520, damping: 40 }}
               />
             )}
@@ -279,7 +279,7 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
   const ended = session.status === "ended";
   return (
     <div className={cx("shrink-0 pb-3 pt-1", compact ? "px-3" : "px-6")}>
-      <div className="mx-auto flex max-w-[700px] items-center gap-3 rounded-[18px] border border-dashed border-line px-4 py-2.5">
+      <div className="mx-auto flex max-w-[700px] items-center gap-3 rounded-[14px] border border-dashed border-line px-4 py-2.5">
         <span className="min-w-0 flex-1 text-base text-dim">
           {ended ? <>This session has ended. Resume it here to keep going in a chat.</> : <>Running outside coool. Stop it and resume here to take control.</>}
         </span>

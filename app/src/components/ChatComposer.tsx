@@ -283,7 +283,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
               exit={{ opacity: 0, y: 4, transition: { duration: 0.12 } }}
               transition={{ type: "spring", stiffness: 620, damping: 42 }}
               style={{ transformOrigin: "bottom left" }}
-              className="absolute inset-x-0 bottom-full z-30 mb-1.5 overflow-hidden rounded-[18px] border border-line bg-raised shadow-pop"
+              className="absolute inset-x-0 bottom-full z-30 mb-1.5 overflow-hidden rounded-[14px] border border-line bg-raised shadow-pop"
             >
               <div className="flex items-center justify-between border-b border-hairline px-3 py-1.5 text-small text-faint">
                 <span className="font-mono text-micro font-semibold uppercase tracking-[0.06em]">Commands</span>
@@ -313,9 +313,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                         onMouseMove={() => sel !== i && setSel(i)}
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => pick(it, true)}
-                        className="relative flex h-[38px] w-full items-center gap-3 rounded-[12px] px-2.5 text-left"
+                        className="relative flex h-[38px] w-full items-center gap-3 rounded-[10px] px-2.5 text-left"
                       >
-                        {i === sel && <motion.span layoutId={`slash-sel-${chat.id}`} transition={{ type: "spring", stiffness: 700, damping: 45 }} className="absolute inset-0 rounded-[12px] bg-hover" />}
+                        {i === sel && <motion.span layoutId={`slash-sel-${chat.id}`} transition={{ type: "spring", stiffness: 700, damping: 45 }} className="absolute inset-0 rounded-[8px] bg-hover" />}
                         <span className={cx("relative w-[176px] shrink-0 truncate font-mono text-mono-base", it.group === "terminal" ? "text-dim" : "text-fg")} title={`/${it.name}`}>
                           <span className="text-faint">/</span>
                           <Hi text={it.name} q={menuQuery ?? ""} />
@@ -337,7 +337,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
 
         <div
           className={cx(
-            "rounded-[26px] border bg-raised shadow-card transition-[border-color,box-shadow] duration-200",
+            "rounded-[20px] border bg-raised shadow-card transition-[border-color,box-shadow] duration-200",
             chat.pendingPermission || chat.pendingQuestion ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))]" : "border-line focus-within:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]",
             disabled && "opacity-60",
           )}
@@ -408,7 +408,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                           setPop(null);
                           void chatCall(chat.id, () => api().chatSetPermissionMode(chat.id, m.id));
                         }}
-                        className="flex w-full items-start gap-2.5 rounded-[12px] px-2.5 py-1.5 text-left hover:bg-hover"
+                        className="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-hover"
                       >
                         <span className="mt-[3px]">
                           <ModeGlyph id={m.id} />
@@ -433,7 +433,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                                 (ok) => ok && useChats.getState().local(chat.id, { level: "info", text: `Sandbox: ${m.label.toLowerCase()} from the next turn on.` }),
                               );
                             }}
-                            className="flex w-full items-start gap-2.5 rounded-[12px] px-2.5 py-1.5 text-left hover:bg-hover"
+                            className="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-hover"
                           >
                             <span className="mt-[3px]">
                               <ModeGlyph id={m.id === "danger-full-access" ? "never" : m.id === "read-only" ? "plan" : "on-failure"} />
@@ -478,7 +478,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   transition={{ duration: 0.16, ease }}
                   onClick={interrupt}
                   title="Stop this turn (Esc)"
-                  className="flex h-[34px] items-center gap-1.5 rounded-[12px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-small font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err-text"
+                  className="flex h-[34px] items-center gap-1.5 rounded-[9px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-small font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err-text"
                 >
                   <IStop size={14} />
                   Stop
@@ -496,7 +496,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   disabled={!can}
                   whileTap={can ? { scale: 0.92 } : undefined}
                   className={cx(
-                    "flex size-[32px] items-center justify-center rounded-[12px] transition-[background-color,color] duration-150",
+                    "flex size-[32px] items-center justify-center rounded-[9px] transition-[background-color,color] duration-150",
                     can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
                   )}
                   title={working ? "Queue for after this turn" : "Send (Enter)"}
@@ -513,16 +513,16 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
 }
 
 function KindTag({ group }: { group: Group }) {
-  if (group === "app") return <span className="relative shrink-0 rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1.5 text-small font-semibold text-dim" title="Handled by coool, never sent">in app</span>;
+  if (group === "app") return <span className="relative shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-1.5 text-small font-semibold text-dim" title="Handled by coool, never sent">in app</span>;
   if (group === "skill")
     return (
-      <span className="relative shrink-0 rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-semibold text-dim" title="A skill: sent to the model">
+      <span className="relative shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-semibold text-dim" title="A skill: sent to the model">
         skill
       </span>
     );
   if (group === "terminal")
     return (
-      <span className="relative flex shrink-0 items-center gap-1 rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] px-1.5 text-small font-semibold text-dim" title="Only works in the CLI's terminal UI">
+      <span className="relative flex shrink-0 items-center gap-1 rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] px-1.5 text-small font-semibold text-dim" title="Only works in the CLI's terminal UI">
         <ITerminal size={12} />
         terminal
       </span>
@@ -553,7 +553,7 @@ function Hi({ text, q }: { text: string; q: string }) {
 
 function ModeGlyph({ id }: { id: string | null }) {
   const c = id === "bypassPermissions" || id === "never" ? "var(--error)" : id === "plan" ? "var(--dim)" : id === "acceptEdits" || id === "on-failure" ? "var(--busy)" : "var(--dim)";
-  return <span className="inline-block size-[7px] rounded-[2px]" style={{ background: c }} />;
+  return <span className="inline-block size-[7px] rounded-[4px]" style={{ background: c }} />;
 }
 
 function ContextRing({ chat }: { chat: Chat }) {
@@ -592,7 +592,7 @@ function ModelPicker({ chat, current, onPick }: { chat: Chat; current: string | 
       {options.map((o) => {
         const u = used[o.id];
         return (
-          <button key={o.id} type="button" data-model-option={o.id} onClick={() => onPick(o.id)} className="flex h-[40px] w-full items-center gap-2.5 rounded-[12px] px-2.5 text-left hover:bg-hover">
+          <button key={o.id} type="button" data-model-option={o.id} onClick={() => onPick(o.id)} className="flex h-[40px] w-full items-center gap-2.5 rounded-[11px] px-2.5 text-left hover:bg-hover">
             <span className="size-[7px] shrink-0 rounded-full" style={{ background: modelColor(o.id) }} />
             <span className="text-base font-medium text-fg">{o.label}</span>
             <span className="min-w-0 flex-1 truncate font-mono text-mono-small text-faint">{o.id !== o.label ? o.id : ""}</span>
@@ -613,7 +613,7 @@ function ModelPicker({ chat, current, onPick }: { chat: Chat; current: string | 
           onChange={(e) => setCustom(e.target.value)}
           placeholder="Other model id…"
           spellCheck={false}
-          className="h-[34px] w-full rounded-[10px] border border-line bg-bg px-2 font-mono text-mono-small outline-none placeholder:font-sans placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]"
+          className="h-[34px] w-full rounded-[9px] border border-line bg-bg px-2 font-mono text-mono-small outline-none placeholder:font-sans placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]"
         />
       </form>
     </div>

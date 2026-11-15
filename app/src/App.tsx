@@ -154,7 +154,7 @@ export default function App() {
             title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
             aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
             onClick={toggleSidebar}
-            className="flex h-[28px] w-[28px] items-center justify-center rounded-[12px] text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
+            className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
           >
             <ISidebar size={17} />
           </button>
@@ -163,7 +163,7 @@ export default function App() {
         <div className="flex min-h-0 flex-1">
           <Rail />
           {/* One raised sheet lying on the window: sidebar panel + main area. */}
-          <div className="flex min-w-0 flex-1 overflow-hidden rounded-tl-[22px] border-l border-t border-hairline bg-bg">
+          <div className="flex min-w-0 flex-1 overflow-hidden rounded-tl-[18px] border-l border-t border-hairline bg-bg">
             <Sidebar />
             <Workspace />
           </div>
@@ -190,11 +190,11 @@ function Toasts() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, x: 16, transition: { duration: 0.16 } }}
             transition={{ type: "spring", stiffness: 480, damping: 36 }}
-            className="pointer-events-auto flex max-w-[420px] items-start gap-2 rounded-[14px] border border-line bg-raised py-2 pl-3 pr-1.5 text-base shadow-pop"
+            className="pointer-events-auto flex max-w-[420px] items-start gap-2 rounded-[10px] border border-line bg-raised py-2 pl-3 pr-1.5 text-base shadow-pop"
           >
             {t.tone === "error" && <IAlert size={14} className="mt-[2px] shrink-0 text-err" />}
             <span className="selectable min-w-0 flex-1 break-words py-[1px]">{t.text}</span>
-            <button className="flex size-[20px] shrink-0 items-center justify-center rounded-[8px] text-faint hover:bg-hover hover:text-fg" onClick={() => dismiss(t.id)}>
+            <button className="flex size-[20px] shrink-0 items-center justify-center rounded-[5px] text-faint hover:bg-hover hover:text-fg" onClick={() => dismiss(t.id)}>
               <IClose size={11} />
             </button>
           </motion.div>

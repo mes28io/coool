@@ -154,7 +154,7 @@ function StateLabel({ status, needs }: { status: "busy" | "idle" | "starting" | 
   );
 }
 
-const cardCls = "group relative flex flex-col overflow-hidden rounded-[22px] border bg-bg p-4 text-left transition-[border-color] duration-200";
+const cardCls = "group relative flex flex-col overflow-hidden rounded-[18px] border bg-bg p-4 text-left transition-[border-color] duration-200";
 
 const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Attention; i: number; stagger: boolean }) {
   const open = useStore((st) => st.open);
@@ -322,7 +322,7 @@ function EmptyState() {
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease }}
-      className="relative flex flex-col items-center overflow-hidden rounded-[22px] border border-dashed border-line px-6 py-16 text-center"
+      className="relative flex flex-col items-center overflow-hidden rounded-[18px] border border-dashed border-line px-6 py-16 text-center"
     >
       <Wordmark size={34} />
       <div className="mt-5 text-display font-semibold tracking-[-0.02em]">No agents running</div>

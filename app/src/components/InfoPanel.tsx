@@ -75,7 +75,7 @@ function ContextTab({ chat }: { chat: Chat }) {
         <button
           type="button"
           onClick={() => void chatCall(chat.id, () => api().chatSend(chat.id, "/compact"))}
-          className="self-start rounded-[10px] border border-line px-2 py-1 text-small text-dim hover:bg-hover hover:text-fg"
+          className="self-start rounded-[7px] border border-line px-2 py-1 text-small text-dim hover:bg-hover hover:text-fg"
         >
           Run /compact to summarize earlier turns
         </button>

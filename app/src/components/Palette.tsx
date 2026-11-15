@@ -143,7 +143,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -6, scale: 0.985, transition: { duration: 0.12 } }}
       transition={{ duration: 0.2, ease }}
-      className="relative flex h-fit max-h-[min(520px,70vh)] w-[600px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-[22px] border border-line bg-raised shadow-pop"
+      className="relative flex h-fit max-h-[min(520px,70vh)] w-[600px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-[18px] border border-line bg-raised shadow-pop"
     >
       <div className="flex items-center gap-2.5 border-b border-hairline px-4">
         <ISearch size={17} className="text-dim" />
@@ -184,9 +184,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                 data-i={i}
                 onMouseMove={() => sel !== i && setSel(i)}
                 onClick={it.run}
-                className={cx("relative flex h-[36px] w-full items-center gap-2.5 rounded-[12px] px-2.5 text-left text-base", i === sel ? "text-fg" : "text-fg/85")}
+                className={cx("relative flex h-[36px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left text-base", i === sel ? "text-fg" : "text-fg/85")}
               >
-                {i === sel && <motion.span layoutId="pal-sel" transition={{ type: "spring", stiffness: 700, damping: 45 }} className="absolute inset-0 rounded-[12px] bg-hover" />}
+                {i === sel && <motion.span layoutId="pal-sel" transition={{ type: "spring", stiffness: 700, damping: 45 }} className="absolute inset-0 rounded-[8px] bg-hover" />}
                 <span className="relative flex w-[30px] shrink-0 items-center text-dim">{it.icon}</span>
                 <span className="relative min-w-0 flex-1 truncate">{it.label}</span>
                 {it.hint && <span className="relative max-w-[40%] shrink-0 truncate text-small text-faint">{it.hint}</span>}

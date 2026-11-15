@@ -242,7 +242,7 @@ export function Popover({
           transition={{ type: "spring", stiffness: 620, damping: 40 }}
           style={{ width, transformOrigin: `${side === "bottom" ? "top" : "bottom"} ${align === "start" ? "left" : "right"}` }}
           className={cx(
-            "absolute z-40 overflow-hidden rounded-[18px] border border-line bg-raised shadow-pop",
+            "absolute z-40 overflow-hidden rounded-[14px] border border-line bg-raised shadow-pop",
             side === "bottom" ? "top-full mt-1.5" : "bottom-full mb-1.5",
             align === "start" ? "left-0" : "right-0",
             className,
@@ -276,7 +276,7 @@ export function Chip({
       title={title}
       onClick={onClick}
       className={cx(
-        "inline-flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[10px] px-2 text-small font-medium transition-[background-color,color] duration-150",
+        "inline-flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[8px] px-2 text-small font-medium transition-[background-color,color] duration-150",
         active ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
         className,
       )}
@@ -290,7 +290,7 @@ export function Kbd({ children, className }: { children: ReactNode; className?: 
   return (
     <kbd
       className={cx(
-        "inline-flex h-[24px] min-w-[20px] items-center justify-center rounded-[8px] border border-line bg-raised px-1 font-mono text-micro font-medium text-dim",
+        "inline-flex h-[24px] min-w-[20px] items-center justify-center rounded-[6px] border border-line bg-raised px-1 font-mono text-micro font-medium text-dim",
         className,
       )}
     >
@@ -322,7 +322,7 @@ export function IconButton({
       disabled={disabled}
       onClick={onClick}
       className={cx(
-        "inline-flex size-7 shrink-0 items-center justify-center rounded-[10px] text-dim transition-[background-color,color] duration-150",
+        "inline-flex size-7 shrink-0 items-center justify-center rounded-[8px] text-dim transition-[background-color,color] duration-150",
         "hover:bg-hover hover:text-fg active:bg-press disabled:opacity-40 disabled:hover:bg-transparent",
         active && "bg-hover text-fg",
         className,
@@ -346,7 +346,7 @@ export function Segmented<T extends string>({
 }) {
   const id = useId();
   return (
-    <div className={cx("relative inline-flex rounded-[12px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]", size === "sm" ? "h-[30px]" : "h-[36px]")}>
+    <div className={cx("relative inline-flex rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] p-[2px]", size === "sm" ? "h-[30px]" : "h-[36px]")}>
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -357,7 +357,7 @@ export function Segmented<T extends string>({
             disabled={o.disabled}
             onClick={() => onChange(o.value)}
             className={cx(
-              "relative z-0 flex items-center gap-1.5 rounded-[9px] font-medium transition-colors duration-150 disabled:opacity-40",
+              "relative z-0 flex items-center gap-1.5 rounded-[6px] font-medium transition-colors duration-150 disabled:opacity-40",
               size === "sm" ? "px-2 text-small" : "px-2.5 text-base",
               on ? "text-fg" : "text-dim hover:text-fg",
             )}
@@ -365,7 +365,7 @@ export function Segmented<T extends string>({
             {on && (
               <motion.span
                 layoutId={`seg-${id}`}
-                className="absolute inset-0 -z-10 rounded-[9px] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.12),0_0_0_0.5px_var(--border)]"
+                className="absolute inset-0 -z-10 rounded-[6px] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.12),0_0_0_0.5px_var(--border)]"
                 transition={spring}
               />
             )}
@@ -405,7 +405,7 @@ export function Button({
       disabled={disabled}
       onClick={onClick}
       className={cx(
-        "inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[12px] px-3 text-base font-medium transition-[background-color,color,border-color,opacity,transform] duration-150 active:scale-[0.98] disabled:opacity-45 disabled:active:scale-100",
+        "inline-flex h-[34px] shrink-0 items-center justify-center gap-1.5 rounded-[9px] px-3 text-base font-medium transition-[background-color,color,border-color,opacity,transform] duration-150 active:scale-[0.98] disabled:opacity-45 disabled:active:scale-100",
         variant === "primary" && "bg-fg text-bg hover:opacity-85",
         variant === "ghost" && "text-dim hover:bg-hover hover:text-fg",
         variant === "outline" && "border border-line bg-raised text-fg shadow-card hover:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))]",
