@@ -128,7 +128,6 @@ function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: num
         : r.starting?.running && !exited
           ? "starting"
           : "ended";
-  const provider = r.session?.provider ?? chatBits.provider ?? r.startingChat?.provider ?? r.starting?.provider;
 
   return (
     <Reorder.Item
@@ -153,7 +152,6 @@ function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: num
         {active && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 rounded-[8px] border border-line bg-[var(--tab-active)] shadow-card" />}
         <StatusDot status={status} size={7} className="relative" />
         {needs && !active && <span className="absolute inset-x-2 bottom-[3px] h-[2px] rounded-full bg-needs/70" />}
-        {provider && <ProviderMark provider={provider} size={13} className="relative" />}
         <span className="relative truncate font-medium">{title}</span>
         {panes.length > 1 && <span className="relative shrink-0 rounded-[4px] bg-hover px-1 text-small text-dim tnum">{panes.length}</span>}
         <button
