@@ -39,7 +39,7 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
       <div
         className={cx(
           "mx-auto flex max-w-[700px] items-end gap-2 rounded-[20px] border bg-raised py-2 pl-3.5 pr-2 shadow-card transition-[border-color,box-shadow] duration-200",
-          "border-line focus-within:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]",
+          "border-line focus-within:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))]",
           disabled && "opacity-60",
         )}
       >

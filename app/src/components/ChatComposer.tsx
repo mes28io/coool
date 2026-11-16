@@ -363,7 +363,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
         <div
           className={cx(
             "rounded-[20px] border bg-raised shadow-card transition-[border-color,box-shadow] duration-200",
-            chat.pendingPermission || chat.pendingQuestion ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))]" : "border-line focus-within:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]",
+            chat.pendingPermission || chat.pendingQuestion ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))]" : "border-line focus-within:border-[color-mix(in_oklab,var(--dim)_45%,var(--border))]",
             disabled && "opacity-60",
           )}
         >
