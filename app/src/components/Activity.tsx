@@ -296,15 +296,15 @@ export function ThinkingRow({
   // One seed per stretch: the start of the activity and what it is. A new activity restarts word, orb and timer.
   const seed = `${exact ? since : `m${mounted}`}:${mood}`;
   const m = MOODS[mood];
-  const tone = large ? { base: "color-mix(in oklab, var(--text) 92%, var(--bg))", hi: "var(--text)" } : undefined;
+  // Same shimmer as the subagent strips: the default tone (a near-full-text base hid the sweep in the large row).
   const label = given ? (
     <span className="shimmer inline-block" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
       {given}
     </span>
   ) : (
-    <ThinkingWord seed={seed} origin={exact ? since : null} words={m.words} cycle={exact} tone={tone} />
+    <ThinkingWord seed={seed} origin={exact ? since : null} words={m.words} cycle={exact} />
   );
-  const dots = <ThinkingDots color={large ? "color-mix(in oklab, var(--text) 92%, var(--bg))" : undefined} />;
+  const dots = <ThinkingDots />;
   if (big)
     return (
       <div className="flex flex-col items-center gap-3 py-1 text-base">
