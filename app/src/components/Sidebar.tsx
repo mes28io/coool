@@ -191,7 +191,7 @@ export function Sidebar() {
   const projectsView = (
     <div className="flex h-full flex-col" data-sidebar-view="projects">
       <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center justify-between pl-4 pr-2">
-        <Wordmark size={24} intro />
+        <Wordmark size={24} />
       </div>
 
       <div className="px-2 pb-1">
