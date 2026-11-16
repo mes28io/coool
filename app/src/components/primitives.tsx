@@ -21,9 +21,7 @@ export const StatusDot = memo(function StatusDot({ status, size = 7, className }
   const color = status === "busy" ? "var(--status-working)" : status === "idle" ? "var(--status-waiting)" : status === "needs" ? "var(--status-needs)" : "var(--dim)";
   return (
     <span className={cx("relative inline-flex shrink-0", status === "needs" && "mx-[2px]", className)} style={{ width: size, height: size }}>
-      {(status === "busy" || status === "starting") && (
-        <span className="pulse-ring absolute inset-0 rounded-full" style={{ background: color }} />
-      )}
+      {/* Only "needs you" moves: working, waiting and starting are steady dots (calmer, and far less repaint). */}
       {status === "needs" && <span className="needs-ring absolute -inset-[2.5px] rounded-full" />}
       <motion.span
         className="relative rounded-full"
