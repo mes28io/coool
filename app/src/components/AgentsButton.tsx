@@ -29,8 +29,8 @@ export function AgentsButton({ cards, shells = 0, open, onToggle, compact }: { c
         open ? "bg-hover" : "hover:bg-hover",
       )}
     >
-      <MoodGlyph mood="delegate" size={15} live={live > 0} className={cx("transition-colors duration-300", live > 0 ? "text-needs-text" : "text-dim")} />
-      <motion.span key={live ? "live" : "idle"} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25 }} className={live ? "font-medium text-needs-text" : "text-dim"} data-agents-label>
+      <MoodGlyph mood="delegate" size={15} live={live > 0} className={cx("transition-colors duration-300", live > 0 ? "text-needs" : "text-dim")} />
+      <motion.span key={live ? "live" : "idle"} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25 }} className={live ? "font-medium text-needs" : "text-dim"} data-agents-label>
         {compact ? live || null : label}
       </motion.span>
     </button>
