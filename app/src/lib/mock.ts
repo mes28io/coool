@@ -6,6 +6,7 @@
 import { NotAvailable, type Backend, type ChatBatch, type PtyChunk } from "./backend";
 import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
+import { SessionsMerge } from "./sessionsMerge";
 import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -750,8 +751,10 @@ export function mockBackend(): Backend {
       show_automation: showAutomation,
     };
   };
+  // Like the Tauri backend (lib/backend.ts): unchanged sessions keep their object identity across payloads.
+  const merge = new SessionsMerge();
   const emitSessions = () => {
-    const s = snapshot();
+    const s = merge.full(snapshot()) ?? snapshot();
     subs.sessions.forEach((cb) => cb(s));
   };
 

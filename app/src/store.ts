@@ -240,10 +240,33 @@ function visibleSessions(all: Session[], showAutomation: boolean): { sessions: S
   const sessions = listed.map((s) => {
     const nested = isChild(s);
     const cn = childNeeds.get(s.id) ?? null;
-    return nested || cn ? { ...s, nested, child_needs: cn } : s;
+    if (!nested && !cn) return s;
+    // Reuse the copy made last time for the same session object, so memoised rows keep skipping it.
+    const prev = derived.get(s);
+    if (prev && prev.nested === nested && (prev.child_needs ?? null) === cn) return prev;
+    const d = { ...s, nested, child_needs: cn };
+    derived.set(s, d);
+    return d;
   });
   return { sessions, hidden: all.length - sessions.length };
 }
+const derived = new WeakMap<Session, Session>();
+
+// Keep the previous object when a new payload carries the same content, so selectors on it don't fire.
+const sameList = <T>(a: readonly T[], b: readonly T[], eq: (x: T, y: T) => boolean = Object.is) => a.length === b.length && a.every((x, i) => eq(x, b[i]));
+const keepList = <T>(prev: T[], next: T[], eq?: (x: T, y: T) => boolean) => (sameList(prev, next, eq) ? prev : next);
+const json = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+/** Per entry: an unchanged value keeps its old object; nothing changed at all keeps the old record. */
+function keepRecord<V>(prev: Record<string | number, V>, next: Record<string | number, V>, eq: (a: V, b: V) => boolean = Object.is) {
+  let same = Object.keys(prev).length === Object.keys(next).length;
+  for (const k of Object.keys(next)) {
+    if (k in prev && eq(prev[k], next[k])) next[k] = prev[k];
+    else same = false;
+  }
+  return same ? prev : next;
+}
+const sameSince = (a: Since, b: Since) =>
+  a.status === b.status && a.current === b.current && a.statusAt === b.statusAt && a.currentAt === b.currentAt && a.observed === b.observed && a.currentObserved === b.currentObserved;
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -364,24 +387,27 @@ export const useStore = create<State>((set, get) => ({
     // A payload built before a local change of the setting still carries the old value.
     const showAutomation = Date.now() - showAutomationSetAt < 3000 ? st.showAutomation : !!snap.show_automation;
     const vis = visibleSessions(snap.sessions, showAutomation);
+    const usage = { claude: snap.usage?.claude ?? null, codex: snap.usage?.codex ?? null };
+    const keptPtyOwner = keepRecord(st.ptyOwner, ptyOwner);
+    const keptChatOwner = keepRecord(st.chatOwner, chatOwner);
     set({
       ready: true,
       loading: !!snap.loading,
-      sessions: vis.sessions,
-      allSessions: snap.sessions,
+      sessions: keepList(st.sessions, vis.sessions),
+      allSessions: keepList(st.allSessions, snap.sessions),
       hiddenAutomation: vis.hidden,
       showAutomation,
-      pending: snap.pending,
-      ptys,
-      ptyOwner,
-      sessionPty,
-      modes,
-      chatOwner,
-      chatInfos,
-      pendingChats,
-      since,
-      usage: { claude: snap.usage?.claude ?? null, codex: snap.usage?.codex ?? null },
-      tabs: normalizeTabs(st.tabs, ptyOwner, chatOwner),
+      pending: keepList(st.pending, snap.pending),
+      ptys: keepRecord(st.ptys, ptys, json),
+      ptyOwner: keptPtyOwner,
+      sessionPty: keepRecord(st.sessionPty, sessionPty),
+      modes: keepRecord(st.modes, modes),
+      chatOwner: keptChatOwner,
+      chatInfos: keepRecord(st.chatInfos, chatInfos, json),
+      pendingChats: keepList(st.pendingChats, pendingChats),
+      since: keepRecord(st.since, since, sameSince),
+      usage: json(st.usage, usage) ? st.usage : usage,
+      tabs: normalizeTabs(st.tabs, keptPtyOwner, keptChatOwner),
     });
   },
   setEnv: (env) => set({ env }),

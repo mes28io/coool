@@ -1,8 +1,8 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
-import { useNow } from "../lib/clock";
+import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, homeShort, projectOf } from "../lib/format";
-import { attention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
+import { attention, sameAttention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
 import { modelLabel } from "../lib/models";
 import type { Agent, ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
@@ -108,6 +108,12 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
       p.waiting += p.startingChats.filter((c) => c.state === "idle").length;
     }
     // Needs you first, then anything live, then most recent activity.
+    // A project whose contents did not change keeps its object, so its memoised group skips the re-render.
+    for (const [cwd, p] of by) {
+      const old = lastProjects.get(cwd);
+      if (old && sameProject(old, p)) by.set(cwd, old);
+      else lastProjects.set(cwd, p);
+    }
     return [...by.values()].sort((a, b) => {
       if (!!a.needs !== !!b.needs) return a.needs ? -1 : 1;
       const la = a.status === "ended" ? 1 : 0;
@@ -116,6 +122,21 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
     });
   }, [sessions, pending, ptys, pendingChats, chatInfos, digest]);
   return { projects, digest };
+}
+
+/** The last object built per project (any content-equal Project is interchangeable, so one cache serves every caller). */
+const lastProjects = new Map<string, Project>();
+const sameList = <T,>(a: T[], b: T[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+function sameProject(a: Project, b: Project): boolean {
+  if (a.name !== b.name || a.status !== b.status || a.needs !== b.needs || a.working !== b.working || a.waiting !== b.waiting || a.needsKey !== b.needsKey || a.updated !== b.updated) return false;
+  if (a.agents.needs !== b.agents.needs || a.agents.busy !== b.agents.busy || a.agents.idle !== b.agents.idle) return false;
+  if (!sameList(a.live, b.live) || !sameList(a.ended, b.ended) || !sameList(a.starting, b.starting) || !sameList(a.startingChats, b.startingChats)) return false;
+  if (a.children.size !== b.children.size) return false;
+  for (const [k, v] of a.children) {
+    const w = b.children.get(k);
+    if (!w || !sameList(v, w)) return false;
+  }
+  return true;
 }
 
 function useSelectedKey(): string | null {
@@ -596,10 +617,14 @@ function Row({
   );
 }
 
-const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest }: { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean; nest?: "open" | "closed" }) {
+type SessionRowProps = { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean; nest?: "open" | "closed" };
+const sameRow = (a: SessionRowProps, b: SessionRowProps) => a.s === b.s && a.selected === b.selected && a.auto === b.auto && a.nested === b.nested && a.nest === b.nest && sameAttention(a.att, b.att);
+
+const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest }: SessionRowProps) {
   const open = useStore((st) => st.open);
   const setKidsOpen = useStore((st) => st.setKidsOpen);
-  const now = useNow();
+  // The age (shown on hover) re-renders the row only when its text changes, not every second.
+  const age = useClock((now) => ago(s.updated, now));
   const status = att.needs ? "needs" : att.status;
   return (
     <Row
@@ -608,7 +633,7 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
       title={displayTitle(s)}
       status={status}
       provider={s.provider}
-      meta={ago(s.updated, now)}
+      meta={age}
       cwdName={s.cwd && s.cwd !== projectOf(s) ? folderName(s.cwd) : undefined}
       dim={att.status === "ended"}
       auto={auto}
@@ -618,4 +643,4 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
       data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined }}
     />
   );
-});
+}, sameRow);

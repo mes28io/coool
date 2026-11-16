@@ -14,18 +14,15 @@ import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
 import { useStore } from "./store";
 
-function applyTheme(t: "dark" | "light", animate: boolean) {
+function applyTheme(t: "dark" | "light") {
   const root = document.documentElement;
   if (root.dataset.theme === t) return;
-  const swap = () => {
-    root.dataset.theme = t;
-    setTerminalTheme(t);
-  };
-  if (!animate || matchMedia("(prefers-reduced-motion: reduce)").matches) return swap();
-  // Cross-fade colours; never flash.
-  root.classList.add("theme-fade");
-  swap();
-  setTimeout(() => root.classList.remove("theme-fade"), 320);
+  // One flip and one repaint. With transitions off for that frame, the hundreds of `transition-colors`
+  // elements don't each start a colour transition (that made the switch stutter); they are back on a frame later.
+  root.classList.add("no-transitions");
+  root.dataset.theme = t;
+  setTerminalTheme(t);
+  requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("no-transitions")));
 }
 
 function useShortcuts() {
@@ -135,7 +132,7 @@ export default function App() {
   useBackendEvents();
 
   useLayoutEffect(() => {
-    applyTheme(theme, true);
+    applyTheme(theme);
     void syncWindow(theme);
   }, [theme]);
   useEffect(() => {

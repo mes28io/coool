@@ -197,23 +197,11 @@ input {
   color: inherit;
 }
 
-/* Theme cross-fade: applied for ~300ms around a switch only, so normal
-   hover transitions keep their own timing. */
-html.theme-fade *,
-html.theme-fade *::before,
-html.theme-fade *::after {
-  transition:
-    background-color 280ms ease,
-    border-color 280ms ease,
-    color 280ms ease,
-    fill 280ms ease,
-    stroke 280ms ease,
-    box-shadow 280ms ease !important;
-}
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation-duration: 260ms;
-  animation-timing-function: ease;
+/* Theme switch: transitions off for the frame the theme flips in (see applyTheme in App.tsx). */
+html.no-transitions *,
+html.no-transitions *::before,
+html.no-transitions *::after {
+  transition: none !important;
 }
 
 /* ---------- scrollbars ----------
@@ -517,6 +505,20 @@ html.theme-fade *::after {
   50% {
     opacity: 1;
   }
+}
+
+/* Loops nobody can see are paused: off screen, scrolled away, in a hidden pane, or the window is hidden
+   (lib/animPause.ts). They resume where they were when they come back into view. */
+[data-anim-off],
+[data-anim-off] *,
+[data-anim-off]::before,
+[data-anim-off]::after,
+[data-anim-off] *::before,
+[data-anim-off] *::after,
+html.page-hidden *,
+html.page-hidden *::before,
+html.page-hidden *::after {
+  animation-play-state: paused !important;
 }
 
 /* Was `content-visibility: auto`. Off: rows never rendered got a 60px placeholder and grew when scrolled

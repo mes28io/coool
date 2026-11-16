@@ -8,7 +8,7 @@ import { isStopReason } from "../lib/stopped";
 import { AgentMark } from "./AgentMark";
 import { MoodGlyph } from "./MoodGlyph";
 import { useStore, type Since } from "../store";
-import { useNow } from "../lib/clock";
+import { useClock } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
 import { liveJobs } from "../lib/live";
 import { IAlert, IChevron, ICheck, toolIcon } from "./icons";
@@ -372,8 +372,8 @@ export function LiveIndicator({
   jobs?: number;
   mainActive: boolean;
 }) {
-  const now = useNow();
-  const launching = mood === "delegate" && since !== null && now - since < 1500;
+  // Only the flag drives a re-render, not every tick.
+  const launching = useClock((now) => mood === "delegate" && since !== null && now - since < 1500);
   const quiet = !mainActive && agents + jobs > 0 && !launching;
   if (!quiet) return <ThinkingRow since={since} mood={mood} detail={detail} large timerSince={timerSince} timerTitle={timerTitle} />;
   const parts = [agents > 0 && `${agents} ${agents === 1 ? "agent" : "agents"}`, jobs > 0 && `${jobs} ${jobs === 1 ? "job" : "jobs"}`].filter(Boolean).join(", ");

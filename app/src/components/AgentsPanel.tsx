@@ -4,7 +4,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { countsText, isLive, orderCards, type AgentCardData } from "../lib/agentCards";
-import { useNow } from "../lib/clock";
+import { useClock } from "../lib/clock";
 import { fmtClock, fmtElapsed } from "../lib/format";
 import { MOODS, toolMood } from "../lib/activityMood";
 import { useFold } from "../lib/cardFold";
@@ -103,20 +103,21 @@ export function AgentsBody({
 }
 
 function Timer({ since, className }: { since: number | null; className?: string }) {
-  const now = useNow();
-  if (since === null) return null;
-  if (since > now + 5000) return null;
-  return <span className={cx("tnum", className)}>{fmtClock(now - since)}</span>;
+  const text = useClock((now) => (since === null || since > now + 5000 ? null : fmtClock(now - since)));
+  if (text === null) return null;
+  return <span className={cx("tnum", className)}>{text}</span>;
 }
 
 /** The agent's total time at the top right: ticking while it runs (from its first step), final once done. */
 function CardTotal({ card }: { card: AgentCardData }) {
-  const now = useNow();
-  const ms = card.state === "running" || card.state === "needs" ? (card.startedAt !== null && card.startedAt <= now + 5000 ? now - card.startedAt : null) : card.durationMs;
-  if (ms === null) return null;
+  const live = card.state === "running" || card.state === "needs";
+  const startedAt = card.startedAt;
+  const ticking = useClock((now) => (live && startedAt !== null && startedAt <= now + 5000 ? fmtClock(now - startedAt) : null));
+  const text = live ? ticking : card.durationMs === null ? null : fmtClock(card.durationMs);
+  if (text === null) return null;
   return (
     <span className="shrink-0 text-small text-faint tnum" title="Total time" data-card-total>
-      {fmtClock(ms)}
+      {text}
     </span>
   );
 }
@@ -319,10 +320,10 @@ function ShellsSection({ shells, onStop }: { shells: Shell[]; onStop?: (pid: num
 }
 
 function ShellElapsed({ since }: { since: number }) {
-  const now = useNow();
+  const text = useClock((now) => fmtElapsed(Math.max(0, now - since)));
   return (
     <span className="shrink-0 text-small leading-[18px] text-faint tnum" title="Running for">
-      {fmtElapsed(Math.max(0, now - since))}
+      {text}
     </span>
   );
 }

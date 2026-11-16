@@ -1,11 +1,11 @@
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { memo, useMemo, useRef, useState } from "react";
-import { useNow } from "../lib/clock";
+import { useClock } from "../lib/clock";
 import { useChats } from "../lib/chat";
 import { ago, displayTitle, folderName, fmtElapsed, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { turnTotals } from "../lib/turn";
 import { MOODS, moodOfCurrent } from "../lib/activityMood";
-import { attention, liveJobs, useChatDigest, type Attention } from "../lib/live";
+import { attention, liveJobs, sameAttention, useChatDigest, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -167,9 +167,12 @@ function StateLabel({ status, needs, background }: { status: "busy" | "idle" | "
 
 const cardCls = "group relative flex flex-col overflow-hidden rounded-[18px] border bg-bg p-4 text-left transition-[border-color] duration-200";
 
-const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Attention; i: number; stagger: boolean }) {
+type CardProps = { s: Session; att: Attention; i: number; stagger: boolean };
+const sameCard = (a: CardProps, b: CardProps) => a.s === b.s && a.i === b.i && a.stagger === b.stagger && sameAttention(a.att, b.att);
+
+const Card = memo(function Card({ s, att, i, stagger }: CardProps) {
   const open = useStore((st) => st.open);
-  const now = useNow();
+  const age = useClock((now) => ago(s.updated, now));
   const needs = att.needs;
   const busy = att.status === "busy" && !needs && !att.background;
   const thinking = busy && (!s.current || isThinking(s.current));
@@ -200,7 +203,8 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       whileHover={{ y: -1, transition: { duration: 0.18 } }}
       className={cx(
         cardCls,
-        needs ? "attn-card border-[color-mix(in_oklab,var(--status-needs)_35%,var(--border))]" : "border-hairline hover:border-[color-mix(in_oklab,var(--dim)_40%,var(--border))]",
+        // No `attn-card` ring here: the card's overflow-hidden clipped it to nothing while it repainted every frame.
+        needs ? "border-[color-mix(in_oklab,var(--status-needs)_35%,var(--border))]" : "border-hairline hover:border-[color-mix(in_oklab,var(--dim)_40%,var(--border))]",
       )}
     >
       <div className="flex h-[22px] items-center gap-1.5">
@@ -257,7 +261,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
             {headline}
           </span>
         ) : (
-          <span className="min-w-0 flex-1 truncate text-dim" title={`Waiting for you · ${ago(s.updated, now)}`}>{worked ? `Waiting for you · worked ${fmtElapsed(worked)}` : `Waiting for you · ${ago(s.updated, now)}`}</span>
+          <span className="min-w-0 flex-1 truncate text-dim" title={`Waiting for you · ${age}`}>{worked ? `Waiting for you · worked ${fmtElapsed(worked)}` : `Waiting for you · ${age}`}</span>
         )}
       </div>
 
@@ -287,7 +291,7 @@ const Card = memo(function Card({ s, att, i, stagger }: { s: Session; att: Atten
       )}
     </motion.button>
   );
-});
+}, sameCard);
 
 function StartingCard({ p, chat, i, stagger }: { p?: PtyInfo; chat?: ChatInfo; i: number; stagger: boolean }) {
   const open = useStore((st) => st.open);
@@ -325,9 +329,9 @@ function StartingCard({ p, chat, i, stagger }: { p?: PtyInfo; chat?: ChatInfo; i
   );
 }
 
-function RecentRow({ s, first }: { s: Session; first: boolean }) {
+const RecentRow = memo(function RecentRow({ s, first }: { s: Session; first: boolean }) {
   const open = useStore((st) => st.open);
-  const now = useNow();
+  const age = useClock((now) => ago(s.updated, now));
   return (
     <div className={cx("group flex h-[40px] items-center gap-3 px-1 transition-colors duration-150", !first && "border-t border-hairline")}>
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={() => open({ kind: "session", key: sessionKey(s) })}>
@@ -340,10 +344,10 @@ function RecentRow({ s, first }: { s: Session; first: boolean }) {
         <IPlay size={13} />
         Resume
       </Button>
-      <span className="w-[56px] shrink-0 text-right text-small text-faint tnum">{ago(s.updated, now)}</span>
+      <span className="w-[56px] shrink-0 text-right text-small text-faint tnum">{age}</span>
     </div>
   );
-}
+});
 
 /** Placeholder bar for a value not parsed yet (Session.loaded === false). */
 function Pending({ w, h = 8, className }: { w: string; h?: number; className?: string }) {

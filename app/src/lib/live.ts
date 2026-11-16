@@ -90,6 +90,14 @@ export function attention(s: Session, d: ChatDigest): Attention {
   return { status, needs: ins, source: ins ? "insight" : null, background, agents };
 }
 
+/** Same attention by value (attention() builds a new object on every call): lets memoised rows skip a re-render. */
+export function sameAttention(a: Attention, b: Attention): boolean {
+  if (a === b) return true;
+  if (a.status !== b.status || a.needs !== b.needs || a.source !== b.source || a.background !== b.background || a.agents.length !== b.agents.length) return false;
+  for (let i = 0; i < a.agents.length; i++) if (a.agents[i] !== b.agents[i]) return false;
+  return true;
+}
+
 export function useAttention(s: Session | null): Attention | null {
   const d = useChatDigest();
   return s ? attention(s, d) : null;

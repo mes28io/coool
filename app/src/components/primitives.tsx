@@ -1,8 +1,8 @@
 import { animate, AnimatePresence, motion, useMotionValue, useTransform } from "motion/react";
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { memo, useEffect, useId, useRef, type ReactNode } from "react";
 import type { Provider, Status } from "../lib/types";
 import { homeShort, fmtApprox, fmtClock, fmtElapsed, fmtTokens } from "../lib/format";
-import { useNow } from "../lib/clock";
+import { useClock } from "../lib/clock";
 import { contextWindow } from "../lib/models";
 import claudeSvg from "../assets/brands/claude.svg?raw";
 import openaiSvg from "../assets/brands/openai.svg?raw";
@@ -17,7 +17,7 @@ export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
 }
 
-export function StatusDot({ status, size = 7, className }: { status: UiStatus; size?: number; className?: string }) {
+export const StatusDot = memo(function StatusDot({ status, size = 7, className }: { status: UiStatus; size?: number; className?: string }) {
   const color = status === "busy" ? "var(--status-working)" : status === "idle" ? "var(--status-waiting)" : status === "needs" ? "var(--status-needs)" : "var(--dim)";
   return (
     <span className={cx("relative inline-flex shrink-0", status === "needs" && "mx-[2px]", className)} style={{ width: size, height: size }}>
@@ -37,7 +37,7 @@ export function StatusDot({ status, size = 7, className }: { status: UiStatus; s
       />
     </span>
   );
-}
+});
 
 export const statusLabel = (s: UiStatus) =>
   s === "busy" ? "Working" : s === "idle" ? "Waiting" : s === "starting" ? "Starting" : s === "needs" ? "Needs you" : "Ended";
@@ -117,25 +117,26 @@ export function Ticker({ value, format = fmtTokens, className }: { value: number
  * no start, or the start is in the future by more than a few seconds (clock skew); a small future skew clamps to 0.
  */
 export function LiveClock({ since, className, title }: { since: number | null; className?: string; title?: string }) {
-  const now = useNow();
-  if (since === null || !Number.isFinite(since) || since > now + 5000) return null;
+  // Re-renders only when the shown text changes (see useClock).
+  const text = useClock((now) => (since === null || !Number.isFinite(since) || since > now + 5000 ? null : fmtClock(now - since)));
+  if (text === null) return null;
   return (
     <span className={cx("tnum", className)} title={title}>
-      {fmtClock(now - since)}
+      {text}
     </span>
   );
 }
 
 export function Elapsed({ since, approx, className }: { since: number | null; approx?: boolean; className?: string }) {
-  const now = useNow();
-  if (since === null) return null;
+  const text = useClock((now) => (since === null ? null : approx ? fmtApprox(now - since) : fmtElapsed(now - since)));
+  if (text === null) return null;
   if (approx)
     return (
       <span className={cx("tnum", className)} title="Approximate: started before coool was watching">
-        {fmtApprox(now - since)}
+        {text}
       </span>
     );
-  return <span className={cx("tnum", className)}>{fmtElapsed(now - since)}</span>;
+  return <span className={cx("tnum", className)}>{text}</span>;
 }
 
 /**
