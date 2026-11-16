@@ -11,9 +11,12 @@
 //! # how often file events wake a refresher over <secs>, and the time spent
 //! # in refresh and in the app's publish path (refresh + JSON + diff):
 //! cargo run --release -p coool-core --example refresh_latency wakes <secs>
+//! # the biggest sessions' JSON, split into activity, subagents and the rest:
+//! cargo run --release -p coool-core --example refresh_latency sizes
 //! ```
 use coool_core::hub::Hub;
-use coool_core::model::{JsonMemo, Session};
+use coool_core::model::Session;
+use coool_core::wire::Sent;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -56,10 +59,27 @@ fn app_old(all: Vec<Session>, last: &mut HashMap<String, Arc<str>>) -> usize {
     diff(last, rows)
 }
 
-/// The app's publish path now: only new or changed sessions serialized ([`JsonMemo`]).
-fn app_new(all: Vec<Session>, memo: &mut JsonMemo<Session>, last: &mut HashMap<String, Arc<str>>) -> usize {
-    let rows = memo.round(keyed(all), Session::to_json);
-    diff(last, rows)
+/// The app's publish path now (`Published::update` over [`Sent`]): an unchanged session is neither
+/// serialized nor sent; a changed one serializes only its new entries and goes out as a patch or whole.
+/// Returns how many sessions changed.
+fn app_new(all: Vec<Session>, memo: &mut HashMap<String, Sent>) -> usize {
+    let mut next = HashMap::with_capacity(memo.len());
+    let mut changed = 0;
+    for (k, s) in keyed(all) {
+        let prev = match memo.remove(&k) {
+            Some(p) if p.same(&s, &None) => {
+                next.insert(k, p);
+                continue;
+            }
+            p => p,
+        };
+        let sent = Sent::new(s, None, prev.as_ref());
+        let _payload = prev.as_ref().and_then(|p| sent.patch(p)).unwrap_or_else(|| sent.to_json());
+        changed += 1;
+        next.insert(k, sent);
+    }
+    *memo = next;
+    changed
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -151,12 +171,12 @@ fn main() {
             let _watch = coool_core::watch::Watch::sources(w.clone());
             let end = Instant::now() + Duration::from_secs(secs);
             let (mut files, mut timer, mut busy, mut app) = (0, 0, Duration::ZERO, Duration::ZERO);
-            let (mut memo, mut last) = (JsonMemo::default(), HashMap::new());
+            let mut memo = HashMap::new();
             while Instant::now() < end {
                 let t = Instant::now();
                 let all = hub.refresh(false);
                 busy += t.elapsed();
-                app_new(all, &mut memo, &mut last);
+                app_new(all, &mut memo);
                 app += t.elapsed();
                 match w.wait(Duration::from_millis(1000)) {
                     coool_core::watch::Wake::Files => files += 1,
@@ -167,11 +187,29 @@ fn main() {
             println!("{secs}s: {files} file wake-ups, {timer} timer ticks, refresh busy {:.0} ms ({:.2}% of a core)", ms(busy), pct(busy));
             println!("{secs}s: app publish path (refresh + JSON + diff) busy {:.0} ms ({:.2}% of a core)", ms(app), pct(app));
         }
+        Some("sizes") => {
+            // The biggest sessions' JSON, split into activity, subagents and the rest.
+            let all = hub.refresh(false);
+            let mut rows: Vec<_> = all
+                .iter()
+                .map(|s| {
+                    let total = s.to_json().len();
+                    let act = serde_json::to_string(&s.activity).map_or(0, |j| j.len());
+                    let agents = serde_json::to_string(&s.agents).map_or(0, |j| j.len());
+                    (total, act, agents, s.activity.len(), s.agents.len(), format!("{:?} {}", s.status, s.id))
+                })
+                .collect();
+            rows.sort_by_key(|r| std::cmp::Reverse(r.0));
+            println!("{} sessions, {:.2} MB of JSON", rows.len(), rows.iter().map(|r| r.0).sum::<usize>() as f64 / 1e6);
+            for (total, act, agents, n, na, id) in rows.iter().take(12) {
+                println!("{:>9} B  activity {act:>9} B ({n} entries)  agents {agents:>9} B ({na})  {id}", total);
+            }
+        }
         _ => {
             let mut refresh = Vec::new();
             let mut ser = Vec::new();
             let (mut old, mut new) = (Vec::new(), Vec::new());
-            let (mut old_last, mut new_last, mut memo) = (HashMap::new(), HashMap::new(), JsonMemo::default());
+            let (mut old_last, mut memo) = (HashMap::new(), HashMap::new());
             let mut changed = Vec::new();
             let mut bytes = 0;
             let mut n = 0;
@@ -192,7 +230,7 @@ fn main() {
                 app_old(all.clone(), &mut old_last);
                 old.push(ms(t.elapsed()));
                 let t = Instant::now();
-                changed.push(app_new(all, &mut memo, &mut new_last) as f64);
+                changed.push(app_new(all, &mut memo) as f64);
                 new.push(ms(t.elapsed()));
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -201,7 +239,7 @@ fn main() {
             stats("serialize x3 (old bench)", ser);
             // The first round serializes everything in both paths; the rest is the steady state.
             stats("app json+diff, all (old)", old[1..].to_vec());
-            stats("app json+diff, memo (new)", new[1..].to_vec());
+            stats("app memo+patch (new)", new[1..].to_vec());
             let total: Vec<f64> = refresh.iter().zip(&new).skip(1).map(|(r, a)| r + a).collect();
             stats("publish path (refresh+memo)", total);
             changed.remove(0);

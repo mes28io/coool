@@ -208,6 +208,8 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
 
 const EMPTY: Session[] = [];
 
+const agentCards = new WeakMap<Agent, { status: Session["status"]; provider: Session["provider"]; card: AgentCardData }>();
+
 export function buildCards(session: Session | null, chat: Chat | undefined, kids: Session[], digest: ChatDigest): AgentCardData[] {
   const out: AgentCardData[] = [];
   const chatAgents = chat ? chat.items.filter((i): i is Extract<ChatItem, { kind: "tool" }> => i.kind === "tool" && i.agent && !i.parent) : [];
@@ -219,7 +221,16 @@ export function buildCards(session: Session | null, chat: Chat | undefined, kids
     }
     for (const t of chatAgents) out.push(cardFromChatTool(chat, t, nested.get(t.id) ?? []));
   } else if (session) {
-    for (const a of session.agents) out.push(cardFromAgent(session, a));
+    for (const a of session.agents) {
+      // A subagent the last payload left alone keeps its object (sessionsMerge), and so its card.
+      const hit = agentCards.get(a);
+      if (hit && hit.status === session.status && hit.provider === session.provider) out.push(hit.card);
+      else {
+        const card = cardFromAgent(session, a);
+        agentCards.set(a, { status: session.status, provider: session.provider, card });
+        out.push(card);
+      }
+    }
   }
   for (const k of kids) out.push(cardFromJob(k, digest));
   return out;

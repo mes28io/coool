@@ -40,9 +40,8 @@ impl Trace {
     #[allow(clippy::too_many_arguments)]
     pub fn emit(&self, seq: u64, event: &str, refresh: Duration, build: Duration, emit: Duration, bytes: usize, changed: &[String], p: &Published) {
         let watched = self.session.as_ref().and_then(|id| {
-            let json = p.sessions.iter().find(|(k, _)| k.ends_with(&format!(":{id}")))?.1;
-            let v: serde_json::Value = serde_json::from_str(json).ok()?;
-            Some(format!(" act={} status={}", v["activity"].as_array().map_or(0, Vec::len), v["status"].as_str().unwrap_or("")))
+            let s = &p.sessions.iter().find(|(k, _)| k.ends_with(&format!(":{id}")))?.1.session;
+            Some(format!(" act={} status={}", s.activity.len(), serde_json::to_value(s.status).ok()?.as_str().unwrap_or("")))
         });
         self.line(&format!(
             "be seq={seq} event={event} refresh_ms={} build_ms={} emit_ms={} bytes={bytes} changed={}{}",

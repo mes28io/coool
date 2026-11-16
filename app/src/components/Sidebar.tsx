@@ -225,8 +225,8 @@ export function Sidebar() {
           </>
         ) : (
           <LayoutGroup>
-            {shownProjects.map((p) => (
-              <ProjectGroup key={p.cwd} p={p} selected={selected} digest={digest} frozen={hover} />
+            {shownProjects.map((p, i) => (
+              <ProjectGroup key={p.cwd} p={p} index={i} selected={selected} digest={digest} frozen={hover} />
             ))}
             {loading && <SidebarSkeleton groups={1} />}
             <OtherToolsLine />
@@ -361,7 +361,7 @@ function Summary({ p }: { p: Project }) {
 
 type Item = { key: string; el: () => ReactNode };
 
-const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }: { p: Project; selected: string | null; digest: ChatDigest; frozen: boolean }) {
+const ProjectGroup = memo(function ProjectGroup({ p, index, selected, digest, frozen }: { p: Project; index: number; selected: string | null; digest: ChatDigest; frozen: boolean }) {
   const live = useStableOrder(p.live, sessionKey, frozen);
   const collapsed = useStore((s) => !!s.collapsed[p.cwd]);
   const revealed = useStore((s) => s.revealed[p.cwd] ?? 0);
@@ -412,9 +412,24 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
     ...live.map(sessionRow),
     ...ended.map(sessionRow),
   ];
+  // What can move or resize this group: its place, its rows and their nested blocks. Layout animations
+  // re-measure only when this changes, not on each sessions payload (one re-renders the busy session's group,
+  // and a measure touches every motion element in the window). Inside the LayoutGroup, one group's change
+  // still animates every group and row.
+  const shape = [
+    index,
+    collapsed ? "c" : "",
+    more,
+    revealed,
+    ...items.map((it) => it.key),
+    ...[...live, ...ended].map((s) => {
+      const kids = p.children.get(s.id);
+      return kids?.length ? `${kidsOpen[sessionKey(s)] ?? ""}:${kids.filter((k) => k.status !== "ended").length}:${kids.map(sessionKey).join(",")}` : "";
+    }),
+  ].join("|");
 
   return (
-    <motion.div layout="position" transition={spring} className="mb-1" data-project={p.cwd}>
+    <motion.div layout="position" layoutDependency={shape} transition={spring} className="mb-1" data-project={p.cwd}>
       {/* The "+" has its own slot at the right at all times (it only fades in), so the name ellipsizes before it. */}
       <div className="group/proj relative flex h-[34px] items-center rounded-[9px] pl-2.5 pr-1.5 transition-colors duration-150 hover:bg-hover">
         <button
@@ -483,13 +498,15 @@ function ChildRows({ parent, agents, kids, selected, digest }: { parent: Session
   const ended = kids.filter((k) => attention(k, digest).status === "ended").sort((a, b) => b.updated - a.updated);
   const shown = all ? ended : ended.filter((k, i) => i < KIDS_ENDED || sessionKey(k) === selected);
   const more = ended.length - shown.length;
+  // The block's own order and its "more" toggle can move these rows (see `shape` in ProjectGroup).
+  const shape = `${all ? "all" : ""}|${[...live, ...shown].map(sessionKey).join()}`;
   return (
     <AnimatePresence initial={false}>
       {agents.map((a) => (
         <AgentRow key={`agent:${sessionKey(parent)}:${a.id}`} parent={parent} a={a} />
       ))}
       {[...live, ...shown].map((k) => (
-        <SessionRow key={sessionKey(k)} s={k} att={attention(k, digest)} selected={selected === sessionKey(k)} nested />
+        <SessionRow key={sessionKey(k)} s={k} att={attention(k, digest)} selected={selected === sessionKey(k)} nested shape={shape} />
       ))}
       {kids.length > 0 && (more > 0 || all) && (
         <button key="jobs-more" type="button" data-nav data-show-jobs onClick={() => setAll(!all)} className={cx(disclosure, "pl-[54px]")}>
@@ -558,7 +575,10 @@ function Row({
   data,
   hover,
   nest,
+  shape = 0,
 }: {
+  /** What can move this row on its own (see `shape` in ProjectGroup); a top-level row moves with its group's. */
+  shape?: string | number;
   selected: boolean;
   onClick: () => void;
   title: string;
@@ -588,6 +608,7 @@ function Row({
       data-nav
       {...data}
       {...rowMotion}
+      layoutDependency={shape}
       onClick={onClick}
       title={[title, tip, cwdName && `in ${cwdName}`].filter(Boolean).join(" · ")}
       aria-label={[title, tip].filter(Boolean).join(", ")}
@@ -645,10 +666,11 @@ function Row({
   );
 }
 
-type SessionRowProps = { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean; nest?: "open" | "closed" };
-const sameRow = (a: SessionRowProps, b: SessionRowProps) => a.s === b.s && a.selected === b.selected && a.auto === b.auto && a.nested === b.nested && a.nest === b.nest && sameAttention(a.att, b.att);
+type SessionRowProps = { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean; nest?: "open" | "closed"; shape?: string };
+const sameRow = (a: SessionRowProps, b: SessionRowProps) =>
+  a.s === b.s && a.selected === b.selected && a.auto === b.auto && a.nested === b.nested && a.nest === b.nest && a.shape === b.shape && sameAttention(a.att, b.att);
 
-const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest }: SessionRowProps) {
+const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest, shape }: SessionRowProps) {
   const open = useStore((st) => st.open);
   const setKidsOpen = useStore((st) => st.setKidsOpen);
   // The age (shown on hover) re-renders the row only when its text changes, not every second.
@@ -668,6 +690,7 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
       nested={nested}
       nest={nest ? { open: nest === "open", onToggle: () => setKidsOpen(sessionKey(s), nest !== "open") } : undefined}
       tip={att.needs ?? att.background}
+      shape={shape}
       data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined }}
     />
   );

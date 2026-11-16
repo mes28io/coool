@@ -47,6 +47,10 @@ export function AgentsBody({
   const rest = ordered.filter(isLive);
   const shownDone = all ? done : done.slice(0, DONE_CAP);
   const more = done.length - shownDone.length;
+  // What can move a card: the lists' order and the shells between them. Layout animations re-measure only when
+  // this changes, not on every sessions payload (each one re-renders the panel; a measure touches every motion
+  // element in the window).
+  const order = `${rest.map((c) => c.id).join()}|${shells.map((s) => s.pid).join()}|${shownDone.map((c) => c.id).join()}`;
 
   return (
     <div className="flex h-full flex-col" data-agents-panel="open">
@@ -62,6 +66,7 @@ export function AgentsBody({
             <motion.div
               key={c.id}
               layout="position"
+              layoutDependency={order}
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
@@ -80,6 +85,7 @@ export function AgentsBody({
             <motion.div
               key={c.id}
               layout="position"
+              layoutDependency={order}
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
@@ -298,14 +304,16 @@ function Recent({ card }: { card: AgentCardData }) {
 /** A small uppercase "SHELLS" label, then one compact card per shell; a finished shell fades out (no history). */
 function ShellsSection({ shells, onStop }: { shells: Shell[]; onStop?: (pid: number) => Promise<void> }) {
   const t = { duration: reducedMotion() ? 0 : 0.3, ease };
+  // Re-measure for layout animations only when the list changes (see `order` in AgentsBody).
+  const order = shells.map((s) => `${s.pid}:${s.started}`).join();
   return (
     <AnimatePresence initial={false}>
       {shells.length > 0 && (
-        <motion.div key="shells" layout="position" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={t} className="overflow-hidden" data-shells-section>
+        <motion.div key="shells" layout="position" layoutDependency={order} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={t} className="overflow-hidden" data-shells-section>
           <div className="px-1 pb-1.5 pt-1 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Shells</div>
           <AnimatePresence initial={false}>
             {shells.map((sh) => (
-              <motion.div key={`${sh.pid}:${sh.started}`} layout="position" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0, transition: { duration: reducedMotion() ? 0 : 0.45, ease } }} transition={t} className="overflow-hidden">
+              <motion.div key={`${sh.pid}:${sh.started}`} layout="position" layoutDependency={order} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0, transition: { duration: reducedMotion() ? 0 : 0.45, ease } }} transition={t} className="overflow-hidden">
                 <div className="pb-2">
                   <ShellCard shell={sh} onStop={onStop} />
                 </div>

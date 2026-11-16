@@ -60,7 +60,7 @@ type Needed = ReturnType<typeof useNeedsYou>[number];
 /** "Bash · pnpm build" -> "pnpm build". */
 const brief = (tool: string, summary: string) => (summary.startsWith(tool + " · ") ? summary.slice(tool.length + 3) : summary);
 
-function NeedsRow({ s, a }: Needed) {
+function NeedsRow({ s, a, order }: Needed & { order: string }) {
   const open = useStore((st) => st.open);
   const now = useNow();
   const chat = useChats((c) => (s.chat != null ? c.chats[s.chat] : undefined));
@@ -76,6 +76,9 @@ function NeedsRow({ s, a }: Needed) {
   return (
     <motion.div
       layout="position"
+      // Re-measure for layout animations only when the list changes: the row re-renders every second (its clock) and with
+      // every sessions payload, and each measure touches every motion element in the window.
+      layoutDependency={order}
       initial={{ opacity: 0, height: 0 }}
       animate={{ opacity: 1, height: "auto" }}
       exit={{ opacity: 0, height: 0, transition: { duration: 0.16 } }}
@@ -171,6 +174,7 @@ function NeedsRow({ s, a }: Needed) {
 
 export function NeedsView() {
   const list = useNeedsYou();
+  const order = list.map((n) => sessionKey(n.s)).join();
   return (
     <div className="flex h-full flex-col" data-sidebar-view="needs">
       <Header title="Needs you" aside={list.length ? `${list.length} waiting` : undefined} />
@@ -182,7 +186,7 @@ export function NeedsView() {
         )}
         <AnimatePresence initial={false}>
           {list.map((n) => (
-            <NeedsRow key={sessionKey(n.s)} {...n} />
+            <NeedsRow key={sessionKey(n.s)} {...n} order={order} />
           ))}
         </AnimatePresence>
       </div>

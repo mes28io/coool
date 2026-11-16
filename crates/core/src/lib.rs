@@ -18,3 +18,4 @@ pub mod tail;
 pub mod usage;
 pub mod util;
 pub mod watch;
+pub mod wire;
