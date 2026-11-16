@@ -19,7 +19,7 @@ import { Composer } from "./Composer";
 import { IActivity, IArrowUp, IClose, IPlay, ITerminal } from "./icons";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
-import { Button, ContextMeter, cx, ease, IconButton, PathText, ProviderMark } from "./primitives";
+import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
 import { modelLabel } from "../lib/models";
 import { useShellFocus } from "../lib/shellFocus";
 
@@ -166,7 +166,7 @@ export function SessionView({
     <div ref={setRoot} className="flex h-full min-w-0 flex-col">
       {/* header */}
       <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[48px] px-3" : "h-[52px] px-4")}>
-        <ProviderMark provider={provider} size={17} />
+        {/* No provider logo here: the model can change mid-chat, so the logo sits on the model chip instead. */}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-base font-semibold tracking-[-0.005em] text-fg">{title}</h2>

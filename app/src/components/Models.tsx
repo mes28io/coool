@@ -202,6 +202,7 @@ export function ModelsChip({ data, current, open, onToggle }: { data: ModelsData
         open ? "bg-hover text-dim" : "text-dim hover:bg-hover",
       )}
     >
+      <ProviderMark provider={providerOf(shown)} size={14} />
       {modelLabel(shown)}
       {/* Plain text, no tag background: a tinted tag on the open (hover-tinted) chip read as a muddy box. */}
       {others > 0 && <span className="text-small text-faint tnum">+{others}</span>}
