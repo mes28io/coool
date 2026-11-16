@@ -391,7 +391,7 @@ export function ThinkingRow({
     );
   if (large)
     return (
-      <div className="flex items-center gap-2.5 pb-1 pt-2.5 text-base" data-live-row data-mood={mood}>
+      <div className="live-layer flex items-center gap-2.5 pb-1 pt-2.5 text-base" data-live-row data-mood={mood}>
         <span className="flex size-[20px] shrink-0 items-center justify-center">
           <MoodGlyph mood={mood} size={16} live={live} className="text-dim" />
         </span>
@@ -596,7 +596,7 @@ export function StepLine({
       className={cx(
         "group relative flex items-center gap-2.5 rounded-[7px] pr-2",
         "h-[28px]",
-        active && !waiting && "sweep",
+        active && !waiting && "sweep live-layer",
         onClick && "hover:bg-hover",
         open && "bg-hover",
       )}

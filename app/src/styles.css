@@ -695,3 +695,13 @@ html.page-hidden *::after {
 .composer-dock > * {
   pointer-events: auto;
 }
+
+/* Rows that animate while a session runs (the live row, the active step, the Jobs now-strip) get their own
+   compositing layer and paint containment: WebKit then repaints only that small layer for each animation
+   step instead of invalidating the surrounding window. */
+.live-layer {
+  contain: layout paint;
+  isolation: isolate;
+  transform: translateZ(0);
+  will-change: transform;
+}
