@@ -1,13 +1,13 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { newChat } from "../lib/actions";
-import { api, isNotAvailable } from "../lib/backend";
+import { api } from "../lib/backend";
 import { folderName, homeShort, projectOf } from "../lib/format";
 import { estimateSize } from "../lib/termlite";
-import type { InsightsStatus, Provider } from "../lib/types";
-import { useStore, type Sheet, type ThemePref } from "../store";
-import { IAlert, ICheck, IFolder, IGear, ISpark, ITerminal } from "./icons";
-import { Button, cx, Kbd, ProviderMark, Segmented } from "./primitives";
+import type { Provider } from "../lib/types";
+import { useStore, type Sheet } from "../store";
+import { IFolder, ITerminal } from "./icons";
+import { Button, cx, Kbd, ProviderMark } from "./primitives";
 
 export function Sheets() {
   const sheet = useStore((s) => s.sheet);
@@ -44,7 +44,6 @@ export function Sheets() {
 function SheetBody({ sheet, close }: { sheet: NonNullable<Sheet>; close: () => void }) {
   if (sheet.kind === "new") return <NewSession initialCwd={sheet.cwd} initialProvider={sheet.provider} close={close} />;
   if (sheet.kind === "quit") return <QuitConfirm running={sheet.running} close={close} />;
-  if (sheet.kind === "settings") return <Settings close={close} />;
   return <StopConfirm label={sheet.label} managed={sheet.managed} pid={sheet.pid} chat={sheet.chat ?? null} close={close} />;
 }
 
@@ -289,182 +288,5 @@ function StopConfirm({ label, managed, pid, chat, close }: { label: string; mana
       }}
       close={close}
     />
-  );
-}
-
-// ---------- settings ----------
-
-function Switch({ on, onChange, disabled, label }: { on: boolean; onChange: (v: boolean) => void; disabled?: boolean; label: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      disabled={disabled}
-      onClick={() => onChange(!on)}
-      className={cx("relative h-[24px] w-[34px] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-40", on ? "bg-accent" : "bg-[color-mix(in_oklab,var(--dim)_35%,transparent)]")}
-    >
-      <motion.span
-        className="absolute top-[2px] size-[20px] rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.25)]"
-        initial={false}
-        animate={{ left: on ? 16 : 2 }}
-        transition={{ type: "spring", stiffness: 700, damping: 38 }}
-      />
-    </button>
-  );
-}
-
-function Settings({ close }: { close: () => void }) {
-  const themePref = useStore((s) => s.themePref);
-  const setThemePref = useStore((s) => s.setThemePref);
-  const showAutomation = useStore((s) => s.showAutomation);
-  const setShowAutomation = useStore((s) => s.setShowAutomation);
-  const hiddenAutomation = useStore((s) => s.hiddenAutomation);
-  const [st, setSt] = useState<InsightsStatus | null>(null);
-  const [key, setKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [replacing, setReplacing] = useState(false);
-
-  useEffect(() => {
-    api()
-      .insightsStatus()
-      .then(setSt)
-      .catch(() => setSt({ enabled: false, has_key: false, available: false }));
-  }, []);
-  const avail = st?.available !== false;
-  const run = async (f: () => Promise<void>, next: Partial<InsightsStatus>) => {
-    setErr(null);
-    try {
-      await f();
-      setSt((s) => (s ? { ...s, ...next } : s));
-      return true;
-    } catch (e) {
-      setErr(isNotAvailable(e) ? "Insights aren't available in this build of coool yet." : e instanceof Error ? e.message : String(e));
-      return false;
-    }
-  };
-  const save = async () => {
-    const k = key.trim();
-    if (!k || saving) return;
-    setSaving(true);
-    // The key goes straight to the backend (Keychain) and is dropped from UI state right away.
-    setKey("");
-    const ok = await run(() => api().insightsSetKey(k), { has_key: true });
-    setSaving(false);
-    if (ok) setReplacing(false);
-  };
-
-  return (
-    <div>
-      <div className="px-4 pb-3 pt-4">
-        <div className="text-title font-semibold tracking-[-0.01em]">Settings</div>
-      </div>
-      <div className="flex flex-col gap-4 px-4 pb-4">
-        <Field label="Theme">
-          <Segmented<ThemePref>
-            value={themePref}
-            onChange={setThemePref}
-            options={[
-              { value: "system", label: "System" },
-              { value: "dark", label: "Dark" },
-              { value: "light", label: "Light" },
-            ]}
-          />
-        </Field>
-
-        <div className="flex items-start gap-3 rounded-[14px] border border-line p-4" data-setting="show-automation">
-          <span className="mt-[1px] flex size-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] text-dim">
-            <IGear size={16} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-base font-semibold">Show runs started by other tools</div>
-            <div className="mt-0.5 text-base text-dim">
-              Sessions that apps and agents launched programmatically (<span className="font-mono text-mono-small">claude -p</span>, the Agent SDK, <span className="font-mono text-mono-small">codex exec</span>). Off, only sessions you started, in a terminal, an editor or here, are listed.
-              {!showAutomation && hiddenAutomation > 0 && <span className="text-faint"> {hiddenAutomation} hidden right now.</span>}
-            </div>
-          </div>
-          <Switch label="Show runs started by other tools" on={showAutomation} onChange={setShowAutomation} />
-        </div>
-
-        <div className="flex flex-col gap-3 rounded-[14px] border border-line p-4">
-          <div className="flex items-start gap-3">
-            <span className="mt-[1px] flex size-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-dim">
-              <ISpark size={16} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-base font-semibold">AI insights</div>
-              <div className="mt-0.5 text-base text-dim">A one-line headline for each live session, and a “Needs you” flag with the reason when an agent is blocked on you.</div>
-            </div>
-            <Switch
-              label="AI insights"
-              on={!!st?.enabled}
-              disabled={!st || !avail}
-              onChange={(v) => void run(() => api().insightsSetEnabled(v), { enabled: v })}
-            />
-          </div>
-          <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_8%,transparent)] px-3 py-2 text-small text-dim">
-            Uses <span className="font-medium text-fg/85">your own Anthropic API key</span>, billed to you, never your Claude Code or Codex login. A small model (Claude Haiku 5.5) runs only for
-            live sessions whose activity changed, at most once per session every 45s, with an hourly cap. That is roughly $0.03 per hour of nonstop agent work per session, and
-            usually far less.
-          </div>
-          {!avail ? (
-            <div className="flex items-center gap-2 text-small text-dim">
-              <IAlert size={15} className="text-busy-text" />
-              Insights aren't available in this build of coool yet.
-            </div>
-          ) : st?.has_key && !replacing ? (
-            <div className="flex items-center gap-2">
-              <span className="flex h-[38px] flex-1 items-center gap-2 rounded-[10px] border border-line bg-bg px-3 text-base">
-                <ICheck size={15} className="text-accent-text" />
-                <span className="text-fg/90">Key saved in your Keychain</span>
-                <span className="ml-auto font-mono text-mono-small tracking-[0.2em] text-faint">••••••••</span>
-              </span>
-              <Button variant="outline" className="h-[38px]" onClick={() => setReplacing(true)}>
-                Replace
-              </Button>
-              <Button variant="ghost" className="h-[38px] hover:text-err-text" onClick={() => void run(() => api().insightsClearKey(), { has_key: false })}>
-                Remove
-              </Button>
-            </div>
-          ) : (
-            <form
-              className="flex gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save();
-              }}
-            >
-              <input
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                className={cx(inputCls, "h-[38px] font-mono text-mono-small")}
-                placeholder="sk-ant-…"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                aria-label="Anthropic API key"
-              />
-              <Button variant="primary" type="submit" className="h-[38px]" disabled={!key.trim() || saving}>
-                {saving ? "Saving…" : "Save key"}
-              </Button>
-              {replacing && (
-                <Button variant="ghost" className="h-[38px]" onClick={() => setReplacing(false)}>
-                  Cancel
-                </Button>
-              )}
-            </form>
-          )}
-          {err && <div className="text-small text-err-text">{err}</div>}
-          {avail && st && !st.has_key && <div className="text-small text-faint">Stored in the macOS Keychain. coool can't show it again; you can only replace or remove it.</div>}
-        </div>
-      </div>
-      <div className="flex justify-end border-t border-hairline bg-panel/60 px-4 py-3">
-        <Button variant="ghost" onClick={close} title="Close settings">
-          Done
-        </Button>
-      </div>
-    </div>
   );
 }

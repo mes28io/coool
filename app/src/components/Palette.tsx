@@ -87,9 +87,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     const r = resolveTarget(leaf?.target ?? null, st);
     out.push(
       { id: "a:new", group: "Actions", label: "New session", icon: <IPlus size={16} />, keys: ["⌘", "T"], run: done(() => st.setSheet({ kind: "new" })) },
-      { id: "a:usage", group: "Actions", label: "Show usage", icon: <IGauge size={16} />, run: done(() => st.setUsageOpen(true)) },
+      { id: "a:usage", group: "Actions", label: "Show usage", icon: <IGauge size={16} />, run: done(() => st.setSidebarView("usage")) },
       { id: "a:home", group: "Actions", label: "Home", icon: <IGrid size={16} />, run: done(() => st.activate(null)) },
-      { id: "a:settings", group: "Actions", label: "Settings and AI insights", icon: <IGear size={16} />, keys: ["⌘", ","], run: done(() => st.setSheet({ kind: "settings" })) },
+      { id: "a:settings", group: "Actions", label: "Settings and AI insights", icon: <IGear size={16} />, keys: ["⌘", ","], run: done(() => st.setSidebarView("settings")) },
       {
         id: "a:theme",
         group: "Actions",

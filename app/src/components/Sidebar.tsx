@@ -13,6 +13,8 @@ import { IChevron, ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { SidebarSkeleton } from "./Skeletons";
+import { NeedsView, SettingsView, UsageView } from "./LeftPanels";
+import { reducedMotion } from "./StepRail";
 
 export interface Project {
   cwd: string;
@@ -182,6 +184,57 @@ export function Sidebar() {
     }
   };
 
+  const view = useStore((s) => s.sidebarView);
+  const setView = useStore((s) => s.setSidebarView);
+  const fade = { duration: reducedMotion() ? 0 : 0.2 };
+
+  const projectsView = (
+    <div className="flex h-full flex-col" data-sidebar-view="projects">
+      <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center justify-between pl-4 pr-2">
+        <Wordmark size={24} intro />
+      </div>
+
+      <div className="px-2 pb-1">
+        <button
+          type="button"
+          title="New session (⌘T)"
+          onClick={() => setSheet({ kind: "new" })}
+          className="flex h-[34px] w-full items-center gap-2.5 rounded-[9px] px-2.5 text-base text-fg transition-colors duration-150 hover:bg-hover"
+        >
+          <ICompose size={18} className="text-dim" />
+          New session
+        </button>
+      </div>
+
+      <div className="px-4 pb-1 pt-5 text-small text-dim">Projects</div>
+
+      <motion.div layoutScroll className="scroll min-h-0 flex-1 px-2 pb-4" onKeyDown={onKeyDown} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
+        {!ready || (loading && projects.length === 0) ? (
+          <SidebarSkeleton />
+        ) : projects.length === 0 ? (
+          <>
+            <div className="mx-1 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-base text-dim">
+              No sessions in the last day.
+              <br />
+              <button className="mt-1 font-medium text-fg hover:underline" onClick={() => setSheet({ kind: "new" })}>
+                Start one
+              </button>
+            </div>
+            <OtherToolsLine />
+          </>
+        ) : (
+          <LayoutGroup>
+            {shownProjects.map((p) => (
+              <ProjectGroup key={p.cwd} p={p} selected={selected} digest={digest} frozen={hover} />
+            ))}
+            {loading && <SidebarSkeleton groups={1} />}
+            <OtherToolsLine />
+          </LayoutGroup>
+        )}
+      </motion.div>
+    </div>
+  );
+
   return (
     <motion.aside
       initial={false}
@@ -190,50 +243,20 @@ export function Sidebar() {
       className="relative h-full shrink-0 overflow-hidden"
       aria-hidden={!open}
       inert={!open}
+      data-sidebar-open={open ? view : "closed"}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && view !== "projects" && !e.defaultPrevented) {
+          e.stopPropagation();
+          setView("projects");
+        }
+      }}
     >
-      <div className="absolute inset-y-0 left-0 flex flex-col overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
-        <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center justify-between pl-4 pr-2">
-          <Wordmark size={24} intro />
-        </div>
-
-        <div className="px-2 pb-1">
-          <button
-            type="button"
-            title="New session (⌘T)"
-            onClick={() => setSheet({ kind: "new" })}
-            className="flex h-[34px] w-full items-center gap-2.5 rounded-[9px] px-2.5 text-base text-fg transition-colors duration-150 hover:bg-hover"
-          >
-            <ICompose size={18} className="text-dim" />
-            New session
-          </button>
-        </div>
-
-        <div className="px-4 pb-1 pt-5 text-small text-dim">Projects</div>
-
-        <motion.div layoutScroll className="scroll min-h-0 flex-1 px-2 pb-4" onKeyDown={onKeyDown} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
-          {!ready || (loading && projects.length === 0) ? (
-            <SidebarSkeleton />
-          ) : projects.length === 0 ? (
-            <>
-              <div className="mx-1 mt-2 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-base text-dim">
-                No sessions in the last day.
-                <br />
-                <button className="mt-1 font-medium text-fg hover:underline" onClick={() => setSheet({ kind: "new" })}>
-                  Start one
-                </button>
-              </div>
-              <OtherToolsLine />
-            </>
-          ) : (
-            <LayoutGroup>
-              {shownProjects.map((p) => (
-                <ProjectGroup key={p.cwd} p={p} selected={selected} digest={digest} frozen={hover} />
-              ))}
-              {loading && <SidebarSkeleton groups={1} />}
-              <OtherToolsLine />
-            </LayoutGroup>
-          )}
-        </motion.div>
+      <div className="absolute inset-y-0 left-0 overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
+        <AnimatePresence initial={false}>
+          <motion.div key={view} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
+            {view === "usage" ? <UsageView /> : view === "needs" ? <NeedsView /> : view === "settings" ? <SettingsView /> : projectsView}
+          </motion.div>
+        </AnimatePresence>
         <ResizeHandle width={width} onChange={setWidth} onDragging={setDragging} />
       </div>
     </motion.aside>

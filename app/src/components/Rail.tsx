@@ -1,32 +1,10 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { attention } from "../lib/live";
-import { displayTitle } from "../lib/format";
-import { sessionKey } from "../lib/types";
+import { type ReactNode } from "react";
 import { useStore } from "../store";
 import { IBell, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
-import { cx, ease, ProviderMark } from "./primitives";
-import { useProjects } from "./Sidebar";
-import { UsagePanel, usageHighest, useUsageProviders } from "./Usage";
-
-const RAIL = 56;
-
-/**
- * Popovers open over the main area, detached from their button: the left edge sits 8px right of
- * the sidebar panel (or of the rail when the panel is collapsed). Vertical anchor is the button's
- * top or bottom edge, measured when it opens.
- */
-function usePopoverPos(anchor: HTMLElement | null, open: boolean, edge: "top" | "bottom") {
-  const sidebarOpen = useStore((s) => s.sidebarOpen);
-  const width = useStore((s) => s.sidebarWidth);
-  const [rect, setRect] = useState<DOMRect | null>(null);
-  useEffect(() => {
-    if (open && anchor) setRect(anchor.getBoundingClientRect());
-  }, [open, anchor]);
-  const left = RAIL + 1 + (sidebarOpen ? width : 0) + 8;
-  if (!rect) return { left } as const;
-  return edge === "bottom" ? ({ left, bottom: window.innerHeight - rect.bottom } as const) : ({ left, top: rect.top } as const);
-}
+import { cx, ease } from "./primitives";
+import { useNeedsYou } from "./LeftPanels";
+import { usageHighest, useUsageProviders } from "./Usage";
 
 /** One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. */
 function RailButton({
@@ -80,115 +58,32 @@ function RailButton({
   );
 }
 
-/** Sessions that are blocked on the person, as a small popover next to the rail. */
+/** Sessions that are blocked on the person: the badge counts them, the view lists them. */
 function NeedsYou() {
-  const { projects, digest } = useProjects();
-  const open = useStore((s) => s.open);
-  const [show, setShow] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  const pos = usePopoverPos(box.current, show, "top");
-  const list = projects.flatMap((p) => p.live.map((s) => ({ s, a: attention(s, digest) })).filter((x) => x.a.needs));
-
-  useEffect(() => {
-    if (!show) return;
-    const down = (e: PointerEvent) => !box.current?.contains(e.target as Node) && setShow(false);
-    const key = (e: KeyboardEvent) => e.key === "Escape" && setShow(false);
-    window.addEventListener("pointerdown", down);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("pointerdown", down);
-      window.removeEventListener("keydown", key);
-    };
-  }, [show]);
-
+  const list = useNeedsYou();
+  const view = useStore((s) => s.sidebarView);
+  const open = useStore((s) => s.sidebarOpen);
+  const toggle = useStore((s) => s.toggleSidebarView);
   return (
-    <div ref={box} className="relative">
-      <RailButton label="Needs you" onClick={() => setShow((v) => !v)} active={show} badge={list.length} hideTip={show}>
-        <IBell size={20} />
-      </RailButton>
-      <AnimatePresence>
-        {show && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, transition: { duration: 0.12 } }}
-            transition={{ duration: 0.16, ease }}
-            style={pos}
-            className="fixed z-50 w-[280px] rounded-[14px] border border-line bg-raised p-1.5 shadow-pop"
-            data-needs-popover
-          >
-            <div className="px-2.5 pb-1 pt-1.5 text-small text-dim">{list.length ? "Needs you" : "Nothing needs you right now."}</div>
-            {list.map(({ s, a }) => (
-              <button
-                key={sessionKey(s)}
-                type="button"
-                data-needs-row={sessionKey(s)}
-                onClick={() => {
-                  open({ kind: "session", key: sessionKey(s) });
-                  setShow(false);
-                }}
-                className="flex w-full items-start gap-2.5 rounded-[9px] px-2.5 py-2 text-left transition-colors duration-150 hover:bg-hover"
-              >
-                <ProviderMark provider={s.provider} size={15} className="mt-[3px]" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-base text-fg">{displayTitle(s)}</span>
-                  <span className="block truncate text-small text-dim">{a.needs}</span>
-                </span>
-              </button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    <RailButton label="Needs you" onClick={() => toggle("needs")} active={open && view === "needs"} badge={list.length}>
+      <IBell size={20} />
+    </RailButton>
   );
 }
 
-/** Plan usage for Claude and Codex, as a popover next to the rail. */
+/** Plan usage for Claude and Codex: the rail dot shows the worst window, the view shows the detail. */
 function UsageButton() {
-  const open = useStore((s) => s.usageOpen);
-  const setOpen = useStore((s) => s.setUsageOpen);
+  const view = useStore((s) => s.sidebarView);
+  const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const toggle = useStore((s) => s.toggleSidebarView);
   const usage = useStore((s) => s.usage);
   const providers = useUsageProviders();
-  const box = useRef<HTMLDivElement>(null);
-  const pos = usePopoverPos(box.current, open, "bottom");
   const hide = (["claude", "codex"] as const).filter((p) => !providers.includes(p));
   const high = usageHighest(usage, [...hide]);
-
-  useEffect(() => {
-    if (!open) return;
-    const down = (e: PointerEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
-    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("pointerdown", down);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("pointerdown", down);
-      window.removeEventListener("keydown", key);
-    };
-  }, [open, setOpen]);
-
   return (
-    <div ref={box} className="relative">
-      <RailButton label={high ? `Usage · ${high.label} ${high.percent}%` : "Usage"} onClick={() => setOpen(!open)} active={open} dot={high?.tone ?? null} hideTip={open}>
-        <IGauge size={20} />
-      </RailButton>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, transition: { duration: 0.12 } }}
-            transition={{ duration: 0.16, ease }}
-            style={pos}
-            className="scroll fixed z-50 max-h-[calc(100vh-140px)] w-[280px] overflow-y-auto rounded-[14px] border border-line bg-raised shadow-pop"
-            data-usage-popover
-            role="dialog"
-            aria-label="Plan usage"
-          >
-            <UsagePanel />
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    <RailButton label={high ? `Usage · ${high.label} ${high.percent}%` : "Usage"} onClick={() => toggle("usage")} active={sidebarOpen && view === "usage"} dot={high?.tone ?? null}>
+      <IGauge size={20} />
+    </RailButton>
   );
 }
 
@@ -201,10 +96,20 @@ export function Rail() {
   const toggleTheme = useStore((s) => s.toggleTheme);
   const sheet = useStore((s) => s.sheet);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const view = useStore((s) => s.sidebarView);
+  const setView = useStore((s) => s.setSidebarView);
+  const toggleView = useStore((s) => s.toggleSidebarView);
 
   return (
     <nav data-tauri-drag-region aria-label="coool" className="relative z-20 flex w-[56px] shrink-0 flex-col items-center gap-1.5 pb-3 pt-1">
-      <RailButton label="Home" active={activeTab === null} onClick={() => activate(null)}>
+      <RailButton
+        label="Home"
+        active={activeTab === null && view === "projects"}
+        onClick={() => {
+          activate(null);
+          setView("projects");
+        }}
+      >
         <IHome size={20} />
       </RailButton>
       <RailButton label="Search" shortcut="⌘K" onClick={() => setPalette(true)}>
@@ -246,7 +151,7 @@ export function Rail() {
             </motion.span>
           </AnimatePresence>
         </RailButton>
-        <RailButton label="Settings" shortcut="⌘," active={sheet?.kind === "settings"} onClick={() => setSheet({ kind: "settings" })}>
+        <RailButton label="Settings" shortcut="⌘," active={sidebarOpen && view === "settings"} onClick={() => toggleView("settings")}>
           <IGear size={20} />
         </RailButton>
       </div>

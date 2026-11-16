@@ -21,8 +21,10 @@ export type Sheet =
   | null
   | { kind: "new"; cwd?: string; provider?: Provider }
   | { kind: "quit"; running: number }
-  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null }
-  | { kind: "settings" };
+  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null };
+
+/** What the left sidebar panel shows: one view at a time. Projects is the default. */
+export type SidebarView = "projects" | "usage" | "needs" | "settings";
 
 /**
  * When the UI saw a session's status / current tool change. `observed` is
@@ -111,8 +113,11 @@ interface State {
   exited: Record<number, boolean>;
   env: Environment | null;
   usage: PlanUsages;
-  usageOpen: boolean;
-  setUsageOpen(v: boolean): void;
+  sidebarView: SidebarView;
+  /** Show a view; a non-Projects view expands a collapsed sidebar. */
+  setSidebarView(v: SidebarView): void;
+  /** Same view again goes back to Projects. */
+  toggleSidebarView(v: SidebarView): void;
   chatInfos: Record<number, ChatInfo>;
   /** chat id -> session key, once discovery linked them (Session.chat). */
   chatOwner: Record<number, string>;
@@ -290,8 +295,20 @@ export const useStore = create<State>((set, get) => ({
   exited: {},
   env: null,
   usage: { claude: null, codex: null },
-  usageOpen: false,
-  setUsageOpen: (v) => set({ usageOpen: v }),
+  sidebarView: "projects",
+  setSidebarView(v) {
+    if (v !== "projects" && !get().sidebarOpen) {
+      try {
+        localStorage.setItem("coool.sidebarOpen", "1");
+      } catch {}
+      set({ sidebarOpen: true });
+    }
+    set({ sidebarView: v });
+  },
+  toggleSidebarView(v) {
+    const s = get();
+    s.setSidebarView(s.sidebarOpen && s.sidebarView === v ? "projects" : v);
+  },
   chatInfos: {},
   chatOwner: {},
   pendingChats: [],
