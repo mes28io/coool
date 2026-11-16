@@ -103,6 +103,9 @@ export function MissionControl() {
 
 const cardMotion = (i: number, stagger: boolean) => ({
   layout: true as const,
+  // Re-measure for layout animations when the card's place changes, not on every sessions payload (the busy
+  // session's card re-renders with each one, and a measure touches every motion element in the window).
+  layoutDependency: i,
   initial: { opacity: 0, y: 14, scale: 0.985 },
   animate: { opacity: 1, y: 0, scale: 1, transition: { ...softSpring, opacity: { duration: 0.3 }, delay: stagger ? Math.min(i, 12) * 0.045 : 0 } },
   exit: { opacity: 0, scale: 0.97, transition: { duration: 0.18 } },

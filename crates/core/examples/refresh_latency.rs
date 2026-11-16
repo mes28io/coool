@@ -10,6 +10,8 @@
 //! cargo run --release -p coool-core --example refresh_latency live <id> <ms|watch>
 //! # how often file events wake a refresher over <secs>, and the refresh time spent:
 //! cargo run --release -p coool-core --example refresh_latency wakes <secs>
+//! # the biggest sessions' JSON, split into activity, subagents and the rest:
+//! cargo run --release -p coool-core --example refresh_latency sizes
 //! ```
 use coool_core::hub::Hub;
 use std::path::Path;
@@ -114,6 +116,24 @@ fn main() {
                 }
             }
             println!("{secs}s: {files} file wake-ups, {timer} timer ticks, refresh busy {:.0} ms ({:.2}% of a core)", ms(busy), ms(busy) / (secs as f64 * 10.0));
+        }
+        Some("sizes") => {
+            // The biggest sessions' JSON, split into activity, subagents and the rest.
+            let all = hub.refresh(false);
+            let mut rows: Vec<_> = all
+                .iter()
+                .map(|s| {
+                    let total = s.to_json().len();
+                    let act = serde_json::to_string(&s.activity).map_or(0, |j| j.len());
+                    let agents = serde_json::to_string(&s.agents).map_or(0, |j| j.len());
+                    (total, act, agents, s.activity.len(), s.agents.len(), format!("{:?} {}", s.status, s.id))
+                })
+                .collect();
+            rows.sort_by_key(|r| std::cmp::Reverse(r.0));
+            println!("{} sessions, {:.2} MB of JSON", rows.len(), rows.iter().map(|r| r.0).sum::<usize>() as f64 / 1e6);
+            for (total, act, agents, n, na, id) in rows.iter().take(12) {
+                println!("{:>9} B  activity {act:>9} B ({n} entries)  agents {agents:>9} B ({na})  {id}", total);
+            }
         }
         _ => {
             let mut refresh = Vec::new();

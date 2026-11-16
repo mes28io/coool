@@ -78,7 +78,7 @@ pub enum ActivityKind {
     Agent,
 }
 
-#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct Activity {
     pub ts: String, // HH:MM:SS (local-ish; transcript timestamps are UTC, see util::short_time)
     pub kind: ActivityKind,
@@ -177,7 +177,7 @@ pub fn sort_model_use(list: &mut [ModelUse]) {
     list.sort_by(|a, b| b.total().cmp(&a.total()).then(b.messages.cmp(&a.messages)).then(a.model.cmp(&b.model)));
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Agent {
     pub id: String,
     pub kind: String,
@@ -192,7 +192,7 @@ pub struct Agent {
     pub models: Vec<ModelUse>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Session {
     pub provider: Provider,
     pub id: String,
@@ -276,6 +276,61 @@ impl Session {
         serde_json::to_string(self).unwrap_or_else(|_| "null".into())
     }
 
+    /// This session's JSON in parts, so the desktop app can send a timeline's
+    /// new entries instead of the whole session (see [`SessionJson`]). In this
+    /// crate for the same reason as [`Session::to_json`].
+    pub fn json_parts(&self) -> SessionJson {
+        // Every field but the two lists. A struct literal, not `..`, so a new field can't be left out.
+        let head = Session {
+            provider: self.provider,
+            id: self.id.clone(),
+            title: self.title.clone(),
+            cwd: self.cwd.clone(),
+            project: self.project.clone(),
+            model: self.model.clone(),
+            pid: self.pid,
+            status: self.status,
+            current: self.current.clone(),
+            last_prompt: self.last_prompt.clone(),
+            tokens: self.tokens.clone(),
+            activity: Vec::new(),
+            agents: Vec::new(),
+            updated: self.updated,
+            managed: self.managed,
+            chat: self.chat,
+            models: self.models.clone(),
+            loaded: self.loaded,
+            origin: self.origin,
+            parent: self.parent.clone(),
+            live_children: self.live_children,
+            background_tasks: self.background_tasks,
+            waiting_for: self.waiting_for.clone(),
+            shells: self.shells.clone(),
+        };
+        SessionJson {
+            head: without(serde_json::to_string(&head).unwrap_or_default(), "\"activity\":[],\"agents\":[],"),
+            activity: entries_json(&self.activity),
+            agents: self
+                .agents
+                .iter()
+                .map(|a| {
+                    let head = Agent {
+                        id: a.id.clone(),
+                        kind: a.kind.clone(),
+                        description: a.description.clone(),
+                        finished: a.finished,
+                        current: a.current.clone(),
+                        tokens: a.tokens.clone(),
+                        activity: Vec::new(),
+                        model: a.model.clone(),
+                        models: a.models.clone(),
+                    };
+                    AgentJson { id: a.id.clone(), head: without(serde_json::to_string(&head).unwrap_or_default(), "\"activity\":[],"), activity: entries_json(&a.activity) }
+                })
+                .collect(),
+        }
+    }
+
     /// Best human label: AI title, else the last prompt, else the folder name.
     pub fn display_title(&self) -> String {
         if !self.title.is_empty() {
@@ -285,5 +340,139 @@ impl Session {
             return crate::util::one_line(p, 60);
         }
         std::path::Path::new(&self.cwd).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "untitled".into())
+    }
+}
+
+/// A [`Session`]'s JSON in parts ([`Session::json_parts`]): what the desktop
+/// app keeps of each session it sent, to send the next time only the entries
+/// of `activity` (and of each subagent's) that changed. [`SessionJson::to_json`]
+/// puts it back together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionJson {
+    /// Every field but `activity` and `agents`, as one JSON object.
+    pub head: String,
+    /// `activity`, one JSON value per entry.
+    pub activity: Vec<String>,
+    pub agents: Vec<AgentJson>,
+}
+
+/// One [`Agent`] in parts (see [`SessionJson`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentJson {
+    pub id: String,
+    /// Every field but `activity`, as one JSON object.
+    pub head: String,
+    pub activity: Vec<String>,
+}
+
+fn entries_json(list: &[Activity]) -> Vec<String> {
+    list.iter().map(|a| serde_json::to_string(a).unwrap_or_else(|_| "null".into())).collect()
+}
+
+/// `json` without the one `"name":[],` run serde wrote for an emptied list. (Inside a
+/// JSON string every `"` is escaped, so the run can only be that field.)
+fn without(mut json: String, field: &str) -> String {
+    if let Some(at) = json.find(field) {
+        json.replace_range(at..at + field.len(), "");
+    }
+    json
+}
+
+/// `head` (a JSON object) with `"key":[items]` appended.
+fn with_list<'a>(head: &str, key: &str, items: impl Iterator<Item = &'a str>, extra: usize) -> String {
+    let mut out = String::with_capacity(head.len() + key.len() + extra + 8);
+    out.push_str(head.strip_suffix('}').unwrap_or(head));
+    if out.len() > 1 {
+        out.push(',');
+    }
+    out.push('"');
+    out.push_str(key);
+    out.push_str("\":[");
+    for (i, it) in items.enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(it);
+    }
+    out.push_str("]}");
+    out
+}
+
+fn list_len(items: &[String]) -> usize {
+    items.iter().map(|s| s.len() + 1).sum()
+}
+
+impl AgentJson {
+    pub fn to_json(&self) -> String {
+        with_list(&self.head, "activity", self.activity.iter().map(String::as_str), list_len(&self.activity))
+    }
+}
+
+impl SessionJson {
+    /// The whole session as one JSON object (the same value [`Session::to_json`] gives).
+    pub fn to_json(&self) -> String {
+        let head = with_list(&self.head, "activity", self.activity.iter().map(String::as_str), list_len(&self.activity));
+        let agents: Vec<String> = self.agents.iter().map(AgentJson::to_json).collect();
+        with_list(&head, "agents", agents.iter().map(String::as_str), list_len(&agents))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn act(text: &str, full: Option<&str>) -> Activity {
+        Activity { ts: "10:00:00".into(), kind: ActivityKind::Text, text: text.into(), full: full.map(str::to_string), shortened: false, step: false }
+    }
+
+    #[test]
+    fn json_parts_put_back_together_equal_to_json() {
+        let agent = Agent {
+            id: "ag".into(),
+            kind: "Explore".into(),
+            description: r#"look "activity":[], around"#.into(),
+            finished: false,
+            current: Some("Read".into()),
+            tokens: Tokens::default(),
+            activity: vec![act("a", None), act("b", Some("b\nfull"))],
+            model: "m".into(),
+            models: Vec::new(),
+        };
+        let mut s = Session {
+            provider: Provider::Claude,
+            id: "x".into(),
+            title: r#""activity":[],"agents":[],"#.into(),
+            cwd: "/tmp".into(),
+            project: String::new(),
+            model: String::new(),
+            pid: Some(3),
+            status: Status::Busy,
+            current: None,
+            last_prompt: None,
+            tokens: Tokens::default(),
+            activity: vec![act("one", None), act("two", Some("two\nlines"))],
+            agents: vec![agent.clone(), Agent { id: "ag2".into(), activity: Vec::new(), ..agent }],
+            updated: SystemTime::UNIX_EPOCH,
+            managed: None,
+            chat: None,
+            models: Vec::new(),
+            loaded: true,
+            origin: Origin::User,
+            parent: None,
+            live_children: 0,
+            background_tasks: false,
+            waiting_for: None,
+            shells: Vec::new(),
+        };
+        let whole: serde_json::Value = serde_json::from_str(&s.to_json()).unwrap();
+        let parts = s.json_parts();
+        let head: serde_json::Value = serde_json::from_str(&parts.head).unwrap();
+        assert!(head.get("activity").is_none() && head.get("agents").is_none() && head["title"] == whole["title"], "{}", parts.head);
+        assert_eq!(parts.activity.len(), 2);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&parts.to_json()).unwrap(), whole);
+        s.activity.clear();
+        s.agents.clear();
+        let empty: serde_json::Value = serde_json::from_str(&s.to_json()).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&s.json_parts().to_json()).unwrap(), empty);
     }
 }

@@ -31,7 +31,7 @@ const HOURLY_CAP: usize = 120;
 const HOUR_MS: u64 = 3_600_000;
 const KEY_RECHECK_MS: u64 = 30_000;
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Insight {
     pub headline: String,
     pub needs_you: Option<String>,

@@ -87,8 +87,34 @@ export function TabBar() {
   );
 }
 
+/**
+ * The draggable shell of a tab. It re-renders only when the tab itself changes: a draggable motion element
+ * re-measures every motion element in the window each time it renders, so what changes with every sessions
+ * payload (title, status) lives in `TabChipBody`.
+ */
 function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: number }) {
   const activate = useStore((s) => s.activate);
+  const closeTab = useStore((s) => s.closeTab);
+  return (
+    <Reorder.Item
+      value={tab.id}
+      initial={{ opacity: 0, width: 0 }}
+      animate={{ opacity: 1, width: "auto" }}
+      exit={{ opacity: 0, width: 0, transition: { duration: 0.16 } }}
+      transition={spring}
+      whileDrag={{ scale: 1.03, zIndex: 5 }}
+      className="relative min-w-[96px] max-w-[230px] shrink"
+      onPointerDown={() => activate(tab.id)}
+      onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
+      data-tab-active={active ? "" : undefined}
+    >
+      {active && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 rounded-[8px] border border-line bg-[var(--tab-active)] shadow-card" />}
+      <TabChipBody tab={tab} active={active} index={index} />
+    </Reorder.Item>
+  );
+}
+
+function TabChipBody({ tab, active, index }: { tab: Tab; active: boolean; index: number }) {
   const closeTab = useStore((s) => s.closeTab);
   const panes = leaves(tab.root);
   const leaf = panes.find((l) => l.id === tab.focus) ?? panes[0];
@@ -130,44 +156,30 @@ function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: num
           : "ended";
 
   return (
-    <Reorder.Item
-      value={tab.id}
-      initial={{ opacity: 0, width: 0 }}
-      animate={{ opacity: 1, width: "auto" }}
-      exit={{ opacity: 0, width: 0, transition: { duration: 0.16 } }}
-      transition={spring}
-      whileDrag={{ scale: 1.03, zIndex: 5 }}
-      className="relative min-w-[96px] max-w-[230px] shrink"
-      onPointerDown={() => activate(tab.id)}
-      onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
-      data-tab-active={active ? "" : undefined}
+    <div
+      title={`${title}${index < 9 ? `  (⌘${index + 1})` : ""}`}
+      className={cx(
+        "group relative flex h-[34px] w-full items-center gap-2 rounded-[9px] pl-2.5 pr-1 text-[13px] transition-colors duration-150",
+        active ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
+      )}
     >
-      <div
-        title={`${title}${index < 9 ? `  (⌘${index + 1})` : ""}`}
+      <StatusDot status={status} size={7} className="relative" />
+      {needs && !active && <span className="absolute inset-x-2 bottom-[3px] h-[2px] rounded-full bg-needs/70" />}
+      <span className="relative truncate font-medium">{title}</span>
+      {panes.length > 1 && <span className="relative shrink-0 rounded-[4px] bg-hover px-1 text-small text-dim tnum">{panes.length}</span>}
+      <button
+        type="button"
+        title="Close tab (⌘W)"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => closeTab(tab.id)}
         className={cx(
-          "group relative flex h-[34px] w-full items-center gap-2 rounded-[9px] pl-2.5 pr-1 text-[13px] transition-colors duration-150",
-          active ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
+          "relative flex size-[24px] shrink-0 items-center justify-center rounded-[6px] text-faint transition-[opacity,background-color,color] duration-150 hover:bg-press hover:text-fg",
+          active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
         )}
       >
-        {active && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 rounded-[8px] border border-line bg-[var(--tab-active)] shadow-card" />}
-        <StatusDot status={status} size={7} className="relative" />
-        {needs && !active && <span className="absolute inset-x-2 bottom-[3px] h-[2px] rounded-full bg-needs/70" />}
-        <span className="relative truncate font-medium">{title}</span>
-        {panes.length > 1 && <span className="relative shrink-0 rounded-[4px] bg-hover px-1 text-small text-dim tnum">{panes.length}</span>}
-        <button
-          type="button"
-          title="Close tab (⌘W)"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => closeTab(tab.id)}
-          className={cx(
-            "relative flex size-[24px] shrink-0 items-center justify-center rounded-[6px] text-faint transition-[opacity,background-color,color] duration-150 hover:bg-press hover:text-fg",
-            active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-          )}
-        >
-          <IClose size={13} />
-        </button>
-      </div>
-    </Reorder.Item>
+        <IClose size={13} />
+      </button>
+    </div>
   );
 }
 

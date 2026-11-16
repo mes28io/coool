@@ -292,6 +292,8 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
             {on && (
               <motion.span
                 layoutId={`mode-${uid}`}
+                // Re-measure only when the mode changes, not on every re-render (each sessions payload re-renders this header).
+                layoutDependency={mode}
                 className="absolute inset-0 -z-10 rounded-[6px] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.12),0_0_0_0.5px_var(--border)]"
                 transition={{ type: "spring", stiffness: 520, damping: 40 }}
               />

@@ -41,6 +41,49 @@ function buildBlocks(list: Activity[]): Block[] {
   return out;
 }
 
+const sameEntry = (a: Activity, b: Activity) =>
+  a === b || (a.ts === b.ts && a.kind === b.kind && a.text === b.text && a.full === b.full && !!a.shortened === !!b.shortened && !!a.step === !!b.step);
+const sameBlock = (a: Block, b: Block) =>
+  a.type === b.type &&
+  (a.type === "steps"
+    ? b.type === "steps" && a.items.length === b.items.length && a.items.every((x, i) => x.key === b.items[i].key && sameEntry(x.a, b.items[i].a))
+    : b.type !== "steps" && sameEntry(a.a, b.a));
+
+/**
+ * `buildBlocks`, with every block that is the same as last time kept as the same object, so the memoised block
+ * views skip it: a busy session re-renders only its newest blocks on each payload, not the whole timeline.
+ */
+function useBlocks(list: Activity[]): Block[] {
+  const prev = useRef(new Map<string, Block>());
+  return useMemo(() => {
+    const next = buildBlocks(list).map((b) => {
+      const old = prev.current.get(b.key);
+      return old && sameBlock(old, b) ? old : b;
+    });
+    prev.current = new Map(next.map((b) => [b.key, b]));
+    return next;
+  }, [list]);
+}
+
+/** The subagents a group's "Agent" steps stand for, kept as the same array while they are the same objects. */
+function useGroupAgents(blocks: Block[], agents: Agent[]): Map<string, Agent[]> {
+  const prev = useRef(new Map<string, Agent[]>());
+  return useMemo(() => {
+    const next = new Map<string, Agent[]>();
+    for (const b of blocks) {
+      if (b.type !== "steps") continue;
+      // In the session's order, so `agentOf` over this subset finds what it finds over all of them.
+      const hit = new Set(b.items.filter((i) => i.a.kind === "agent").map((i) => agentOf(i.a, agents)));
+      const list = hit.size ? agents.filter((g) => hit.has(g)) : NO_AGENTS;
+      const old = prev.current.get(b.key);
+      next.set(b.key, old && old.length === list.length && old.every((g, i) => g === list[i]) ? old : list);
+    }
+    prev.current = next;
+    return next;
+  }, [blocks, agents]);
+}
+const NO_AGENTS: Agent[] = [];
+
 const enter = { opacity: 0, y: 10 };
 const shown = { opacity: 1, y: 0 };
 
@@ -81,7 +124,8 @@ export const liveTime = (since: Since | undefined, fallback: number, activity?: 
 };
 
 export function Timeline({ session, compact, live }: { session: Session; compact?: boolean; live?: LiveTime }) {
-  const blocks = useMemo(() => buildBlocks(session.activity), [session.activity]);
+  const blocks = useBlocks(session.activity);
+  const groupAgents = useGroupAgents(blocks, session.agents);
   const initial = useRef<Set<string> | null>(null);
   if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
   const scroller = useRef<HTMLDivElement>(null);
@@ -92,7 +136,9 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   const [fresh, setFresh] = useState(false);
   const busy = session.status === "busy";
   const thinking = busy && (isThinking(session.current) || !session.current || blocks[blocks.length - 1]?.type !== "steps");
-  const lt = live ?? liveTime(undefined, session.updated, session.activity);
+  const given = live ?? liveTime(undefined, session.updated, session.activity);
+  // The same object while the values are, so blocks that take it can skip re-rendering.
+  const lt = useMemo(() => ({ at: given.at, approx: given.approx }), [given.at, given.approx]);
   const turn = useMemo(() => turnTotals(session), [session]);
   const agentsRunning = session.agents.filter((a) => !a.finished).length;
   const now = moodOfCurrent(isThinking(session.current) ? null : session.current, 0);
@@ -154,25 +200,21 @@ export function Timeline({ session, compact, live }: { session: Session; compact
     >
       <div className={cx("mx-auto flex max-w-[700px] flex-col pb-[72px] pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
         {blocks.map((b, i) => {
-          const fresh = !initial.current!.has(b.key);
           const last = i === blocks.length - 1;
+          const active = b.type === "steps" && busy && last && !thinking;
+          const agents = groupAgents.get(b.key) ?? NO_AGENTS;
           return (
-            <motion.div
+            <TimelineBlock
               key={b.key}
-              className={cx(!last && i < blocks.length - 6 && "cv-auto")}
-              initial={fresh ? enter : false}
-              animate={shown}
-              transition={{ duration: 0.32, ease }}
-            >
-              {b.type === "prompt" && <PromptBlock a={b.a} />}
-              {b.type === "text" && (
-                <ActivityText a={b.a} />
-              )}
-              {b.type === "error" && <ErrorBlock a={b.a} />}
-              {b.type === "steps" && (
-                <StepGroup items={b.items} agents={session.agents} active={busy && last && !thinking} latest={last || i >= blocks.length - 2} live={lt} />
-              )}
-            </motion.div>
+              b={b}
+              fresh={!initial.current!.has(b.key)}
+              cv={!last && i < blocks.length - 6}
+              active={active}
+              latest={last || i >= blocks.length - 2}
+              agents={agents}
+              // Only a group with something running shows live time; the rest skip re-rendering as it moves.
+              live={active || agents.some((g) => !g.finished) ? lt : STILL}
+            />
           );
         })}
         {!busy && turn.startMs !== null && turn.endMs !== null && turn.endMs > turn.startMs && blocks[blocks.length - 1]?.type !== "prompt" && (
@@ -212,6 +254,35 @@ export function Timeline({ session, compact, live }: { session: Session; compact
 }
 
 const STILL: LiveTime = { at: 0, approx: true };
+
+/** One block of the timeline; memoised, so a payload re-renders only the blocks it changed (see `useBlocks`). */
+const TimelineBlock = memo(function TimelineBlock({
+  b,
+  fresh,
+  cv,
+  active,
+  latest,
+  agents,
+  live,
+}: {
+  b: Block;
+  fresh: boolean;
+  cv: boolean;
+  active: boolean;
+  latest: boolean;
+  agents: Agent[];
+  live: LiveTime;
+}) {
+  return (
+    <motion.div className={cx(cv && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={blockIn}>
+      {b.type === "prompt" && <PromptBlock a={b.a} />}
+      {b.type === "text" && <ActivityText a={b.a} />}
+      {b.type === "error" && <ErrorBlock a={b.a} />}
+      {b.type === "steps" && <StepGroup items={b.items} agents={agents} active={active} latest={latest} live={live} />}
+    </motion.div>
+  );
+});
+const blockIn = { duration: 0.32, ease };
 
 /** Finished transcript rows drawn like the timeline, without live state (a resumed chat's history). */
 export function HistoryBlocks({ rows }: { rows: Activity[] }) {
