@@ -15,6 +15,20 @@ export interface Activity {
   shortened?: boolean;
   /** An error that is one failed step (a tool call), not a failed turn: shown quietly. */
   step?: boolean;
+  /** A step that published a page to claude.ai (Claude Code's Artifact tool). */
+  artifact?: ArtifactInfo;
+}
+
+/** One published version of an artifact (crates/core/src/artifact.rs). Publishes with the same `url` are versions of one artifact. */
+export interface ArtifactInfo {
+  url: string;
+  version?: number;
+  /** The local page that was published. */
+  file_path: string;
+  /** Published path -> local file. */
+  files?: Record<string, string>;
+  icon?: string;
+  title: string;
 }
 
 export interface Tokens {
@@ -280,7 +294,7 @@ export type ChatEvent = Ev &
     | { type: "thinking_delta"; message_id: string; text: string; parent_tool_id: string | null }
     | { type: "assistant_message"; id: string; text: string; model: string | null; parent_tool_id: string | null }
     | { type: "tool_start"; id: string; name: string; summary: string; input: unknown; parent_tool_id: string | null }
-    | { type: "tool_end"; id: string; ok: boolean; output: string }
+    | { type: "tool_end"; id: string; ok: boolean; output: string; artifact?: ArtifactInfo }
     | { type: "permission_request"; request_id: string; tool: string; summary: string; input: unknown; remember?: RememberOption[] }
     | { type: "usage"; model: string | null; tokens: Tokens; context_window: number | null }
     | { type: "state"; state: ChatRunState }

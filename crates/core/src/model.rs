@@ -101,6 +101,9 @@ pub struct Activity {
     /// recover from these, so frontends show them quietly.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub step: bool,
+    /// A step that published a page to claude.ai (see [`crate::artifact`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<Box<crate::artifact::ArtifactInfo>>,
 }
 
 /// Characters of `Activity::full` kept per entry.
@@ -112,7 +115,7 @@ pub const FULL_RECENT: usize = 50;
 impl Activity {
     /// A step (tool call, subagent) or a fixed note: one line says it all.
     pub fn line(ts: String, kind: ActivityKind, text: impl Into<String>) -> Self {
-        Self { ts, kind, text: text.into(), full: None, shortened: false, step: false }
+        Self { ts, kind, text: text.into(), full: None, shortened: false, step: false, artifact: None }
     }
 
     /// A prompt, reply or error: its one-line form (`max` columns) and, when
@@ -127,7 +130,7 @@ impl Activity {
             Some((end, _)) => (format!("{}…", &s[..end]), true),
             None => (s.to_string(), false),
         };
-        Self { ts, kind, text, full: Some(full), shortened: cut, step: false }
+        Self { ts, kind, text, full: Some(full), shortened: cut, step: false, artifact: None }
     }
 }
 

@@ -9,7 +9,8 @@ import { answerPermission, answerQuestion } from "../lib/actions";
 import { type Chat, type ChatItem, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { modelLabel } from "../lib/models";
-import type { Activity, RememberOption } from "../lib/types";
+import type { Activity, ArtifactInfo, RememberOption } from "../lib/types";
+import { ArtifactCard, artifactVersions } from "./ArtifactCard";
 import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
@@ -40,6 +41,8 @@ const QUESTION_TOOLS = /^(AskUserQuestion|request_user_input|ExitPlanMode)$/;
 type Block =
   | { type: "item"; key: string; item: ChatItem }
   | { type: "steps"; key: string; tools: Tool[] }
+  /** An artifact's newest publish; earlier publishes of the same page fold into it. */
+  | { type: "artifact"; key: string; info: ArtifactInfo; versions: number }
   /** One task-list card per turn (TodoWrite / update_plan calls), updated in place. */
   | { type: "plan"; key: string; calls: Tool[]; prompt: string; end: { ts: number; ok: boolean } | null };
 
@@ -59,8 +62,9 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
     if (it.kind === "prompt") turn++;
     else if (it.kind === "tool" && !it.parent && isSyntheticPlan(it)) synthetic.add(turn);
   }
+  const pages = artifactVersions(items, (it) => (it.kind === "tool" && !it.parent ? it.artifact : undefined));
   let turnNo = 0;
-  for (const it of items) {
+  for (const [idx, it] of items.entries()) {
     const parent = "parent" in it ? it.parent : null;
     if (parent) {
       const l = children.get(parent) ?? [];
@@ -82,7 +86,10 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
       plan.calls.push(it);
       continue;
     }
-    if (it.kind === "tool") {
+    if (it.kind === "tool" && it.artifact) {
+      const p = pages.get(it.artifact.url)!;
+      if (p.last === idx) blocks.push({ type: "artifact", key: `artifact:${it.artifact.url}`, info: p.info, versions: p.versions });
+    } else if (it.kind === "tool") {
       const last = blocks[blocks.length - 1];
       if (last?.type === "steps") last.tools.push(it);
       else blocks.push({ type: "steps", key: it.key, tools: [it] });
@@ -323,6 +330,8 @@ export function ChatTimeline({
                 <PlanBlock b={b} chat={chat} />
               ) : b.type === "steps" ? (
                 <ChatSteps tools={b.tools} chat={chat} nested={children} latest={isLast || i >= blocks.length - 2} />
+              ) : b.type === "artifact" ? (
+                <ArtifactCard info={b.info} versions={b.versions} />
               ) : (
                 <ItemView item={b.item} chat={chat} onOpenTerminal={onOpenTerminal} onResume={isLast ? onResume : undefined} />
               )}

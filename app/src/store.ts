@@ -2,7 +2,7 @@
 // everything else here is UI state (tabs, splits, theme, overlays).
 
 import { create } from "zustand";
-import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
+import type { ArtifactInfo, ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { api } from "./lib/backend";
 
@@ -21,7 +21,9 @@ export type Sheet =
   | null
   | { kind: "new"; cwd?: string; provider?: Provider }
   | { kind: "quit"; running: number }
-  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null };
+  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null }
+  /** A Claude Code artifact's page, previewed from its local copy (components/ArtifactCard.tsx). */
+  | { kind: "artifact"; info: ArtifactInfo; versions: number };
 
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
 export type SidebarView = "projects" | "usage" | "needs" | "settings";

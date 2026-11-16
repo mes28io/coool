@@ -3,7 +3,7 @@
 // Mission control can show "Needs you" without the chat view being mounted.
 
 import { create } from "zustand";
-import type { Activity, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
+import type { Activity, ArtifactInfo, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
 import { shortTitle } from "./format";
 import { isStopReason } from "./stopped";
 
@@ -31,6 +31,8 @@ export type ChatItem =
       agent: boolean;
       /** Cut off by Stop / an interrupt (ok is false, but it did not fail): shown neutral, never counted as failed. */
       stopped?: boolean;
+      /** The page an Artifact publish made. */
+      artifact?: ArtifactInfo;
     }
   | {
       kind: "permission";
@@ -322,7 +324,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         break;
       case "tool_end": {
         const i = findLast((x) => x.kind === "tool" && x.id === e.id);
-        if (i >= 0) patch(i, { endTs: e.ts, ok: e.ok, output: e.output, stopped: !e.ok && isStopReason(e.output) });
+        if (i >= 0) patch(i, { endTs: e.ts, ok: e.ok, output: e.output, stopped: !e.ok && isStopReason(e.output), ...(e.artifact ? { artifact: e.artifact } : {}) });
         break;
       }
       case "commands":

@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Activity, Agent, Session } from "../lib/types";
+import type { Activity, Agent, ArtifactInfo, Session } from "../lib/types";
 import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { MOODS, moodOfCurrent, toolMood, type Mood } from "../lib/activityMood";
 import { useFold } from "../lib/cardFold";
@@ -19,25 +19,33 @@ import { ModelTag } from "./Models";
 import { modelLabel } from "../lib/models";
 import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
 import { TimelineSkeleton } from "./Skeletons";
+import { ArtifactCard, artifactVersions } from "./ArtifactCard";
 
 type Block =
   | { type: "prompt" | "text" | "error"; key: string; a: Activity }
-  | { type: "steps"; key: string; items: { key: string; a: Activity }[] };
+  | { type: "steps"; key: string; items: { key: string; a: Activity }[] }
+  /** An artifact's newest publish; earlier publishes of the same page fold into it. */
+  | { type: "artifact"; key: string; a: Activity; info: ArtifactInfo; versions: number };
 
 function buildBlocks(list: Activity[]): Block[] {
   const seen = new Map<string, number>();
   const out: Block[] = [];
-  for (const a of list) {
+  const pages = artifactVersions(list, (a) => a.artifact);
+  list.forEach((a, i) => {
     const base = `${a.ts}|${a.kind}|${a.text.slice(0, 40)}`;
     const n = seen.get(base) ?? 0;
     seen.set(base, n + 1);
     const key = `${base}#${n}`;
-    if (a.kind === "tool" || a.kind === "agent") {
+    if (a.artifact) {
+      const p = pages.get(a.artifact.url)!;
+      // Keyed by the page, so a new version replaces the card instead of adding one.
+      if (p.last === i) out.push({ type: "artifact", key: `artifact:${a.artifact.url}`, a, info: p.info, versions: p.versions });
+    } else if (a.kind === "tool" || a.kind === "agent") {
       const last = out[out.length - 1];
       if (last?.type === "steps") last.items.push({ key, a });
       else out.push({ type: "steps", key, items: [{ key, a }] });
     } else out.push({ type: a.kind, key, a });
-  }
+  });
   return out;
 }
 
@@ -47,7 +55,9 @@ const sameBlock = (a: Block, b: Block) =>
   a.type === b.type &&
   (a.type === "steps"
     ? b.type === "steps" && a.items.length === b.items.length && a.items.every((x, i) => x.key === b.items[i].key && sameEntry(x.a, b.items[i].a))
-    : b.type !== "steps" && sameEntry(a.a, b.a));
+    : a.type === "artifact"
+      ? b.type === "artifact" && a.versions === b.versions && JSON.stringify(a.info) === JSON.stringify(b.info)
+      : b.type !== "steps" && b.type !== "artifact" && sameEntry(a.a, b.a));
 
 /**
  * `buildBlocks`, with every block that is the same as last time kept as the same object, so the memoised block
@@ -279,6 +289,7 @@ const TimelineBlock = memo(function TimelineBlock({
       {b.type === "text" && <ActivityText a={b.a} />}
       {b.type === "error" && <ErrorBlock a={b.a} />}
       {b.type === "steps" && <StepGroup items={b.items} agents={agents} active={active} latest={latest} live={live} />}
+      {b.type === "artifact" && <ArtifactCard info={b.info} versions={b.versions} />}
     </motion.div>
   );
 });
@@ -297,6 +308,7 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
           )}
           {b.type === "error" && <ErrorBlock a={b.a} />}
           {b.type === "steps" && <StepGroup items={b.items} agents={[]} active={false} latest={false} live={STILL} />}
+          {b.type === "artifact" && <ArtifactCard info={b.info} versions={b.versions} />}
         </div>
       ))}
     </div>

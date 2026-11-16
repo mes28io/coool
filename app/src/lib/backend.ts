@@ -83,6 +83,13 @@ export interface Backend {
   /** Device hints for "Reduce motion: Auto" (null when the build can't tell); pushed again when they change. */
   motionHints(): Promise<MotionHints | null>;
   onMotionHints(cb: (h: MotionHints) => void): Unlisten;
+
+  /** Whether each artifact's local page is still on disk (by claude.ai URL). */
+  artifactStatus(urls: string[]): Promise<Record<string, boolean>>;
+  /** Where the preview frame loads an artifact's page from; `src` null when the local copy is gone. */
+  artifactPreview(url: string): Promise<{ src: string | null }>;
+  /** Open a claude.ai artifact link in the default browser. */
+  openArtifact(url: string): Promise<void>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -234,6 +241,13 @@ async function tauriBackend(): Promise<Backend> {
     onConfirmQuit: (cb) => sub<null>("confirm-quit", () => cb()),
     motionHints: () => soft<MotionHints>("motion_hints").catch(() => null),
     onMotionHints: (cb) => sub<MotionHints>("motion-hints", cb),
+    artifactStatus: (urls) => invoke("artifact_status", { urls }),
+    artifactPreview: (url) => invoke("artifact_preview", { url }),
+    openArtifact: async (url) => {
+      if (!url.startsWith("https://claude.ai/")) return;
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(url);
+    },
   };
 }
 

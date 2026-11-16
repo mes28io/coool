@@ -223,6 +223,9 @@ pub enum ChatEventKind {
         id: String,
         ok: bool,
         output: String,
+        /// The page an `Artifact` publish call made (see [`crate::artifact`]).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact: Option<Box<crate::artifact::ArtifactInfo>>,
     },
     PermissionRequest {
         request_id: String,

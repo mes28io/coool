@@ -8,7 +8,7 @@ import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import { SessionsMerge } from "./sessionsMerge";
 import { mockHints } from "./motion";
-import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
+import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
 const enc = new TextEncoder();
@@ -157,6 +157,8 @@ function session(p: Partial<Session> & Pick<Session, "provider" | "id" | "cwd">)
   };
 }
 
+const MOCK_ARTIFACT_URL = "https://claude.ai/artifact/9xQmT4kVdR2wLpE7";
+
 export function mockBackend(): Backend {
   const now = Date.now();
   let showAutomation = (() => {
@@ -221,6 +223,57 @@ export function mockBackend(): Backend {
     }),
     "coool",
   );
+  // Artifacts (Claude Code's Artifact tool): one page published three times, and one whose local copy is gone.
+  {
+    const scratch = `/private/tmp/claude-501/-Users-you-code-coool/3f1c9e/scratchpad/guide`;
+    const guide = (version: number): ArtifactInfo => ({
+      url: "https://claude.ai/artifact/9xQmT4kVdR2wLpE7",
+      version,
+      file_path: `${scratch}/onboarding.html`,
+      files: { "diagram.svg": `${scratch}/diagram.svg` },
+      // Like Claude Code: the icon word comes with the first publish only.
+      ...(version === 1 ? { icon: "wrench" } : {}),
+      title: "Onboarding guide: running agents",
+    });
+    const step = (text: string, t: number, artifact?: ArtifactInfo): Activity => ({ ...act("tool", text, t), ...(artifact ? { artifact } : {}) });
+    const t0 = now - 50 * 60_000;
+    add(
+      session({
+        provider: "claude",
+        id: "art01e",
+        cwd: coool,
+        title: "Write the onboarding guide page",
+        status: "ended",
+        tokens: tok(31_000, 6_400, 52_000),
+        activity: [
+          act("prompt", "Make a one-page onboarding guide for running agents in coool, with a diagram, and publish it", t0),
+          step("Artifact · quickstart", t0 + 9_000),
+          step("Write · scratchpad/guide/onboarding.html", t0 + 40_000),
+          step("Write · scratchpad/guide/diagram.svg", t0 + 52_000),
+          step("Artifact · scratchpad/guide/onboarding.html", t0 + 70_000, guide(1)),
+          act("text", "Published the guide. It has the three steps and the diagram of a session's lifecycle.", t0 + 75_000),
+          act("prompt", "Make the steps numbered and add a dark theme", t0 + 6 * 60_000),
+          step("Edit · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 20_000),
+          step("Artifact · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 30_000, guide(2)),
+          step("Edit · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 50_000),
+          step("Artifact · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 60_000, guide(3)),
+          act("text", "Updated: numbered steps, and the page follows the system theme.", t0 + 6 * 60_000 + 64_000),
+          act("prompt", "Also publish last week's release notes page", t0 + 9 * 60_000),
+          step("Artifact · scratchpad/notes/release.html", t0 + 9 * 60_000 + 20_000, {
+            url: "https://claude.ai/artifact/R7nB2cYw8sKq",
+            version: 1,
+            file_path: "/private/tmp/claude-501/-Users-you-code-coool/0b77aa/scratchpad/notes/release.html",
+            files: {},
+            icon: "doc",
+            title: "Release notes, week 46",
+          }),
+          act("text", "Published the release notes.", t0 + 9 * 60_000 + 24_000),
+        ],
+        updated: t0 + 9 * 60_000 + 24_000,
+      }),
+      "coool",
+    );
+  }
   // Full text for a read-only session: a multi-line prompt, a long Markdown reply with a table, and a cut one.
   const oneLine = (t: string) => t.replace(/\s+/g, " ").trim();
   const fullAct = (kind: ActivityKind, full: string, t: number, shortened?: boolean): Activity => ({ ...act(kind, oneLine(full).slice(0, 400), t), full, ...(shortened ? { shortened: true } : {}) });
@@ -1235,6 +1288,17 @@ export function mockBackend(): Backend {
     },
     onMotionHints() {
       return () => {};
+    },
+    // Artifacts: the guide's local copy is "there" (served from app/public/mock-artifact), the release notes' is gone.
+    async artifactStatus(urls) {
+      return Object.fromEntries(urls.map((u) => [u, u === MOCK_ARTIFACT_URL]));
+    },
+    async artifactPreview(url) {
+      await delay(120);
+      return { src: url === MOCK_ARTIFACT_URL ? "/mock-artifact/onboarding.html" : null };
+    },
+    async openArtifact(url) {
+      window.open(url, "_blank", "noopener");
     },
 
     // ---------- chats ----------

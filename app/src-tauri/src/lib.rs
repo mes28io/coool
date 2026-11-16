@@ -9,6 +9,7 @@
 //! handles cloned out of the Hub, so a slow refresh never delays streamed text.
 //! See docs/APP_SPEC.md ("Backend contract") and docs/CHAT_SPEC.md.
 
+mod artifact;
 mod env;
 mod motion;
 mod selftest;
@@ -72,6 +73,8 @@ struct Core {
     show_automation: AtomicBool,
     /// `COOOL_TRACE_SESSIONS`: latency trace (off unless set).
     trace: Option<trace::Trace>,
+    /// Artifact previews (see [`artifact`]).
+    previews: artifact::Previews,
 }
 
 /// The last payload the UI got, per session, so the next refresh sends only
@@ -344,6 +347,8 @@ impl Core {
         if let Some(t) = &self.selftest {
             sessions.retain(|s| t.owns(&s.cwd));
         }
+        // Artifact previews only serve what a timeline the UI holds published.
+        self.previews.set_timelines(sessions.iter().map(|s| s.activity.clone()).collect());
         let sessions = {
             let mut ins = self.insights.lock().unwrap();
             ins.tick(&sessions);
@@ -984,10 +989,13 @@ pub fn run() {
         selftest,
         show_automation: AtomicBool::new(prefs.show_automation),
         trace: trace::Trace::from_env(),
+        previews: artifact::Previews::default(),
     });
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
         .manage(core.clone())
         .invoke_handler(tauri::generate_handler![
             list_sessions,
@@ -1028,6 +1036,9 @@ pub fn run() {
             selftest::selftest_request_quit,
             trace::trace_sessions,
             motion::motion_hints,
+            artifact::artifact_status,
+            artifact::artifact_preview,
+            artifact::selftest_artifact,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;

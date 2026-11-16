@@ -1,6 +1,7 @@
 //! coool-core: provider adapters, session model and PTY management.
 //! UI-agnostic: the TUI and the desktop app are both thin layers over [`hub::Hub`].
 
+pub mod artifact;
 pub mod cache;
 pub mod chat;
 pub mod claude;

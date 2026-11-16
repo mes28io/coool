@@ -296,6 +296,8 @@ pub(crate) struct Claude {
     tasks: Vec<Task>,
     /// Task tool calls waiting for their result: tool_use id -> (name, input).
     task_calls: HashMap<String, (String, Value)>,
+    /// `Artifact` publish calls waiting for their result, by tool id (their input).
+    artifact_calls: HashMap<String, Value>,
     /// Last error shown this turn, so the turn's `result` doesn't repeat it.
     last_error: Option<String>,
 }
@@ -343,6 +345,7 @@ impl Claude {
             stopping: false,
             tasks: Vec::new(),
             task_calls: HashMap::new(),
+            artifact_calls: HashMap::new(),
             last_error: None,
         }
     }
@@ -614,7 +617,7 @@ impl Claude {
             input: json!({"todos": todos, "_synthetic": true}),
             parent_tool_id: None,
         });
-        o.ev(ChatEventKind::ToolEnd { id, ok: true, output: String::new() });
+        o.ev(ChatEventKind::ToolEnd { id, ok: true, output: String::new(), artifact: None });
     }
 
     /// Notes held while the person was asked go out once nobody is asked.
@@ -755,6 +758,9 @@ impl Claude {
                         self.open_tools.push(tid.clone());
                         if name == "TaskCreate" || name == "TaskUpdate" {
                             self.task_calls.insert(tid.clone(), (name.clone(), input.clone()));
+                        }
+                        if crate::artifact::is_publish(&name, &input) {
+                            self.artifact_calls.insert(tid.clone(), input.clone());
                         }
                     }
                     o.ev(ChatEventKind::ToolStart {
@@ -1053,7 +1059,13 @@ impl Backend for Claude {
                             self.last_tool_end = Some(tid.clone());
                         }
                         let ok = b["is_error"].as_bool() != Some(true);
-                        o.ev(ChatEventKind::ToolEnd { id: tid.clone(), ok, output: clip(&result_text(&b["content"]), MAX_OUTPUT) });
+                        let artifact = self
+                            .artifact_calls
+                            .remove(&tid)
+                            .filter(|_| ok)
+                            .and_then(|input| crate::artifact::from_publish(&input, &result_text(&b["content"]), &v["tool_use_result"]))
+                            .map(Box::new);
+                        o.ev(ChatEventKind::ToolEnd { id: tid.clone(), ok, output: clip(&result_text(&b["content"]), MAX_OUTPUT), artifact });
                         if let Some((name, input)) = self.task_calls.remove(&tid)
                             && ok
                         {
@@ -1331,6 +1343,31 @@ mod tests {
 
     /// Real run: a turn interrupted mid-stream, then set_model and
     /// set_permission_mode, then a turn on the new model.
+    #[test]
+    fn artifact_publish_ends_with_its_artifact() {
+        let mut c = Claude::new(&opts());
+        let use_ = |id: &str, input: &str| format!(r#"{{"type":"assistant","message":{{"id":"m-{id}","model":"claude-x","content":[{{"type":"tool_use","id":"{id}","name":"Artifact","input":{input}}}]}}}}"#);
+        let result = |id: &str, text: &str| format!(r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}","content":{}}}]}}}}"#, serde_json::to_string(text).unwrap());
+        let lines = [
+            use_("q", r#"{"action":"quickstart","intent":"other"}"#),
+            result("q", "Quickstart. …"),
+            use_("p", r#"{"file_path":"/x/rehber/p2s-sensor-rehberi.html","files":{"th-kart.jpg":"/x/rehber/th-kart.jpg"},"icon":"wrench"}"#),
+            result("p", "Published /x/rehber/p2s-sensor-rehberi.html at https://claude.ai/artifact/2z4giSyysLF1DLHG4j2bLD (Version 3, version id 1-a) Icon: \"wrench\".\n\nMore."),
+        ];
+        let mut o = Out::default();
+        for l in &lines {
+            c.on_line(l, &mut o);
+        }
+        let evs = o.events;
+        let ends: Vec<(String, Option<Box<crate::artifact::ArtifactInfo>>)> = evs.iter().filter_map(|e| if let ChatEventKind::ToolEnd { id, artifact, .. } = e { Some((id.clone(), artifact.clone())) } else { None }).collect();
+        assert_eq!(ends.len(), 2);
+        assert!(ends[0].1.is_none(), "quickstart is a plain step");
+        let a = ends[1].1.as_ref().expect("the publish carries its artifact");
+        assert_eq!((a.url.as_str(), a.version, a.icon.as_deref()), ("https://claude.ai/artifact/2z4giSyysLF1DLHG4j2bLD", Some(3), Some("wrench")));
+        assert_eq!(a.files["th-kart.jpg"], "/x/rehber/th-kart.jpg");
+        assert_eq!(a.title, "p2s-sensor-rehberi.html");
+    }
+
     #[test]
     fn fixture_interrupt_and_model_switch() {
         let mut c = Claude::new(&opts());

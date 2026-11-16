@@ -5,13 +5,14 @@
 // (see app/src-tauri/src/selftest.rs for how to run it).
 //
 // Scenarios (COOOL_SELFTEST=all, or a comma list): stream, approval, interrupt,
-// model, slash, question, steer, markdown, resume, codex, insights, quit, and `perf` (CPU phases; not in `all`).
+// model, slash, question, steer, markdown, resume, codex, insights, quit, and `perf` (CPU phases; not in `all`),
+// `artifact` (preview sandbox; no model calls).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { newChat } from "./lib/actions";
 import { api, isTauri } from "./lib/backend";
 import { chatNeeds, useChats, type Chat, type ChatItem } from "./lib/chat";
-import type { ChatEvent } from "./lib/types";
+import type { ArtifactInfo, ChatEvent } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { decideMotion, setMotionPref, type MotionHints, type MotionPref } from "./lib/motion";
 import { useStore } from "./store";
@@ -164,6 +165,41 @@ async function ensureMain(ctx: Ctx): Promise<number> {
 }
 
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  /** Artifact preview: the page loads in its sandboxed frame with its supporting file, and reaches nothing of coool's. */
+  async artifact() {
+    await step("an artifact previews in a sandboxed frame without coool's IPC", async () => {
+      const info = (await invoke("selftest_artifact")) as ArtifactInfo;
+      const probe = new Promise<Record<string, unknown>>((res) => {
+        const on = (e: MessageEvent) => {
+          const r = (e.data as { cooolArtifactProbe?: Record<string, unknown> } | null)?.cooolArtifactProbe;
+          if (!r) return;
+          window.removeEventListener("message", on);
+          res(r);
+        };
+        window.addEventListener("message", on);
+      });
+      useStore.getState().setSheet({ kind: "artifact", info, versions: 1 });
+      const r = await Promise.race([probe, sleep(15_000).then(() => null)]);
+      if (!r) throw new Fail("the frame sent no probe result");
+      const frame = document.querySelector<HTMLIFrameElement>("[data-artifact-frame]");
+      await shot("artifact-preview");
+      useStore.getState().setSheet(null);
+      const bad: string[] = [];
+      if (frame?.getAttribute("sandbox") !== "allow-scripts") bad.push(`sandbox=${frame?.getAttribute("sandbox")}`);
+      if (r.internals !== "undefined") bad.push(`__TAURI_INTERNALS__ ${r.internals}`);
+      if (r.tauri !== "undefined") bad.push(`__TAURI__ ${r.tauri}`);
+      if (r.parent !== "blocked") bad.push(`parent.document ${r.parent}`);
+      // The frame's effective origin is opaque (`self.origin` "null"; WebKit's `location.origin` still names the URL).
+      if (r.origin !== "null") bad.push(`origin ${r.origin}`);
+      if (r.img !== "loaded") bad.push(`supporting image ${r.img}`);
+      if (r.secret === 200) bad.push("served a file outside the artifact's map");
+      if (r.escape === 200) bad.push("served a path outside the folder");
+      // The probe asks the IPC to log this line; it must never arrive.
+      await sleep(500);
+      if (bad.length) throw new Fail(`${bad.join("; ")} (${JSON.stringify(r)})`);
+      return JSON.stringify(r);
+    });
+  },
   async stream(ctx) {
     await step("new session sheet opens a chat, not a terminal", async () => {
       useStore.getState().setSheet({ kind: "new", cwd: ctx.cfg.dir, provider: "claude" });

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onboarding guide: running agents</title>
+<style>
+  :root { --bg: #fbfaf7; --fg: #1d1c1a; --dim: #6b675f; --card: #ffffff; --line: #e6e2d9; --accent: #2f7d5b; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #181816; --fg: #ecebe7; --dim: #9d998f; --card: #22211f; --line: #34322e; --accent: #5cc195; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 40px 24px 56px; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .lede { color: var(--dim); margin: 0 0 28px; }
+  ol { list-style: none; padding: 0; margin: 0 0 28px; counter-reset: s; }
+  li { counter-increment: s; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 14px 52px; margin-bottom: 10px; position: relative; }
+  li::before { content: counter(s); position: absolute; left: 16px; top: 14px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--bg); font-weight: 600; font-size: 13px; display: grid; place-items: center; }
+  li b { display: block; }
+  li span { color: var(--dim); }
+  figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  figure img { width: 100%; height: auto; display: block; }
+  figcaption { color: var(--dim); font-size: 13px; margin-top: 8px; }
+  #js { color: var(--dim); font-size: 13px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Running agents in coool</h1>
+  <p class="lede">Three steps from a new session to a finished change.</p>
+  <ol>
+    <li><b>Start a session</b><span>Press ⌘T, pick the project folder and Claude Code or Codex.</span></li>
+    <li><b>Say what you want</b><span>One clear goal per session. Steps, jobs and subagents show as they run.</span></li>
+    <li><b>Answer when asked</b><span>A blue dot means it needs you: approve a step or answer a question.</span></li>
+  </ol>
+  <figure>
+    <img src="diagram.svg" alt="A session's lifecycle: working, waiting, needs you, done">
+    <figcaption>A session's lifecycle (the image is a supporting file of this page).</figcaption>
+  </figure>
+  <p id="js">Scripts are off.</p>
+</main>
+<script>document.getElementById("js").textContent = "Scripts run in the sandboxed frame.";</script>
+</body>
+</html>

@@ -32,6 +32,9 @@ struct ParseState {
     /// Recent Bash tool calls, for matching background shells (see [`crate::shells`]).
     #[serde(default)]
     bash: Vec<crate::shells::BashCall>,
+    /// `Artifact` publish calls waiting for their result: (tool_use_id, step summary, input).
+    #[serde(default)]
+    artifacts: Vec<(String, String, Value)>,
 }
 
 /// Everything parsed from one transcript (main session or subagent).
@@ -510,6 +513,9 @@ fn parse_line(
                             if let Some(id) = item["tool_use_id"].as_str() {
                                 st.open_tools.retain(|(t, _)| t != id);
                                 bash_result(st, id, &item["content"]);
+                                if item["is_error"].as_bool() != Some(true) {
+                                    artifact_result(st, id, &item["content"], &v["toolUseResult"], activity);
+                                }
                             }
                             if item["is_error"].as_bool() == Some(true) {
                                 let txt = result_text(&item["content"]).unwrap_or_else(|| "tool error".into());
@@ -593,6 +599,16 @@ fn parse_line(
                                 st.bash.retain(|c| c.id != id);
                                 crate::shells::push_call(&mut st.bash, call);
                             }
+                            if crate::artifact::is_publish(name, &item["input"])
+                                && let Some(id) = item["id"].as_str()
+                            {
+                                st.artifacts.retain(|(t, _, _)| t != id);
+                                st.artifacts.push((id.to_string(), sum.clone(), item["input"].clone()));
+                                // Bounded: calls whose result never came.
+                                if st.artifacts.len() > 16 {
+                                    st.artifacts.remove(0);
+                                }
+                            }
                             let kind = if name == "Agent" || name == "Task" { ActivityKind::Agent } else { ActivityKind::Tool };
                             push_activity(activity, Activity::line(ts.clone(), kind, sum.clone()));
                             *current = Some(sum);
@@ -613,6 +629,15 @@ fn parse_line(
         }
         _ => {}
     }
+}
+
+/// One transcript file's timeline, parsed the way a session's is (for tools; the app goes through [`ClaudeSource`]).
+pub fn timeline(path: &Path) -> std::io::Result<Vec<Activity>> {
+    let mut p = Parsed::default();
+    for l in fs::read_to_string(path)?.lines() {
+        p.line(l);
+    }
+    Ok(p.activity)
 }
 
 /// A session's own model rows plus its subagents' rows (flagged `via_agent`), most used first.
@@ -639,6 +664,16 @@ fn bash_result(st: &mut ParseState, id: &str, content: &Value) {
         }
         None if !c.background => c.done = true,
         None => {}
+    }
+}
+
+/// An `Artifact` publish call's result: the step that made the call carries what it published.
+fn artifact_result(st: &mut ParseState, id: &str, content: &Value, structured: &Value, activity: &mut [Activity]) {
+    let Some(i) = st.artifacts.iter().position(|(t, _, _)| t == id) else { return };
+    let (_, sum, input) = st.artifacts.remove(i);
+    let Some(info) = crate::artifact::from_publish(&input, &result_text(content).unwrap_or_default(), structured) else { return };
+    if let Some(step) = activity.iter_mut().rev().find(|a| a.kind == ActivityKind::Tool && a.artifact.is_none() && a.text == sum) {
+        step.artifact = Some(Box::new(info));
     }
 }
 
@@ -699,6 +734,38 @@ mod tests {
 
     /// Prompts, replies and errors keep their whole text (line breaks
     /// included) beside the one-line form; tool steps stay one line.
+    #[test]
+    fn artifact_publishes_are_parsed_and_other_actions_stay_steps() {
+        let mut o = Out::default();
+        for l in include_str!("artifact_fixtures/printer.jsonl").lines() {
+            feed(&mut o, l);
+        }
+        let steps: Vec<&Activity> = o.activity.iter().filter(|a| a.kind == ActivityKind::Tool).collect();
+        assert_eq!(steps.len(), 4, "quickstart + three publishes");
+        assert!(steps[0].artifact.is_none(), "quickstart is not a page");
+        let dir = "/private/tmp/claude-501/-Users-mdapro--claude-spares-spare-7JKFOZ/3ab36589-be76-44e1-8fb0-015ae4826f14/scratchpad/rehber/";
+        for (i, s) in steps[1..].iter().enumerate() {
+            let a = s.artifact.as_ref().expect("a publish carries its artifact");
+            assert_eq!(a.url, "https://claude.ai/artifact/2z4giSyysLF1DLHG4j2bLD");
+            assert_eq!(a.version, Some(i as u32 + 1));
+            assert_eq!(a.file_path, format!("{dir}p2s-sensor-rehberi.html"));
+            assert_eq!(a.files.get("th-kart.jpg").map(String::as_str), Some(format!("{dir}th-kart.jpg").as_str()));
+            assert_eq!(a.title, "P2S Sensör Onarım Rehberi");
+            assert_eq!(a.icon.as_deref(), if i == 0 { Some("wrench") } else { None });
+        }
+        // Survives the parse cache's round trip.
+        let back: Vec<Activity> = serde_json::from_str(&serde_json::to_string(&o.activity).unwrap()).unwrap();
+        assert_eq!(back, o.activity);
+    }
+
+    #[test]
+    fn failed_artifact_publish_is_a_plain_step() {
+        let mut o = Out::default();
+        feed(&mut o, &format!(r#"{{"type":"assistant",{TS},"message":{{"id":"m1","model":"claude-x","content":[{{"type":"tool_use","id":"a1","name":"Artifact","input":{{"file_path":"/x/a.html"}}}}]}}}}"#));
+        feed(&mut o, &format!(r#"{{"type":"user",{TS},"message":{{"content":[{{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":"Published nothing"}}]}}}}"#));
+        assert!(o.activity.iter().all(|a| a.artifact.is_none()));
+    }
+
     #[test]
     fn messages_keep_their_full_text() {
         let mut o = Out::default();

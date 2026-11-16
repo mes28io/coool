@@ -529,7 +529,7 @@ impl Codex {
                 }
                 if !started {
                     let (ok, output) = tool_result(item);
-                    o.ev(ChatEventKind::ToolEnd { id, ok, output: clip(&output, MAX_OUTPUT) });
+                    o.ev(ChatEventKind::ToolEnd { id, ok, output: clip(&output, MAX_OUTPUT), artifact: None });
                 }
             }
         }
@@ -552,7 +552,7 @@ impl Codex {
                 let input = plan_input(p);
                 let n = input["plan"].as_array().map_or(0, Vec::len);
                 o.ev(ChatEventKind::ToolStart { id: id.clone(), name: "update_plan".into(), summary: format!("update_plan · {n} steps"), input, parent_tool_id: None });
-                o.ev(ChatEventKind::ToolEnd { id, ok: true, output: String::new() });
+                o.ev(ChatEventKind::ToolEnd { id, ok: true, output: String::new(), artifact: None });
             }
             "turn/completed" if self.is_main(&p["threadId"]) => {
                 let t = &p["turn"];

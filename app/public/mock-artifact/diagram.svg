@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 120" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="14">
+  <g fill="none" stroke="#8a8578" stroke-width="1.5"><path d="M138 60h40M298 60h40M458 60h40"/><path d="M172 55l6 5-6 5M332 55l6 5-6 5M492 55l6 5-6 5"/></g>
+  <g stroke-width="1.5">
+    <rect x="18" y="36" width="120" height="48" rx="10" fill="#e3f3ea" stroke="#2f7d5b"/>
+    <rect x="178" y="36" width="120" height="48" rx="10" fill="#fbf1d9" stroke="#b7862a"/>
+    <rect x="338" y="36" width="120" height="48" rx="10" fill="#e1ecfb" stroke="#2f6bc1"/>
+    <rect x="498" y="36" width="120" height="48" rx="10" fill="#efede8" stroke="#8a8578"/>
+  </g>
+  <g fill="#1d1c1a" text-anchor="middle"><text x="78" y="65">Working</text><text x="238" y="65">Waiting</text><text x="398" y="65">Needs you</text><text x="558" y="65">Done</text></g>
+</svg>

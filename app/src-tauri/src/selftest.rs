@@ -63,6 +63,11 @@ impl SelfTest {
         Some(Self { scenario: scenario.trim().to_string(), dir, canonical, shots, log })
     }
 
+    /// The throwaway folder.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// True for a session whose folder is inside the self-test folder.
     pub fn owns(&self, cwd: &str) -> bool {
         let p = Path::new(cwd);
