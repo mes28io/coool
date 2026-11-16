@@ -8,6 +8,13 @@ import.meta.glob("./assets/fonts/pally/pally.css", { eager: true });
 import App from "./App";
 import { demoPage, GlyphsDemo, LedgerDemo, PlanDemo } from "./components/Demos";
 import { initBackend } from "./lib/backend";
+import { setMotionHints } from "./lib/motion";
+
+// "Reduce motion: Auto" follows the device (Low Power Mode, heat, battery) as well as the system setting.
+void initBackend().then((b) => {
+  b.onMotionHints(setMotionHints);
+  void b.motionHints().then(setMotionHints);
+});
 
 // Wait for the bundled fonts so xterm measures Geist Mono, not a fallback.
 Promise.all([

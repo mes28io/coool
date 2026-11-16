@@ -1,18 +1,25 @@
 /* MoodGlyph motion (see MoodGlyph.tsx). Every element's resting style is the glyph's first frame:
-   `data-live="false"` and reduced motion simply drop the animation. Units inside the SVG are grid
-   units (CSS px in the 16-unit viewBox). Loops are 1.2-2.4 s, eased, transform/opacity/dash only. */
+   `data-live="false"`, a static scope and reduced motion simply drop the animation. Units inside the SVG are grid
+   units (CSS px in the 16-unit viewBox). Loops are 1.2-2.4 s, stepped, transform/opacity/dash only. */
 
 .mg * {
   transform-box: view-box;
 }
-/* After the shorthands below (higher specificity): every loop repeats, eased in and out. */
+/* After the shorthands below (higher specificity): every loop repeats, stepped. The timing function applies per
+   keyframe interval, so 5 steps per interval comes to ~8-12 updates a second for these 1.2-2.4 s loops: they read as
+   motion, while the SVG (never composited in WebKit) repaints a few times a second instead of every frame. */
 .mg [class] {
   animation-iteration-count: infinite;
   animation-fill-mode: both;
-  animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  animation-timing-function: steps(5);
 }
+/* One interval for the whole loop: as many steps as ~12/s. */
 .mg .mg-other {
-  animation-timing-function: linear;
+  animation-timing-function: steps(28);
+}
+.mg .mg-search,
+.mg .mg-read-page {
+  animation-timing-function: steps(9);
 }
 .mg .mg-dim {
   opacity: 0.4;
@@ -192,13 +199,10 @@
 }
 
 .mg[data-live="false"] *,
-.mg[data-live="false"] {
+.mg[data-live="false"],
+[data-anim-static] .mg *,
+.reduce-motion .mg * {
   animation: none !important;
-}
-@media (prefers-reduced-motion: reduce) {
-  .mg * {
-    animation: none !important;
-  }
 }
 
 /* A new mood's glyph fades in (the old one is gone at once: glyph and word never disagree). */
@@ -210,8 +214,6 @@
     opacity: 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .mg.mg-in {
-    animation: none;
-  }
+.reduce-motion .mg.mg-in {
+  animation: none;
 }

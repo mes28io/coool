@@ -18,9 +18,11 @@
 //!   (at most [`TAIL_BYTES`]), only for the sessions the UI says are on
 //!   screen ([`Shells::set_focus`]), and only for a path a transcript named as
 //!   Bash background output ([`output_path_ok`]). Nothing else is read.
-//! - **Cost.** One pass over the session processes' children per
-//!   [`SCAN_EVERY`] (a handful of `proc_pidinfo` calls on macOS, `/proc` reads
-//!   on Linux; no external commands). Between passes the last answer is reused.
+//! - **Cost.** A pass over a session process's children (a handful of
+//!   `proc_pidinfo` calls on macOS, `/proc` reads on Linux; no external
+//!   commands) every [`SCAN_EVERY`] while the session is "hot" (on screen,
+//!   background tasks per its CLI, or shells found at its last pass), else
+//!   every [`COLD_EVERY`] ([`walk_due`]). Between passes the last answer is reused.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -28,8 +30,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// A foreground command shows once it has run this long.
 pub const MIN_AGE: Duration = Duration::from_secs(3);
-/// The process tree is walked at most this often.
+/// A hot session's process tree is walked at most this often (see [`walk_due`]).
 pub const SCAN_EVERY: Duration = Duration::from_secs(1);
+/// Any other live session's tree is walked this often: a new shell there shows
+/// within this (a foreground one needs [`MIN_AGE`] anyway).
+pub const COLD_EVERY: Duration = Duration::from_secs(10);
 /// Bytes read from the end of an output file.
 pub const TAIL_BYTES: u64 = 4096;
 /// Output lines kept per shell.
@@ -607,12 +612,25 @@ pub struct Target<'a> {
     pub id: &'a str,
     pub pid: u32,
     pub cwd: &'a str,
-    pub calls: Vec<BashCall>,
+    /// The CLI says background tasks of this session still run (keeps it hot).
+    pub background: bool,
+    /// Its recent Bash calls. None: not gathered (the session isn't
+    /// [`Shells::wants`]ed now), so it isn't walked this pass unless forced.
+    pub calls: Option<Vec<BashCall>>,
+}
+
+/// Whether a session's process tree is due for a walk at `now`, given when it
+/// was last walked: every [`SCAN_EVERY`] while `hot`, else every [`COLD_EVERY`].
+pub fn walk_due(hot: bool, last: Option<Instant>, now: Instant) -> bool {
+    let every = if hot { SCAN_EVERY } else { COLD_EVERY };
+    last.is_none_or(|t| now.saturating_duration_since(t) >= every)
 }
 
 #[derive(Default)]
 pub struct Shells {
     last: Option<Instant>,
+    /// Session id -> when its tree was last walked.
+    walked: HashMap<String, Instant>,
     /// (pid, start ms) -> state.
     seen: HashMap<(u32, u64), Seen>,
     /// Session ids whose shells get output tails.
@@ -622,26 +640,48 @@ pub struct Shells {
 }
 
 impl Shells {
-    /// Sessions on screen: only their shells get output tails.
+    /// Sessions on screen: only their shells get output tails, and they are
+    /// walked every [`SCAN_EVERY`]. A session that just came on screen is walked at once.
     pub fn set_focus(&mut self, ids: impl IntoIterator<Item = String>) {
         let next: HashSet<String> = ids.into_iter().collect();
         if next != self.focus {
+            for id in next.difference(&self.focus) {
+                self.walked.remove(id);
+            }
             self.focus = next;
             self.last = None;
         }
     }
 
-    /// Whether the next [`Shells::scan`] walks the process tree (else `targets` is unused).
+    /// Whether the next [`Shells::scan`] may walk anything (else `targets` is unused).
     pub fn due(&self) -> bool {
         self.last.is_none_or(|t| t.elapsed() >= SCAN_EVERY)
     }
 
-    /// Shells per session pid. Walks the process tree when the last walk is
-    /// older than [`SCAN_EVERY`] (or `force`), else returns the last answer.
+    /// Hot: on screen, background tasks per the CLI, or shells at the last walk
+    /// (so a running shell's CPU and output stay fresh, and one that ends goes
+    /// away within a second).
+    fn hot(&self, id: &str, pid: u32, background: bool) -> bool {
+        background || self.focus.contains(id) || self.seen.values().any(|s| s.session_pid == pid)
+    }
+
+    /// Whether the session's tree is due for a walk now (see [`walk_due`]):
+    /// only then do its Bash calls need gathering for [`Target::calls`].
+    pub fn wants(&self, id: &str, pid: u32, background: bool) -> bool {
+        walk_due(self.hot(id, pid, background), self.walked.get(id).copied(), Instant::now())
+    }
+
+    /// Shells per session pid. At most every [`SCAN_EVERY`] (or when `force`d),
+    /// walks the process trees of the targets that are due ([`walk_due`]; all
+    /// of them when forced); every other session keeps its last answer.
     pub fn scan(&mut self, targets: &[Target], force: bool) -> HashMap<u32, Vec<Shell>> {
         let now = Instant::now();
         if force || self.last.is_none_or(|t| now.duration_since(t) >= SCAN_EVERY) {
-            self.walk(targets, now);
+            let due: Vec<bool> = targets
+                .iter()
+                .map(|t| force || (t.calls.is_some() && walk_due(self.hot(t.id, t.pid, t.background), self.walked.get(t.id).copied(), now)))
+                .collect();
+            self.walk(targets, &due, now);
             self.last = Some(now);
         }
         let mut out: HashMap<u32, Vec<Shell>> = HashMap::new();
@@ -654,13 +694,17 @@ impl Shells {
         out
     }
 
-    fn walk(&mut self, targets: &[Target], now: Instant) {
-        let wall_ms = |t: Instant| t.duration_since(self.last.unwrap_or(t)).as_millis() as u64;
-        let dt_ms = wall_ms(now);
+    fn walk(&mut self, targets: &[Target], due: &[bool], now: Instant) {
         let epoch_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
         let session_pids: HashSet<u32> = targets.iter().map(|t| t.pid).collect();
         let mut alive: HashSet<(u32, u64)> = HashSet::new();
-        for t in targets {
+        let mut walked_pids: HashSet<u32> = HashSet::new();
+        for (t, _) in targets.iter().zip(due).filter(|(_, d)| **d) {
+            // CPU is measured over the time since this session's last walk.
+            let dt_ms = self.walked.insert(t.id.to_string(), now).map_or(0, |last| now.duration_since(last).as_millis() as u64);
+            walked_pids.insert(t.pid);
+            let no_calls = Vec::new();
+            let calls = t.calls.as_ref().unwrap_or(&no_calls);
             let helpers = match self.mcp.get(t.cwd) {
                 Some((at, h)) if now.duration_since(*at) < Duration::from_secs(60) => h.clone(),
                 _ => {
@@ -672,9 +716,9 @@ impl Shells {
             let session_pgid = sys::info(t.pid).map(|p| p.pgid).unwrap_or(0);
             let procs = shells_under(t.pid, &session_pids, &helpers);
             let found: Vec<Found> = procs.iter().map(|(p, cmd)| Found { pid: p.pid, command: cmd.clone(), started: p.start_ms }).collect();
-            let matched = match_calls(&found, &t.calls);
+            let matched = match_calls(&found, calls);
             for ((p, cmd), m) in procs.into_iter().zip(matched) {
-                let call = m.map(|j| &t.calls[j]);
+                let call = m.map(|j| &calls[j]);
                 let background = call.is_some_and(|c| c.background);
                 let age = epoch_now.saturating_sub(p.start_ms);
                 if !background && age < MIN_AGE.as_millis() as u64 {
@@ -752,7 +796,9 @@ impl Shells {
                 }
             }
         }
-        self.seen.retain(|k, _| alive.contains(k));
+        // Walked sessions: what was found. The others keep what they had while they are still live.
+        self.seen.retain(|k, s| if walked_pids.contains(&s.session_pid) { alive.contains(k) } else { session_pids.contains(&s.session_pid) });
+        self.walked.retain(|id, _| targets.iter().any(|t| t.id == id));
         self.mcp.retain(|cwd, _| targets.iter().any(|t| t.cwd == cwd));
     }
 
@@ -950,6 +996,39 @@ mod tests {
         assert_eq!(sys::parse_procargs(&[0, 0]), None);
     }
 
+    #[test]
+    fn hot_sessions_are_walked_every_second_others_every_ten() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_millis(s);
+        assert!(walk_due(false, None, t0) && walk_due(true, None, t0), "never walked: now");
+        assert!(walk_due(true, Some(t0), at(1_000)));
+        assert!(!walk_due(true, Some(t0), at(999)));
+        assert!(!walk_due(false, Some(t0), at(9_999)));
+        assert!(walk_due(false, Some(t0), at(10_000)));
+        assert!(!walk_due(false, Some(at(5)), t0), "a clock read just before the walk is not due");
+
+        // What makes a session hot: on screen, background tasks, or shells last time.
+        let mut s = Shells::default();
+        s.walked.insert("a".into(), Instant::now());
+        s.walked.insert("b".into(), Instant::now());
+        assert!(!s.hot("a", 10, false));
+        assert!(s.hot("a", 10, true), "the CLI says background tasks run");
+        s.set_focus(["a".to_string()]);
+        assert!(s.hot("a", 10, false) && !s.hot("b", 11, false));
+        assert!(s.wants("a", 10, false), "coming on screen: walked at once");
+        assert!(!s.wants("b", 11, false), "cold and walked just now");
+        let shell = Shell { pid: 99, command: "sleep 9".into(), description: None, started: 1, cpu: 0, output: None, tail: Vec::new(), idle_loop: false, background: true };
+        s.seen.insert((99, 1), Seen { shell, session_pid: 11, session_pgid: 0, pgid: 99, cpu: HashMap::new(), low_since: None, tail_key: None });
+        assert!(s.hot("b", 11, false), "had a shell at the last walk");
+        // A pass that walks nothing keeps the other sessions' shells.
+        let targets = [Target { id: "b", pid: 11, cwd: "/nonexistent", background: false, calls: None }];
+        let got = s.scan(&targets, false);
+        assert_eq!(got.get(&11).map(Vec::len), Some(1), "not walked (no calls gathered), last answer kept");
+        // Once the session is gone, so are its shells.
+        s.last = None;
+        assert!(s.scan(&[], false).is_empty());
+    }
+
     /// A real `zsh -c '<snapshot wrapper>'` child of this test process is found
     /// with its command; a child with no wrapper (a helper look-alike) is not.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -970,7 +1049,7 @@ mod tests {
         // The scanner lists it as background (matched call) right away, and Stop verifies it.
         let mut s = Shells::default();
         let calls = vec![BashCall { id: "t".into(), command: "sleep 30".into(), background: true, description: Some("wait".into()), at: 1, ..Default::default() }];
-        let targets = [Target { id: "sess", pid: me, cwd: "/nonexistent", calls }];
+        let targets = [Target { id: "sess", pid: me, cwd: "/nonexistent", background: false, calls: Some(calls) }];
         let got = s.scan(&targets, true);
         let sh = got.get(&me).and_then(|v| v.iter().find(|x| x.pid == child.id())).cloned().expect("listed");
         assert_eq!((sh.command.as_str(), sh.description.as_deref(), sh.background), ("sleep 30", Some("wait"), true));

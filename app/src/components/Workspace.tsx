@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { chatTitle, needsAnswer, useChats } from "../lib/chat";
 import { displayTitle, folderName, projectOf } from "../lib/format";
 import { useAttention } from "../lib/live";
+import { reducedMotion } from "../lib/motion";
 import type { Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { leaves, resolveTarget, useStore, type Leaf, type Node, type Tab } from "../store";
@@ -49,7 +50,7 @@ export function TabBar() {
   // Keep the active tab in view when there are more tabs than room.
   useEffect(() => {
     const el = strip.current?.querySelector<HTMLElement>("[data-tab-active]");
-    el?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
   }, [activeTab, tabs.length]);
 
   return (

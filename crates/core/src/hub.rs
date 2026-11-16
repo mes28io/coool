@@ -52,8 +52,8 @@ pub struct Hub {
     ancestors: crate::lineage::AncestorCache,
     /// Background shells under live sessions (see [`crate::shells`]).
     shells: crate::shells::Shells,
-    /// Live sessions as of the last refresh (id, pid, cwd, provider), for [`Hub::stop_shell`].
-    shell_targets: Vec<(String, u32, String, Provider)>,
+    /// Live sessions as of the last refresh (id, pid, cwd, provider, background tasks), for [`Hub::stop_shell`].
+    shell_targets: Vec<(String, u32, String, Provider, bool)>,
 }
 
 impl Hub {
@@ -292,10 +292,12 @@ impl Hub {
         self.shell_targets = all
             .iter()
             .filter(|s| s.status != Status::Ended)
-            .filter_map(|s| Some((s.id.clone(), s.pid?, s.cwd.clone(), s.provider)))
+            .filter_map(|s| Some((s.id.clone(), s.pid?, s.cwd.clone(), s.provider, s.background_tasks)))
             .collect();
         let found = if self.shells.due() {
-            let targets = shell_scan_targets(&self.shell_targets, &self.claude);
+            // Bash calls only for the sessions walked this time.
+            let shells = &self.shells;
+            let targets = shell_scan_targets(&self.shell_targets, &self.claude, |id, pid, bg| shells.wants(id, pid, bg));
             self.shells.scan(&targets, false)
         } else {
             self.shells.scan(&[], false)
@@ -317,7 +319,7 @@ impl Hub {
     /// a shell of a live session. SIGTERM to its process group (when it leads
     /// its own) or to the pid, SIGKILL after 3 s if it is still there.
     pub fn stop_shell(&mut self, pid: u32) -> Result<()> {
-        let targets = shell_scan_targets(&self.shell_targets, &self.claude);
+        let targets = shell_scan_targets(&self.shell_targets, &self.claude, |_, _, _| true);
         let t = self.shells.verify(&targets, pid).context("that process is not a background shell of a live session")?;
         crate::shells::stop(t, Duration::from_secs(3)).context("couldn't signal the shell")?;
         Ok(())
@@ -476,9 +478,13 @@ impl Hub {
 }
 
 /// What the shell scan needs per live session; Claude sessions bring their recent Bash calls.
-fn shell_scan_targets<'a>(live: &'a [(String, u32, String, Provider)], claude: &ClaudeSource) -> Vec<crate::shells::Target<'a>> {
+/// `gather(id, pid, background)`: whether to collect that session's calls (else it isn't walked this time).
+fn shell_scan_targets<'a>(live: &'a [(String, u32, String, Provider, bool)], claude: &ClaudeSource, gather: impl Fn(&str, u32, bool) -> bool) -> Vec<crate::shells::Target<'a>> {
     live.iter()
-        .map(|(id, pid, cwd, p)| crate::shells::Target { id, pid: *pid, cwd, calls: if *p == Provider::Claude { claude.bash_calls(id) } else { Vec::new() } })
+        .map(|(id, pid, cwd, p, bg)| {
+            let calls = gather(id, *pid, *bg).then(|| if *p == Provider::Claude { claude.bash_calls(id) } else { Vec::new() });
+            crate::shells::Target { id, pid: *pid, cwd, background: *bg, calls }
+        })
         .collect()
 }
 

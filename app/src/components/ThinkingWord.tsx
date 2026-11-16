@@ -10,7 +10,8 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { THINKING_WORD_MS, thinkingWordAt } from "../lib/format";
 import { cx } from "./primitives";
-import { reducedMotion, Reveal } from "./StepRail";
+import { useLive } from "../lib/motion";
+import { Reveal } from "./StepRail";
 
 export function ThinkingWord({
   seed,
@@ -30,8 +31,9 @@ export function ThinkingWord({
   tone?: { base?: string; hi?: string };
 }) {
   const step = THINKING_WORD_MS;
-  // Reduced motion: one word per stretch, no cycling.
-  const cycling = cycle && !reducedMotion();
+  // Static scope (Home, sidebar) or reduced motion: one word per stretch, no cycling, no shimmer.
+  const live = useLive();
+  const cycling = cycle && live;
   const latched = useRef<{ seed: typeof seed; at: number }>({ seed, at: origin ?? Date.now() });
   if (latched.current.seed !== seed) latched.current = { seed, at: origin ?? Date.now() };
   const base = latched.current.at;
@@ -55,15 +57,17 @@ export function ThinkingWord({
     <span className={cx("inline-block whitespace-nowrap", className)}>
       {/* A new word replaces the old one outright (never both on screen), then sweeps in. No opacity animation on a wrapper here:
           the shimmer paints the text through background-clip, and a composited child layer would hide it. */}
-      <Reveal key={word} text={word} fresh={word !== first.current} inner={{ className: "shimmer", style: shimmerStyle }} />
+      <Reveal key={word} text={word} fresh={word !== first.current} inner={live ? { className: "shimmer", style: shimmerStyle } : undefined} />
     </span>
   );
 }
 
-/** The trailing "…": three dots lighting up in turn. Static under reduced motion. Fixed width, so nothing after it moves. */
+/** The trailing "…": three dots lighting up in turn. Static in a static AnimateScope and under reduced motion. Fixed width, so nothing after it moves. */
 export function ThinkingDots({ className, color }: { className?: string; color?: string }) {
+  // Without `think-dots` the three dots just stand there (static scope, reduced motion).
+  const live = useLive();
   return (
-    <span className={cx("think-dots inline-flex shrink-0", !color && "text-dim", className)} style={color ? { color } : undefined}>
+    <span className={cx(live && "think-dots", "inline-flex shrink-0", !color && "text-dim", className)} style={color ? { color } : undefined}>
       <span className="sr-only">…</span>
       <span aria-hidden>.</span>
       <span aria-hidden>.</span>

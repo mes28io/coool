@@ -45,7 +45,7 @@ type Block =
 
 const enter = { opacity: 0, y: 10 };
 const shown = { opacity: 1, y: 0 };
-const reduced = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+const reduced = reducedMotion;
 
 function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string, ChatItem[]> } {
   const children = new Map<string, ChatItem[]>();

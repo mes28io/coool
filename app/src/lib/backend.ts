@@ -3,6 +3,7 @@
 
 import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
 import type { ChatEvent, ChatOptions, Environment, InsightsStatus, Provider, Snapshot } from "./types";
+import type { MotionHints } from "./motion";
 
 export interface PtyChunk {
   id: number;
@@ -78,6 +79,10 @@ export interface Backend {
 
   /** Settings: "Show runs started by other tools" (persisted; echoed in `Snapshot.show_automation`). */
   setShowAutomation(enabled: boolean): Promise<void>;
+
+  /** Device hints for "Reduce motion: Auto" (null when the build can't tell); pushed again when they change. */
+  motionHints(): Promise<MotionHints | null>;
+  onMotionHints(cb: (h: MotionHints) => void): Unlisten;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -227,6 +232,8 @@ async function tauriBackend(): Promise<Backend> {
       ),
     onPtyExit: (cb) => sub<{ id: number }>("pty-exit", (p) => cb(p.id)),
     onConfirmQuit: (cb) => sub<null>("confirm-quit", () => cb()),
+    motionHints: () => soft<MotionHints>("motion_hints").catch(() => null),
+    onMotionHints: (cb) => sub<MotionHints>("motion-hints", cb),
   };
 }
 

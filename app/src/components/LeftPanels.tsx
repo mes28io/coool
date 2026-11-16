@@ -9,6 +9,7 @@ import { pendingPermission, pendingQuestion, useChats } from "../lib/chat";
 import { useNow } from "../lib/clock";
 import { ago, displayTitle } from "../lib/format";
 import { attention } from "../lib/live";
+import { setMotionPref, useMotion, type MotionPref } from "../lib/motion";
 import { sessionKey } from "../lib/types";
 import type { InsightsStatus } from "../lib/types";
 import { useStore, type ThemePref } from "../store";
@@ -240,6 +241,29 @@ function Row({ label, desc, control, stack, children, attr }: { label: string; d
 const inputCls =
   "h-[32px] w-full min-w-0 rounded-[8px] border border-line bg-bg px-2.5 font-mono text-mono-small outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
 
+/** Reduce motion: Auto / On / Off (lib/motion.ts), with what it amounts to right now. */
+function ReduceMotionRow() {
+  const m = useMotion();
+  const now =
+    m.pref === "on" ? "Reduced: activity shows still" : m.pref === "off" ? "Full motion, always" : m.reduce ? `Auto · reduced now (${m.reason ?? "device"})` : "Auto · full motion";
+  return (
+    <Row
+      attr="reduce-motion"
+      label="Reduce motion"
+      desc="Auto follows macOS Reduce motion, Low Power Mode, heat and a low battery."
+      stack
+      control={
+        <div className="flex flex-col gap-1.5">
+          <Segmented<MotionPref> size="sm" value={m.pref} onChange={setMotionPref} options={[{ value: "auto", label: "Auto" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} />
+          <div className="text-small text-dim" data-motion-state={m.reduce ? "reduced" : "full"}>
+            {now}
+          </div>
+        </div>
+      }
+    />
+  );
+}
+
 export function SettingsView() {
   const themePref = useStore((s) => s.themePref);
   const setThemePref = useStore((s) => s.setThemePref);
@@ -287,6 +311,7 @@ export function SettingsView() {
       <div className="scroll min-h-0 flex-1 px-3 pb-4">
         <Section label="Appearance">
           <Row label="Theme" stack control={<Segmented<ThemePref> size="sm" value={themePref} onChange={setThemePref} options={[{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />} />
+          <ReduceMotionRow />
         </Section>
 
         <Section label="Sessions">
