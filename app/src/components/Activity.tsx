@@ -320,7 +320,7 @@ export function ThinkingRow({
     );
   if (large)
     return (
-      <div className="flex items-center gap-3 pb-1 pt-2.5 text-prose" data-live-row data-mood={mood}>
+      <div className="flex items-center gap-2.5 pb-1 pt-2.5 text-base" data-live-row data-mood={mood}>
         <span className="flex size-[20px] shrink-0 items-center justify-center">
           <MoodGlyph mood={mood} size={16} live={live} className="text-dim" />
         </span>
