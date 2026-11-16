@@ -5,7 +5,7 @@
 // (see app/src-tauri/src/selftest.rs for how to run it).
 //
 // Scenarios (COOOL_SELFTEST=all, or a comma list): stream, approval, interrupt,
-// model, slash, question, steer, markdown, resume, codex, insights, quit.
+// model, slash, question, steer, markdown, resume, codex, insights, quit, and `perf` (CPU phases; not in `all`).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { newChat } from "./lib/actions";
@@ -13,6 +13,7 @@ import { api, isTauri } from "./lib/backend";
 import { chatNeeds, useChats, type Chat, type ChatItem } from "./lib/chat";
 import type { ChatEvent } from "./lib/types";
 import { sessionKey } from "./lib/types";
+import { decideMotion, setMotionPref, type MotionHints, type MotionPref } from "./lib/motion";
 import { useStore } from "./store";
 
 interface Config {
@@ -23,6 +24,8 @@ interface Config {
 
 const PROMPT_BLUE = "Write three short sentences about the colour blue. Plain text, no lists, and keep every sentence under twelve words so the whole reply stays brief.";
 const ALL = ["stream", "approval", "interrupt", "model", "slash", "question", "steer", "markdown", "resume", "codex", "origins", "pty", "usage", "insights", "quit"];
+// `perf` is not in ALL: it takes ~4 minutes. Run it alone: COOOL_SELFTEST=perf,quit
+const PERF_MODEL = "claude-haiku-5-5";
 const CLAUDE_MODEL = "haiku";
 const CODEX_MODEL = "gpt-5.6-luna";
 
@@ -141,12 +144,14 @@ interface Ctx {
   /** The main Claude chat most scenarios continue in. */
   main: number | null;
   question: number | null;
+  /** Model for the next startClaude (default: CLAUDE_MODEL). */
+  model?: string;
 }
 
 async function startClaude(ctx: Ctx, prompt?: string): Promise<number> {
   const before = new Set(Object.keys(useChats.getState().chats).map(Number));
   const t = Date.now();
-  await newChat({ provider: "claude", cwd: ctx.cfg.dir, model: CLAUDE_MODEL, prompt });
+  await newChat({ provider: "claude", cwd: ctx.cfg.dir, model: ctx.model ?? CLAUDE_MODEL, prompt });
   await log(`INFO newChat returned after ${Date.now() - t}ms; chats ${Object.keys(useChats.getState().chats).join(",")}; ptys ${Object.keys(useStore.getState().ptys).join(",")}; toasts ${useStore.getState().toasts.map((x) => x.text).join(" | ")}`);
   return (await waitFor("the new chat", () => newId(before), 10_000)).id;
 }
@@ -766,6 +771,65 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         if (after.enabled) throw new Fail("still enabled");
       }
     });
+  },
+
+  /**
+   * CPU measurement: a chat running a long, quiet tool stays open and focused. Phases are logged with timestamps
+   * (A: Reduce motion as the person has it, normally Auto; B: On; C: On, no chat on screen = Home) so a sampler
+   * (`ps` once a second) can average each measure window. Each phase: 30 s settle, 40 s measure. Restores the setting.
+   */
+  async perf(ctx) {
+    const original = ((): MotionPref => {
+      try {
+        const v = localStorage.getItem("coool.motion");
+        return v === "on" || v === "off" ? v : "auto";
+      } catch {
+        return "auto";
+      }
+    })();
+    ctx.model = PERF_MODEL;
+    const allow = setInterval(() => {
+      const c = $("[data-approval]");
+      if (c) button("Allow once", c)?.click();
+    }, 300);
+    const hintsSeen: MotionHints[] = [];
+    api().onMotionHints((h) => hintsSeen.push(h));
+    const report = async (tag: string) => {
+      const h = (await invoke("motion_hints").catch(() => null)) as MotionHints | null;
+      const m = decideMotion("auto", matchMedia("(prefers-reduced-motion: reduce)").matches, h);
+      await log(`HINTS ${tag} ${JSON.stringify(h)} os_reduce=${matchMedia("(prefers-reduced-motion: reduce)").matches} auto_decision=${JSON.stringify(m)} pref=${original} html.reduce-motion=${document.documentElement.classList.contains("reduce-motion")} pushed=${hintsSeen.length}`);
+    };
+    const phase = async (name: string) => {
+      await log(`PERF ${name} settle-start`);
+      await sleep(30_000);
+      await log(`PERF ${name} measure-start`);
+      await sleep(40_000);
+      await log(`PERF ${name} measure-end`);
+    };
+    try {
+      const id = await startClaude(ctx, "Run this exact shell command in the foreground, one call at a time, never in parallel, five times in a row: python3 -c \"import time; time.sleep(60)\". Then reply done.");
+      ctx.main = id;
+      await waitFor("the chat timeline", () => $("[data-chat-timeline]"), 10_000);
+      await waitFor("a running step", () => items(id).find((i) => i.kind === "tool" && !i.parent && i.endTs === null), 90_000);
+      await log(`PERF chat ${id} model ${PERF_MODEL} requested; running=${chat(id)?.running}`);
+      await report("start");
+      await phase("A pref=" + original);
+      await log(`PERF A running=${chat(id)?.running}`);
+      setMotionPref("on");
+      await report("after-on");
+      await phase("B pref=on");
+      await log(`PERF B running=${chat(id)?.running}`);
+      useStore.setState({ activeTab: null });
+      await sleep(500);
+      await log(`PERF C home: main shows ${$("[data-chat-timeline]") ? "a chat (!)" : "no chat"}`);
+      await phase("C pref=on home");
+      await log(`PERF C running=${chat(id)?.running}`);
+    } finally {
+      ctx.model = undefined;
+      clearInterval(allow);
+      setMotionPref(original);
+      await log(`PERF restored pref=${original}`);
+    }
   },
 
   async quit(ctx) {
