@@ -4,12 +4,13 @@
 //! transcript or registry file changes (file-system events, see
 //! `coool_core::watch`), when kicked, and at least once a second. It sends the
 //! UI one full `sessions` payload, then `sessions-delta`s carrying only the
-//! sessions that changed. A ~16ms pump streams raw PTY bytes to xterm.js
+//! sessions that changed. A ~16ms pump (asleep while nothing streams) sends raw PTY bytes to xterm.js
 //! (`pty-output`, `pty-exit`) and chat events (`chat-event`); it reads through
 //! handles cloned out of the Hub, so a slow refresh never delays streamed text.
 //! See docs/APP_SPEC.md ("Backend contract") and docs/CHAT_SPEC.md.
 
 mod env;
+mod motion;
 mod selftest;
 mod trace;
 
@@ -18,7 +19,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use coool_core::chat::{ChatEvent, ChatEventKind, ChatHandle, ChatOptions, ChatState};
 use coool_core::hub::Hub;
 use coool_core::insights::{self, Insight, Insights};
-use coool_core::model::{Provider, Session};
+use coool_core::model::{JsonMemo, Provider, Session};
 use coool_core::pty::RawLog;
 use coool_core::usage::{PlanUsage, UsageMonitor};
 use coool_core::watch::{Watch, Waker};
@@ -51,6 +52,10 @@ struct Core {
     hub: Mutex<Hub>,
     /// What the UI was last sent (see [`Published`]).
     published: Mutex<Published>,
+    /// Each session's JSON from the last refresh, reused while it is unchanged.
+    session_json: Mutex<JsonMemo<(Session, Option<Insight>)>>,
+    /// Wakes the output pump when a PTY or chat is registered (it naps while there is none).
+    pump_waker: Arc<Waker>,
     /// Taken by `publish` from building a payload through emitting it.
     emit_order: Mutex<()>,
     streams: Mutex<HashMap<usize, Stream>>,
@@ -78,7 +83,7 @@ struct Published {
     /// Session keys (`provider:id`) in display order.
     order: Vec<String>,
     /// Session key -> its JSON as last sent.
-    sessions: HashMap<String, String>,
+    sessions: HashMap<String, Arc<str>>,
     /// [`Rest`] as a JSON object.
     rest: String,
 }
@@ -145,15 +150,16 @@ impl Published {
     /// Takes the latest sessions (key, JSON; in display order) and the rest of
     /// the payload. Returns what to emit, or None when nothing changed (the
     /// very first call always emits: the UI waits for it).
-    fn update(&mut self, sessions: Vec<(String, String)>, rest: String, trace: bool) -> Option<Update> {
+    fn update(&mut self, sessions: Vec<(String, Arc<str>)>, rest: String, trace: bool) -> Option<Update> {
         let first = self.seq == 0;
-        // `updated` changes on every write, so comparing a session's JSON is a cheap and exact "changed?".
+        // `updated` changes on every write, so comparing a session's JSON is a cheap and exact "changed?"
+        // (the same `Arc` when [`JsonMemo`] reused it: no compare at all).
         let mut next = HashMap::with_capacity(sessions.len());
         let mut order = Vec::with_capacity(sessions.len());
         let mut upsert = String::from("{");
         let mut changed = Vec::new();
         for (key, json) in sessions {
-            if self.sessions.get(&key) != Some(&json) {
+            if !self.sessions.get(&key).is_some_and(|old| Arc::ptr_eq(old, &json) || *old == json) {
                 if upsert.len() > 1 {
                     upsert.push(',');
                 }
@@ -194,7 +200,7 @@ impl Published {
             if i > 0 {
                 list.push(',');
             }
-            list.push_str(self.sessions.get(k).map_or("null", String::as_str));
+            list.push_str(self.sessions.get(k).map_or("null", |j| &**j));
         }
         list.push(']');
         let order = serde_json::to_string(&self.order).unwrap_or_default();
@@ -373,7 +379,8 @@ impl Core {
         let loading = rest.loading;
         let t1 = Instant::now();
         let rest = serde_json::to_string(&rest).unwrap_or_else(|_| "{}".into());
-        let sessions: Vec<(String, String)> = sessions.into_iter().map(|(k, s, i)| (k, session_json(&s, i.as_ref()))).collect();
+        // Only sessions that changed since the last refresh are serialized again.
+        let sessions = self.session_json.lock().unwrap().round(sessions.into_iter().map(|(k, s, i)| (k, (s, i))), |(s, i)| session_json(s, i.as_ref()));
         // Held through the emit, so payloads go out in `seq` order (`published`
         // itself is not: `list_sessions` must never wait for an emit).
         let _order = self.emit_order.lock().unwrap();
@@ -399,6 +406,7 @@ impl Core {
     fn register_pty(&self, hub: &Hub, id: usize) {
         if let Some(m) = hub.get(id) {
             self.streams.lock().unwrap().insert(id, Stream { raw: m.raw.clone(), exited: m.exited.clone(), offset: 0, exit_sent: false });
+            self.pump_waker.kick();
         }
     }
 
@@ -569,6 +577,7 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
         let id = hub.start_chat(opts).map_err(|e| format!("couldn't start {}: {e:#}", provider.label()))?;
         let handle = hub.chat(id).expect("just started").handle();
         core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false });
+        core.pump_waker.kick();
         id
     };
     // The chat row (and a pending tab) shows up right away.
@@ -816,12 +825,15 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
         loop {
             let mut out = Vec::new();
             let mut exits = Vec::new();
+            // Anything still streaming? If not, nap until one is registered.
+            let mut active = false;
             {
                 let mut streams = core.streams.lock().unwrap();
                 for (&id, s) in streams.iter_mut() {
                     if s.exit_sent {
                         continue;
                     }
+                    active = true;
                     // Read `exited` before draining so the final bytes are never lost.
                     let exited = *s.exited.lock().unwrap();
                     let (bytes, next) = s.raw.lock().unwrap().read_since(s.offset);
@@ -844,6 +856,7 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                     if c.exit_sent {
                         continue;
                     }
+                    active = true;
                     let (events, next) = c.handle.events_since(c.seq);
                     c.seq = next;
                     if events.is_empty() {
@@ -875,7 +888,12 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
             if !exits.is_empty() || chat_changed {
                 core.kick();
             }
-            thread::sleep(Duration::from_millis(16));
+            if active {
+                thread::sleep(Duration::from_millis(16));
+            } else {
+                // `register_pty` / `start_chat` kick it; the timeout is only a backstop.
+                core.pump_waker.wait(Duration::from_secs(5));
+            }
         }
     });
 }
@@ -957,6 +975,8 @@ pub fn run() {
     let core = Arc::new(Core {
         hub: Mutex::new(hub),
         published: Mutex::new(Published::new()),
+        session_json: Mutex::new(JsonMemo::default()),
+        pump_waker: Waker::new(),
         emit_order: Mutex::new(()),
         streams: Mutex::new(HashMap::new()),
         chats: Mutex::new(HashMap::new()),
@@ -1010,6 +1030,7 @@ pub fn run() {
             selftest::selftest_shot,
             selftest::selftest_request_quit,
             trace::trace_sessions,
+            motion::motion_hints,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
@@ -1019,6 +1040,7 @@ pub fn run() {
                 t.prepare_window(&handle);
             }
             spawn_refresher(handle.clone(), c.clone());
+            motion::spawn_watch(handle.clone());
             spawn_pump(handle, c);
             Ok(())
         })
@@ -1068,8 +1090,8 @@ mod tests {
         serde_json::to_string(&Rest { pending: pending.to_vec(), ..Rest::default() }).unwrap()
     }
 
-    fn rows(r: &[(&str, Value)]) -> Vec<(String, String)> {
-        r.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    fn rows(r: &[(&str, Value)]) -> Vec<(String, Arc<str>)> {
+        r.iter().map(|(k, v)| (k.to_string(), Arc::from(v.to_string()))).collect()
     }
 
     #[test]
@@ -1122,7 +1144,7 @@ mod tests {
             current: None,
             last_prompt: None,
             tokens: Default::default(),
-            activity: Vec::new(),
+            activity: Default::default(),
             agents: Vec::new(),
             updated: std::time::UNIX_EPOCH,
             managed: None,

@@ -15,6 +15,7 @@ import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives
 import { SidebarSkeleton } from "./Skeletons";
 import { NeedsView, SettingsView, UsageView } from "./LeftPanels";
 import { reducedMotion } from "./StepRail";
+import { AnimateScope } from "../lib/motion";
 
 export interface Project {
   cwd: string;
@@ -244,6 +245,7 @@ export function Sidebar() {
       aria-hidden={!open}
       inert={!open}
       data-sidebar-open={open ? view : "closed"}
+      data-anim-static
       onKeyDown={(e) => {
         if (e.key === "Escape" && view !== "projects" && !e.defaultPrevented) {
           e.stopPropagation();
@@ -251,6 +253,8 @@ export function Sidebar() {
         }
       }}
     >
+      {/* Rows show activity static: it animates only in the open session (lib/motion.ts). */}
+      <AnimateScope enabled={false}>
       <div className="absolute inset-y-0 left-0 overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
         <AnimatePresence initial={false}>
           <motion.div key={view} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
@@ -259,6 +263,7 @@ export function Sidebar() {
         </AnimatePresence>
         <ResizeHandle width={width} onChange={setWidth} onDragging={setDragging} />
       </div>
+      </AnimateScope>
     </motion.aside>
   );
 }

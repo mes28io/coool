@@ -75,7 +75,7 @@ impl Parsed {
             last_prompt: s.last_prompt.clone(),
             current: s.current.clone(),
             tokens: s.tokens.clone(),
-            activity: s.activity.clone(),
+            activity: Arc::new(s.activity.clone()),
             models: s.models.clone(),
             in_turn: self.st.in_turn,
             started: self.st.started,
@@ -120,6 +120,8 @@ pub struct CodexSource {
     walked: bool,
     /// For [`CodexSource::refresh`]: parses everything inline.
     own_pool: Option<Pool>,
+    /// Recent day folders' listings, re-read only when the folder changed.
+    dirs: StatMemo<Vec<PathBuf>>,
 }
 
 impl CodexSource {
@@ -139,6 +141,7 @@ impl CodexSource {
             walk: Arc::default(),
             walked: false,
             own_pool: None,
+            dirs: StatMemo::default(),
         }
     }
 
@@ -227,8 +230,10 @@ impl CodexSource {
         self.start_walk(pool, &recent_dirs, now);
         let mut candidates: Vec<PathBuf> = Vec::new();
         for d in &recent_dirs {
-            Self::rollouts_in(d, &mut candidates);
+            let files = list_dir(&mut self.dirs, d).unwrap_or_default();
+            candidates.extend(files.into_iter().filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl")));
         }
+        self.dirs.retain(|p| recent_dirs.iter().any(|d| d == p));
         candidates.extend(self.old_recent.iter().cloned());
         candidates.extend(self.entries.keys().cloned());
         candidates.sort();

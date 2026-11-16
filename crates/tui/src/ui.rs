@@ -185,7 +185,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
     let (title, activity, info): (String, Vec<Activity>, Vec<Line>) = match row {
         Some(Row::Session(i)) => {
             let s = &app.sessions[i];
-            (display_title(s), s.activity.clone(), session_info(app, s))
+            (display_title(s), s.activity.to_vec(), session_info(app, s))
         }
         Some(Row::Agent(i, a)) => {
             let s = &app.sessions[i];
@@ -196,7 +196,7 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
                 kv(t, "parent", display_title(s)),
                 kv(t, "tokens", tokens_line(&ag.tokens)),
             ];
-            (format!("subagent · {}", ag.kind), ag.activity.clone(), info)
+            (format!("subagent · {}", ag.kind), ag.activity.to_vec(), info)
         }
         Some(Row::Pending(_)) => ("starting…".into(), vec![], vec![Line::from(Span::styled("waiting for the session transcript to appear · enter to attach", Style::default().fg(t.dim)))]),
         None => ("".into(), vec![], vec![]),

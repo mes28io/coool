@@ -6,7 +6,8 @@ import { motion } from "motion/react";
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cx, ease } from "./primitives";
 
-export const reducedMotion = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+import { reducedMotion } from "../lib/motion";
+export { reducedMotion };
 
 /** Rail x (px) and the gutter before the row's icon: dot and icon sit close, in one column. */
 const RAIL_X = 6;

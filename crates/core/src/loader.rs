@@ -57,7 +57,7 @@ pub(crate) struct View {
     pub last_prompt: Option<String>,
     pub current: Option<String>,
     pub tokens: Tokens,
-    pub activity: Vec<Activity>,
+    pub activity: std::sync::Arc<Vec<Activity>>,
     /// Own model rows, most used first.
     pub models: Vec<ModelUse>,
     pub in_turn: bool,
@@ -633,7 +633,7 @@ pub(crate) mod tests {
         assert_eq!(a.models, b.models);
         assert_eq!((&a.id, &a.title, &a.cwd, &a.model, &a.last_prompt, &a.current), (&b.id, &b.title, &b.cwd, &b.model, &b.last_prompt, &b.current));
         assert_eq!(a.activity.len(), b.activity.len());
-        assert!(a.activity.iter().zip(&b.activity).all(|(x, y)| x.text == y.text && x.kind == y.kind && x.ts == y.ts));
+        assert!(a.activity.iter().zip(b.activity.iter()).all(|(x, y)| x.text == y.text && x.kind == y.kind && x.ts == y.ts));
         assert_eq!((a.in_turn, a.started), (b.in_turn, b.started));
         assert_eq!((a.origin, &a.parent, &a.agent_name), (b.origin, &b.parent, &b.agent_name));
     }

@@ -250,6 +250,12 @@ html.no-transitions *::after {
 
 /* ---------- motion primitives ---------- */
 
+/* Looping activity animations are stepped: ~12 updates a second, whatever the screen's refresh rate. They still read
+   as motion, but WebKit restyles and repaints a few times a second instead of every frame (a paint property like
+   background-position, or anything inside an SVG, is never composited). One-off transitions stay smooth.
+   Reduced motion is one class on <html>, `reduce-motion` (lib/motion.ts: the Settings choice, the system setting,
+   Low Power Mode...), and `[data-anim-static]` marks Home and the sidebar, where activity shows static. */
+
 /* Shimmer sweep for "thinking" text and the active step. */
 .shimmer {
   background-image: linear-gradient(
@@ -264,7 +270,8 @@ html.no-transitions *::after {
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
-  animation: shimmer 2.1s cubic-bezier(0.4, 0, 0.3, 1) infinite;
+  /* 26 steps per 2.1 s (~12/s). */
+  animation: shimmer 2.1s steps(26) infinite;
 }
 @keyframes shimmer {
   0% {
@@ -293,7 +300,8 @@ html.no-transitions *::after {
     transparent 100%
   );
   transform: translateX(-100%);
-  animation: sweep 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  /* 28 steps per 2.4 s (~12/s). */
+  animation: sweep 2.4s steps(28) infinite;
   pointer-events: none;
 }
 @keyframes sweep {
@@ -302,24 +310,9 @@ html.no-transitions *::after {
   }
 }
 
-/* A light travelling along a 1px line: busy cards' top edge. */
-.edge-run {
-  background: linear-gradient(90deg, transparent, var(--status-working), transparent);
-  background-size: 40% 100%;
-  background-repeat: no-repeat;
-  animation: edge-run 2.6s cubic-bezier(0.5, 0, 0.3, 1) infinite;
-}
-@keyframes edge-run {
-  0% {
-    background-position: -40% 0;
-  }
-  100% {
-    background-position: 140% 0;
-  }
-}
-
 .breathe {
-  animation: breathe 1.8s ease-in-out infinite;
+  /* 10 steps per half (~11/s). */
+  animation: breathe 1.8s steps(10) infinite;
 }
 @keyframes breathe {
   0%,
@@ -340,34 +333,6 @@ html.no-transitions *::after {
   }
 }
 
-.dots span {
-  display: inline-block;
-  width: 3px;
-  height: 3px;
-  border-radius: 9px;
-  background: currentColor;
-  margin-left: 2px;
-  animation: dot 1.2s ease-in-out infinite;
-}
-.dots span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.dots span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-@keyframes dot {
-  0%,
-  80%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
-  }
-  40% {
-    opacity: 1;
-    transform: translateY(-2px);
-  }
-}
-
 /* "Needs you": a slow accent ring, calmer than the working pulse. */
 .needs-ring {
   box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--status-needs) 70%, transparent);
@@ -385,16 +350,22 @@ html.no-transitions *::after {
   }
 }
 .needs-badge {
-  box-shadow: 0 0 0 0 color-mix(in oklab, var(--status-needs) 45%, transparent);
+  position: relative;
+}
+/* The glow is a fixed 3px ring whose opacity breathes: compositor-only, unlike an animated box-shadow (a repaint per frame). */
+.needs-badge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--status-needs) 18%, transparent);
+  opacity: 0;
   animation: needs-glow 2.4s ease-in-out infinite;
+  pointer-events: none;
 }
 @keyframes needs-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in oklab, var(--status-needs) 0%, transparent);
-  }
   50% {
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--status-needs) 18%, transparent);
+    opacity: 1;
   }
 }
 
@@ -432,7 +403,8 @@ html.no-transitions *::after {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: attn-spin 4.5s linear infinite;
+  /* A paint per update (conic gradient): 54 steps per 4.5 s (~12/s). */
+  animation: attn-spin 4.5s steps(54) infinite;
   pointer-events: none;
   z-index: -1;
 }
@@ -480,7 +452,8 @@ html.no-transitions *::after {
 /* Skeleton placeholders: a slow, soft opacity pulse (staggered per block via animation-delay). */
 .skel {
   background: color-mix(in oklab, var(--text) 8%, transparent);
-  animation: skel 2.4s ease-in-out infinite both;
+  /* 14 steps per half (~12/s). */
+  animation: skel 2.4s steps(14) infinite both;
 }
 @keyframes skel {
   0%,
@@ -531,41 +504,62 @@ html.page-hidden *::after {
   background-clip: content-box;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .shimmer {
-    animation: none;
-    color: var(--shimmer-hi, var(--text));
-    background: none;
+/* Activity shows static where nobody is looking at it (Home, sidebar) and while motion is reduced: the word without
+   its shimmer, no sweeping bars. Status dots are unaffected (only "needs you" moves). */
+[data-anim-static] .shimmer,
+.reduce-motion .shimmer {
+  animation: none;
+  color: var(--shimmer-hi, var(--text));
+  background: none;
+}
+[data-anim-static] .sweep::after,
+[data-anim-static] .seg-run::after,
+.reduce-motion .sweep::after,
+.reduce-motion .seg-run::after {
+  animation: none;
+  opacity: 0;
+}
+[data-anim-static] .think-dots > span[aria-hidden],
+.reduce-motion .think-dots > span[aria-hidden] {
+  animation: none;
+  opacity: 1;
+}
+/* Placeholders of cards and rows whose transcript isn't read yet: a still block where activity is static. */
+[data-anim-static] .skel {
+  animation: none;
+  opacity: 0.8;
+}
+/* Reduced motion: no loops at all, except the needs-you ring as a slow opacity breathe. */
+.reduce-motion .skel,
+.reduce-motion .needs-badge::after,
+.reduce-motion .attn-card::before,
+.reduce-motion .stream-chunk,
+.reduce-motion .caret,
+.reduce-motion .spin {
+  animation: none;
+}
+.reduce-motion .skel {
+  opacity: 0.8;
+}
+/* The small needs-you dot keeps breathing, slower and smooth (opacity only). */
+.reduce-motion .breathe {
+  animation: breathe 3s ease-in-out infinite;
+}
+.reduce-motion .needs-ring {
+  transform: none;
+  animation: needs-breathe 3.2s ease-in-out infinite;
+}
+@keyframes needs-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
   }
-  .sweep::after,
-  .edge-run,
-  .dots span {
-    animation: none;
+  50% {
+    opacity: 1;
   }
-  .edge-run {
-    background: var(--status-working);
-    opacity: 0.5;
-  }
-  .breathe {
-    animation-duration: 3s;
-  }
-  .skel {
-    animation: none;
-    opacity: 0.8;
-  }
-  .needs-ring,
-  .needs-badge,
-  .attn-card::before,
-  .stream-chunk {
-    animation: none;
-  }
-  .needs-ring {
-    opacity: 0.8;
-  }
-  .caret {
-    animation: none;
-    opacity: 0.7;
-  }
+}
+.reduce-motion .caret {
+  opacity: 0.7;
 }
 
 /* Left-to-right reveal of a newly arrived label (Reveal): a mask sweeping over one unchanged text node. */
@@ -589,12 +583,10 @@ html.page-hidden *::after {
     mask-position: 0% 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .rv-sweep {
-    animation: none;
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
+.reduce-motion .rv-sweep {
+  animation: none;
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 /* Streaming caret at the end of rendered markdown (the last text-bearing block). */
@@ -616,12 +608,10 @@ html.page-hidden *::after {
   height: 11px;
   width: 5px;
 }
-@media (prefers-reduced-motion: reduce) {
-  .md-live > *::after,
-  .md-live li::after {
-    animation: none;
-    opacity: 0.7;
-  }
+.reduce-motion .md-live > *::after,
+.reduce-motion .md-live li::after {
+  animation: none;
+  opacity: 0.7;
 }
 
 /* Agents panel: segmented step bar (active = green with a slow moving highlight, failed = hatched red). */
@@ -633,34 +623,27 @@ html.page-hidden *::after {
 .seg-run::after {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: 0 auto 0 0;
+  width: 55%;
   background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.6), transparent);
-  background-size: 55% 100%;
-  background-repeat: no-repeat;
-  animation: seg-run 2.6s cubic-bezier(0.45, 0, 0.3, 1) infinite;
+  transform: translateX(-57%);
+  /* A moving layer (transform), not a moving background: 30 steps per 2.6 s (~12/s). */
+  animation: seg-run 2.6s steps(30) infinite;
 }
 @keyframes seg-run {
-  0% {
-    background-position: -70% 0;
-  }
-  100% {
-    background-position: 170% 0;
+  to {
+    transform: translateX(139%);
   }
 }
 .seg-fail {
   background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--error) 75%, transparent) 0 1.5px, color-mix(in oklab, var(--error) 22%, transparent) 1.5px 3px);
 }
-@media (prefers-reduced-motion: reduce) {
-  .seg-run::after {
-    animation: none;
-    opacity: 0;
-  }
-}
 
 /* The trailing dots of a thinking label (ThinkingDots): one by one, a brief hold, restart. */
 .think-dots > span[aria-hidden] {
   opacity: 0;
-  animation: 1.4s linear infinite both;
+  /* Two steps per keyframe interval: each dot fades in two beats (~7 updates/s). */
+  animation: 1.4s steps(2) infinite both;
 }
 .think-dots > span:nth-child(2) {
   animation-name: think-dot-1;
@@ -685,12 +668,6 @@ html.page-hidden *::after {
   0%, 32% { opacity: 0; }
   42%, 86% { opacity: 1; }
   96%, 100% { opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .think-dots > span[aria-hidden] {
-    animation: none;
-    opacity: 1;
-  }
 }
 
 /* The chat composer (and the read-only notice in its place) docks over the bottom of the timeline: the

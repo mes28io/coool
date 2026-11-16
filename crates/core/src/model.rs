@@ -1,6 +1,7 @@
 //! Provider-agnostic data model shared by every adapter and the UI.
 
 use serde::{Serialize, Serializer};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 fn epoch_ms<S: Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
@@ -78,7 +79,7 @@ pub enum ActivityKind {
     Agent,
 }
 
-#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Activity {
     pub ts: String, // HH:MM:SS (local-ish; transcript timestamps are UTC, see util::short_time)
     pub kind: ActivityKind,
@@ -177,7 +178,7 @@ pub fn sort_model_use(list: &mut [ModelUse]) {
     list.sort_by(|a, b| b.total().cmp(&a.total()).then(b.messages.cmp(&a.messages)).then(a.model.cmp(&b.model)));
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Agent {
     pub id: String,
     pub kind: String,
@@ -185,14 +186,17 @@ pub struct Agent {
     pub finished: bool,
     pub current: Option<String>,
     pub tokens: Tokens,
-    pub activity: Vec<Activity>,
+    /// Shared with the transcript's parsed view: cloning a session is cheap.
+    pub activity: Arc<Vec<Activity>>,
     /// Model it ran on (most used, or as launched); empty when unknown.
     pub model: String,
     /// Every model it used, most used first.
     pub models: Vec<ModelUse>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+/// `PartialEq` is exact over everything serialized (and compares shared
+/// timelines by pointer first), so an equal session has the same JSON.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Session {
     pub provider: Provider,
     pub id: String,
@@ -207,7 +211,8 @@ pub struct Session {
     pub current: Option<String>,
     pub last_prompt: Option<String>,
     pub tokens: Tokens,
-    pub activity: Vec<Activity>,
+    /// Shared with the transcript's parsed view: cloning a session is cheap.
+    pub activity: Arc<Vec<Activity>>,
     pub agents: Vec<Agent>,
     /// Serialized as epoch milliseconds.
     #[serde(serialize_with = "epoch_ms")]
@@ -268,6 +273,39 @@ pub fn push_activity(list: &mut Vec<Activity>, a: Activity) {
     }
 }
 
+/// Keeps each keyed value's JSON from the last round and reuses it while the
+/// value compares equal, so a refresh where little changed serializes little.
+/// Exact as long as equal values serialize the same (true for derived
+/// `PartialEq` over the serialized fields).
+pub struct JsonMemo<T> {
+    last: std::collections::HashMap<String, (T, Arc<str>)>,
+}
+
+impl<T> Default for JsonMemo<T> {
+    fn default() -> Self {
+        Self { last: Default::default() }
+    }
+}
+
+impl<T: PartialEq> JsonMemo<T> {
+    /// One round: every value's JSON, in order (`ser` runs only for new or
+    /// changed values). Keys missing from this round are forgotten.
+    pub fn round(&mut self, items: impl IntoIterator<Item = (String, T)>, ser: impl Fn(&T) -> String) -> Vec<(String, Arc<str>)> {
+        let mut next = std::collections::HashMap::with_capacity(self.last.len());
+        let mut out = Vec::with_capacity(self.last.len());
+        for (key, v) in items {
+            let json = match self.last.remove(&key) {
+                Some((old, json)) if old == v => json,
+                _ => Arc::from(ser(&v)),
+            };
+            out.push((key.clone(), json.clone()));
+            next.insert(key, (v, json));
+        }
+        self.last = next;
+        out
+    }
+}
+
 impl Session {
     /// This session as JSON (what the desktop app sends). Serialized here, in
     /// this crate, so callers built without optimizations still get the
@@ -285,5 +323,33 @@ impl Session {
             return crate::util::one_line(p, 60);
         }
         std::path::Path::new(&self.cwd).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| "untitled".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_memo_serializes_only_new_and_changed_values() {
+        let calls = std::cell::Cell::new(0);
+        let ser = |v: &u32| {
+            calls.set(calls.get() + 1);
+            v.to_string()
+        };
+        let mut m = JsonMemo::default();
+        let kv = |r: &[(&str, u32)]| r.iter().map(|(k, v)| (k.to_string(), *v)).collect::<Vec<_>>();
+        let got = m.round(kv(&[("a", 1), ("b", 2)]), ser);
+        assert_eq!(got.iter().map(|(k, j)| (k.as_str(), &**j)).collect::<Vec<_>>(), [("a", "1"), ("b", "2")]);
+        assert_eq!(calls.get(), 2);
+        let again = m.round(kv(&[("b", 2), ("a", 1)]), ser);
+        assert_eq!(calls.get(), 2, "nothing changed: nothing serialized");
+        assert!(Arc::ptr_eq(&again[1].1, &got[0].1), "the same JSON is handed back");
+        let got = m.round(kv(&[("a", 5), ("c", 3)]), ser);
+        assert_eq!(calls.get(), 4, "a changed, c is new");
+        assert_eq!(got.iter().map(|(_, j)| &**j).collect::<Vec<_>>(), ["5", "3"]);
+        // b was dropped in the last round: back again, it is serialized anew.
+        m.round(kv(&[("b", 2)]), ser);
+        assert_eq!(calls.get(), 5);
     }
 }

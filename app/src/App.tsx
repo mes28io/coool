@@ -4,6 +4,7 @@ import { api } from "./lib/backend";
 import { openAgentsDemo } from "./lib/agentsDemo";
 import { rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
+import { useMotion } from "./lib/motion";
 import { syncWindow } from "./lib/boot";
 import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
@@ -130,6 +131,7 @@ export default function App() {
   const setSystemTheme = useStore((s) => s.setSystemTheme);
   useShortcuts();
   useBackendEvents();
+  const reduceMotion = useMotion().reduce;
 
   useLayoutEffect(() => {
     applyTheme(theme);
@@ -144,7 +146,7 @@ export default function App() {
   }, []);
 
   return (
-    <MotionConfig reducedMotion="user">
+    <MotionConfig reducedMotion={reduceMotion ? "always" : "never"}>
       <div className="flex h-full w-full flex-col bg-panel">
         {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}
         <div data-tauri-drag-region className="flex h-[44px] shrink-0 items-center pl-[84px] pr-2">

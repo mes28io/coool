@@ -7,6 +7,7 @@ import { NotAvailable, type Backend, type ChatBatch, type PtyChunk } from "./bac
 import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import { SessionsMerge } from "./sessionsMerge";
+import { mockHints } from "./motion";
 import type { Activity, ActivityKind, Agent, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -1202,6 +1203,12 @@ export function mockBackend(): Backend {
       return () => subs.exit.delete(cb);
     },
     onConfirmQuit() {
+      return () => {};
+    },
+    async motionHints() {
+      return mockHints(location.search);
+    },
+    onMotionHints() {
       return () => {};
     },
 

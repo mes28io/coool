@@ -3,6 +3,7 @@ import { memo, useEffect, useId, useRef, type ReactNode } from "react";
 import type { Provider, Status } from "../lib/types";
 import { homeShort, fmtApprox, fmtClock, fmtElapsed, fmtTokens } from "../lib/format";
 import { useClock } from "../lib/clock";
+import { reducedMotion } from "../lib/motion";
 import { contextWindow } from "../lib/models";
 import claudeSvg from "../assets/brands/claude.svg?raw";
 import openaiSvg from "../assets/brands/openai.svg?raw";
@@ -162,7 +163,7 @@ export function ContextRing({ context, model, window: reported, size = 13 }: { c
         strokeDasharray={c}
         initial={false}
         animate={{ strokeDashoffset: c * (1 - Math.max(0.03, pct)) }}
-        transition={{ duration: typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 0.6, ease }}
+        transition={{ duration: reducedMotion() ? 0 : 0.6, ease }}
       />
     </svg>
   );

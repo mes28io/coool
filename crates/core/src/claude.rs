@@ -63,7 +63,7 @@ impl Parsed {
             last_prompt: self.last_prompt.clone(),
             current: self.current.clone(),
             tokens: self.tokens.clone(),
-            activity: self.activity.clone(),
+            activity: Arc::new(self.activity.clone()),
             models,
             origin: self.p.entrypoint.as_ref().map(|e| crate::origin::claude(Some(e), self.p.human)),
             bash: self.p.bash.clone(),
@@ -97,23 +97,44 @@ struct Entry {
     agents: Vec<AgentEntry>,
 }
 
+/// What a refresh re-reads only when the file or folder changed (see [`StatMemo`]).
+#[derive(Default)]
+struct Memos {
+    /// Folder listings: projects/, each project folder, each subagents folder, sessions/.
+    dirs: StatMemo<Vec<PathBuf>>,
+    /// Registry files, parsed (None: not a usable entry).
+    registry: StatMemo<Option<RegEntry>>,
+    /// Subagent `meta.json`s, parsed.
+    metas: StatMemo<AgentMeta>,
+}
+
+/// A registry file: (pid, session id, `startedAt`, what it says).
+type RegEntry = (u32, String, Option<u64>, Live);
+
+#[derive(Clone, Default)]
+struct AgentMeta {
+    kind: String,
+    description: String,
+    finished: bool,
+    model: Option<String>,
+}
+
 pub struct ClaudeSource {
     root: PathBuf,
     entries: HashMap<String, Entry>,
     recent_window: Duration,
     /// For [`ClaudeSource::refresh`]: parses everything inline.
     own_pool: Option<Pool>,
+    memo: Memos,
 }
 
 impl ClaudeSource {
     pub fn new(recent_window: Duration) -> Self {
-        let root = dirs::home_dir().unwrap_or_default().join(".claude");
-        Self { root, entries: HashMap::new(), recent_window, own_pool: None }
+        Self::with_root(dirs::home_dir().unwrap_or_default().join(".claude"), recent_window)
     }
 
-    #[cfg(test)]
     pub(crate) fn with_root(root: PathBuf, recent_window: Duration) -> Self {
-        Self { root, entries: HashMap::new(), recent_window, own_pool: None }
+        Self { root, entries: HashMap::new(), recent_window, own_pool: None, memo: Memos::default() }
     }
 
     /// Re-scan and parse everything new, synchronously; returns all sessions.
@@ -128,27 +149,31 @@ impl ClaudeSource {
     /// Cheap pass: registry, listing, stat. Parsing is left to `pool`
     /// (small reads inline, within `budget` bytes).
     pub(crate) fn scan(&mut self, pool: &Pool, budget: &mut u64) {
-        let mut live = self.read_registry();
+        let mut listed: HashSet<PathBuf> = HashSet::new();
+        let mut metas_seen: HashSet<PathBuf> = HashSet::new();
+        let mut live = self.read_registry(&mut listed);
         let now = SystemTime::now();
 
         // Discover transcripts: every live session + anything touched recently.
+        // Folder listings are reused while the folder is unchanged; every
+        // transcript is still stat-ed (one stat each), since appends don't move
+        // the folder's mtime.
         let mut wanted: HashMap<String, (PathBuf, fs::Metadata)> = HashMap::new();
-        if let Ok(dirs) = fs::read_dir(self.root.join("projects")) {
-            for d in dirs.flatten() {
-                let Ok(files) = fs::read_dir(d.path()) else { continue };
-                for f in files.flatten() {
-                    let p = f.path();
-                    if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                        continue;
-                    }
-                    let id = p.file_stem().unwrap().to_string_lossy().to_string();
-                    let mtime = f.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-                    let recent = now.duration_since(mtime).map(|d| d < self.recent_window).unwrap_or(true);
-                    if (recent || live.contains_key(&id))
-                        && let Ok(m) = fs::metadata(&p)
-                    {
-                        wanted.insert(id, (p, m));
-                    }
+        let projects = self.root.join("projects");
+        listed.insert(projects.clone());
+        for d in list_dir(&mut self.memo.dirs, &projects).unwrap_or_default() {
+            let Some(files) = list_dir(&mut self.memo.dirs, &d) else { continue };
+            listed.insert(d);
+            for p in files {
+                if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Ok(m) = fs::metadata(&p) else { continue };
+                let id = p.file_stem().unwrap().to_string_lossy().to_string();
+                let mtime = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                let recent = now.duration_since(mtime).map(|d| d < self.recent_window).unwrap_or(true);
+                if recent || live.contains_key(&id) {
+                    wanted.insert(id, (p, m));
                 }
             }
         }
@@ -184,10 +209,14 @@ impl ClaudeSource {
             }
             let is_live = e.live.is_some();
             pool.sync(&e.slot, meta, loader::prio(is_live, true, mtime), budget);
-            scan_agents(e, &path.with_extension("").join("subagents"), pool, budget);
+            let dir = path.with_extension("").join("subagents");
+            scan_agents(e, &dir, &mut self.memo, &mut metas_seen, pool, budget);
+            listed.insert(dir);
         }
 
         self.entries.retain(|id, _| wanted.contains_key(id));
+        self.memo.dirs.retain(|p| listed.contains(p));
+        self.memo.metas.retain(|p| metas_seen.contains(p));
     }
 
     /// Every wanted transcript (and subagent transcript) fully parsed at least once.
@@ -214,36 +243,51 @@ impl ClaudeSource {
         out
     }
 
-    fn read_registry(&self) -> HashMap<String, Live> {
+    /// Live sessions from the registry. Each file is parsed again only when it
+    /// changed; whether its process is (still) alive is checked every time.
+    fn read_registry(&mut self, listed: &mut HashSet<PathBuf>) -> HashMap<String, Live> {
         let mut out = HashMap::new();
-        let Ok(entries) = fs::read_dir(self.root.join("sessions")) else { return out };
-        for e in entries.flatten() {
-            let p = e.path();
+        let dir = self.root.join("sessions");
+        let Some(files) = list_dir(&mut self.memo.dirs, &dir) else {
+            self.memo.registry.retain(|_| false);
+            return out;
+        };
+        listed.insert(dir);
+        let mut seen = HashSet::new();
+        for p in files {
             if p.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let Some(v) = fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
-            let (Some(pid), Some(sid)) = (v["pid"].as_u64().and_then(|p| u32::try_from(p).ok()), v["sessionId"].as_str()) else { continue };
-            if !pid_alive(pid) || pid_reused(pid, v["startedAt"].as_u64()) {
-                continue;
+            let Ok(meta) = fs::metadata(&p) else { continue };
+            if let Some((pid, sid, started_at, live)) = self.memo.registry.get(&p, &meta, || parse_registry(&p))
+                && pid_alive(*pid)
+                && !pid_reused(*pid, *started_at)
+            {
+                out.insert(sid.clone(), live.clone());
             }
-            out.insert(
-                sid.to_string(),
-                Live {
-                    pid,
-                    cwd: v["cwd"].as_str().unwrap_or("").to_string(),
-                    name: v["name"].as_str().unwrap_or("").to_string(),
-                    busy: v["status"].as_str() == Some("busy"),
-                    // `shell`: the turn is over but background tasks still run (the
-                    // CLI's own UI shows that as working). `waiting`: blocked on the person.
-                    shell: v["status"].as_str() == Some("shell"),
-                    waiting_for: (v["status"].as_str() == Some("waiting")).then(|| v["waitingFor"].as_str().unwrap_or("input").to_string()),
-                    entrypoint: v["entrypoint"].as_str().map(str::to_string),
-                },
-            );
+            seen.insert(p);
         }
+        self.memo.registry.retain(|p| seen.contains(p));
         out
     }
+}
+
+/// One registry file: (pid, session id, startedAt, what it says), if usable.
+fn parse_registry(p: &Path) -> Option<RegEntry> {
+    let v = fs::read_to_string(p).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())?;
+    let (Some(pid), Some(sid)) = (v["pid"].as_u64().and_then(|p| u32::try_from(p).ok()), v["sessionId"].as_str()) else { return None };
+    let live = Live {
+        pid,
+        cwd: v["cwd"].as_str().unwrap_or("").to_string(),
+        name: v["name"].as_str().unwrap_or("").to_string(),
+        busy: v["status"].as_str() == Some("busy"),
+        // `shell`: the turn is over but background tasks still run (the
+        // CLI's own UI shows that as working). `waiting`: blocked on the person.
+        shell: v["status"].as_str() == Some("shell"),
+        waiting_for: (v["status"].as_str() == Some("waiting")).then(|| v["waitingFor"].as_str().unwrap_or("input").to_string()),
+        entrypoint: v["entrypoint"].as_str().map(str::to_string),
+    };
+    Some((pid, sid.to_string(), v["startedAt"].as_u64(), live))
 }
 
 fn session(id: &str, e: &Entry) -> Session {
@@ -304,12 +348,11 @@ fn session(id: &str, e: &Entry) -> Session {
     }
 }
 
-fn scan_agents(e: &mut Entry, dir: &Path, pool: &Pool, budget: &mut u64) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+fn scan_agents(e: &mut Entry, dir: &Path, memo: &mut Memos, seen: &mut HashSet<PathBuf>, pool: &Pool, budget: &mut u64) {
+    let Some(entries) = list_dir(&mut memo.dirs, dir) else { return };
     let mut metas: Vec<(String, PathBuf)> = entries
-        .flatten()
-        .filter_map(|d| {
-            let p = d.path();
+        .into_iter()
+        .filter_map(|p| {
             let name = p.file_name()?.to_string_lossy().to_string();
             let id = name.strip_prefix("agent-")?.strip_suffix(".meta.json")?.to_string();
             Some((id, p))
@@ -318,7 +361,14 @@ fn scan_agents(e: &mut Entry, dir: &Path, pool: &Pool, budget: &mut u64) {
     metas.sort();
     let live = e.live.is_some();
     for (aid, meta_path) in metas {
-        let meta: Value = fs::read_to_string(&meta_path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
+        // Re-read only when it changed (`finished` flips once, at the end).
+        let meta = match fs::metadata(&meta_path) {
+            Ok(m) => {
+                seen.insert(meta_path.clone());
+                memo.metas.get(&meta_path, &m, || parse_agent_meta(&meta_path)).clone()
+            }
+            Err(_) => parse_agent_meta(&meta_path),
+        };
         let jl = dir.join(format!("agent-{aid}.jsonl"));
         let idx = match e.agents.iter().position(|a| a.id == aid) {
             Some(i) => i,
@@ -336,10 +386,10 @@ fn scan_agents(e: &mut Entry, dir: &Path, pool: &Pool, budget: &mut u64) {
             }
         };
         let a = &mut e.agents[idx];
-        a.kind = meta["agentType"].as_str().unwrap_or("agent").to_string();
-        a.description = meta["description"].as_str().unwrap_or("").to_string();
-        a.finished = meta["finished"].as_bool().unwrap_or(false);
-        a.meta_model = meta["model"].as_str().map(str::to_string);
+        a.kind = meta.kind;
+        a.description = meta.description;
+        a.finished = meta.finished;
+        a.meta_model = meta.model;
         match fs::metadata(&jl) {
             Ok(m) => {
                 a.has_file = true;
@@ -348,6 +398,16 @@ fn scan_agents(e: &mut Entry, dir: &Path, pool: &Pool, budget: &mut u64) {
             }
             Err(_) => a.has_file = false,
         }
+    }
+}
+
+fn parse_agent_meta(p: &Path) -> AgentMeta {
+    let meta: Value = fs::read_to_string(p).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
+    AgentMeta {
+        kind: meta["agentType"].as_str().unwrap_or("agent").to_string(),
+        description: meta["description"].as_str().unwrap_or("").to_string(),
+        finished: meta["finished"].as_bool().unwrap_or(false),
+        model: meta["model"].as_str().map(str::to_string),
     }
 }
 
@@ -372,6 +432,7 @@ pub fn live_pid_for(session_id: &str, pid: u32) -> bool {
     v["sessionId"].as_str() == Some(session_id) && v["pid"].as_u64() == Some(pid as u64) && pid_alive(pid) && !pid_reused(pid, v["startedAt"].as_u64())
 }
 
+#[derive(Clone)]
 struct Live {
     pid: u32,
     cwd: String,
@@ -759,7 +820,7 @@ mod tests {
             finished: true,
             current: None,
             tokens: Tokens::default(),
-            activity: Vec::new(),
+            activity: Default::default(),
             model: "claude-haiku-5-5".into(),
             models: vec![ModelUse { model: "claude-haiku-5-5".into(), input: 1000, cached: 0, output: 0, messages: 3, via_agent: false }],
         };

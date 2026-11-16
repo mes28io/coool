@@ -31,7 +31,7 @@ const HOURLY_CAP: usize = 120;
 const HOUR_MS: u64 = 3_600_000;
 const KEY_RECHECK_MS: u64 = 30_000;
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Insight {
     pub headline: String,
     pub needs_you: Option<String>,
@@ -521,7 +521,7 @@ mod tests {
             current: Some("Bash · cargo test".into()),
             last_prompt: Some("make the tests pass".into()),
             tokens: Tokens::default(),
-            activity: (0..n).map(|i| act(ActivityKind::Text, &format!("line {i}"))).collect(),
+            activity: std::sync::Arc::new((0..n).map(|i| act(ActivityKind::Text, &format!("line {i}"))).collect()),
             agents: vec![],
             updated: SystemTime::now(),
             managed: None,
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn prompt_truncates_long_text() {
         let mut s = session("a", 0);
-        s.activity.push(act(ActivityKind::Error, &"x".repeat(1000)));
+        std::sync::Arc::make_mut(&mut s.activity).push(act(ActivityKind::Error, &"x".repeat(1000)));
         let p = build_prompt(&s);
         let line = p.lines().find(|l| l.starts_with("[error]")).unwrap();
         assert!(line.chars().count() <= "[error] ".len() + 300);
@@ -675,7 +675,7 @@ mod tests {
         let mut s = session("a", 3);
         let f = fingerprint(&s);
         assert_eq!(f, fingerprint(&s.clone()));
-        s.activity.push(act(ActivityKind::Text, "more"));
+        std::sync::Arc::make_mut(&mut s.activity).push(act(ActivityKind::Text, "more"));
         assert_ne!(f, fingerprint(&s));
         let f = fingerprint(&s);
         s.status = Status::Idle;
@@ -747,12 +747,12 @@ mod tests {
     fn real_api_call() {
         let key = api_key().expect("no API key configured");
         let mut s = session("live", 0);
-        s.activity = vec![
+        s.activity = std::sync::Arc::new(vec![
             act(ActivityKind::Prompt, "make the parser tests pass"),
             act(ActivityKind::Tool, "Bash · cargo test -p parser"),
             act(ActivityKind::Error, "test parse_nested failed: expected 3, got 2"),
             act(ActivityKind::Text, "I will fix the off-by-one in the nesting counter."),
-        ];
+        ]);
         let i = summarize(&key, &s).unwrap();
         println!("headline: {}\nneeds_you: {:?}", i.headline, i.needs_you);
         assert!(!i.headline.is_empty());

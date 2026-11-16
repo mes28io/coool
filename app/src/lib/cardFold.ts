@@ -3,10 +3,9 @@
 // after it finishes, unless the person opened or closed it by hand. A hand-set state is kept for
 // the app run (cards remount when the panel or the session changes).
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { reducedMotion as reduced } from "./motion";
 
 const chosen = new Map<string, boolean>();
-
-const reduced = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** How long a just-finished card stays open before it folds. */
 const SETTLE_MS = 900;

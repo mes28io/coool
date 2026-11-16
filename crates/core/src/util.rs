@@ -162,6 +162,86 @@ pub fn tool_summary(name: &str, input: &Value) -> String {
     if detail.is_empty() { name.to_string() } else { format!("{name} · {}", one_line(&detail, 140)) }
 }
 
+/// What a file's metadata says about its content: length, mtime and (on unix)
+/// inode. Unchanged key, unchanged content, with one caveat handled by
+/// [`StatMemo`]: a write within the mtime's granularity of the last read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatKey {
+    len: u64,
+    mtime: SystemTime,
+    ino: u64,
+}
+
+impl StatKey {
+    pub fn of(m: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        let ino = std::os::unix::fs::MetadataExt::ino(m);
+        #[cfg(not(unix))]
+        let ino = 0;
+        Self { len: m.len(), mtime: m.modified().unwrap_or(SystemTime::UNIX_EPOCH), ino }
+    }
+}
+
+/// A value derived from a file (or a folder's listing), recomputed only when
+/// its [`StatKey`] changed. "Racy" entries, read within [`StatMemo::SETTLE`]
+/// of their mtime (a later write in the same mtime tick would go unnoticed on
+/// a coarse-clock filesystem), are recomputed every time until they settle.
+pub struct StatMemo<T> {
+    map: std::collections::HashMap<std::path::PathBuf, (StatKey, SystemTime, T)>,
+}
+
+impl<T> Default for StatMemo<T> {
+    fn default() -> Self {
+        Self { map: Default::default() }
+    }
+}
+
+impl<T> StatMemo<T> {
+    /// Covers the coarsest mtime clocks in use (HFS+ 1 s, FAT 2 s).
+    pub const SETTLE: Duration = Duration::from_secs(2);
+
+    /// The value for `path` (whose current metadata is `meta`): the last one
+    /// if the file is unchanged since a settled read, else `f()`.
+    pub fn get(&mut self, path: &std::path::Path, meta: &std::fs::Metadata, f: impl FnOnce() -> T) -> &T {
+        let key = StatKey::of(meta);
+        let fresh = |(k, read_at, _): &(StatKey, SystemTime, T)| *k == key && read_at.duration_since(key.mtime).is_ok_and(|d| d >= Self::SETTLE);
+        if !self.map.get(path).is_some_and(fresh) {
+            let read_at = SystemTime::now();
+            self.map.insert(path.to_path_buf(), (key, read_at, f()));
+        }
+        &self.map[path].2
+    }
+
+    /// Forgets every path `keep` says no to.
+    pub fn retain(&mut self, mut keep: impl FnMut(&std::path::Path) -> bool) {
+        self.map.retain(|p, _| keep(p));
+    }
+}
+
+/// A folder's entries (paths), re-listed only when the folder itself changed
+/// (an entry was added, removed or renamed: that moves the folder's mtime).
+/// None when it can't be read.
+pub fn list_dir(memo: &mut StatMemo<Vec<std::path::PathBuf>>, dir: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
+    let meta = std::fs::metadata(dir).ok()?;
+    if !meta.is_dir() {
+        return None;
+    }
+    let mut ok = true;
+    let v = memo.get(dir, &meta, || match std::fs::read_dir(dir) {
+        Ok(r) => r.flatten().map(|e| e.path()).collect(),
+        Err(_) => {
+            ok = false;
+            Vec::new()
+        }
+    });
+    let v = v.clone();
+    if !ok {
+        memo.retain(|p| p != dir);
+        return None;
+    }
+    Some(v)
+}
+
 /// Whether `pid` names a live process. Rejects 0 and values that would wrap to a
 /// negative pid: `kill(0 | -n, …)` addresses process *groups*, not one process.
 pub fn pid_alive(pid: u32) -> bool {
@@ -248,6 +328,56 @@ fn imp_ppid(_: libc::pid_t) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unchanged settled files are not read again; a change, or a file still
+    /// within the settle window of its mtime, is.
+    #[test]
+    fn stat_memo_rereads_only_changed_or_racy_files() {
+        let d = std::env::temp_dir().join(format!("coool-statmemo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("a.json");
+        let ago = |s: u64| SystemTime::now() - Duration::from_secs(s);
+        let write = |text: &str, mtime: Option<SystemTime>| {
+            std::fs::write(&p, text).unwrap();
+            if let Some(t) = mtime {
+                std::fs::File::options().write(true).open(&p).unwrap().set_modified(t).unwrap();
+            }
+        };
+        let reads = std::cell::Cell::new(0);
+        let mut m: StatMemo<String> = StatMemo::default();
+        let get = |m: &mut StatMemo<String>| {
+            let meta = std::fs::metadata(&p).unwrap();
+            m.get(&p, &meta, || {
+                reads.set(reads.get() + 1);
+                std::fs::read_to_string(&p).unwrap()
+            })
+            .clone()
+        };
+        write("busy", Some(ago(60)));
+        assert_eq!((get(&mut m), get(&mut m), reads.get()), ("busy".into(), "busy".into(), 1), "settled: read once");
+        write("idle", Some(ago(30)));
+        assert_eq!((get(&mut m), reads.get()), ("idle".into(), 2), "same length, new mtime");
+        write("idle", None);
+        get(&mut m);
+        get(&mut m);
+        assert_eq!(reads.get(), 4, "just written: read every time until it settles");
+
+        // Folder listings follow entries being added and removed.
+        let mut dirs = StatMemo::default();
+        let set_dir_mtime = || std::fs::File::open(&d).unwrap().set_modified(ago(60)).unwrap();
+        set_dir_mtime();
+        assert_eq!(list_dir(&mut dirs, &d), Some(vec![p.clone()]));
+        std::fs::write(d.join("b.json"), "x").unwrap();
+        let mut got = list_dir(&mut dirs, &d).unwrap();
+        got.sort();
+        assert_eq!(got, vec![p.clone(), d.join("b.json")]);
+        std::fs::remove_file(d.join("b.json")).unwrap();
+        set_dir_mtime();
+        assert_eq!(list_dir(&mut dirs, &d), Some(vec![p.clone()]));
+        assert_eq!(list_dir(&mut dirs, &d.join("missing")), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn parent_pid_of_this_process() {

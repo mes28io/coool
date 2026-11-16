@@ -2,10 +2,11 @@
 // animated while live. The main agent gets a thinking orb (ThinkOrb); subagents get this, so a
 // panel full of running agents stays calm. Drawn on the 16 grid of icons.tsx (1.5 stroke, round
 // caps), one colour (currentColor). Motion is CSS keyframes in moodGlyph.css, only on transform,
-// opacity and dash offset. `live={false}` and reduced motion show the first frame, which is a
-// complete icon on its own. A change of mood cross-fades inside a fixed box (no layout shift).
+// opacity and dash offset, stepped (~12 updates/s). `live={false}`, a static AnimateScope (lib/motion.ts)
+// and reduced motion show the first frame, which is a complete icon on its own. A change of mood cross-fades inside a fixed box (no layout shift).
 import type { ReactNode } from "react";
 import type { Mood } from "../lib/activityMood";
+import { useLive } from "../lib/motion";
 import { cx } from "./primitives";
 import "./moodGlyph.css";
 
@@ -107,6 +108,8 @@ const GLYPHS: Record<Mood, ReactNode> = {
 
 /** The bare SVG of one mood (no cross-fade). */
 export function MoodSvg({ mood, size = 14, live = true, className }: { mood: Mood; size?: number; live?: boolean; className?: string }) {
+  // Static outside the panes the person is looking at (Home, sidebar) and while motion is reduced.
+  const on = useLive() && live;
   return (
     <svg
       width={size}
@@ -118,7 +121,7 @@ export function MoodSvg({ mood, size = 14, live = true, className }: { mood: Moo
       strokeLinecap="round"
       strokeLinejoin="round"
       className={cx("mg", className)}
-      data-live={live ? "true" : "false"}
+      data-live={on ? "true" : "false"}
       data-mood={mood}
       aria-hidden
     >
