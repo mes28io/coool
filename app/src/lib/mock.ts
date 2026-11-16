@@ -1090,6 +1090,31 @@ export function mockBackend(): Backend {
   }
   setInterval(tick, 1100);
 
+  // `?stress=sidebar`: a seeded storm of status flips (top-level rows and child jobs), so the sidebar's
+  // reorder / cap / exit animations can be checked frame by frame (scripts drive it over CDP).
+  if (location.search.includes("stress=sidebar")) {
+    let seed = 0x5eed;
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let x = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+    const pool = () => live.filter((l) => !l.chat && l.s.managed === null);
+    setInterval(() => {
+      const ls = pool();
+      for (let n = 1 + Math.floor(rand() * 3); n > 0 && ls.length; n--) {
+        const s = ls[Math.floor(rand() * ls.length)].s;
+        const r = rand();
+        s.status = r < 0.4 ? "busy" : r < 0.75 ? "idle" : "ended";
+        s.waiting_for = s.status === "idle" && rand() < 0.4 ? "permission to run `cargo test`" : null;
+        s.current = s.status === "busy" ? "thinking…" : null;
+        s.updated = Date.now();
+      }
+      emitSessions();
+    }, 140);
+  }
+
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const linkAfter = (p: (typeof ptys)[number], ms: number, existing?: Live, firstPrompt?: string) => {

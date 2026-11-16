@@ -1,13 +1,12 @@
-import { AnimatePresence, LayoutGroup, motion } from "motion/react";
+import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, homeShort, projectOf } from "../lib/format";
 import { attention, sameAttention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
-import { modelLabel } from "../lib/models";
-import type { Agent, ChatInfo, PtyInfo, Session, Status } from "../lib/types";
+import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
 import { sessionKey } from "../lib/types";
-import { useStableOrder } from "../lib/stable";
+import { useMoveKeys, useStableOrder } from "../lib/stable";
 import { leaves, resolveTarget, useStore } from "../store";
 import { IChevron, ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
 import { Wordmark } from "./Wordmark";
@@ -176,7 +175,7 @@ export function Sidebar() {
   // Arrow keys move through the rows (every row is a real button).
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("button[data-nav]")];
+    const rows = [...e.currentTarget.querySelectorAll<HTMLElement>("button[data-nav]")].filter((r) => !r.closest("[data-ghost]"));
     const i = rows.indexOf(document.activeElement as HTMLElement);
     const next = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
     if (next) {
@@ -209,7 +208,7 @@ export function Sidebar() {
 
       <div className="px-4 pb-1 pt-5 text-small text-dim">Projects</div>
 
-      <motion.div layoutScroll className="scroll min-h-0 flex-1 px-2 pb-4" onKeyDown={onKeyDown} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
+      <div className="scroll min-h-0 flex-1 px-2 pb-4" onKeyDown={onKeyDown} onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
         {!ready || (loading && projects.length === 0) ? (
           <SidebarSkeleton />
         ) : projects.length === 0 ? (
@@ -224,15 +223,16 @@ export function Sidebar() {
             <OtherToolsLine />
           </>
         ) : (
-          <LayoutGroup>
-            {shownProjects.map((p, i) => (
-              <ProjectGroup key={p.cwd} p={p} index={i} selected={selected} digest={digest} frozen={hover} />
+          <>
+            {/* Projects that change places snap (a tall group gliding across another would draw rows over rows). */}
+            {shownProjects.map((p) => (
+              <ProjectGroup key={p.cwd} p={p} selected={selected} digest={digest} frozen={hover} />
             ))}
             {loading && <SidebarSkeleton groups={1} />}
             <OtherToolsLine />
-          </LayoutGroup>
+          </>
         )}
-      </motion.div>
+      </div>
     </div>
   );
 
@@ -359,9 +359,9 @@ function Summary({ p }: { p: Project }) {
   );
 }
 
-type Item = { key: string; el: () => ReactNode };
+type Item = { key: string; el: ReactNode };
 
-const ProjectGroup = memo(function ProjectGroup({ p, index, selected, digest, frozen }: { p: Project; index: number; selected: string | null; digest: ChatDigest; frozen: boolean }) {
+const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }: { p: Project; selected: string | null; digest: ChatDigest; frozen: boolean }) {
   const live = useStableOrder(p.live, sessionKey, frozen);
   const collapsed = useStore((s) => !!s.collapsed[p.cwd]);
   const revealed = useStore((s) => s.revealed[p.cwd] ?? 0);
@@ -370,6 +370,8 @@ const ProjectGroup = memo(function ProjectGroup({ p, index, selected, digest, fr
   const setSheet = useStore((s) => s.setSheet);
   const showAutomation = useStore((s) => s.showAutomation);
   const kidsOpen = useStore((s) => s.kidsOpen);
+  // "Show N more jobs" under each parent row, by parent key.
+  const [allJobs, setAllJobs] = useState<Record<string, boolean>>({});
   const onlyEnded = p.live.length + p.starting.length + p.startingChats.length === 0;
   const Folder = collapsed ? IFolder : IFolderOpen;
 
@@ -383,53 +385,37 @@ const ProjectGroup = memo(function ProjectGroup({ p, index, selected, digest, fr
   }, [p.children, selected]);
   const ended = p.ended.filter((s, i) => i < endedSlots || sessionKey(s) === selected || s.id === pinnedParent);
   const more = p.ended.length - ended.length;
-  const sessionRow = (s: Session): Item => ({
-    key: sessionKey(s),
-    el: () => {
-      const att = attention(s, digest);
-      const kids = p.children.get(s.id) ?? [];
-      const key = sessionKey(s);
-      // Running subagents are not listed in the sidebar (owner's call): they show in the chat header's agents chip and on Home.
-      const liveKids = kids.some((k) => attention(k, digest).status !== "ended");
-      const hasContent = kids.length > 0;
-      // Open by default while anything in the block is live (or the open chat is in it); the person's choice wins.
-      const open = kidsOpen[key] ?? (liveKids || kids.some((k) => sessionKey(k) === selected));
-      return [
-        <SessionRow key={key} s={s} att={att} selected={selected === key} auto={showAutomation && s.origin === "automation"} nest={hasContent ? (open ? "open" : "closed") : undefined} />,
-        <ChildRows key={`kids:${key}`} parent={s} agents={[]} kids={open ? kids : []} selected={selected} digest={digest} />,
-      ];
-    },
-  });
+  // One flat list of rows (a session, then its nested child runs), each in its own slot.
+  const sessionRows = (s: Session): Item[] => {
+    const att = attention(s, digest);
+    const kids = p.children.get(s.id) ?? [];
+    const key = sessionKey(s);
+    // Running subagents are not listed in the sidebar (owner's call): they show in the chat header's agents chip and on Home.
+    const liveKids = kids.some((k) => attention(k, digest).status !== "ended");
+    // Open by default while anything in the block is live (or the open chat is in it); the person's choice wins.
+    const open = kidsOpen[key] ?? (liveKids || kids.some((k) => sessionKey(k) === selected));
+    const out: Item[] = [{ key, el: <SessionRow s={s} att={att} selected={selected === key} auto={showAutomation && s.origin === "automation"} nest={kids.length ? (open ? "open" : "closed") : undefined} /> }];
+    if (open && kids.length) out.push(...childItems(key, kids, selected, digest, !!allJobs[key], (all) => setAllJobs((m) => ({ ...m, [key]: all }))));
+    return out;
+  };
   const items: Item[] = [
     ...p.startingChats.map((c) => ({
       key: `chat:${c.id}`,
-      el: () => <Row key={`chat:${c.id}`} selected={selected === `chat:${c.id}`} onClick={() => useStore.getState().open({ kind: "chat", id: c.id })} title={`New ${c.provider === "claude" ? "Claude Code" : "Codex"} chat`} status={c.state === "idle" ? "idle" : "starting"} provider={c.provider} meta="now" />,
+      el: <Row selected={selected === `chat:${c.id}`} onClick={() => useStore.getState().open({ kind: "chat", id: c.id })} title={`New ${c.provider === "claude" ? "Claude Code" : "Codex"} chat`} status={c.state === "idle" ? "idle" : "starting"} provider={c.provider} meta="now" />,
     })),
     ...p.starting.map((s) => ({
       key: `pty:${s.id}`,
-      el: () => <Row key={`pty:${s.id}`} selected={selected === `pty:${s.id}`} onClick={() => useStore.getState().open({ kind: "pty", id: s.id })} title={`New ${s.provider} session`} status="starting" provider={s.provider} meta="now" />,
+      el: <Row selected={selected === `pty:${s.id}`} onClick={() => useStore.getState().open({ kind: "pty", id: s.id })} title={`New ${s.provider} session`} status="starting" provider={s.provider} meta="now" />,
     })),
-    ...live.map(sessionRow),
-    ...ended.map(sessionRow),
+    ...live.flatMap(sessionRows),
+    ...ended.flatMap(sessionRows),
   ];
-  // What can move or resize this group: its place, its rows and their nested blocks. Layout animations
-  // re-measure only when this changes, not on each sessions payload (one re-renders the busy session's group,
-  // and a measure touches every motion element in the window). Inside the LayoutGroup, one group's change
-  // still animates every group and row.
-  const shape = [
-    index,
-    collapsed ? "c" : "",
-    more,
-    revealed,
-    ...items.map((it) => it.key),
-    ...[...live, ...ended].map((s) => {
-      const kids = p.children.get(s.id);
-      return kids?.length ? `${kidsOpen[sessionKey(s)] ?? ""}:${kids.filter((k) => k.status !== "ended").length}:${kids.map(sessionKey).join(",")}` : "";
-    }),
-  ].join("|");
+  // A row that moves past others closes at its old place and opens at its new one (see useMoveKeys): rows
+  // never glide across each other, so no frame shows rows overlapping or a hole between them.
+  const slotKey = useMoveKeys(items.map((it) => it.key));
 
   return (
-    <motion.div layout="position" layoutDependency={shape} transition={spring} className="mb-1" data-project={p.cwd}>
+    <div className="mb-1" data-project={p.cwd}>
       {/* The "+" has its own slot at the right at all times (it only fades in), so the name ellipsizes before it. */}
       <div className="group/proj relative flex h-[34px] items-center rounded-[9px] pl-2.5 pr-1.5 transition-colors duration-150 hover:bg-hover">
         <button
@@ -461,13 +447,17 @@ const ProjectGroup = memo(function ProjectGroup({ p, index, selected, digest, fr
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease }}
+            transition={{ duration: reducedMotion() ? 0 : 0.22, ease }}
             className="overflow-hidden"
           >
-            <div className="flex flex-col gap-px pt-px">
-              <AnimatePresence initial={false}>{items.map((it) => it.el())}</AnimatePresence>
+            <div className="flex flex-col" data-project-rows>
+              <AnimatePresence initial={false}>
+                {items.map((it) => (
+                  <Slot key={slotKey(it.key)}>{it.el}</Slot>
+                ))}
+              </AnimatePresence>
               {(more > 0 || revealed > 0) && (
-                <div className="flex">
+                <div className="flex pt-px">
                   {more > 0 && (
                     <button type="button" data-nav data-show-more onClick={() => setRevealed(p.cwd, revealed + PAGE)} className={cx(disclosure, "min-w-0 flex-1 pl-[38px]")}>
                       Show {more} more
@@ -484,76 +474,56 @@ const ProjectGroup = memo(function ProjectGroup({ p, index, selected, digest, fr
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </div>
   );
 });
+
+/**
+ * One row's place in its project's list. It opens and closes by height (in flow, never by transform), so the
+ * rows around it move with it frame by frame. A closing slot keeps showing its row, fading, and is inert.
+ */
+function Slot({ children }: { children: ReactNode }) {
+  const present = useIsPresent();
+  const t = reducedMotion() ? { duration: 0 } : { height: { duration: 0.24, ease }, opacity: { duration: 0.18 } };
+  return (
+    <motion.div
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: "auto", opacity: 1 }}
+      exit={{ height: 0, opacity: 0 }}
+      transition={t}
+      className="shrink-0 overflow-hidden pt-px"
+      data-ghost={present ? undefined : ""}
+      inert={!present}
+      aria-hidden={!present || undefined}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 /** Recent ended child runs shown under their parent before "Show N more jobs". */
 const KIDS_ENDED = 2;
 
-/** A session's nested block: its running subagents, then live child runs, then the most recent ended ones. */
-function ChildRows({ parent, agents, kids, selected, digest }: { parent: Session; agents: Agent[]; kids: Session[]; selected: string | null; digest: ChatDigest }) {
-  const [all, setAll] = useState(false);
+/** A session's nested block: live child runs, then the most recent ended ones. */
+function childItems(parentKey: string, kids: Session[], selected: string | null, digest: ChatDigest, all: boolean, setAll: (all: boolean) => void): Item[] {
   const live = kids.filter((k) => attention(k, digest).status !== "ended").sort((a, b) => b.updated - a.updated);
   const ended = kids.filter((k) => attention(k, digest).status === "ended").sort((a, b) => b.updated - a.updated);
   const shown = all ? ended : ended.filter((k, i) => i < KIDS_ENDED || sessionKey(k) === selected);
   const more = ended.length - shown.length;
-  // The block's own order and its "more" toggle can move these rows (see `shape` in ProjectGroup).
-  const shape = `${all ? "all" : ""}|${[...live, ...shown].map(sessionKey).join()}`;
-  return (
-    <AnimatePresence initial={false}>
-      {agents.map((a) => (
-        <AgentRow key={`agent:${sessionKey(parent)}:${a.id}`} parent={parent} a={a} />
-      ))}
-      {[...live, ...shown].map((k) => (
-        <SessionRow key={sessionKey(k)} s={k} att={attention(k, digest)} selected={selected === sessionKey(k)} nested shape={shape} />
-      ))}
-      {kids.length > 0 && (more > 0 || all) && (
-        <button key="jobs-more" type="button" data-nav data-show-jobs onClick={() => setAll(!all)} className={cx(disclosure, "pl-[54px]")}>
+  const out: Item[] = [...live, ...shown].map((k) => ({ key: sessionKey(k), el: <SessionRow s={k} att={attention(k, digest)} selected={selected === sessionKey(k)} nested /> }));
+  if (more > 0 || all)
+    out.push({
+      key: `jobs-more:${parentKey}`,
+      el: (
+        <button type="button" data-nav data-show-jobs onClick={() => setAll(!all)} className={cx(disclosure, "w-full pl-[54px]")}>
           {all ? "Fewer jobs" : `Show ${more} more ${more === 1 ? "job" : "jobs"}`}
         </button>
-      )}
-    </AnimatePresence>
-  );
-}
-
-/** A running subagent: a worker inside its session, listed like a child job. Opens the session at that agent's card. */
-function AgentRow({ parent, a }: { parent: Session; a: Agent }) {
-  const open = useStore((st) => st.open);
-  const focusAgent = useStore((st) => st.focusAgent);
-  const title = a.description || a.kind;
-  return (
-    <Row
-      selected={false}
-      onClick={() => {
-        open({ kind: "session", key: sessionKey(parent) });
-        focusAgent(a.id);
-      }}
-      title={title}
-      status="busy"
-      provider={parent.provider}
-      meta=""
-      nested
-      tip={a.current}
-      hover={
-        <span className="flex min-w-0 items-center gap-1" title={a.model}>
-          <span className="truncate">{a.model ? modelLabel(a.model).split(" ")[0] : a.kind}</span>
-        </span>
-      }
-      data={{ "data-agent-row": a.id, "data-nested": "1" }}
-    />
-  );
+      ),
+    });
+  return out;
 }
 
 const disclosure = "flex h-[28px] items-center rounded-[8px] text-left text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim";
-
-const rowMotion = {
-  layout: "position" as const,
-  initial: { opacity: 0, x: -6 },
-  animate: { opacity: 1, x: 0 },
-  exit: { opacity: 0, transition: { duration: 0.12 } },
-  transition: { ...spring, opacity: { duration: 0.2 } },
-};
 
 /**
  * One session: title only. State is a single dot at the right edge (green working,
@@ -575,10 +545,7 @@ function Row({
   data,
   hover,
   nest,
-  shape = 0,
 }: {
-  /** What can move this row on its own (see `shape` in ProjectGroup); a top-level row moves with its group's. */
-  shape?: string | number;
   selected: boolean;
   onClick: () => void;
   title: string;
@@ -603,12 +570,10 @@ function Row({
 }) {
   const dot = status === "busy" || status === "starting" || status === "needs" || status === "idle";
   return (
-    <motion.button
+    <button
       type="button"
       data-nav
       {...data}
-      {...rowMotion}
-      layoutDependency={shape}
       onClick={onClick}
       title={[title, tip, cwdName && `in ${cwdName}`].filter(Boolean).join(" · ")}
       aria-label={[title, tip].filter(Boolean).join(", ")}
@@ -662,15 +627,15 @@ function Row({
           </>
         )}
       </span>
-    </motion.button>
+    </button>
   );
 }
 
-type SessionRowProps = { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean; nest?: "open" | "closed"; shape?: string };
+type SessionRowProps = { s: Session; att: Attention; selected: boolean; auto?: boolean; nested?: boolean; nest?: "open" | "closed" };
 const sameRow = (a: SessionRowProps, b: SessionRowProps) =>
-  a.s === b.s && a.selected === b.selected && a.auto === b.auto && a.nested === b.nested && a.nest === b.nest && a.shape === b.shape && sameAttention(a.att, b.att);
+  a.s === b.s && a.selected === b.selected && a.auto === b.auto && a.nested === b.nested && a.nest === b.nest && sameAttention(a.att, b.att);
 
-const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest, shape }: SessionRowProps) {
+const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest }: SessionRowProps) {
   const open = useStore((st) => st.open);
   const setKidsOpen = useStore((st) => st.setKidsOpen);
   // The age (shown on hover) re-renders the row only when its text changes, not every second.
@@ -690,7 +655,6 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
       nested={nested}
       nest={nest ? { open: nest === "open", onToggle: () => setKidsOpen(sessionKey(s), nest !== "open") } : undefined}
       tip={att.needs ?? att.background}
-      shape={shape}
       data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined }}
     />
   );

@@ -231,7 +231,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const rows = useStore.getState().sessions.filter((x) => x.id === sid).length;
       if (rows !== 1) throw new Fail(`${rows} sessions with id ${sid}`);
       if (useStore.getState().pendingChats.includes(id)) throw new Fail("still listed as pending");
-      const sidebarRows = $all(`[data-session-row="${sessionKey(s)}"]`).length;
+      const sidebarRows = $all(`[data-session-row="${sessionKey(s)}"]`).filter((r) => !r.closest("[data-ghost]")).length;
       if (sidebarRows !== 1) throw new Fail(`${sidebarRows} sidebar rows for the session`);
       // coool's own chat, even though the CLI records it as programmatic (sdk-cli).
       if (s.origin !== "coool") throw new Fail(`origin ${s.origin}, not coool`);
