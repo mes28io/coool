@@ -39,7 +39,7 @@ function useShortcuts() {
       else if (k === "w" && !e.shiftKey) st.closeFocused();
       else if (k === "\\" || e.code === "Backslash") st.split(e.shiftKey ? "col" : "row");
       else if (k === "l" && e.shiftKey) st.toggleTheme();
-      else if (k === "," && !e.shiftKey) st.setSheet({ kind: "settings" });
+      else if (k === "," && !e.shiftKey) st.setSidebarView("settings");
       else if (/^[1-9]$/.test(e.key) && !e.shiftKey) st.activateIndex(Number(e.key) - 1);
       else if (k === "0" && !e.shiftKey) st.activate(null);
       else hit = false;

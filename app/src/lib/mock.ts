@@ -922,6 +922,11 @@ export function mockBackend(): Backend {
   const chCoool = newChat("claude", coool, {}, 0);
   chCoool.always.add("Bash");
   setTimeout(() => chCoool.send("Add a slash command menu to the chat composer"), 2200);
+  // `?needs=demo`: a second chat with a pending question (the notes chat above already asks to run something).
+  if (location.search.includes("needs=demo")) {
+    const cq = newChat("claude", `${HOME}/code/atlas`, {}, 0);
+    setTimeout(() => cq.send("Which retry approach should I choose? ask me"), 1600);
+  }
   if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
   if (location.search.includes("plan=chat")) void import("./mockPlan").then((m) => m.runPlanChat(newChat("claude", coool, {}, 0))); // see mockPlan.ts
   if (location.search.includes("steer=demo")) void import("./mockPlan").then((m) => m.runSteerDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
