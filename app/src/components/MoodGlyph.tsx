@@ -1,7 +1,7 @@
 // The subagent "now" mark: one small glyph per activity mood (lib/activityMood.ts), quietly
 // animated while live. The main agent gets a thinking orb (ThinkOrb); subagents get this, so a
-// panel full of running agents stays calm. Drawn on the 16 grid of icons.tsx (1.5 stroke, round
-// caps), one colour (currentColor). Motion is CSS keyframes in moodGlyph.css, only on transform,
+// panel full of running agents stays calm. Drawn on the 16 grid of icons.tsx, in its Geist style
+// (1.5 stroke, butt caps, mitred joins, .25/.75 grid, filled dots), one colour (currentColor). Motion is CSS keyframes in moodGlyph.css, only on transform,
 // opacity and dash offset, stepped (~12 updates/s). `live={false}`, a static AnimateScope (lib/motion.ts)
 // and reduced motion show the first frame, which is a complete icon on its own. A change of mood cross-fades inside a fixed box (no layout shift).
 import type { ReactNode } from "react";
@@ -22,7 +22,7 @@ const GLYPHS: Record<Mood, ReactNode> = {
   // A thought bubble; its three dots light in turn.
   think: (
     <>
-      <path d="M3.75 2.75h8.5a2 2 0 012 2v4.5a2 2 0 01-2 2H8.25L5 13.75V11.25H3.75a2 2 0 01-2-2v-4.5a2 2 0 012-2z" />
+      <path d="M3.25 2.75h9.5a1.5 1.5 0 011.5 1.5v5.5a1.5 1.5 0 01-1.5 1.5h-4.5l-3.5 3v-3h-1.5a1.5 1.5 0 01-1.5-1.5v-5.5a1.5 1.5 0 011.5-1.5z" />
       <Dot x={5.25} y={7} r={0.9} className="mg-think-dot mg-think-dot-0" />
       <Dot x={8} y={7} r={0.9} className="mg-think-dot mg-think-dot-1" />
       <Dot x={10.75} y={7} r={0.9} className="mg-think-dot mg-think-dot-2" />
@@ -31,11 +31,11 @@ const GLYPHS: Record<Mood, ReactNode> = {
   // Three rows; the marks tick in order, top to bottom.
   plan: (
     <>
-      {[4, 8, 12].map((y, i) => (
+      {[3.75, 8, 12.25].map((y, i) => (
         <g key={y}>
           <Dot x={4} y={y} className={`mg-plan-dot mg-plan-dot-${i}`} />
-          <path d={`M2.5 ${y}l1.25 1.25L6.25 ${y - 1.5}`} className={`mg-plan-tick mg-plan-tick-${i}`} />
-          <path d={`M8.75 ${y}H13.5`} />
+          <path d={`M2.25 ${y}l1.5 1.5L6.5 ${y - 1.25}`} className={`mg-plan-tick mg-plan-tick-${i}`} />
+          <path d={`M8.75 ${y}H14.25`} />
         </g>
       ))}
     </>
@@ -58,15 +58,15 @@ const GLYPHS: Record<Mood, ReactNode> = {
   // A pencil drawing the line under it.
   write: (
     <>
-      <path d="M2.75 13.25H7.75" pathLength={1} className="mg-write-line" />
+      <path d="M2.25 13.25H7.75" pathLength={1} className="mg-write-line" />
       <path d="M12.4 4.45L14.05 6.1L9.7 10.45L7.75 10.75L8.05 8.8Z" className="mg-write-pen" />
     </>
   ),
   // A prompt and its cursor.
   run: (
     <>
-      <path d="M3.5 4.5L7 8L3.5 11.5" />
-      <path d="M9.25 11.5H12.75" className="mg-run-cursor" />
+      <path d="M3.25 4.25L7 8l-3.75 3.75" />
+      <path d="M8.75 11.75H13" className="mg-run-cursor" />
     </>
   ),
   // One node handing work to two; a bead travels down each branch in turn.
@@ -118,8 +118,8 @@ export function MoodSvg({ mood, size = 14, live = true, className }: { mood: Moo
       fill="none"
       stroke="currentColor"
       strokeWidth={1.5}
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      strokeLinecap="butt"
+      strokeLinejoin="miter"
       className={cx("mg", className)}
       data-live={on ? "true" : "false"}
       data-mood={mood}

@@ -13,7 +13,7 @@ import { score } from "../lib/fuzzy";
 import { fmtTokens } from "../lib/format";
 import { modelColor, modelLabel, tokTotal } from "../lib/models";
 import type { CommandKind } from "../lib/types";
-import { IArrowUp, ICheck, IStop, ITerminal } from "./icons";
+import { IArrowUp, ICaret, ICheck, IStop, ITerminal } from "./icons";
 import { InfoPanel, type InfoTab } from "./InfoPanel";
 import { useInfoRequest } from "../lib/infoRequest";
 import { flushLocal, steer } from "../lib/steer";
@@ -563,9 +563,7 @@ function KindTag({ group }: { group: Group }) {
 
 function Caret() {
   return (
-    <svg width="8" height="8" viewBox="0 0 8 8" className="opacity-60" aria-hidden>
-      <path d="M1.25 2.75L4 5.5l2.75-2.75" fill="none" stroke="currentColor" strokeWidth="1.25" />
-    </svg>
+<ICaret size={9} strokeWidth={1.75} className="opacity-60" aria-hidden />
   );
 }
 

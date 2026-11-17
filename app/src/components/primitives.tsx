@@ -8,7 +8,7 @@ import { registerOverlay } from "../lib/overlays";
 import { contextWindow } from "../lib/models";
 import claudeSvg from "../assets/brands/claude.svg?raw";
 import openaiSvg from "../assets/brands/openai.svg?raw";
-import { IArrowDown } from "./icons";
+import { IArrowDown, IExclaim } from "./icons";
 
 export type UiStatus = Status | "starting" | "needs";
 
@@ -308,10 +308,7 @@ export function NeedsBadge({ small, className }: { small?: boolean; className?: 
         className,
       )}
     >
-      <svg width={small ? 8 : 10} height={small ? 8 : 10} viewBox="0 0 10 10" aria-hidden>
-        <path d="M5 1.2v4.3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-        <circle cx="5" cy="8.1" r="1" fill="currentColor" />
-      </svg>
+      <IExclaim size={small ? 8 : 10} strokeWidth={2.25} aria-hidden />
       Needs you
     </span>
   );

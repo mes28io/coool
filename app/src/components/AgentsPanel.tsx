@@ -11,7 +11,7 @@ import { useFold } from "../lib/cardFold";
 import { modelLabel } from "../lib/models";
 import { useStableOrder } from "../lib/stable";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
-import { ICheck, IChevron, toolIcon } from "./icons";
+import { IArrowUpRight, ICheck, IChevron, toolIcon } from "./icons";
 import { MoodGlyph } from "./MoodGlyph";
 import { cx, ease, spring, StatusDot, TokenCount } from "./primitives";
 import { reducedMotion } from "./StepRail";
@@ -163,9 +163,9 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
             data-open-card
             title={card.source === "job" ? "Open" : "Open in timeline"}
             aria-label={card.source === "job" ? "Open" : "Open in timeline"}
-            className="-my-0.5 flex size-[22px] items-center justify-center rounded-[6px] text-[14px] leading-none text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
+            className="-my-0.5 flex size-[22px] items-center justify-center rounded-[6px] text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
           >
-            ↗
+            <IArrowUpRight size={13} />
           </button>
         </span>
         <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="-mr-1 -mt-px flex size-[20px] shrink-0 items-center justify-center text-faint" title={collapsed ? "Expand" : "Collapse"}>

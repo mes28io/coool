@@ -134,6 +134,17 @@ export const IBack = mk(<path d="M14.25 8H3M6.75 3.75L2.5 8l4.25 4.25" />);
 export const IForward = mk(<path d="M1.75 8H13M9.25 3.75L13.5 8l-4.25 4.25" />);
 /** Open elsewhere (the system browser). */
 export const IExternal = mk(<path d="M6.75 2.75h-3.5a1 1 0 00-1 1v9a1 1 0 001 1h9a1 1 0 001-1v-3.5M9.25 2.25h4.5v4.5M13.75 2.25l-6 6" />);
+/** "Open": an arrow leaving up and to the right (Jobs cards). */
+export const IArrowUpRight = mk(<path d="M3.75 12.25l8-8M5.25 4.25h6.5v6.5" />);
+/** The "!" of the Needs-you badge, without a frame. */
+export const IExclaim = mk(
+  <>
+    <path d="M8 2v7.75" />
+    {dot(8, 13, 1.1)}
+  </>,
+);
+/** A small dropdown caret: a flatter open corner than IChevron, pointing down. */
+export const ICaret = mk(<path d="M3.75 6l4.25 4.25L12.25 6" />);
 export const IRefresh = mk(<path d="M13.25 8a5.25 5.25 0 11-1.54-3.71M12.25 1.75v3h-3" />);
 
 /** The subagent mark (a cube), static, in the parent's colour. Takes the same props as the stroke icons. */

@@ -5,7 +5,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { ago } from "../lib/format";
-import { IFile, IList, ILock, ITerminal } from "./icons";
+import { IFile, IForward, IList, ILock, ITerminal } from "./icons";
 import { cx, ease } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
@@ -155,7 +155,7 @@ function Row({ c, now, onUndo, also, hot, onHover }: { c: LedgerChange; now: num
             {c.before !== undefined && c.after !== undefined ? (
               <>
                 <span className="min-w-0 truncate line-through decoration-faint/60">{c.before}</span>
-                <span className="shrink-0">→</span>
+                <IForward size={12} className="shrink-0 text-faint" />
                 <span className="min-w-0 truncate text-dim">{c.after}</span>
               </>
             ) : (

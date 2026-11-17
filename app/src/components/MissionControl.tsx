@@ -14,7 +14,7 @@ import { useStore, type Since } from "../store";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { MoodGlyph } from "./MoodGlyph";
 import { AnimateScope } from "../lib/motion";
-import { IPlay, IPlus, ISpark, toolIcon } from "./icons";
+import { IForward, IPlay, IPlus, ISpark, toolIcon } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, Button, ContextMeter, cx, Elapsed, ease, LiveClock, Kbd, PathText, ProviderMark, softSpring, StatusDot, statusLabel } from "./primitives";
 import { resumeInto } from "./SessionView";
@@ -230,7 +230,7 @@ const Card = memo(function Card({ s, att, i, stagger }: CardProps) {
             <span className="min-w-0 flex-1 truncate text-needs-text" title={needs}>
               {needs}
             </span>
-            <span className="shrink-0 text-small text-needs-text/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review →" : "Open →"}</span>
+            <span className="flex shrink-0 items-center gap-1 text-small text-needs-text/80 opacity-0 transition-opacity group-hover:opacity-100">{att.source === "approval" ? "Review" : "Open"}<IForward size={11} /></span>
           </>
         ) : crew ? (
           <span className="flex min-w-0 flex-1 items-center gap-2 text-fg/90" data-card-agents>
