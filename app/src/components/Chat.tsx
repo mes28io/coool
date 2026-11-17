@@ -322,7 +322,7 @@ export function ChatTimeline({
             <div aria-hidden className="pointer-events-none absolute inset-x-0 top-full h-5" style={{ background: "linear-gradient(to bottom, var(--bg), transparent)" }} />
           </div>
         )}
-        <div className={cx("mx-auto flex max-w-[700px] flex-col pb-[72px]", showCps ? "pt-3" : "pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
+        <div className={cx("mx-auto flex max-w-[700px] flex-col pb-[40px]", showCps ? "pt-3" : "pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
         {earlier && earlier.length > 0 && <Earlier rows={earlier} />}
         {!chat.ready && blocks.length === 0 && (
           <div className="flex min-h-[40vh] items-center justify-center">
