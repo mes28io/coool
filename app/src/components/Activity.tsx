@@ -717,7 +717,7 @@ export function useFocusLit(asked: boolean, card: { current: HTMLElement | null 
 /** How a finished subagent ended, and its one-line result: "Done · 3 tool uses · 5s". */
 export type AgentEnd = "done" | "failed" | "stopped";
 export function agentResultParts(uses: number, ms: number | null, tokens = 0): string[] {
-  return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `↓ ${fmtTokens(tokens)}`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
+  return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `↓ ${fmtTokens(tokens)} tokens`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
 }
 
 /** The chevron of a foldable card: › folded, ⌄ open. */
