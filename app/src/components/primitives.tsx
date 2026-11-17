@@ -1,5 +1,5 @@
 import { animate, AnimatePresence, motion, useMotionValue, useTransform } from "motion/react";
-import { memo, useEffect, useId, useRef, type ReactNode } from "react";
+import { memo, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Provider, Status } from "../lib/types";
 import { homeShort, fmtApprox, fmtClock, fmtElapsed, fmtTokens } from "../lib/format";
 import { useClock } from "../lib/clock";
@@ -144,12 +144,40 @@ export function LiveClock({ since, className, title }: { since: number | null; c
   );
 }
 
-/** "↓ 3.2k tokens": output tokens, dim, next to a timer. Nothing when 0/unknown. */
+/**
+ * Counts a growing number up smoothly. The transcript lands a whole message at a time (456 → 567 → 644), while Claude
+ * Code's own counter ticks as it streams; so on each rise the shown value runs up to the new one over ~1 s, stepped
+ * (~12 updates/s, like the app's other motion). The first value shows as is; Reduce motion jumps straight to it.
+ */
+function useCountUp(n: number): number {
+  const [shown, setShown] = useState(n);
+  const from = useRef(n);
+  useEffect(() => {
+    const start = from.current;
+    from.current = n;
+    if (n <= start || reducedMotion()) {
+      setShown(n);
+      return;
+    }
+    const t0 = performance.now();
+    const ms = Math.min(1200, 300 + (n - start) * 4);
+    const id = window.setInterval(() => {
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      setShown(Math.round(start + (n - start) * (1 - (1 - k) * (1 - k))));
+      if (k >= 1) window.clearInterval(id);
+    }, 83);
+    return () => window.clearInterval(id);
+  }, [n]);
+  return shown;
+}
+
+/** "↓ 3.2k tokens": output tokens, dim, next to a timer. Nothing when 0/unknown. Rises count up (see useCountUp). */
 export function TokenCount({ n, what = "this turn", className }: { n: number | null | undefined; what?: string; className?: string }) {
+  const shown = useCountUp(n && n > 0 ? n : 0);
   if (!n || n <= 0) return null;
   return (
     <span className={cx("tnum", className)} title={`${Math.round(n).toLocaleString("en-US")} output tokens ${what}`} data-token-count>
-      ↓ {fmtTokens(n)} tokens
+      ↓ {fmtTokens(shown)} tokens
     </span>
   );
 }
