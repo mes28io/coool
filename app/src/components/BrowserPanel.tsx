@@ -111,7 +111,7 @@ function TabStrip({ panelKey, state }: { panelKey: string; state: BrowserTabs })
                 }
               }}
               className={cx(
-                "group relative flex h-[26px] min-w-[52px] flex-[0_1_180px] cursor-default items-center gap-1.5 rounded-[7px] pl-2 pr-1 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-[var(--dim)]",
+                "group relative flex h-[26px] min-w-[52px] max-w-[180px] flex-[0_1_180px] cursor-default items-center gap-1.5 rounded-[7px] pl-2 pr-1 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-[var(--dim)]",
                 on ? "bg-[color-mix(in_oklab,var(--dim)_13%,transparent)] text-fg" : "text-dim hover:bg-hover hover:text-fg",
               )}
               data-browser-tab={t.id}
