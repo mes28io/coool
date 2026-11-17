@@ -632,18 +632,14 @@ html.page-hidden *::after {
 .seg-run {
   position: relative;
   overflow: hidden;
-  /* a light blue base with a narrow band of full systemBlue passing over it, so the bar reads mostly light blue */
-  background: color-mix(in oklab, var(--status-running) 70%, white);
-}
-:root[data-theme="light"] .seg-run {
-  background: color-mix(in oklab, var(--status-running) 55%, white);
+  background: var(--status-running);
 }
 .seg-run::after {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
-  width: 35%;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--status-running) 55%, transparent), transparent);
+  width: 55%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.6), transparent);
   transform: translateX(-57%);
   /* A moving layer (transform), not a moving background: 30 steps per 2.6 s (~12/s). */
   animation: seg-run 2.6s steps(30) infinite;
