@@ -1151,6 +1151,7 @@ mod tests {
             activity: Arc::new((0..n).map(|i| entry(&format!("{id} entry {i}"))).collect()),
             agents: Vec::new(),
             updated: std::time::UNIX_EPOCH + Duration::from_millis(updated_ms),
+            last_event: None,
             managed: None,
             chat: None,
             models: Vec::new(),
