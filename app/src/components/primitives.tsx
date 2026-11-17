@@ -8,6 +8,7 @@ import { registerOverlay } from "../lib/overlays";
 import { contextWindow } from "../lib/models";
 import claudeSvg from "../assets/brands/claude.svg?raw";
 import openaiSvg from "../assets/brands/openai.svg?raw";
+import { IArrowDown } from "./icons";
 
 export type UiStatus = Status | "starting" | "needs";
 
@@ -573,9 +574,7 @@ export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; f
           needs ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))] text-needs-text" : "border-line text-dim hover:text-fg",
         )}
       >
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 3v9.5M4 8.5l4 4 4-4" />
-        </svg>
+        <IArrowDown size={13} />
         {label}
         {fresh && !needs && <span className="size-[6px] rounded-full bg-running" />}
       </button>

@@ -1,6 +1,20 @@
 import type { SVGProps } from "react";
 import { AgentMark } from "./AgentMark";
 
+/*
+ * coool's icon set: original drawings made in the style of Vercel's Geist icons (no Geist paths are copied).
+ * Rules inferred from that set and used for every icon here:
+ * - 16x16 viewBox, drawn with a 1.5 stroke in currentColor, no fills (except tiny dots, which are filled r=.75-1 circles).
+ * - Square ends: butt caps and mitred joins, so line ends and corners read crisp, not rounded. Shapes whose sharp angles
+ *   would mitre into spikes (star, bolt, pulse) switch to round joins locally.
+ * - Big and quiet: ~1px of air inside the box; frames run on the 1.75 / 14.25 lines, circles are r 6.25 at the centre.
+ * - Small corner radii: 1-1.5 on frames, 1 on small tiles; geometry is straight lines, 45-degree diagonals and arcs.
+ * - Pixel grid: straight strokes sit on .25 / .75 centre lines so both edges land on whole device pixels at 2x;
+ *   symmetric marks (plus, arrows, dividers) stay on the true centre (8) instead.
+ * - Metaphors kept literal and minimal: chevrons are open 90-degree corners, arrows are a shaft + open corner head,
+ *   containers (terminal, split, sidebar) are a rounded frame with one divider.
+ */
+
 type P = SVGProps<SVGSVGElement> & { size?: number };
 
 const base = (size = 16, p: P) => ({
@@ -10,8 +24,8 @@ const base = (size = 16, p: P) => ({
   fill: "none",
   stroke: "currentColor",
   strokeWidth: 1.5,
-  strokeLinecap: "round" as const,
-  strokeLinejoin: "round" as const,
+  strokeLinecap: "butt" as const,
+  strokeLinejoin: "miter" as const,
   ...p,
 });
 
@@ -20,114 +34,107 @@ const mk = (d: React.ReactNode) =>
     return <svg {...base(size, p)}>{d}</svg>;
   };
 
-export const IPlus = mk(<path d="M8 3.5v9M3.5 8h9" />);
-export const IClose = mk(<path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />);
-export const IChevron = mk(<path d="M6 4l4 4-4 4" />);
+/** A filled dot (bullets, the point of "!"); stroked dots vanish with butt caps. */
+const dot = (cx: number, cy: number, r = 0.9) => <circle cx={cx} cy={cy} r={r} fill="currentColor" stroke="none" />;
+
+export const IPlus = mk(<path d="M8 1.75v12.5M1.75 8h12.5" />);
+export const IClose = mk(<path d="M3.25 3.25l9.5 9.5M12.75 3.25l-9.5 9.5" />);
+/** Points right; call sites rotate it. */
+export const IChevron = mk(<path d="M5.75 3.25L10.5 8l-4.75 4.75" />);
 export const ISearch = mk(
   <>
-    <circle cx="7" cy="7" r="4.25" />
-    <path d="M10.2 10.2L13 13" />
+    <circle cx="6.75" cy="6.75" r="5" />
+    <path d="M10.5 10.5l3.75 3.75" />
   </>,
 );
 export const ITerminal = mk(
   <>
-    <rect x="2" y="3" width="12" height="10" rx="2" />
-    <path d="M5 6.5l2 1.5-2 1.5M8.5 10H11" />
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+    <path d="M4.75 6l2 2-2 2M8.25 10.25h3" />
   </>,
 );
-export const IActivity = mk(<path d="M2 8.5h2.5l1.5-4 3 7 1.5-3H14" />);
+export const IActivity = mk(<path d="M1 8.25h3l1.75-4.5 3.5 8.5 1.75-4H15" strokeLinejoin="round" />);
 export const IGrid = mk(
   <>
-    <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2" />
-    <rect x="9" y="2.5" width="4.5" height="4.5" rx="1.2" />
-    <rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2" />
-    <rect x="9" y="9" width="4.5" height="4.5" rx="1.2" />
+    <rect x="1.75" y="1.75" width="4.5" height="4.5" rx="1" />
+    <rect x="9.75" y="1.75" width="4.5" height="4.5" rx="1" />
+    <rect x="1.75" y="9.75" width="4.5" height="4.5" rx="1" />
+    <rect x="9.75" y="9.75" width="4.5" height="4.5" rx="1" />
   </>,
 );
 export const ISplitRight = mk(
   <>
-    <rect x="2" y="2.5" width="12" height="11" rx="2" />
-    <path d="M8 2.5v11" />
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+    <path d="M8 2.75v10.5" />
   </>,
 );
 export const ISplitDown = mk(
   <>
-    <rect x="2" y="2.5" width="12" height="11" rx="2" />
-    <path d="M2 8h12" />
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+    <path d="M1.75 8h12.5" />
   </>,
 );
 export const ISun = mk(
   <>
     <circle cx="8" cy="8" r="2.75" />
-    <path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M3.6 12.4l1.05-1.05M11.35 4.65l1.05-1.05" />
+    <path d="M8 1v1.75M8 13.25V15M1 8h1.75M13.25 8H15M3.05 3.05l1.24 1.24M11.71 11.71l1.24 1.24M3.05 12.95l1.24-1.24M11.71 4.29l1.24-1.24" />
   </>,
 );
-export const IMoon = mk(<path d="M13 9.6A5.25 5.25 0 016.4 3a5.25 5.25 0 106.6 6.6z" />);
-export const IStop = mk(<rect x="4.25" y="4.25" width="7.5" height="7.5" rx="1.6" />);
-export const IPlay = mk(<path d="M5 3.8v8.4a.6.6 0 00.9.5l6.6-4.2a.6.6 0 000-1L5.9 3.3a.6.6 0 00-.9.5z" />);
-export const IFolder = mk(<path d="M2.25 5V11.5a1.5 1.5 0 001.5 1.5h8.5a1.5 1.5 0 001.5-1.5V6.5A1.5 1.5 0 0012.25 5H8L6.5 3.25H3.75A1.5 1.5 0 002.25 4.75z" />);
-export const IFile = mk(
-  <>
-    <path d="M4 2.25h5L12 5.25V13a.75.75 0 01-.75.75h-7.5A.75.75 0 013 13V3A.75.75 0 013.75 2.25z" />
-    <path d="M8.75 2.25V5.5H12" />
-  </>,
-);
-export const IPencil = mk(<path d="M10.5 2.75l2.75 2.75L6 12.75 2.75 13.25 3.25 10z" />);
+export const IMoon = mk(<path d="M14 9.75A6 6 0 016.25 2 6.25 6.25 0 1014 9.75z" />);
+export const IStop = mk(<rect x="3.75" y="3.75" width="8.5" height="8.5" rx="1.25" />);
+export const IPlay = mk(<path d="M4.75 2.75v10.5L12.75 8z" />);
+export const IFolder = mk(<path d="M1.75 3.75a1 1 0 011-1h3.69l1.5 1.5h5.31a1 1 0 011 1v7a1 1 0 01-1 1H2.75a1 1 0 01-1-1z" />);
+export const IFile = mk(<path d="M2.75 1.75h6l4.5 4.5v8H2.75zM8.75 1.75v4.5h4.5" />);
+export const IPencil = mk(<path d="M10.5 2.25l3.25 3.25-8.25 8.25H2.25V10.5zM8.75 4l3.25 3.25" />);
 export const IGlobe = mk(
   <>
-    <circle cx="8" cy="8" r="5.75" />
-    <path d="M2.25 8h11.5M8 2.25c1.6 1.6 2.4 3.5 2.4 5.75S9.6 12.15 8 13.75C6.4 12.15 5.6 10.25 5.6 8S6.4 3.85 8 2.25z" />
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M1.75 8h12.5M8 1.75C6.25 3.5 5.5 5.5 5.5 8s.75 4.5 2.5 6.25C9.75 12.5 10.5 10.5 10.5 8S9.75 3.5 8 1.75z" />
   </>,
 );
-export const ISpark = mk(<path d="M8 2l1.3 3.7L13 7l-3.7 1.3L8 12l-1.3-3.7L3 7l3.7-1.3z" />);
+export const ISpark = mk(<path d="M8 1.75l1.5 4.75 4.75 1.5-4.75 1.5L8 14.25 6.5 9.5 1.75 8 6.5 6.5z" strokeLinejoin="round" />);
 export const IAlert = mk(
   <>
-    <circle cx="8" cy="8" r="5.75" />
-    <path d="M8 5v3.5M8 10.9v.1" />
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M8 4.25v4.5" />
+    {dot(8, 11.25)}
   </>,
 );
-export const ICheck = mk(<path d="M3.5 8.5l3 3 6-7" />);
-export const IReturn = mk(<path d="M12.5 4v3.5a2 2 0 01-2 2h-7M6 7l-2.5 2.5L6 12" />);
-export const IStack = mk(
-  <>
-    <path d="M8 2.5l5.5 2.75L8 8 2.5 5.25z" />
-    <path d="M2.5 8L8 10.75 13.5 8M2.5 10.75L8 13.5l5.5-2.75" />
-  </>,
+export const ICheck = mk(<path d="M2.75 8.5L6.25 12l7-7.5" />);
+export const IReturn = mk(<path d="M13.25 2.75v5a1.5 1.5 0 01-1.5 1.5H3.25M6.25 6.25l-3 3 3 3" />);
+export const IStack = mk(<path d="M8 1.75l6 3.25-6 3.25L2 5zM2 8l6 3.25L14 8M2 11l6 3.25L14 11" />);
+export const ICommand = mk(
+  <path d="M5.75 5.75h4.5v4.5h-4.5zM5.75 5.75V4A1.75 1.75 0 104 5.75h1.75M10.25 5.75V4A1.75 1.75 0 1112 5.75h-1.75M10.25 10.25V12A1.75 1.75 0 1012 10.25h-1.75M5.75 10.25V12A1.75 1.75 0 114 10.25h1.75" />,
 );
-export const ICommand = mk(<path d="M6 6V4.5A1.5 1.5 0 104.5 6H6zm0 0h4m-4 0v4m4-4V4.5A1.5 1.5 0 1111.5 6H10zm0 0v4m0 0h1.5a1.5 1.5 0 11-1.5 1.5V10zm0 0H6m0 0v1.5A1.5 1.5 0 114.5 10H6z" />);
 export const IGear = mk(
   <>
+    <path
+      d="M6.79 3.15L6.87 1.6h2.26l.08 1.55 1.37.56 1.15-1.03 1.59 1.59-1.03 1.15.56 1.37 1.55.08v2.26l-1.55.08-.56 1.37 1.03 1.15-1.59 1.59-1.15-1.03-1.37.56-.08 1.55H6.87l-.08-1.55-1.37-.56-1.15 1.03-1.59-1.59 1.03-1.15-.56-1.37-1.55-.08V6.87l1.55-.08.56-1.37-1.03-1.15 1.59-1.59 1.15 1.03z"
+      strokeLinejoin="round"
+    />
     <circle cx="8" cy="8" r="2" />
-    <path d="M8 1.75v1.5M8 12.75v1.5M14.25 8h-1.5M3.25 8h-1.5M12.42 3.58l-1.06 1.06M4.64 11.36l-1.06 1.06M12.42 12.42l-1.06-1.06M4.64 4.64L3.58 3.58" />
-    <circle cx="8" cy="8" r="4.25" />
   </>,
 );
-export const IArrowDown = mk(<path d="M8 3v9.5M4 8.5l4 4 4-4" />);
-export const IArrowUp = mk(<path d="M8 13V3.5M4 7.5l4-4 4 4" />);
+export const IArrowDown = mk(<path d="M8 1.75V13M3.75 9.25L8 13.5l4.25-4.25" />);
+export const IArrowUp = mk(<path d="M8 14.25V3M3.75 6.75L8 2.5l4.25 4.25" />);
 
-export const IHome = mk(<path d="M2.75 7.25L8 2.75l5.25 4.5V12.5a.75.75 0 01-.75.75H10V9.5H6v3.75H3.5a.75.75 0 01-.75-.75z" />);
-export const IBell = mk(<path d="M4 11V7.25a4 4 0 118 0V11l1 1.5H3zM6.75 14a1.4 1.4 0 002.5 0" />);
-export const ICompose = mk(<path d="M7 3H4.25A1.5 1.5 0 002.75 4.5v7.25a1.5 1.5 0 001.5 1.5H11.5a1.5 1.5 0 001.5-1.5V9M10.9 2.9l2.2 2.2L7.6 10.6 5.2 11l.4-2.4z" />);
-export const IFolderOpen = mk(<path d="M2.25 11.5V4.75a1.5 1.5 0 011.5-1.5H6l1.4 1.75h4.1a1.5 1.5 0 011.5 1.5V6.5M2.25 11.5l1.4-4.1a1 1 0 01.95-.7h8.9a.75.75 0 01.72.97l-1.2 4.1a1.5 1.5 0 01-1.44 1.08H3.75a1.5 1.5 0 01-1.5-1.5z" />);
+export const IHome = mk(<path d="M2.25 6.5L8 1.75l5.75 4.75v7.75H2.25zM6.25 14.25v-4h3.5v4" />);
+export const IBell = mk(<path d="M3.25 11.25V6.5a4.75 4.75 0 019.5 0v4.75l1.5 1.5H1.75zM6.25 14.75h3.5" />);
+export const ICompose = mk(<path d="M7.25 2.75h-4a1.5 1.5 0 00-1.5 1.5v8.5a1.5 1.5 0 001.5 1.5h8.5a1.5 1.5 0 001.5-1.5v-4M11.75 1.75l2.5 2.5L8.5 10H6V7.5z" />);
+export const IFolderOpen = mk(<path d="M1.75 13.25v-9.5a1 1 0 011-1h3.69l1.5 1.5h4.31a1 1 0 011 1v2M1.75 13.25l1.75-6h10.75l-1.75 6z" />);
 export const ISidebar = mk(
   <>
-    <rect x="2.25" y="3" width="11.5" height="10" rx="2" />
-    <path d="M6.25 3v10" />
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+    <path d="M6.25 2.75v10.5" />
   </>,
 );
 
-export const IGauge = mk(
-  <>
-    <path d="M2.5 11.5a5.5 5.5 0 1111 0" />
-    <path d="M8 11.25l2.4-3.4" />
-    <path d="M4.2 7.2l.6.6M8 4.6v.8M11.8 7.2l-.6.6" />
-  </>,
-);
-export const IBack = mk(<path d="M12.5 8h-9M7.5 4l-4 4 4 4" />);
-export const IForward = mk(<path d="M3.5 8h9M8.5 4l4 4-4 4" />);
+export const IGauge = mk(<path d="M2.59 12.63a6.25 6.25 0 1110.82 0M8 9.5l2.75-3" />);
+export const IBack = mk(<path d="M14.25 8H3M6.75 3.75L2.5 8l4.25 4.25" />);
+export const IForward = mk(<path d="M1.75 8H13M9.25 3.75L13.5 8l-4.25 4.25" />);
 /** Open elsewhere (the system browser). */
-export const IExternal = mk(<path d="M9.25 2.75h4v4M13.25 2.75L7.5 8.5M11.75 9.25v2.5a1.5 1.5 0 01-1.5 1.5h-6a1.5 1.5 0 01-1.5-1.5v-6a1.5 1.5 0 011.5-1.5h2.5" />);
-export const IRefresh = mk(<path d="M13 3.5v3h-3M3 12.5v-3h3M12.4 6.5A4.75 4.75 0 004.2 5M3.6 9.5a4.75 4.75 0 008.2 1.5" />);
+export const IExternal = mk(<path d="M6.75 2.75h-3.5a1 1 0 00-1 1v9a1 1 0 001 1h9a1 1 0 001-1v-3.5M9.25 2.25h4.5v4.5M13.75 2.25l-6 6" />);
+export const IRefresh = mk(<path d="M13.25 8a5.25 5.25 0 11-1.54-3.71M12.25 1.75v3h-3" />);
 
 /** The subagent mark (a cube), static, in the parent's colour. Takes the same props as the stroke icons. */
 export function IAgent({ size = 14, className }: P) {
@@ -148,17 +155,24 @@ export function toolIcon(name: string) {
 /** Two nodes joined by a fork: checkpoints / branches. */
 export const IBranch = mk(
   <>
-    <circle cx="4.5" cy="3.75" r="1.5" />
-    <circle cx="11.5" cy="12.25" r="1.5" />
-    <path d="M4.5 5.25v3.5a3 3 0 003 3h2.5" />
+    <circle cx="4.25" cy="3.75" r="1.75" />
+    <circle cx="11.75" cy="12.25" r="1.75" />
+    <path d="M4.25 5.5v3.25a3.5 3.5 0 003.5 3.5H10" />
   </>,
 );
 
-export const IList = mk(<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" />);
-export const ILock = mk(
+export const IList = mk(
   <>
-    <rect x="3.5" y="7.25" width="9" height="6" rx="1.5" />
-    <path d="M5.5 7.25V5.5a2.5 2.5 0 015 0v1.75" />
+    <path d="M5.75 3.75h8.5M5.75 8h8.5M5.75 12.25h8.5" />
+    {dot(2.5, 3.75)}
+    {dot(2.5, 8)}
+    {dot(2.5, 12.25)}
   </>,
 );
-export const IBolt = mk(<path d="M9 2L4 9h3.5L7 14l5-7H8.5z" />);
+export const ILock = mk(
+  <>
+    <rect x="2.75" y="7.25" width="10.5" height="7" rx="1.25" />
+    <path d="M5 7.25V5a3 3 0 016 0v2.25" />
+  </>,
+);
+export const IBolt = mk(<path d="M9.25 1.75l-6 7.5h4.5l-1 5 6-7.5h-4.5z" strokeLinejoin="round" />);

@@ -564,7 +564,7 @@ function KindTag({ group }: { group: Group }) {
 function Caret() {
   return (
     <svg width="8" height="8" viewBox="0 0 8 8" className="opacity-60" aria-hidden>
-      <path d="M1.5 3l2.5 2.5L6.5 3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M1.25 2.75L4 5.5l2.75-2.75" fill="none" stroke="currentColor" strokeWidth="1.25" />
     </svg>
   );
 }
