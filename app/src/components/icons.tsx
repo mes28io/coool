@@ -5,8 +5,7 @@ import { AgentMark } from "./AgentMark";
  * coool's icon set: original drawings made in the style of Vercel's Geist icons (no Geist paths are copied).
  * Rules inferred from that set and used for every icon here:
  * - 16x16 viewBox, drawn with a 1.5 stroke in currentColor, no fills (except tiny dots, which are filled r=.75-1 circles).
- * - Square ends: butt caps and mitred joins, so line ends and corners read crisp, not rounded. Shapes whose sharp angles
- *   would mitre into spikes (star, bolt, pulse) switch to round joins locally.
+ * - Round ends: round caps and round joins everywhere, as in Geist (soft line ends and corners, never spiky).
  * - Big and quiet: ~1px of air inside the box; frames run on the 1.75 / 14.25 lines, circles are r 6.25 at the centre.
  * - Small corner radii: 1-1.5 on frames, 1 on small tiles; geometry is straight lines, 45-degree diagonals and arcs.
  * - Pixel grid: straight strokes sit on .25 / .75 centre lines so both edges land on whole device pixels at 2x;
@@ -24,8 +23,8 @@ const base = (size = 16, p: P) => ({
   fill: "none",
   stroke: "currentColor",
   strokeWidth: 1.5,
-  strokeLinecap: "butt" as const,
-  strokeLinejoin: "miter" as const,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
   ...p,
 });
 
@@ -34,7 +33,7 @@ const mk = (d: React.ReactNode) =>
     return <svg {...base(size, p)}>{d}</svg>;
   };
 
-/** A filled dot (bullets, the point of "!"); stroked dots vanish with butt caps. */
+/** A filled dot (bullets, the point of "!"). */
 const dot = (cx: number, cy: number, r = 0.9) => <circle cx={cx} cy={cy} r={r} fill="currentColor" stroke="none" />;
 
 export const IPlus = mk(<path d="M8 1.75v12.5M1.75 8h12.5" />);

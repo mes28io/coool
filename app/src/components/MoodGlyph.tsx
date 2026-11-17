@@ -1,7 +1,7 @@
 // The subagent "now" mark: one small glyph per activity mood (lib/activityMood.ts), quietly
 // animated while live. The main agent gets a thinking orb (ThinkOrb); subagents get this, so a
 // panel full of running agents stays calm. Drawn on the 16 grid of icons.tsx, in its Geist style
-// (1.5 stroke, butt caps, mitred joins, .25/.75 grid, filled dots), one colour (currentColor). Motion is CSS keyframes in moodGlyph.css, only on transform,
+// (1.5 stroke, round caps and joins, .25/.75 grid, filled dots), one colour (currentColor). Motion is CSS keyframes in moodGlyph.css, only on transform,
 // opacity and dash offset, stepped (~12 updates/s). `live={false}`, a static AnimateScope (lib/motion.ts)
 // and reduced motion show the first frame, which is a complete icon on its own. A change of mood cross-fades inside a fixed box (no layout shift).
 import type { ReactNode } from "react";
@@ -118,8 +118,8 @@ export function MoodSvg({ mood, size = 14, live = true, className }: { mood: Moo
       fill="none"
       stroke="currentColor"
       strokeWidth={1.5}
-      strokeLinecap="butt"
-      strokeLinejoin="miter"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       className={cx("mg", className)}
       data-live={on ? "true" : "false"}
       data-mood={mood}
