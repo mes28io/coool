@@ -13,7 +13,8 @@ import { Sheets } from "./components/Sheets";
 import { Rail } from "./components/Rail";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
-import { useStore } from "./store";
+import { leaves, useStore } from "./store";
+import { sessionKey } from "./lib/types";
 
 function applyTheme(t: "dark" | "light") {
   const root = document.documentElement;
@@ -51,6 +52,45 @@ function useShortcuts() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+}
+
+/** The sessions on screen count as seen: mark them while their tab is the active one and the window is in view. */
+function useMarkSeen() {
+  useEffect(() => {
+    let inView = document.visibilityState === "visible";
+    const sync = () => {
+      if (!inView) return;
+      const st = useStore.getState();
+      const tab = st.tabs.find((t) => t.id === st.activeTab);
+      if (!tab) return;
+      for (const l of leaves(tab.root)) {
+        if (l.target?.kind !== "session") continue;
+        const key = l.target.key;
+        const s = st.sessions.find((x) => sessionKey(x) === key);
+        if (s) st.markSeen(key, s.updated);
+      }
+    };
+    const view = () => {
+      inView = document.visibilityState === "visible";
+      sync();
+    };
+    const blur = () => (inView = false);
+    const focus = () => view();
+    document.addEventListener("visibilitychange", view);
+    window.addEventListener("blur", blur);
+    window.addEventListener("focus", focus);
+    // Runs when sessions, tabs or the active tab change (a turn completing while open marks again).
+    const unsub = useStore.subscribe((s, p) => {
+      if (s.sessions !== p.sessions || s.tabs !== p.tabs || s.activeTab !== p.activeTab) sync();
+    });
+    sync();
+    return () => {
+      document.removeEventListener("visibilitychange", view);
+      window.removeEventListener("blur", blur);
+      window.removeEventListener("focus", focus);
+      unsub();
+    };
   }, []);
 }
 
@@ -131,6 +171,7 @@ export default function App() {
   const setSystemTheme = useStore((s) => s.setSystemTheme);
   useShortcuts();
   useBackendEvents();
+  useMarkSeen();
   const reduceMotion = useMotion().reduce;
 
   useLayoutEffect(() => {

@@ -4,7 +4,7 @@
 import { create } from "zustand";
 import type { ArtifactInfo, ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
 import { sessionKey } from "./lib/types";
-import { api } from "./lib/backend";
+import { api, isTauri } from "./lib/backend";
 
 export type Target = { kind: "session"; key: string } | { kind: "pty"; id: number } | { kind: "chat"; id: number };
 export type Leaf = { type: "leaf"; id: string; target: Target | null };
@@ -127,6 +127,11 @@ interface State {
   pendingChats: number[];
   since: Record<string, Since>;
 
+  /** Which finished turns the person has looked at: `base` covers everything older, `m` is session key -> its `updated` when last seen. */
+  seen: Seen;
+  /** Record that the person has seen this session as of `updated` (never moves backwards). */
+  markSeen(key: string, updated: number): void;
+
   tabs: Tab[];
   activeTab: string | null;
   modes: Record<string, ViewMode>;
@@ -188,6 +193,36 @@ interface State {
   setSidebarWidth(w: number): void;
   toggleSidebar(): void;
 }
+
+export interface Seen {
+  base: number;
+  m: Record<string, number>;
+}
+const SEEN_KEY = "coool.seen";
+const SEEN_TTL = 30 * 24 * 3600_000;
+function readSeen(): Seen {
+  const now = Date.now();
+  // First run: whatever is already idle counts as seen. (The browser mock has no history, so everything starts unseen.)
+  let out: Seen = { base: isTauri ? now : 0, m: {} };
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    if (raw) {
+      const v = JSON.parse(raw) as Partial<Seen>;
+      if (v && typeof v.base === "number" && v.m && typeof v.m === "object") {
+        const cutoff = now - SEEN_TTL;
+        const m: Record<string, number> = {};
+        for (const [k, t] of Object.entries(v.m)) if (typeof t === "number" && t >= cutoff) m[k] = t;
+        // Dropped entries were all older than the cutoff, so lifting the baseline keeps them seen.
+        out = { base: isTauri ? Math.max(v.base, cutoff) : v.base, m };
+      }
+    } else localStorage.setItem(SEEN_KEY, JSON.stringify(out));
+  } catch {
+    /* storage unavailable: seen lasts for this run */
+  }
+  return out;
+}
+/** True while the session finished a turn the person has not looked at yet. */
+export const isUnseen = (seen: Seen, key: string, updated: number) => updated > (seen.m[key] ?? seen.base);
 
 const COLLAPSED_KEY = "coool.collapsedProjects";
 function readCollapsed(): Record<string, true> {
@@ -315,6 +350,18 @@ export const useStore = create<State>((set, get) => ({
   chatOwner: {},
   pendingChats: [],
   since: {},
+  seen: readSeen(),
+  markSeen(key, updated) {
+    const { seen } = get();
+    if (!isUnseen(seen, key, updated)) return;
+    const next: Seen = { base: seen.base, m: { ...seen.m, [key]: updated } };
+    set({ seen: next });
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  },
   tabs: [],
   activeTab: null,
   modes: {},
@@ -437,6 +484,10 @@ export const useStore = create<State>((set, get) => ({
     let target = t;
     if (t.kind === "pty" && get().ptyOwner[t.id]) target = { kind: "session", key: get().ptyOwner[t.id] };
     if (t.kind === "chat" && get().chatOwner[t.id]) target = { kind: "session", key: get().chatOwner[t.id] };
+    if (target.kind === "session") {
+      const s = get().sessions.find((x) => sessionKey(x) === (target as { key: string }).key);
+      if (s) get().markSeen(sessionKey(s), s.updated);
+    }
     // Already visible somewhere: go there.
     for (const tab of tabs) {
       const hit = leaves(tab.root).find((l) => sameTarget(l.target, target));

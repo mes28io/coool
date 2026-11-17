@@ -5,7 +5,7 @@ import { useChats } from "../lib/chat";
 import { ago, displayTitle, folderName, fmtElapsed, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { turnTotals } from "../lib/turn";
 import { MOODS, moodOfCurrent } from "../lib/activityMood";
-import { attention, liveJobs, sameAttention, useChatDigest, type Attention } from "../lib/live";
+import { attention, liveJobs, sameAttention, useChatDigest, useUnseen, type Attention } from "../lib/live";
 import { modelColor, modelLabel, sessionModels } from "../lib/models";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -154,7 +154,7 @@ function CardModel({ s }: { s: Session }) {
 }
 
 /** State at the top right of a card: just a dot ("Needs you" keeps its word, in yellow). */
-function StateLabel({ status, needs, background }: { status: "busy" | "idle" | "starting" | "ended"; needs?: boolean; background?: string | null }) {
+function StateLabel({ status, needs, background, unseen = true }: { status: "busy" | "idle" | "starting" | "ended"; needs?: boolean; background?: string | null; unseen?: boolean }) {
   if (needs)
     return (
       <span className="flex shrink-0 items-center gap-1.5 text-small font-medium text-needs-text">
@@ -166,7 +166,7 @@ function StateLabel({ status, needs, background }: { status: "busy" | "idle" | "
   const word = background ? `Working in background · ${background}` : status === "idle" ? "Waiting for you" : statusLabel(status);
   return (
     <span role="img" aria-label={word} title={word} className="flex size-[16px] shrink-0 items-center justify-center">
-      <StatusDot status={status} size={8} />
+      {(status !== "idle" || unseen) && <StatusDot status={status} size={8} />}
     </span>
   );
 }
@@ -180,6 +180,7 @@ const sameCard = (a: CardProps, b: CardProps) => a.s === b.s && a.i === b.i && a
 const Card = memo(function Card({ s, att, i, stagger }: CardProps) {
   const open = useStore((st) => st.open);
   const age = useClock((now) => ago(s.updated, now));
+  const unseen = useUnseen(s);
   const needs = att.needs;
   const busy = att.status === "busy" && !needs && !att.background;
   const thinking = busy && (!s.current || isThinking(s.current));
@@ -218,7 +219,7 @@ const Card = memo(function Card({ s, att, i, stagger }: CardProps) {
         <ProviderMark provider={s.provider} size={14} />
         <span className="min-w-0 flex-1 truncate text-small text-dim">{folderName(projectOf(s))}</span>
         {s.origin === "automation" && <AutoTag />}
-        <StateLabel status={att.status} needs={!!needs} background={att.background} />
+        <StateLabel status={att.status} needs={!!needs} background={att.background} unseen={unseen} />
       </div>
       <div className="mt-2 line-clamp-2 text-title font-semibold tracking-[-0.01em] text-fg">{displayTitle(s)}</div>
 
