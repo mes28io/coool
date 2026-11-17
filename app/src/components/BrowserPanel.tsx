@@ -89,7 +89,7 @@ function TabStrip({ panelKey, state }: { panelKey: string; state: BrowserTabs })
   };
   return (
     <div className="flex h-[36px] shrink-0 items-center gap-1 border-b border-hairline pl-2 pr-1.5" role="tablist" data-browser-tabs={state.tabs.length}>
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
+      <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
         {state.tabs.map((t) => {
           const on = t.id === state.active;
           const title = tabTitle(t);
@@ -111,7 +111,7 @@ function TabStrip({ panelKey, state }: { panelKey: string; state: BrowserTabs })
                 }
               }}
               className={cx(
-                "group relative flex h-[26px] min-w-[52px] max-w-[180px] flex-1 cursor-default items-center gap-1.5 rounded-[7px] pl-2 pr-1 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-[var(--dim)]",
+                "group relative flex h-[26px] min-w-[52px] flex-[0_1_180px] cursor-default items-center gap-1.5 rounded-[7px] pl-2 pr-1 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-[var(--dim)]",
                 on ? "bg-[color-mix(in_oklab,var(--dim)_13%,transparent)] text-fg" : "text-dim hover:bg-hover hover:text-fg",
               )}
               data-browser-tab={t.id}
@@ -138,7 +138,8 @@ function TabStrip({ panelKey, state }: { panelKey: string; state: BrowserTabs })
           );
         })}
       </div>
-      <IconButton title="New tab" onClick={() => openBrowser(panelKey, { kind: "start" })}>
+      {/* Right after the last tab (as in Safari/Chrome); the tabs shrink, then scroll, to keep it in view. */}
+      <IconButton title="New tab" className="shrink-0" onClick={() => openBrowser(panelKey, { kind: "start" })}>
         <IPlus size={14} />
       </IconButton>
     </div>
