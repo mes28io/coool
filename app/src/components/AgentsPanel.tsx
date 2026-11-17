@@ -173,7 +173,7 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
           <IChevron size={14} />
         </motion.span>
       </div>
-      <div className="px-3 pb-2.5 pt-3">
+      <div className="px-3 pb-2.5 pt-1.5">
         <Strip card={card} />
       </div>
       <AnimatePresence initial={false}>
