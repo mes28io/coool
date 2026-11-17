@@ -150,9 +150,24 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
             {[card.model ? modelLabel(card.model) : null, card.kind].filter(Boolean).join(" · ")}
           </div>
         </div>
-        <span className="-mt-[2px] flex shrink-0 items-center gap-2">
-          {/* No status pill: the strip under the title already says Running / Done / Failed / Stopped / Needs you. */}
-          <CardTotal card={card} />
+        <span className="-mt-[2px] flex shrink-0 items-center gap-1">
+          {/* No status pill: the strip under the title already says Running / Done / Failed / Stopped / Needs you.
+              Time and tokens sit in the footer while the card is open; folded, the header keeps them. */}
+          {collapsed && <CardTotal card={card} />}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            data-open-card
+            title={card.source === "job" ? "Open" : "Open in timeline"}
+            aria-label={card.source === "job" ? "Open" : "Open in timeline"}
+            className="-my-0.5 flex size-[22px] items-center justify-center rounded-[6px] text-[14px] leading-none text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
+          >
+            ↗
+          </button>
         </span>
         <motion.span animate={{ rotate: collapsed ? 0 : 90 }} transition={{ duration: 0.18, ease }} className="-mr-1 -mt-px flex size-[20px] shrink-0 items-center justify-center text-faint" title={collapsed ? "Expand" : "Collapse"}>
           <IChevron size={14} />
@@ -171,15 +186,13 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
                 <span className="tnum">
                   {card.steps.length} {card.steps.length === 1 ? "step" : "steps"}
                 </span>
-                <span className="flex-1" />
                 {card.stoppable && (
                   <button type="button" onClick={onStop} className="-my-px h-[24px] rounded-[6px] px-1.5 text-small text-dim transition-colors duration-150 hover:bg-hover hover:text-fg">
                     Stop
                   </button>
                 )}
-                <button type="button" onClick={onOpen} data-open-card className="-mr-1.5 h-[24px] rounded-[6px] px-1.5 text-small text-dim transition-colors duration-150 hover:bg-hover hover:text-fg">
-                  {card.source === "job" ? "Open" : "Open in timeline ↗"}
-                </button>
+                <span className="flex-1" />
+                <CardTotal card={card} />
               </div>
             </div>
           </motion.div>
