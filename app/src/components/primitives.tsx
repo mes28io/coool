@@ -27,8 +27,8 @@ function WorkSpinner({ size, className }: { size: number; className?: string }) 
   return (
     <span className={cx("relative inline-flex shrink-0 items-center justify-center", className)} style={{ width: size, height: size }}>
       <svg aria-hidden width={px} height={px} viewBox="0 0 16 16" className="work-spin absolute text-running" style={{ left: (size - px) / 2, top: (size - px) / 2 }}>
-        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2.2" />
-        <path d="M8 2a6 6 0 016 6" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2.8" />
+        <path d="M8 2a6 6 0 016 6" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" />
       </svg>
     </span>
   );
