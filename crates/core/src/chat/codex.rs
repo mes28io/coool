@@ -67,6 +67,24 @@ pub(crate) fn args() -> Vec<String> {
     vec!["app-server".into()]
 }
 
+/// `-c mcp_servers.<name>.command=…` / `.args=[…]` / `.env={…}` overrides (values are TOML; a JSON string is a valid
+/// TOML basic string). Codex reads them on top of the person's config without writing it.
+pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
+    let q = |s: &str| serde_json::to_string(s).unwrap_or_default();
+    let mut a = Vec::new();
+    for s in servers {
+        let key = format!("mcp_servers.{}", s.name);
+        a.extend(["-c".into(), format!("{key}.command={}", q(&s.command))]);
+        let args: Vec<String> = s.args.iter().map(|x| q(x)).collect();
+        a.extend(["-c".into(), format!("{key}.args=[{}]", args.join(","))]);
+        if !s.env.is_empty() {
+            let env: Vec<String> = s.env.iter().map(|(k, v)| format!("{}={}", q(k), q(v))).collect();
+            a.extend(["-c".into(), format!("{key}.env={{{}}}", env.join(","))]);
+        }
+    }
+    a
+}
+
 enum Req {
     Init,
     ModelList,
@@ -1146,6 +1164,28 @@ mod tests {
 
     fn opts() -> ChatOptions {
         ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()) }
+    }
+
+    #[test]
+    fn mcp_servers_become_config_overrides() {
+        let a = mcp_args(&[super::super::McpServer {
+            name: "coool-device".into(),
+            command: "/Applications/coool.app/Contents/MacOS/coool".into(),
+            args: vec!["--coool-device-mcp".into()],
+            env: vec![("COOOL_DEVICE_TOKEN".into(), "t\"1".into())],
+            allow_all: true,
+        }]);
+        assert_eq!(
+            a,
+            vec![
+                "-c",
+                r#"mcp_servers.coool-device.command="/Applications/coool.app/Contents/MacOS/coool""#,
+                "-c",
+                r#"mcp_servers.coool-device.args=["--coool-device-mcp"]"#,
+                "-c",
+                r#"mcp_servers.coool-device.env={"COOOL_DEVICE_TOKEN"="t\"1"}"#,
+            ]
+        );
     }
 
     /// `availableDecisions` exactly as Codex 0.145 sent them (untrusted mode):

@@ -8,6 +8,7 @@ import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import { SessionsMerge } from "./sessionsMerge";
 import { mockHints } from "./motion";
+import { mockSim } from "./mockSim";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -1335,6 +1336,8 @@ export function mockBackend(): Backend {
     onBrowserNewTab() {
       return () => {};
     },
+    // The iPhone panel (lib/mockSim.ts).
+    ...mockSim(),
 
     // ---------- chats ----------
     async startChat({ provider, cwd, resume, model, permission_mode }) {

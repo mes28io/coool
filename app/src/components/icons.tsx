@@ -92,6 +92,20 @@ export const IGlobe = mk(
     <path d="M8 1.75c-2 2-3 3.9-3 6.25s1 4.25 3 6.25M8 1.75c2 2 3 3.9 3 6.25s-1 4.25-3 6.25M1.75 8h12.5" strokeWidth={1} opacity={0.8} />
   </>,
 );
+/** iPhone (the right panel's device): a tall rounded frame, the dynamic-island pill drawn thinner and lighter like the globe's lines. */
+export const IPhone = mk(
+  <>
+    <rect x="4.25" y="1.75" width="7.5" height="12.5" rx="2" />
+    <path d="M7 3.75h2" strokeWidth={1} opacity={0.8} />
+  </>,
+);
+/** Mac (a sandbox Mac, coming): a laptop, its screen frame over a wider base line. */
+export const IMac = mk(
+  <>
+    <rect x="3.25" y="2.75" width="9.5" height="8" rx="1.25" />
+    <path d="M1.75 12.75h12.5" />
+  </>,
+);
 export const ISpark = mk(<path d="M8 1.75l1.5 4.75 4.75 1.5-4.75 1.5L8 14.25 6.5 9.5 1.75 8 6.5 6.5z" strokeLinejoin="round" />);
 export const IAlert = mk(
   <>

@@ -95,7 +95,7 @@ Sidebar cap: per project at most 5 rows at rest (every live chat, most urgent fi
 
 ## Right panel
 
-A session pane has one right-hand panel slot (`components/RightPanel.tsx`), showing one of three kinds; opening one replaces the one showing: **Jobs** (subagents, child jobs, background shells), **Models**, and the **browser**. Jobs and Models show in panes at least 900px wide, 300–440px wide (this run only). The browser shows in panes at least 680px wide, is wider (default 600px, resizable by dragging its left edge, at least 360px, always leaving the chat 320px; the width is remembered in localStorage `coool.browserWidth`). Escape or the header toggle hides a panel; a globe button in the session header brings the browser back (its tabs, or the ones it had when closed).
+A session pane has one right-hand panel slot (`components/RightPanel.tsx`), showing one of four kinds; opening one replaces the one showing: **Jobs** (subagents, child jobs, background shells), **Models**, the **browser** and the **iPhone** (see "iPhone panel"). Jobs and Models show in panes at least 900px wide, 300–440px wide (this run only). The browser shows in panes at least 680px wide, is wider (default 600px, resizable by dragging its left edge, at least 360px, always leaving the chat 320px; the width is remembered in localStorage `coool.browserWidth`). Escape or the header toggle hides a panel; the session header's Browser (globe) and iPhone buttons bring theirs back (the browser: its tabs, or the ones it had when closed).
 
 ## Artifacts and the browser panel
 
@@ -147,6 +147,68 @@ WebKit reports a size only when both `width` and `height` are given (and a posit
 
 Known limits: while the page has keyboard focus, the app's web shortcuts (Cmd+K and friends) go to the page; native menu shortcuts still work. Email links open in the person's mail app and default browser, not here.
 
+## iPhone panel (iOS Simulator) and the `coool-device` MCP server
+
+The idea: agents (and the person) test and drive apps inside coool's right panel, on a device of their own, instead of opening windows that take over the screen while the person works on something else. Phase 1 is the iOS Simulator; phase 2 is a sandboxed Mac (a Virtualization.framework VM) behind the same header button and the same MCP server.
+
+**The header.** Three icon buttons sit where the globe was, left to right: **Browser** (the globe, spinning while a page loads), **iPhone**, **Mac** (disabled, tooltip "Coming soon: sandbox Mac"), then Jobs. Each toggles its environment in the right panel: one at a time; clicking the active one closes the panel, clicking another switches. Selected = background only, the icon keeps its colour. Each chat remembers which was open (`rightPanel[key]`), so closing and reopening restores it. While the chat's agent drives its iPhone and another panel is showing, the iPhone button shows a small breathing blue dot (4 s after the latest action).
+
+**The panel** (`components/DevicePanel.tsx`, panel kind `device`, store `device[key] = { udid }`): 340–720px wide (default 400, resizable by its left edge, `coool.deviceWidth`), shown in panes at least 660px wide (else a toast). Top bar: the device picker (state dot, name, state; coool's own devices first, then the person's under "Your simulators"), Boot / Shut down, Home (also ⇧⌘H), Lock, close. No device yet: the first coool device; none exists: "Set up iPhone" creates **coool iPhone** (newest iOS runtime, newest non-Max iPhone Pro) and boots it. No Xcode: a calm empty state with the reason. Not booted: a black screen in the device's shape with Boot; Booting… / Shutting down… with a spinner; errors inline with "Try again". The live screen keeps the device's aspect (18px padding, corners 6% of its width, hairline ring) and streams only while the panel shows a booted device (detached when hidden, switched, unmounted). Input: pointer down / move / up become touches in device points (moves throttled to one per frame, pointer captured); click focuses the screen (soft ring); printable keys are typed, Enter / Backspace / Tab / Escape / arrows are keys (Escape on a focused screen doesn't close the panel), Cmd+V pastes the clipboard's text, other Cmd/Ctrl shortcuts stay the app's. Agent activity is drawn over the screen: a ripple where it tapped, a fading line for a swipe, and an "Agent is driving…" pill for 3 s after its latest action (still, then gone, with reduced motion). Agent activity in a chat sets that chat's device and opens the iPhone panel when no panel is showing (not again for 30 s if the person closed it during that stretch). Picking a device calls `sim_bind(chat, udid)`, so the agent acts on what the person sees. The browser mock has two devices, a generated home screen and a fake agent tap every 6 s.
+
+**Never steals focus.** `simctl boot` is headless; Simulator.app is never opened; nothing activates a window. coool only creates, erases or deletes devices of its own (named "coool …"); the person's simulators can be booted / shut down from the panel and selected, nothing more. Devices coool booted are shut down when coool quits.
+
+### Backend (`app/src-tauri/src/device/`)
+
+- `simctl.rs`: lifecycle through `xcrun simctl` (list, create coool's device, boot + bootstatus, shutdown, install, launch, terminate, openurl, ui appearance, location, privacy, pbcopy, listapps).
+- `helper.rs` + `native/coool-sim.m`: **coool-sim**, our own Objective-C helper (no idb, nothing downloaded). build.rs compiles it with `xcrun clang`; the app embeds the binary and writes it to `<app local data>/bin/coool-sim-<hash>` on first use. One process per booted device, stdin JSON lines in, framed stdout out (`[u32 len][u8 kind]`, `J` JSON / `F` JPEG). It loads CoreSimulator / SimulatorKit / AccessibilityPlatformTranslation at runtime (nothing links privately) and:
+  - **frames**: registers SimScreen frame callbacks on the device's display IO ports and takes the surface whose size is the main screen; each presented frame is scaled and JPEG-encoded with CoreImage, coalesced to ≤30 fps, only while someone watches. (Never call the display descriptor's synchronous getters on Xcode 27: they block. Setup runs off the main thread: the remote proxies answer on the main queue.)
+  - **input**: Xcode 27 (CoreSimulator ≥1155.4) drops the legacy Indigo HID path, so input goes to the guest's `dtuhidd` (`com.apple.coredevice.feature.remote.hid.digitizer`) over XPC: the service's port from `-[SimDevice lookup:error:]`, wrapped with `xpc_endpoint_create_mach_port_4sim` + `xpc_connection_enable_sim2host_4sim`, a liveness barrier, then `IndigoDigitizerEvent` (normalized touch), `IndigoButtonEvent` (home 0x0C/0x40, lock 0x0C/0x30, …) and `IndigoKeyboardButtonEvent` (US-layout HID usages; non-ASCII text is pasted via `simctl pbcopy` + Cmd+V).
+  - **UI tree**: `AXPTranslatorRequest`s sent with `-[SimDevice sendAccessibilityRequestAsync:…]` (frontmost application, then one multiple-attribute request per element: frame, role, label, value, identifier, enabled, selected, focused, placeholder, children) — the assistive-technology view, typically 10–50 elements.
+  - **idle**: "no frame presented for N ms", the settle signal.
+- Technique learned from facebook/idb (MIT; FBSimulatorControl HID/XPC/Framebuffer, FBSimulatorAX), reimplemented.
+
+**Spike (Apple silicon, macOS 27.0.1, Xcode 27, iOS 27.0, iPhone 18 Pro):** `simctl io screenshot` 420–1840 ms per frame (unusable for live view). coool-sim: JPEG frame (900px) 2 ms to encode (11 ms first), ~57 KB, 0 fps on a still screen, ~21 fps while animating; accessibility read 15–80 ms (14–45 elements); tap 62 ms (40 ms of it the touch's hold); typing "Hello, World! 123" 37 ms, correct; home button 85 ms. idb_companion was not used: it drives the same private APIs plus a gRPC server and a Python client (more hops), only its newest builds speak DTUHID, and it would be a downloaded binary.
+
+Commands: `sim_devices() -> { available, reason?, devices: [{ udid, name, state, runtime, deviceType, coool }] }`, `sim_ensure_device() -> udid`, `sim_boot({ udid })` (resolves when booted), `sim_shutdown({ udid })`, `sim_attach({ udid, frames: Channel }) -> { w, h, scale, stream }` (raw JPEG bytes on the channel), `sim_detach({ udid, stream })`, `sim_input({ udid, input })` (`touch` down/move/up x,y · `button` · `key` name + modifiers · `text`), `sim_bind({ chat, udid })`. Events (to `main`): `sim-state` (`{ udid, state }` on Booting / Booted / Shutting Down / Shutdown), `sim-activity` (`{ udid, chat, source: agent|user, kind: tap|swipe|type|press|app|observe|device, x?, y?, x2?, y2?, label? }`, points).
+
+### The `coool-device` MCP server (`device/mcp.rs`)
+
+Every chat coool starts gets it automatically, bound to that chat's panel device (else coool's own device, created and booted on first use; the panel follows). Claude Code: `--mcp-config=<json>` and `--allowedTools=mcp__coool-device` (its tools are pre-approved: they only touch the simulator in this chat's panel, which the person watches); Codex: `-c mcp_servers.coool-device.command=… .args=[…] .env={…}`. Nothing is written to the person's CLI config (`coool_core::chat::McpServer`, `Hub::set_chat_mcp`).
+
+Transport: the server's command is coool's own executable with `--coool-device-mcp` (`main.rs` checks it before starting any UI): a tiny proxy that connects to the app's Unix socket (`<app local data>/device-<pid>.sock`, falling back to the per-user temp folder when that path is too long for a socket; mode 0600; stale sockets of dead coool processes are removed), sends the chat's token (random per chat, per launch, via env `COOOL_DEVICE_TOKEN`) and pipes newline-delimited JSON-RPC both ways. Unknown tokens are refused. No network port, nothing else exposed. `coool --coool-device-serve <dir>` runs the server without the UI (prints `{ socket, token }` for chat 0) for scripted tests.
+
+Tools (MCP 2025-06-18; every action returns the screen after it settles — no frame for 120 ms — or "Screen unchanged (N elements).", plus `(act · settle · observe)` timings; `observe: false` skips it):
+
+| tool | arguments |
+|---|---|
+| `observe` | `screenshot?` (adds a JPEG, longest side `max_size` default 800), — returns the listing below |
+| `tap` | `target` (element id) or `x`,`y`; `hold_ms` (≥500 long-press) |
+| `type` | `text`; `into` (tap this id first), `clear` (Cmd+A, Backspace), `submit` (Return) |
+| `swipe` | `scroll`: up/down/left/right (`in` a scroll view id, `amount`), or `from`/`to` (id or [x,y]), `duration_ms` |
+| `press` | `key` (return, backspace, tab, escape, space, arrows, one character; `modifiers`) or `button` (home, lock, siri, volumeUp, volumeDown) |
+| `batch` | `actions`: `{tap}`, `{type,into?,clear?,submit?}`, `{press}`, `{button}`, `{swipe:[x1,y1,x2,y2]}`, `{scroll,in?}`, `{wait_for}`, `{wait_ms}`, `{launch}`, `{open_url}`; stops at the first failure and says which |
+| `wait_for` | `text` (in any label/value) or `id`, `gone`, or `idle`; `timeout_ms` (5000) — polls the tree every ~80 ms |
+| `app` | `action`: launch / terminate (`bundle_id`), install (`path` to a simulator .app), open_url, list |
+| `device` | `action`: status, list, select (`udid`; the panel follows), boot, shutdown, appearance (`value`), location (`lat`,`lon`), privacy (`service`,`bundle_id`,`grant`) |
+
+The listing (depth-first, indented by nesting; `offscreen` marks elements scrolled out of view):
+
+```
+coool iPhone (iPhone 18 Pro, iOS 27.0) · 402x874 pt · app "Settings" · 15 elements
+[4wm] heading "Settings" (16,120 133x41)
+[vym] group "com.apple.settings.sidebar.collectionView" (0,0 402x874)
+  [mdw] button "General" id="com.apple.settings.general" (16,293 370x52)
+[q6x] textfield value="Search" (28,808 346x28)
+```
+
+Element ids hash role + identifier (else label, else value; position only when there's nothing else) + occurrence, so an element keeps its id across observes and unrelated changes. A tap by id hits the centre of the element's visible part; an id no longer on screen is an error that says to observe again.
+
+Measured end to end through the real proxy (scripted client, booted iPhone 18 Pro): `observe` 23–49 ms (13–15 elements); `observe` + screenshot 34–121 ms; a tap itself ~60 ms; tap + settled observe 230–470 ms (median ~360) when the screen reacts without a transition, 0.5–1.2 s across a navigation push/pop (the iOS animation itself; settling any sooner returned a mid-transition tree in a third of the runs); app launch tap + observe ~0.8 s; batch (tap field, type, wait for text) + observe 1.5 s; Cmd+A, Backspace, type + observe ~0.7 s.
+
+**External sessions** (not started by coool) don't get the server yet. They could connect the same way: a "Connect an agent" action would mint a token for a panel and show a ready `claude mcp add coool-device -- <coool> --coool-device-mcp` (with the socket and token in its env) or the Codex equivalent.
+
+**Known limits.** Rotation isn't supported yet (the screen shape is fixed at attach; DTUHID orientation goes through the vendor-defined service). Typing uses a US layout (others paste). Two chats on one device share it (each can `device select` another). Private APIs can move with each Xcode: everything is looked up at runtime and fails as a clear message in the panel / tool result.
+
 ## Engineering constraints
 
 - The frontend must also run in a plain browser (`pnpm dev`) with a built-in mock data source when Tauri is absent: realistic sessions that change over time (statuses flipping, steps arriving, a fake terminal stream). This is how the UI gets developed and screenshot-tested without the shell, and it is the demo for coool.sh later.
@@ -157,4 +219,4 @@ Known limits: while the page has keyboard focus, the app's web shortcuts (Cmd+K 
 
 ## Out of scope for v1
 
-Diff review, the agent-hands MCP server (browser / simulator / desktop control), inline 3D output, cost estimates, auto-update, signing. Leave clean seams, build none of it.
+Diff review, agent control of the in-app browser and of a desktop (the simulator part of the agent-hands MCP server is built: "iPhone panel"), inline 3D output, cost estimates, auto-update, signing. Leave clean seams, build none of it.

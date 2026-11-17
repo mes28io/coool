@@ -48,6 +48,8 @@ pub struct Hub {
     own: OwnSessions,
     /// How chats introduce themselves to `codex app-server`.
     client_name: String,
+    /// MCP servers coool hands each chat it starts, by chat id (see [`Hub::set_chat_mcp`]).
+    chat_mcp: Option<crate::chat::McpFor>,
     /// Live child run pid -> pid of the session above it (see [`crate::lineage`]).
     ancestors: crate::lineage::AncestorCache,
     /// Background shells under live sessions (see [`crate::shells`]).
@@ -82,6 +84,7 @@ impl Hub {
             chat_exited_at: HashMap::new(),
             own: OwnSessions::at(OwnSessions::default_path()),
             client_name: crate::origin::CLIENT_NAME.to_string(),
+            chat_mcp: None,
             ancestors: Default::default(),
             shells: Default::default(),
             shell_targets: Vec::new(),
@@ -99,6 +102,11 @@ impl Hub {
     /// a test run uses [`crate::origin::TEST_CLIENT_NAME`]).
     pub fn set_client_name(&mut self, name: &str) {
         self.client_name = name.to_string();
+    }
+
+    /// MCP servers each new chat gets, built from its chat id (the desktop app's `coool-device` server).
+    pub fn set_chat_mcp(&mut self, f: Option<crate::chat::McpFor>) {
+        self.chat_mcp = f;
     }
 
     /// Re-scan disk (cheaply) and return all sessions as known now, busiest first.
@@ -349,7 +357,8 @@ impl Hub {
     /// Start a structured chat (see [`crate::chat`]). Returns its id, stable for the process.
     pub fn start_chat(&mut self, opts: ChatOptions) -> Result<usize> {
         let id = self.chats.len();
-        let c = Chat::start(id, opts, &self.client_name)?;
+        let mcp = self.chat_mcp.as_ref().map(|f| f(id)).unwrap_or_default();
+        let c = Chat::start(id, opts, &self.client_name, &mcp)?;
         // Claude chats know their session id up front: remember it before the
         // transcript exists, so a crash right away still leaves it marked.
         if let Some(sid) = c.session_id() {
