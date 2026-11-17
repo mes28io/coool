@@ -8,7 +8,7 @@ import { reducedMotion } from "../lib/motion";
 import type { Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { leaves, resolveTarget, useStore, type Leaf, type Node, type Tab } from "../store";
-import { IClose, IGrid, ISearch, ISplitDown, ISplitRight } from "./icons";
+import { IClose, ISearch, ISplitDown, ISplitRight } from "./icons";
 import { MissionControl } from "./MissionControl";
 import { cx, ease, IconButton, Kbd, ProviderMark, spring, StatusDot } from "./primitives";
 import { SessionView } from "./SessionView";
@@ -42,7 +42,6 @@ export function Workspace() {
 export function TabBar() {
   const tabs = useStore((s) => s.tabs);
   const activeTab = useStore((s) => s.activeTab);
-  const activate = useStore((s) => s.activate);
   const reorder = useStore((s) => s.reorder);
   const split = useStore((s) => s.split);
   const ids = useMemo(() => tabs.map((t) => t.id), [tabs]);
@@ -55,20 +54,7 @@ export function TabBar() {
 
   return (
     <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-1 pl-2">
-      <button
-        type="button"
-        title="Home"
-        onClick={() => activate(null)}
-        className={cx(
-          "relative flex h-[34px] shrink-0 items-center gap-1.5 rounded-[9px] px-2.5 text-base font-medium transition-colors duration-150",
-          activeTab === null ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",
-        )}
-      >
-        {activeTab === null && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 -z-0 rounded-[8px] border border-line bg-[var(--tab-active)] shadow-card" />}
-        <IGrid size={16} className="relative" />
-        {tabs.length === 0 && <span className="relative">Home</span>}
-      </button>
-      {tabs.length > 0 && <span className="mx-1 h-4 w-px shrink-0 bg-line" />}
+      {/* No Home button here: the rail's Home is the one way back to Home (two looked like a duplicate). */}
       <Reorder.Group ref={strip} axis="x" values={ids} onReorder={reorder} className="scroll-x flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden" data-tauri-drag-region>
         <AnimatePresence initial={false}>
           {tabs.map((t, i) => (
