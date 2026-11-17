@@ -454,7 +454,7 @@ export function IconButton({
       className={cx(
         "inline-flex size-7 shrink-0 items-center justify-center rounded-[8px] text-dim transition-[background-color,color] duration-150",
         "hover:bg-hover hover:text-fg active:bg-press disabled:opacity-40 disabled:hover:bg-transparent",
-        active && "bg-hover text-fg",
+        active && "bg-hover", // selected: only the background changes (as the Jobs button), the icon keeps its colour
         className,
       )}
     >
