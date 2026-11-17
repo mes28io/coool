@@ -230,20 +230,6 @@ export function SessionView({
             <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />
           </div>
         </div>
-        {session?.loaded === false && !chat ? (
-          !compact && (
-            <div className="hidden items-center gap-2.5 xl:flex" title="Reading this session's transcript…">
-              <Skel w={64} h={9} />
-              <Skel w={16} h={16} />
-              <Skel w={56} h={9} />
-            </div>
-          )
-        ) : (
-          <div className="mr-2.5 flex shrink-0 items-center gap-2.5">
-            {!compact && wide && models && (models.main.length > 0 || model) && <ModelsChip data={models} current={model} open={modelsOpen} onToggle={() => toggleRight("models")} />}
-            {showTokens && <ContextMeter context={context} model={model} window={chat?.contextWindow} hideValues={compact} />}
-          </div>
-        )}
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
         {isChat && !hasTerm && (chatLive || session) && (
           <Button variant="ghost" onClick={openTerm} title="Continue this session in the real CLI, in a terminal" className={compact ? "px-2" : ""}>
@@ -263,6 +249,21 @@ export function SessionView({
           </IconButton>
         )}
         {panelOn && panelKey && <AgentsButton cards={cards} shells={shells.length} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
+        {/* Model and context sit at the right end, after the Jobs and browser buttons. */}
+        {session?.loaded === false && !chat ? (
+          !compact && (
+            <div className="hidden items-center gap-2.5 xl:flex" title="Reading this session's transcript…">
+              <Skel w={64} h={9} />
+              <Skel w={16} h={16} />
+              <Skel w={56} h={9} />
+            </div>
+          )
+        ) : (
+          <div className="ml-1 flex shrink-0 items-center gap-2.5">
+            {!compact && wide && models && (models.main.length > 0 || model) && <ModelsChip data={models} current={model} open={modelsOpen} onToggle={() => toggleRight("models")} />}
+            {showTokens && <ContextMeter context={context} model={model} window={chat?.contextWindow} hideValues={compact} />}
+          </div>
+        )}
         {onClosePane && (
           <IconButton title="Close pane" onClick={onClosePane} className="-mr-1">
             <IClose size={14} />
