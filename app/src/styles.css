@@ -333,10 +333,10 @@ html.no-transitions *::after {
 .spin {
   animation: spin 0.9s linear infinite;
 }
-/* Working session: a macOS-style activity indicator (StatusDot). One spoke per step, a composited rotate of the
-   whole svg (~10 updates/s); Reduce motion holds it still. */
+/* Working session: a spinning ring (StatusDot). A composited rotate of the whole svg, stepped (~20 updates/s, smooth
+   enough for a ring); Reduce motion holds it still. */
 .work-spin {
-  animation: spin 0.8s steps(8) infinite;
+  animation: spin 1s steps(20) infinite;
 }
 .reduce-motion .work-spin {
   animation: none;
