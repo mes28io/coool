@@ -88,8 +88,8 @@ export const IPencil = mk(<path d="M10.5 2.25l3.25 3.25-8.25 8.25H2.25V10.5zM8.7
 export const IGlobe = mk(
   <>
     <circle cx="8" cy="8" r="6.25" />
-    {/* One wide pointed lens and the equator, drawn lighter (thinner, half-strength) so the outline leads and it stays calm. */}
-    <path d="M8 1.75c-2 2-3 3.9-3 6.25s1 4.25 3 6.25M8 1.75c2 2 3 3.9 3 6.25s-1 4.25-3 6.25M1.75 8h12.5" strokeWidth={1.2} opacity={0.5} />
+    {/* One wide pointed lens and the equator, drawn thinner and a touch lighter so the outline leads and it stays calm. */}
+    <path d="M8 1.75c-2 2-3 3.9-3 6.25s1 4.25 3 6.25M8 1.75c2 2 3 3.9 3 6.25s-1 4.25-3 6.25M1.75 8h12.5" strokeWidth={1} opacity={0.8} />
   </>,
 );
 export const ISpark = mk(<path d="M8 1.75l1.5 4.75 4.75 1.5-4.75 1.5L8 14.25 6.5 9.5 1.75 8 6.5 6.5z" strokeLinejoin="round" />);
