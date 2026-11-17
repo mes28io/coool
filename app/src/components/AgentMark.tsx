@@ -7,7 +7,7 @@ import { cx } from "./primitives";
 
 export type AgentMarkState = "live" | "done" | "failed" | "stopped" | "plain";
 
-const TONE: Record<AgentMarkState, string> = { live: "text-working-text", done: "text-dim", failed: "text-err-text", stopped: "text-faint", plain: "" };
+const TONE: Record<AgentMarkState, string> = { live: "text-running", done: "text-dim", failed: "text-err-text", stopped: "text-faint", plain: "" };
 
 export function AgentMark({ size = 14, state = "plain", className }: { size?: number; state?: AgentMarkState; className?: string }) {
   return (

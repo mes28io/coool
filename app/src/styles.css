@@ -106,6 +106,8 @@
   --color-accent-ink: var(--accent-ink);
   --color-busy: var(--busy);
   --color-working: var(--status-working);
+  /* jobs (subagents, shells) and steps while they run: Apple blue, like the Jobs button */
+  --color-running: var(--status-needs);
   --color-working-text: var(--status-working-text);
   --color-waiting: var(--status-waiting);
   --color-waiting-text: var(--status-waiting-text);
@@ -614,11 +616,11 @@ html.page-hidden *::after {
   opacity: 0.7;
 }
 
-/* Agents panel: segmented step bar (active = green with a slow moving highlight, failed = hatched red). */
+/* Agents panel: segmented step bar (active = blue with a slow moving highlight, failed = hatched red). */
 .seg-run {
   position: relative;
   overflow: hidden;
-  background: var(--status-working);
+  background: var(--status-needs);
 }
 .seg-run::after {
   content: "";

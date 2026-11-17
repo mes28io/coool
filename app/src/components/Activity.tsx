@@ -12,7 +12,7 @@ import { useClock } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
 import { liveJobs } from "../lib/live";
 import { IAlert, IChevron, ICheck, toolIcon } from "./icons";
-import { Elapsed, JumpToBottom, LiveClock, cx, ease, StatusDot } from "./primitives";
+import { Elapsed, JumpToBottom, LiveClock, cx, ease } from "./primitives";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { Markdown } from "./Markdown";
 import { ModelTag } from "./Models";
@@ -463,7 +463,7 @@ export function LiveIndicator({
   return (
     <div className="flex items-center gap-2 py-1 text-small text-dim" data-live-quiet>
       <span className="flex size-[22px] shrink-0 items-center justify-center">
-        <span className="size-[7px] rounded-full bg-working" />
+        <span className="size-[7px] rounded-full bg-running" />
       </span>
       <span>{parts} running</span>
       <LiveClock since={timerSince !== undefined ? timerSince : since} title={timerTitle} className="ml-auto shrink-0 pr-2 text-small text-dim" />
@@ -612,7 +612,7 @@ export function StepLine({
         onClick && "hover:bg-hover",
         open && "bg-hover",
       )}
-      style={active ? { ["--sweep" as string]: "var(--status-working)" } : undefined}
+      style={active ? { ["--sweep" as string]: "var(--status-needs)" } : undefined}
     >
       <span
         className={cx(
@@ -773,7 +773,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
         data-open={open}
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
-          focused ? "border-[color-mix(in_oklab,var(--status-working)_45%,var(--border))]" : "border-hairline",
+          focused ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))]" : "border-hairline",
         )}
       >
         {running ? (
@@ -783,7 +783,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
             </span>
             <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
             {agent && <AgentModels agent={agent} />}
-            <StatusDot status="busy" size={7} />
+            <span className="size-[7px] shrink-0 rounded-full bg-running" />
             <FoldChevron open={open} />
           </div>
         ) : (

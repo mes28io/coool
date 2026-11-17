@@ -701,7 +701,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
         data-open={open}
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
-          lit ? "border-[color-mix(in_oklab,var(--status-working)_45%,var(--border))]" : "border-hairline",
+          lit ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))]" : "border-hairline",
         )}
       >
         {running ? (
@@ -712,7 +712,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
               <ModelTag key={m} model={m} />
             ))}
             <span className="flex items-center gap-1.5 text-small text-faint">
-              <StatusDot status="busy" size={7} />
+              <span className="size-[7px] shrink-0 rounded-full bg-running" />
               <LiveClock since={tool.ts} />
             </span>
             <FoldChevron open={open} />

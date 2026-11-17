@@ -71,7 +71,7 @@ export function RailItem({ first, last, fresh, active, dotY = 14, children }: { 
       {/* One mark per step, on the rail: a dot, or the spinner while the step runs. */}
       <span aria-hidden className="absolute flex size-[14px] -translate-x-1/2 -translate-y-1/2 items-center justify-center" style={{ left: RAIL_X + 0.5, top: dotY }}>
         {active ? (
-          <svg width="12" height="12" viewBox="0 0 16 16" className="spin text-working-text">
+          <svg width="12" height="12" viewBox="0 0 16 16" className="spin text-running">
             <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2.2" />
             <path d="M8 2a6 6 0 016 6" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
           </svg>
