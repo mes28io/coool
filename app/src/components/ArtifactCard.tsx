@@ -1,6 +1,6 @@
 // Claude Code artifacts: pages a session published to claude.ai with its Artifact tool.
-// A card in the timeline (the newest version; earlier publishes of the same page fold into it). Preview shows the
-// local copy, Open the claude.ai page, both in the session's browser panel beside the chat (BrowserPanel.tsx).
+// A card in the timeline (the newest version; earlier publishes of the same page fold into it). "Open" shows the
+// local copy (or claude.ai when it's gone), "claude.ai" the live page, both in the session's browser panel (BrowserPanel.tsx).
 
 import { createElement, useEffect, useState, type ComponentType } from "react";
 import { api } from "../lib/backend";
@@ -72,6 +72,10 @@ export function ArtifactCard({ info, versions }: { info: ArtifactInfo; versions:
   const open = useOpenPage();
   const available = useAvailable(info);
   const gone = available === false;
+  const local = available === true;
+  // One clear main action: "Open" shows the page beside the chat, from the copy saved on this Mac (instant, no
+  // sign-in), or from claude.ai when that copy is gone. "claude.ai" always loads the live page there.
+  const openMain = () => (local ? open({ kind: "artifact", info, versions }) : open({ kind: "web", url: info.url }));
   return (
     <div className="my-1 flex max-w-[620px] items-center gap-3 rounded-[12px] border border-line bg-raised py-2.5 pl-3 pr-2.5 shadow-card" data-artifact-card={info.url} data-artifact-available={available === null ? "unknown" : String(available)}>
       <span className="flex size-[36px] shrink-0 items-center justify-center rounded-[9px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] text-dim">
@@ -90,28 +94,29 @@ export function ArtifactCard({ info, versions }: { info: ArtifactInfo; versions:
             </>
           )}
           <span aria-hidden>·</span>
-          {gone ? (
-            <span className="truncate" data-artifact-gone>
-              Local copy no longer available
-            </span>
-          ) : (
-            <span className="truncate" title={info.url}>
-              {host(info.url)}
-            </span>
-          )}
+          <span className="truncate" data-artifact-gone={gone || undefined}>
+            {gone ? "Only on claude.ai" : local ? "Saved on this Mac" : host(info.url)}
+          </span>
         </div>
       </div>
       <Button
+        variant="ghost"
+        className="h-[30px] gap-1.5 px-2.5 text-dim"
+        title="Load the live page from claude.ai beside the chat (sign in to claude.ai once)"
+        onClick={() => open({ kind: "web", url: info.url })}
+        data-artifact-open
+      >
+        <IGlobe size={14} />
+        claude.ai
+      </Button>
+      <Button
         variant="outline"
-        className="h-[30px] px-2.5"
-        disabled={available !== true}
-        title={gone ? "The local copy is gone (scratch folders get cleaned); Open still works" : "Preview the local copy beside the chat"}
-        onClick={() => open({ kind: "artifact", info, versions })}
+        className="h-[30px] px-3"
+        disabled={available === null}
+        title={local ? "Open the page beside the chat, from the copy saved on this Mac" : "Open the page from claude.ai beside the chat"}
+        onClick={openMain}
         data-artifact-preview
       >
-        Preview
-      </Button>
-      <Button variant="ghost" className="h-[30px] px-2.5" title={`Open ${info.url} beside the chat`} onClick={() => open({ kind: "web", url: info.url })} data-artifact-open>
         Open
       </Button>
     </div>

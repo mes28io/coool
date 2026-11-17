@@ -64,6 +64,13 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
   }
   const pages = artifactVersions(items, (it) => (it.kind === "tool" && !it.parent ? it.artifact : undefined));
   let turnNo = 0;
+  // Artifact cards wait for the end of their turn (its "worked for" row, or the next prompt), so they read as the
+  // turn's result, after the reply that talks about them.
+  let held: Block[] = [];
+  const flush = () => {
+    blocks.push(...held);
+    held = [];
+  };
   for (const [idx, it] of items.entries()) {
     const parent = "parent" in it ? it.parent : null;
     if (parent) {
@@ -74,6 +81,7 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
     }
     if (it.kind === "tool" && QUESTION_TOOLS.test(it.name)) continue;
     if (it.kind === "tool" && isTaskNoise(it.name) && synthetic.has(turnNo)) continue;
+    if (it.kind === "prompt" || it.kind === "turn") flush();
     if (it.kind === "prompt") {
       turnNo++;
       prompt = it.text;
@@ -88,7 +96,7 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
     }
     if (it.kind === "tool" && it.artifact) {
       const p = pages.get(it.artifact.url)!;
-      if (p.last === idx) blocks.push({ type: "artifact", key: `artifact:${it.artifact.url}`, info: p.info, versions: p.versions });
+      if (p.last === idx) held.push({ type: "artifact", key: `artifact:${it.artifact.url}`, info: p.info, versions: p.versions });
     } else if (it.kind === "tool") {
       const last = blocks[blocks.length - 1];
       if (last?.type === "steps") last.tools.push(it);
@@ -97,6 +105,7 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
       // Empty, finished reasoning (provider hides it): nothing to show.
     } else blocks.push({ type: "item", key: it.key, item: it });
   }
+  flush();
   return { blocks, children };
 }
 

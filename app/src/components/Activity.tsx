@@ -31,6 +31,13 @@ function buildBlocks(list: Activity[]): Block[] {
   const seen = new Map<string, number>();
   const out: Block[] = [];
   const pages = artifactVersions(list, (a) => a.artifact);
+  // Artifact cards wait for the end of their turn (before the next prompt), so they read as the turn's result, after
+  // the reply that talks about them.
+  let held: Block[] = [];
+  const flush = () => {
+    out.push(...held);
+    held = [];
+  };
   list.forEach((a, i) => {
     const base = `${a.ts}|${a.kind}|${a.text.slice(0, 40)}`;
     const n = seen.get(base) ?? 0;
@@ -39,13 +46,17 @@ function buildBlocks(list: Activity[]): Block[] {
     if (a.artifact) {
       const p = pages.get(a.artifact.url)!;
       // Keyed by the page, so a new version replaces the card instead of adding one.
-      if (p.last === i) out.push({ type: "artifact", key: `artifact:${a.artifact.url}`, a, info: p.info, versions: p.versions });
+      if (p.last === i) held.push({ type: "artifact", key: `artifact:${a.artifact.url}`, a, info: p.info, versions: p.versions });
     } else if (a.kind === "tool" || a.kind === "agent") {
       const last = out[out.length - 1];
       if (last?.type === "steps") last.items.push({ key, a });
       else out.push({ type: "steps", key, items: [{ key, a }] });
-    } else out.push({ type: a.kind, key, a });
+    } else {
+      if (a.kind === "prompt") flush();
+      out.push({ type: a.kind, key, a });
+    }
   });
+  flush();
   return out;
 }
 
