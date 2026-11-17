@@ -486,8 +486,8 @@ export function LiveIndicator({
         <span className="size-[7px] rounded-full bg-running" />
       </span>
       <span>{parts} running</span>
+      {/* No token count here: the main agent is idle, so its count isn't moving; each job shows its own. */}
       <span className="ml-auto flex shrink-0 items-center gap-2 pr-2 text-small text-dim">
-        <TokenCount n={tokens} />
         <LiveClock since={timerSince !== undefined ? timerSince : since} title={timerTitle} />
       </span>
     </div>
