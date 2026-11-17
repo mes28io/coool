@@ -100,6 +100,14 @@ export const IAlert = mk(
     {dot(8, 11.25)}
   </>,
 );
+/** About / information: the alert circle turned over (dot on top). */
+export const IInfo = mk(
+  <>
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M8 7.25v4" />
+    {dot(8, 4.75)}
+  </>,
+);
 export const ICheck = mk(<path d="M2.75 8.5L6.25 12l7-7.5" />);
 export const IReturn = mk(<path d="M13.25 2.75v5a1.5 1.5 0 01-1.5 1.5H3.25M6.25 6.25l-3 3 3 3" />);
 export const IStack = mk(<path d="M8 1.75l6 3.25-6 3.25L2 5zM2 8l6 3.25L14 8M2 11l6 3.25L14 11" />);

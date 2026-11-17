@@ -12,7 +12,7 @@ import { IChevron, ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { SidebarSkeleton } from "./Skeletons";
-import { NeedsView, SettingsView, UsageView } from "./LeftPanels";
+import { NeedsView } from "./LeftPanels";
 import { reducedMotion } from "./StepRail";
 import { AnimateScope } from "../lib/motion";
 
@@ -260,7 +260,7 @@ export function Sidebar() {
       <div className="absolute inset-y-0 left-0 overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
         <AnimatePresence initial={false}>
           <motion.div key={view} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
-            {view === "usage" ? <UsageView /> : view === "needs" ? <NeedsView /> : view === "settings" ? <SettingsView /> : projectsView}
+            {view === "needs" ? <NeedsView /> : projectsView}
           </motion.div>
         </AnimatePresence>
         <ResizeHandle width={width} onChange={setWidth} onDragging={setDragging} />

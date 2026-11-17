@@ -1285,7 +1285,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
 
   // Free: reads what the backend already gathered; no model turn.
   async usage() {
-    await step("plan usage reaches the UI and the sidebar Usage view shows it", async () => {
+    await step("plan usage reaches the UI and the Usage page shows it", async () => {
       const u = await waitFor("a usage payload", () => {
         const x = (useStore.getState() as { usage?: { claude: unknown; codex: unknown } }).usage;
         return x && (x.claude || x.codex) ? x : null;
@@ -1293,7 +1293,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const btn = ([...document.querySelectorAll("button[aria-label]")] as HTMLElement[]).find((b) => b.getAttribute("aria-label")!.startsWith("Usage"));
       if (!btn) throw new Fail("no Usage button in the rail");
       btn.click();
-      const pop = await waitFor("the usage view", () => document.querySelector('[aria-label="Plan usage"]') as HTMLElement | null, 5_000);
+      const pop = await waitFor("the Usage page", () => document.querySelector('[aria-label="Plan usage"]') as HTMLElement | null, 5_000);
       await sleep(600);
       await shot("usage");
       const text = (pop.textContent ?? "").replace(/\s+/g, " ");

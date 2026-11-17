@@ -268,11 +268,11 @@ function StartView({ recent, onOpen, onGo }: { recent: RecentPage[]; onOpen: (p:
 /**
  * The spot the native webview covers. Its rect follows layout (ResizeObserver on it and its panel, window resizes,
  * then a few animation frames while springs settle); it is visible only while the panel shows it, fully open,
- * nothing (sheet, palette, popover) draws over it, and the window is visible.
+ * nothing (sheet, palette, popover, the Settings page) draws over it, and the window is visible.
  */
 function NativeHost({ tabKey: viewKey, page, active, loading }: { tabKey: string; page: Extract<BrowserPage, { kind: "web" }>; active: boolean; loading: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  const covered = useStore((s) => s.palette || s.sheet !== null);
+  const covered = useStore((s) => s.palette || s.sheet !== null || s.settings !== null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;

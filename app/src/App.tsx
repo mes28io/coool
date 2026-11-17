@@ -12,6 +12,8 @@ import { Palette } from "./components/Palette";
 import { IAlert, IClose, ISidebar } from "./components/icons";
 import { Sheets } from "./components/Sheets";
 import { Rail } from "./components/Rail";
+import { SettingsPage } from "./components/SettingsPage";
+import { cx } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
 import { leaves, useStore } from "./store";
@@ -36,13 +38,16 @@ function useShortcuts() {
       if (!mod) return;
       const k = e.key.toLowerCase();
       let hit = true;
-      if (k === "k") st.setPalette(!st.palette);
+      // While the Settings page is up, pane and sidebar shortcuts would act on things out of sight: they wait.
+      const away = st.settings !== null && (((k === "b" || k === "w") && !e.shiftKey) || k === "\\" || e.code === "Backslash");
+      if (away) hit = true;
+      else if (k === "k") st.setPalette(!st.palette);
       else if (k === "t" && !e.shiftKey) st.setSheet({ kind: "new" });
       else if (k === "b" && !e.shiftKey) st.toggleSidebar();
       else if (k === "w" && !e.shiftKey) st.closeFocused();
       else if (k === "\\" || e.code === "Backslash") st.split(e.shiftKey ? "col" : "row");
       else if (k === "l" && e.shiftKey) st.toggleTheme();
-      else if (k === "," && !e.shiftKey) st.setSidebarView("settings");
+      else if (k === "," && !e.shiftKey) st.openSettings();
       else if (/^[1-9]$/.test(e.key) && !e.shiftKey) st.activateIndex(Number(e.key) - 1);
       else if (k === "0" && !e.shiftKey) st.activate(null);
       else hit = false;
@@ -170,6 +175,7 @@ export default function App() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const setSystemTheme = useStore((s) => s.setSystemTheme);
+  const settingsOpen = useStore((s) => s.settings !== null);
   useShortcuts();
   useBackendEvents();
   useMarkSeen();
@@ -192,23 +198,30 @@ export default function App() {
       <div className="flex h-full w-full flex-col bg-panel">
         {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}
         <div data-tauri-drag-region className="flex h-[44px] shrink-0 items-center pl-[84px] pr-2">
-          <button
-            type="button"
-            title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
-            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-            onClick={toggleSidebar}
-            className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
-          >
-            <ISidebar size={17} />
-          </button>
-          <TabBar />
+          {/* The app's own controls step aside (kept mounted) while the Settings page is up. */}
+          <div data-tauri-drag-region className={cx("flex h-full min-w-0 flex-1 items-center", settingsOpen && "invisible")} inert={settingsOpen} aria-hidden={settingsOpen || undefined}>
+            <button
+              type="button"
+              title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
+              aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+              onClick={toggleSidebar}
+              className="flex h-[28px] w-[28px] items-center justify-center rounded-[8px] text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
+            >
+              <ISidebar size={17} />
+            </button>
+            <TabBar />
+          </div>
         </div>
         <div className="flex min-h-0 flex-1">
           <Rail />
-          {/* One raised sheet lying on the window: sidebar panel + main area. */}
-          <div className="flex min-w-0 flex-1 overflow-hidden rounded-tl-[18px] border-l border-t border-hairline bg-bg">
-            <Sidebar />
-            <Workspace />
+          {/* One raised sheet lying on the window: sidebar panel + main area, or the full-screen Settings page over them
+              (the app stays mounted underneath, hidden and inert, so going back finds every tab, pane and scroll as it was). */}
+          <div className="relative flex min-w-0 flex-1 overflow-hidden rounded-tl-[18px] border-l border-t border-hairline bg-bg">
+            <div className={cx("flex min-w-0 flex-1", settingsOpen && "invisible")} inert={settingsOpen} aria-hidden={settingsOpen || undefined}>
+              <Sidebar />
+              <Workspace />
+            </div>
+            <AnimatePresence>{settingsOpen && <SettingsPage key="settings" />}</AnimatePresence>
           </div>
         </div>
       </div>
