@@ -109,6 +109,59 @@ export interface Backend {
   onBrowserClosed(cb: (id: string) => void): Unlisten;
   /** A page asked for a new window that opens as a tab (`target=_blank`, `window.open` without a size); `id` is its panel webview. */
   onBrowserNewTab(cb: (t: { id: string; url: string }) => void): Unlisten;
+
+  // ---- iPhone: the iOS Simulator in the right panel (components/DevicePanel.tsx) ----
+  /** The simulators (coool's own first); `available: false` with a reason when there is no Xcode / not macOS. */
+  simDevices(): Promise<SimList>;
+  /** Makes coool's own simulator ("coool iPhone") if there is none; returns its udid. */
+  simEnsureDevice(): Promise<string>;
+  /** Resolves once the device is booted. */
+  simBoot(udid: string): Promise<void>;
+  simShutdown(udid: string): Promise<void>;
+  /** Streams the device's screen as JPEG frames to `onFrame` until `simDetach`; `w`/`h` in points. */
+  simAttach(udid: string, onFrame: (jpeg: ArrayBuffer) => void): Promise<{ w: number; h: number; scale: number; stream: number }>;
+  simDetach(udid: string, stream: number): Promise<void>;
+  simInput(udid: string, input: SimInput): Promise<void>;
+  /** The device a chat's agent tools act on (the one its panel shows); null unbinds. */
+  simBind(chat: number, udid: string | null): Promise<void>;
+  onSimActivity(cb: (a: SimActivity) => void): Unlisten;
+  onSimState(cb: (s: { udid: string; state: string }) => void): Unlisten;
+}
+
+export interface SimDevice {
+  udid: string;
+  name: string;
+  /** "Booted" | "Shutdown" | "Booting" | "Shutting Down" */
+  state: string;
+  /** e.g. "iOS 27.0" */
+  runtime: string;
+  /** e.g. "iPhone 18 Pro" */
+  deviceType: string;
+  /** One of coool's own devices (named "coool …"). */
+  coool: boolean;
+}
+export interface SimList {
+  available: boolean;
+  reason?: string;
+  devices: SimDevice[];
+}
+export type SimInput =
+  | { kind: "touch"; phase: "down" | "move" | "up"; x: number; y: number }
+  | { kind: "button"; name: "home" | "lock" | "siri" | "volumeUp" | "volumeDown" }
+  | { kind: "key"; name: string; modifiers?: ("shift" | "control" | "option" | "command")[] }
+  | { kind: "text"; text: string };
+export interface SimActivity {
+  udid: string;
+  /** The coool chat whose agent acted (null: none / the user). */
+  chat: number | null;
+  source: "agent" | "user";
+  kind: "tap" | "swipe" | "type" | "press" | "app" | "observe" | "device";
+  /** Points, like `simInput`'s touches; a swipe goes from (x, y) to (x2, y2). */
+  x?: number;
+  y?: number;
+  x2?: number;
+  y2?: number;
+  label?: string;
 }
 
 export interface BrowserBounds {
@@ -138,7 +191,7 @@ export function b64ToBytes(b64: string): Uint8Array {
 }
 
 async function tauriBackend(): Promise<Backend> {
-  const { invoke } = await import("@tauri-apps/api/core");
+  const { invoke, Channel } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
 
   // Tauri's listen() is async; hand back a sync unlisten that also works if
@@ -294,6 +347,27 @@ async function tauriBackend(): Promise<Backend> {
     onBrowserState: (cb) => sub<BrowserState>("browser-state", cb),
     onBrowserClosed: (cb) => sub<string>("browser-closed", cb),
     onBrowserNewTab: (cb) => sub<{ id: string; url: string }>("browser-new-tab", cb),
+    simDevices: async () => {
+      try {
+        return await soft<SimList>("sim_devices");
+      } catch (e) {
+        if (isNotAvailable(e)) return { available: false, reason: "This build of coool can't show an iPhone yet.", devices: [] };
+        throw e;
+      }
+    },
+    simEnsureDevice: () => soft("sim_ensure_device"),
+    simBoot: (udid) => soft("sim_boot", { udid }),
+    simShutdown: (udid) => soft("sim_shutdown", { udid }),
+    simAttach: (udid, onFrame) => {
+      // A raw channel body arrives as an ArrayBuffer; a JSON-encoded one as an array of bytes.
+      const frames = new Channel<ArrayBuffer | number[]>((m) => onFrame(m instanceof ArrayBuffer ? m : new Uint8Array(m).buffer));
+      return soft("sim_attach", { udid, frames });
+    },
+    simDetach: (udid, stream) => soft("sim_detach", { udid, stream }),
+    simInput: (udid, input) => soft("sim_input", { udid, input }),
+    simBind: (chat, udid) => soft("sim_bind", { chat, udid }),
+    onSimActivity: (cb) => sub<SimActivity>("sim-activity", cb),
+    onSimState: (cb) => sub<{ udid: string; state: string }>("sim-state", cb),
   };
 }
 

@@ -306,6 +306,25 @@ pub(crate) struct Claude {
     last_error: Option<String>,
 }
 
+/// `--mcp-config=<json>` (the `=` form: the flag takes several values and would swallow what follows) and, for servers
+/// whose tools are pre-approved, `--allowedTools=mcp__<name>`.
+pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
+    if servers.is_empty() {
+        return Vec::new();
+    }
+    let mut map = serde_json::Map::new();
+    for s in servers {
+        let env: serde_json::Map<String, Value> = s.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+        map.insert(s.name.clone(), json!({ "type": "stdio", "command": s.command, "args": s.args, "env": env }));
+    }
+    let mut a = vec![format!("--mcp-config={}", json!({ "mcpServers": map }))];
+    let allowed: Vec<String> = servers.iter().filter(|s| s.allow_all).map(|s| format!("mcp__{}", s.name)).collect();
+    if !allowed.is_empty() {
+        a.push(format!("--allowedTools={}", allowed.join(",")));
+    }
+    a
+}
+
 impl Claude {
     pub fn new(opts: &ChatOptions) -> Self {
         let (skills, terminal) = KNOWN_KINDS
@@ -1320,6 +1339,25 @@ mod tests {
         assert!(a.windows(2).any(|w| w[0] == "--resume" && w[1] == "abc"));
         assert!(a.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "plan"));
         assert!(!a.contains(&"--session-id".to_string()));
+    }
+
+    #[test]
+    fn mcp_servers_ride_on_flags_with_equals() {
+        assert!(mcp_args(&[]).is_empty());
+        let a = mcp_args(&[super::super::McpServer {
+            name: "coool-device".into(),
+            command: "/Applications/coool.app/Contents/MacOS/coool".into(),
+            args: vec!["--coool-device-mcp".into()],
+            env: vec![("COOOL_DEVICE_TOKEN".into(), "t\"1".into())],
+            allow_all: true,
+        }.clone()]);
+        assert_eq!(a.len(), 2);
+        let cfg: Value = serde_json::from_str(a[0].strip_prefix("--mcp-config=").unwrap()).unwrap();
+        let s = &cfg["mcpServers"]["coool-device"];
+        assert_eq!(s["command"], "/Applications/coool.app/Contents/MacOS/coool");
+        assert_eq!(s["args"][0], "--coool-device-mcp");
+        assert_eq!(s["env"]["COOOL_DEVICE_TOKEN"], "t\"1");
+        assert_eq!(a[1], "--allowedTools=mcp__coool-device");
     }
 
     /// Real run: initialize, a Write that needs permission (allowed), then a

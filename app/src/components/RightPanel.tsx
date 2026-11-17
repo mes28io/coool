@@ -1,4 +1,4 @@
-// The right-hand slot of a session: one panel at a time (Jobs, Models or the browser) in one frame.
+// The right-hand slot of a session: one panel at a time (Jobs, Models, the browser or the iPhone) in one frame.
 // The frame animates its width open / closed; switching panels cross-fades inside it.
 
 import { AnimatePresence, motion } from "motion/react";

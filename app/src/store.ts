@@ -41,7 +41,7 @@ export interface BrowserTabs {
   tabs: BrowserTab[];
   active: number;
 }
-export type RightPanelKind = "agents" | "models" | "browser";
+export type RightPanelKind = "agents" | "models" | "browser" | "device";
 
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
 export type SidebarView = "projects" | "usage" | "needs" | "settings";
@@ -108,6 +108,11 @@ const BROWSER_DEFAULT = 600;
 export const BROWSER_MIN = 360;
 export const BROWSER_CHAT_MIN = 320;
 const clampBrowser = (w: number) => Math.round(Math.min(1600, Math.max(BROWSER_MIN, w)));
+const DEVICE_DEFAULT = 400;
+/** The iPhone panel's narrowest (the chat keeps `BROWSER_CHAT_MIN` beside it too) and widest. */
+export const DEVICE_MIN = 340;
+export const DEVICE_MAX = 720;
+const clampDevice = (w: number) => Math.round(Math.min(DEVICE_MAX, Math.max(DEVICE_MIN, w)));
 
 function readNum(k: string, d: number) {
   try {
@@ -217,6 +222,12 @@ interface State {
   /** Width of the browser panel (wider than the others; persisted). The pane may clamp it. */
   browserWidth: number;
   setBrowserWidth(w: number): void;
+  /** Per session (same keys as `rightPanel`): the simulator its iPhone panel shows; this run only. */
+  device: Record<string, { udid: string }>;
+  setDevice(key: string, udid: string): void;
+  /** Width of the iPhone panel (persisted). The pane may clamp it. */
+  deviceWidth: number;
+  setDeviceWidth(w: number): void;
   toggleCollapsed(project: string): void;
   setRevealed(project: string, n: number): void;
 
@@ -506,6 +517,16 @@ export const useStore = create<State>((set, get) => ({
       localStorage.setItem("coool.browserWidth", String(v));
     } catch {}
     set({ browserWidth: v });
+  },
+  device: {},
+  setDevice: (key, udid) => set((s) => (s.device[key]?.udid === udid ? s : { device: { ...s.device, [key]: { udid } } })),
+  deviceWidth: clampDevice(readNum("coool.deviceWidth", DEVICE_DEFAULT)),
+  setDeviceWidth(w) {
+    const v = clampDevice(w);
+    try {
+      localStorage.setItem("coool.deviceWidth", String(v));
+    } catch {}
+    set({ deviceWidth: v });
   },
   toggleCollapsed(project) {
     const collapsed = { ...get().collapsed };

@@ -11,6 +11,7 @@
 
 mod artifact;
 mod browser;
+mod device;
 mod env;
 mod motion;
 mod selftest;
@@ -958,6 +959,18 @@ fn expand_tilde(p: &str) -> String {
     p.to_string()
 }
 
+/// `coool --coool-device-mcp`: the stdio MCP server a chat's CLI runs; it relays to the running app (device/mcp.rs).
+pub fn device_mcp_proxy() -> i32 {
+    device::mcp::proxy()
+}
+
+/// `coool --coool-device-serve <dir>`: the device MCP server without the UI, for scripted tests (device/mod.rs).
+pub fn device_serve_headless(dir: &std::path::Path) -> i32 {
+    device::Devices::serve_headless(dir)
+}
+
+pub const DEVICE_MCP_FLAG: &str = device::mcp::PROXY_FLAG;
+
 pub fn run() {
     // A Finder-launched app gets a minimal PATH; adopt the login shell's so
     // `claude` / `codex` resolve. Must happen before any thread starts.
@@ -996,6 +1009,8 @@ pub fn run() {
         browsers: browser::Browsers::default(),
     });
 
+    let devices = Arc::new(device::Devices::default());
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // No click-to-open script: it would run in the in-app browser's pages too, swallowing every `target=_blank`
@@ -1003,6 +1018,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
         .manage(core.clone())
+        .manage(devices.clone())
         .invoke_handler(tauri::generate_handler![
             list_sessions,
             spawn_session,
@@ -1052,6 +1068,14 @@ pub fn run() {
             browser::browser_poll,
             browser::browser_close,
             browser::browser_open_external,
+            device::sim_devices,
+            device::sim_ensure_device,
+            device::sim_boot,
+            device::sim_shutdown,
+            device::sim_attach,
+            device::sim_detach,
+            device::sim_input,
+            device::sim_bind,
             selftest::selftest_probe_server,
             selftest::selftest_probe_result,
             selftest::selftest_resize,
@@ -1072,6 +1096,11 @@ pub fn run() {
             if let Some(t) = &c.selftest {
                 t.prepare_window(&handle);
             }
+            // The iPhone panel's devices and the `coool-device` MCP server each chat coool starts gets.
+            let devices = app.state::<Arc<device::Devices>>().inner().clone();
+            devices.init(&handle);
+            let d = devices.clone();
+            c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id| d.mcp.server_for(id).into_iter().collect())));
             spawn_refresher(handle.clone(), c.clone());
             motion::spawn_watch(handle.clone());
             spawn_pump(handle, c);
@@ -1117,6 +1146,9 @@ pub fn run() {
         }
         RunEvent::Exit => {
             core.hub.lock().unwrap().kill_all();
+            let devices = handle.state::<Arc<device::Devices>>();
+            device::mcp::cleanup(&devices);
+            devices.shutdown_all();
         }
         _ => {}
     });

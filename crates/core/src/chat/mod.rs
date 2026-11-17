@@ -40,6 +40,21 @@ pub struct ChatOptions {
     pub permission_mode: Option<String>,
 }
 
+/// An MCP server (stdio) handed to a chat's CLI at launch: Claude Code gets it through `--mcp-config`, Codex through
+/// `-c mcp_servers.<name>.…` overrides. Nothing is written to the person's CLI config.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    /// Pre-approve every tool of this server (Claude: `--allowedTools=mcp__<name>`).
+    pub allow_all: bool,
+}
+
+/// Builds the MCP servers for a chat from its id.
+pub type McpFor = Box<dyn Fn(usize) -> Vec<McpServer> + Send>;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatState {
@@ -498,17 +513,20 @@ pub struct Chat {
 
 impl Chat {
     /// `client_name`: how coool introduces itself to `codex app-server` (see [`crate::origin`]).
-    pub(crate) fn start(id: usize, opts: ChatOptions, client_name: &str) -> Result<Self> {
+    pub(crate) fn start(id: usize, opts: ChatOptions, client_name: &str, mcp: &[McpServer]) -> Result<Self> {
         let (backend, program, args): (Box<dyn Backend>, &str, Vec<String>) = match opts.provider {
             Provider::Claude => {
                 let b = claude::Claude::new(&opts);
-                let args = b.args();
+                let mut args = b.args();
+                args.extend(claude::mcp_args(mcp));
                 (Box::new(b), "claude", args)
             }
             Provider::Codex => {
                 let mut b = codex::Codex::new(&opts);
                 b.client_name = client_name.to_string();
-                (Box::new(b), "codex", codex::args())
+                let mut args = codex::args();
+                args.extend(codex::mcp_args(mcp));
+                (Box::new(b), "codex", args)
             }
         };
         Self::spawn(id, opts.provider, &opts.cwd, program, &args, backend)
@@ -1031,7 +1049,7 @@ mod tests {
     #[test]
     fn missing_folder_is_an_error_not_a_spawn() {
         let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None };
-        assert!(Chat::start(0, opts, "coool").is_err());
+        assert!(Chat::start(0, opts, "coool", &[]).is_err());
     }
 
     /// A stand-in CLI (`/bin/sh` echoing stdin back) exercises the process
