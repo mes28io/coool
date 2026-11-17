@@ -1,5 +1,5 @@
 // Plan usage (CHAT_SPEC "Plan usage"): one block per provider, one row per window.
-// Used by the rail popover and by the chat's /usage panel, so the rows live here once.
+// Used by the Settings page (Usage), the rail tooltip and the chat's /usage panel, so the rows live here once.
 import { useEffect, useRef, useState } from "react";
 import { usageRefresh } from "../lib/actions";
 import { useNow } from "../lib/clock";
@@ -17,7 +17,7 @@ export function usageTone(w: Pick<UsageWindow, "used_percent" | "severity">): "n
   if (p !== null && p >= 75) return "warn";
   return "neutral";
 }
-const toneColor = { neutral: "var(--dim)", warn: "var(--busy)", bad: "var(--error)" } as const;
+export const toneColor = { neutral: "var(--dim)", warn: "var(--busy)", bad: "var(--error)" } as const;
 
 /** "Resets in 1h 54m" under 24 h, "Resets Mon 09:00" beyond. */
 export function resetText(resetsMs: number | null, now: number): string | null {
@@ -98,7 +98,7 @@ function useRefresh(provider: Provider, fetched: number | null) {
   return { st, start };
 }
 
-const NAME = { claude: "Claude", codex: "Codex" } as const;
+export const NAME = { claude: "Claude", codex: "Codex" } as const;
 
 export function UsageBlock({ provider, usage, bare }: { provider: Provider; usage: PlanUsage | null; bare?: boolean }) {
   const now = useNow();

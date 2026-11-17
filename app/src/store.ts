@@ -44,7 +44,10 @@ export interface BrowserTabs {
 export type RightPanelKind = "agents" | "models" | "browser";
 
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
-export type SidebarView = "projects" | "usage" | "needs" | "settings";
+export type SidebarView = "projects" | "needs";
+/** The full-screen Settings page's categories, in order (components/SettingsPage.tsx). */
+export const SETTINGS_SECTIONS = ["appearance", "sessions", "insights", "usage", "about"] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /**
  * When the UI saw a session's status / current tool change. `observed` is
@@ -109,6 +112,14 @@ export const BROWSER_MIN = 360;
 export const BROWSER_CHAT_MIN = 320;
 const clampBrowser = (w: number) => Math.round(Math.min(1600, Math.max(BROWSER_MIN, w)));
 
+function readSettingsLast(): SettingsSection {
+  try {
+    const v = localStorage.getItem("coool.settingsSection");
+    if (v && v !== "usage" && (SETTINGS_SECTIONS as readonly string[]).includes(v)) return v as SettingsSection;
+  } catch {}
+  return "appearance";
+}
+
 function readNum(k: string, d: number) {
   try {
     const v = Number(localStorage.getItem(k));
@@ -150,6 +161,16 @@ interface State {
   setSidebarView(v: SidebarView): void;
   /** Same view again goes back to Projects. */
   toggleSidebarView(v: SidebarView): void;
+  /**
+   * The full-screen Settings page, open on this category; null = the app (sidebar and panes stay mounted underneath,
+   * untouched). Opening a session or switching tabs closes it.
+   */
+  settings: SettingsSection | null;
+  /** The category Settings opens on: the last one shown other than Usage (Usage has its own rail button); persisted. */
+  settingsLast: SettingsSection;
+  /** Open the page on `section`, or on the remembered category. */
+  openSettings(section?: SettingsSection): void;
+  closeSettings(): void;
   chatInfos: Record<number, ChatInfo>;
   /** chat id -> session key, once discovery linked them (Session.chat). */
   chatOwner: Record<number, string>;
@@ -400,6 +421,19 @@ export const useStore = create<State>((set, get) => ({
     const s = get();
     s.setSidebarView(s.sidebarOpen && s.sidebarView === v ? "projects" : v);
   },
+  settings: null,
+  settingsLast: readSettingsLast(),
+  openSettings(section) {
+    const v = section ?? get().settingsLast;
+    if (v !== "usage" && v !== get().settingsLast) {
+      try {
+        localStorage.setItem("coool.settingsSection", v);
+      } catch {}
+      set({ settingsLast: v });
+    }
+    set({ settings: v });
+  },
+  closeSettings: () => set({ settings: null }),
   chatInfos: {},
   chatOwner: {},
   pendingChats: [],
@@ -606,6 +640,7 @@ export const useStore = create<State>((set, get) => ({
   markExited: (id) => set((s) => ({ exited: { ...s.exited, [id]: true } })),
 
   open(t, opts) {
+    if (get().settings) set({ settings: null });
     const { tabs, activeTab } = get();
     let target = t;
     if (t.kind === "pty" && get().ptyOwner[t.id]) target = { kind: "session", key: get().ptyOwner[t.id] };
@@ -672,11 +707,11 @@ export const useStore = create<State>((set, get) => ({
     if (tab.root.type === "split") get().closePane(tab.focus);
     else get().closeTab(tab.id);
   },
-  activate: (tab) => set({ activeTab: tab }),
+  activate: (tab) => set({ activeTab: tab, settings: null }),
   activateIndex(i) {
     const { tabs } = get();
     const t = i === 8 ? tabs[tabs.length - 1] : tabs[i];
-    if (t) set({ activeTab: t.id });
+    if (t) set({ activeTab: t.id, settings: null });
   },
   reorder(ids) {
     const by = new Map(get().tabs.map((t) => [t.id, t]));

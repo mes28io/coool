@@ -183,7 +183,7 @@ Uses the Anthropic API with a key the person supplies (never bundled, never the 
 - Key lookup order: env `COOOL_ANTHROPIC_API_KEY`, then the macOS Keychain item with service `coool-anthropic-api-key` (account `coool`). Helpers to save and delete the Keychain item. Never log or serialize the key. Saving writes the command to `/usr/bin/security -i` on stdin, so the key never appears in a process's argv, and reads it back to confirm (the item stays one `security` owns, so reads never raise a Keychain prompt for the unsigned app).
 - `Insight { headline: String, needs_you: Option<String>, generated_ms: u64 }`: `headline` is one plain line saying what the agent is doing or did (also used as the title when a session has none); `needs_you` is set only when the session is blocked on the person (a question, an approval, an error it cannot pass, a loop), saying what it needs.
 - A scheduler that keeps cost negligible: only live sessions, only when their activity changed since the last insight, at most one request per session per 45s, a global hourly cap, small model (`claude-haiku-5-5`), short input (title, last prompt, last ~40 activity lines, status, current tool), structured JSON output.
-- App: a Settings sheet to paste a key (stored in the Keychain), an on/off toggle, and the insight shown on Mission control cards and sidebar rows; "Needs you" gets its own badge and sorts first.
+- App: Settings > AI insights (the full-screen Settings page) to paste a key (stored in the Keychain), an on/off toggle, and the insight shown on Mission control cards and sidebar rows; "Needs you" gets its own badge and sorts first.
 
 ## Dev self-test (debug builds only)
 
