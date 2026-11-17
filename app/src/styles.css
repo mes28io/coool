@@ -338,8 +338,10 @@ html.no-transitions *::after {
 .dot-spin {
   box-sizing: border-box;
   border-radius: 9999px;
-  border: 1.5px solid color-mix(in oklab, var(--status-running) 20%, transparent);
+  /* half the ring lit: a quarter arc at this size reads as a faint dot */
+  border: 1.5px solid color-mix(in oklab, var(--status-running) 28%, transparent);
   border-top-color: var(--status-running);
+  border-right-color: var(--status-running);
   animation: spin 1s steps(12) infinite;
 }
 .reduce-motion .dot-spin {
