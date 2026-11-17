@@ -141,6 +141,9 @@ pub struct Tokens {
     pub output: u64,
     /// Size of the most recent request's context window usage.
     pub context: u64,
+    /// Output tokens of the current (or latest) turn: since its last prompt. 0 when unknown.
+    #[serde(default)]
+    pub turn_output: u64,
 }
 
 /// Tokens one model consumed within a session or subagent.

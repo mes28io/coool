@@ -13,7 +13,7 @@ import { useStableOrder } from "../lib/stable";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { ICheck, IChevron, toolIcon } from "./icons";
 import { MoodGlyph } from "./MoodGlyph";
-import { cx, ease, spring, StatusDot } from "./primitives";
+import { cx, ease, spring, StatusDot, TokenCount } from "./primitives";
 import { reducedMotion } from "./StepRail";
 import type { Shell } from "../lib/types";
 import { useStore } from "../store";
@@ -122,8 +122,11 @@ function CardTotal({ card }: { card: AgentCardData }) {
   const text = live ? ticking : card.durationMs === null ? null : fmtClock(card.durationMs);
   if (text === null) return null;
   return (
-    <span className="shrink-0 text-small text-faint tnum" title="Total time" data-card-total>
-      {text}
+    <span className="flex shrink-0 items-center gap-2 text-small text-faint">
+      <TokenCount n={card.tokens} what="by this agent" />
+      <span className="tnum" title="Total time" data-card-total>
+        {text}
+      </span>
     </span>
   );
 }

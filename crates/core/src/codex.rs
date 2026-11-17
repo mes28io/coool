@@ -437,6 +437,7 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
         }
         (Some("event_msg"), Some("task_started")) => {
             st.in_turn = true;
+            s.tokens.turn_output = 0;
             s.current = Some("thinking…".into());
         }
         (Some("event_msg"), Some("task_complete")) | (Some("event_msg"), Some("turn_aborted")) => {
@@ -459,6 +460,7 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
                 st.last_total = now;
             } else if now != st.last_total {
                 let (di, dc, dout) = (now.0 - pi, now.1 - pc, now.2 - po);
+                s.tokens.turn_output += dout;
                 st.last_total = now;
                 let model = if s.model.is_empty() { "unknown".to_string() } else { s.model.clone() };
                 let used = ModelUse { model, input: di.saturating_sub(dc), cached: dc, output: dout, messages: 1, via_agent: false };
@@ -568,6 +570,20 @@ mod tests {
 "#);
         let rows: Vec<_> = s.models.iter().map(|m| (m.model.as_str(), m.input, m.cached, m.output, m.messages)).collect();
         assert_eq!(rows, vec![("gpt-b", 300, 0, 5, 1), ("gpt-a", 60, 40, 10, 1)]);
+    }
+
+    #[test]
+    fn turn_output_counts_growth_since_task_started() {
+        let (_, s) = run(r#"
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":0,"output_tokens":25}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":0,"output_tokens":25}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cached_input_tokens":0,"output_tokens":32}}}}
+"#);
+        assert_eq!((s.tokens.output, s.tokens.turn_output), (32, 22));
     }
 
     #[test]

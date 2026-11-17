@@ -36,6 +36,8 @@ export interface Tokens {
   cached: number;
   output: number;
   context: number;
+  /** Output tokens of the current (or latest) turn; absent/0 when unknown. */
+  turn_output?: number;
 }
 
 /** CHAT_SPEC "Models used". Additive; the backend may not send it yet. */

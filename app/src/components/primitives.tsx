@@ -144,6 +144,16 @@ export function LiveClock({ since, className, title }: { since: number | null; c
   );
 }
 
+/** "↓ 3.2k": output tokens, dim, next to a timer. Nothing when 0/unknown. */
+export function TokenCount({ n, what = "this turn", className }: { n: number | null | undefined; what?: string; className?: string }) {
+  if (!n || n <= 0) return null;
+  return (
+    <span className={cx("tnum", className)} title={`${Math.round(n).toLocaleString("en-US")} output tokens ${what}`} data-token-count>
+      ↓ {fmtTokens(n)}
+    </span>
+  );
+}
+
 export function Elapsed({ since, approx, className }: { since: number | null; approx?: boolean; className?: string }) {
   const text = useClock((now) => (since === null ? null : approx ? fmtApprox(now - since) : fmtElapsed(now - since)));
   if (text === null) return null;

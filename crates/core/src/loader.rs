@@ -119,6 +119,8 @@ impl Parsed {
         // Codex totals are cumulative counters, so the last one seen is exact;
         // per-model rows are sums of their growth.
         v.models.clear();
+        // Only the tail was read: the turn's start may be missing.
+        v.tokens.turn_output = 0;
         v
     }
 }
@@ -669,7 +671,7 @@ pub(crate) mod tests {
             if kind == Kind::Claude {
                 assert_eq!(pv.tokens.input, 0);
             } else {
-                assert_eq!(pv.tokens, want.tokens, "codex counters are cumulative");
+                assert_eq!(Tokens { turn_output: 0, ..pv.tokens.clone() }, Tokens { turn_output: 0, ..want.tokens.clone() }, "codex counters are cumulative");
                 assert_eq!(pv.id, "cid");
             }
 

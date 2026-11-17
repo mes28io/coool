@@ -35,6 +35,9 @@ struct ParseState {
     /// `Artifact` publish calls waiting for their result: (tool_use_id, step summary, input).
     #[serde(default)]
     artifacts: Vec<(String, String, Value)>,
+    /// Output tokens of assistant messages since the last prompt.
+    #[serde(default)]
+    turn_out: u64,
 }
 
 /// Everything parsed from one transcript (main session or subagent).
@@ -65,7 +68,7 @@ impl Parsed {
             model: self.model.clone(),
             last_prompt: self.last_prompt.clone(),
             current: self.current.clone(),
-            tokens: self.tokens.clone(),
+            tokens: Tokens { turn_output: self.p.turn_out, ..self.tokens.clone() },
             activity: Arc::new(self.activity.clone()),
             models,
             origin: self.p.entrypoint.as_ref().map(|e| crate::origin::claude(Some(e), self.p.human)),
@@ -556,6 +559,7 @@ fn parse_line(
                 tokens.input += g("input_tokens") + g("cache_creation_input_tokens");
                 tokens.cached += g("cache_read_input_tokens");
                 tokens.output += g("output_tokens");
+                st.turn_out += g("output_tokens");
                 // `<synthetic>` marks locally generated messages (errors, command output).
                 if let Some(m) = msg["model"].as_str().filter(|m| !m.is_empty() && *m != "<synthetic>") {
                     let used = ModelUse {
@@ -687,6 +691,7 @@ fn user_text(s: &str, ts: String, st: &mut ParseState, current: &mut Option<Stri
         return;
     }
     push_activity(activity, Activity::message(ts, ActivityKind::Prompt, s, 400));
+    st.turn_out = 0;
     *current = Some("thinking…".into());
 }
 
@@ -865,6 +870,22 @@ mod tests {
         feed(&mut o, &rec(r#"{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/x"}}"#));
         assert_eq!((o.tokens.input, o.tokens.cached, o.tokens.output, o.tokens.context), (15, 100, 7, 115));
         assert_eq!(o.model, "claude-x");
+    }
+
+    #[test]
+    fn turn_output_restarts_at_each_prompt() {
+        let mut o = Out::default();
+        let user = |t: &str| format!(r#"{{"type":"user",{TS},"message":{{"role":"user","content":"{t}"}}}}"#);
+        let asst = |id: &str, out: u64| format!(r#"{{"type":"assistant",{TS},"message":{{"id":"{id}","model":"claude-x","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":1,"output_tokens":{out}}}}}}}"#);
+        feed(&mut o, &user("one"));
+        feed(&mut o, &asst("a", 30));
+        feed(&mut o, &asst("a", 30)); // same message again
+        feed(&mut o, &asst("b", 12));
+        assert_eq!(o.st.turn_out, 42);
+        feed(&mut o, &user("two"));
+        assert_eq!(o.st.turn_out, 0);
+        feed(&mut o, &asst("c", 5));
+        assert_eq!((o.st.turn_out, o.tokens.output), (5, 47));
     }
 
     #[test]

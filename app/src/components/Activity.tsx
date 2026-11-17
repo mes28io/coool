@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, ArtifactInfo, Session } from "../lib/types";
-import { fmtElapsed, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
+import { fmtElapsed, fmtTokens, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { MOODS, moodOfCurrent, toolMood, type Mood } from "../lib/activityMood";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
@@ -12,7 +12,7 @@ import { useClock } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
 import { liveJobs } from "../lib/live";
 import { IAlert, IChevron, ICheck, toolIcon } from "./icons";
-import { Elapsed, JumpToBottom, LiveClock, cx, ease } from "./primitives";
+import { Elapsed, JumpToBottom, LiveClock, TokenCount, cx, ease } from "./primitives";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { Markdown } from "./Markdown";
 import { ModelTag } from "./Models";
@@ -245,13 +245,14 @@ export function Timeline({ session, compact, live }: { session: Session; compact
               Worked for <span className="tnum">{fmtElapsed(turn.endMs - turn.startMs)}</span>
             </span>
             {turn.tools > 0 && <span>· {turn.tools} tool {turn.tools === 1 ? "use" : "uses"}</span>}
+            {!!session.tokens.turn_output && <TokenCount n={session.tokens.turn_output} className="text-small text-faint" />}
             {session.model && <span>· {modelLabel(session.model)}</span>}
           </div>
         )}
         <AnimatePresence>
           {busy && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
-              <LiveIndicator since={lt.approx ? null : lt.at} mood={agentsRunning > 0 && !session.current ? "delegate" : now.mood} detail={now.detail} agents={agentsRunning} jobs={liveJobs(session)} mainActive={mainActive} timerSince={turn.startMs} timerTitle={turn.approxStart ? "since the earliest step shown" : undefined} />
+              <LiveIndicator since={lt.approx ? null : lt.at} mood={agentsRunning > 0 && !session.current ? "delegate" : now.mood} detail={now.detail} agents={agentsRunning} jobs={liveJobs(session)} mainActive={mainActive} timerSince={turn.startMs} tokens={session.tokens.turn_output} timerTitle={turn.approxStart ? "since the earliest step shown" : undefined} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -371,8 +372,11 @@ export function ThinkingRow({
   live = true,
   timerSince,
   timerTitle,
+  tokens,
 }: {
   since: number | null;
+  /** Output tokens of the turn, shown left of the timer. */
+  tokens?: number;
   /** The running total shown at the right (the turn's start); defaults to `since`. Never restarts with the activity. */
   timerSince?: number | null;
   timerTitle?: string;
@@ -423,7 +427,10 @@ export function ThinkingRow({
           {dots}
         </span>
         {detail && <span className="selectable min-w-0 flex-1 truncate font-mono text-mono-small text-dim">{shortDetail(detail)}</span>}
-        <LiveClock since={timerSince !== undefined ? timerSince : exact ? since : null} title={timerTitle} className="ml-auto shrink-0 pr-2 text-small text-dim" />
+        <span className="ml-auto flex shrink-0 items-center gap-2 pr-2 text-small text-dim">
+          <TokenCount n={tokens} />
+          <LiveClock since={timerSince !== undefined ? timerSince : exact ? since : null} title={timerTitle} />
+        </span>
       </div>
     );
   return (
@@ -456,8 +463,10 @@ export function LiveIndicator({
   mainActive,
   timerSince,
   timerTitle,
+  tokens,
 }: {
   since: number | null;
+  tokens?: number;
   timerSince?: number | null;
   timerTitle?: string;
   mood: Mood;
@@ -469,7 +478,7 @@ export function LiveIndicator({
   // Only the flag drives a re-render, not every tick.
   const launching = useClock((now) => mood === "delegate" && since !== null && now - since < 1500);
   const quiet = !mainActive && agents + jobs > 0 && !launching;
-  if (!quiet) return <ThinkingRow since={since} mood={mood} detail={detail} large timerSince={timerSince} timerTitle={timerTitle} />;
+  if (!quiet) return <ThinkingRow since={since} mood={mood} detail={detail} large timerSince={timerSince} timerTitle={timerTitle} tokens={tokens} />;
   const parts = [agents > 0 && `${agents} ${agents === 1 ? "agent" : "agents"}`, jobs > 0 && `${jobs} ${jobs === 1 ? "job" : "jobs"}`].filter(Boolean).join(", ");
   return (
     <div className="flex items-center gap-2 py-1 text-small text-dim" data-live-quiet>
@@ -477,7 +486,10 @@ export function LiveIndicator({
         <span className="size-[7px] rounded-full bg-running" />
       </span>
       <span>{parts} running</span>
-      <LiveClock since={timerSince !== undefined ? timerSince : since} title={timerTitle} className="ml-auto shrink-0 pr-2 text-small text-dim" />
+      <span className="ml-auto flex shrink-0 items-center gap-2 pr-2 text-small text-dim">
+        <TokenCount n={tokens} />
+        <LiveClock since={timerSince !== undefined ? timerSince : since} title={timerTitle} />
+      </span>
     </div>
   );
 }
@@ -704,8 +716,8 @@ export function useFocusLit(asked: boolean, card: { current: HTMLElement | null 
 
 /** How a finished subagent ended, and its one-line result: "Done · 3 tool uses · 5s". */
 export type AgentEnd = "done" | "failed" | "stopped";
-export function agentResultParts(uses: number, ms: number | null): string[] {
-  return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
+export function agentResultParts(uses: number, ms: number | null, tokens = 0): string[] {
+  return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `↓ ${fmtTokens(tokens)}`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
 }
 
 /** The chevron of a foldable card: › folded, ⌄ open. */
@@ -766,7 +778,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   const end: AgentEnd = failedEnd ? (isStopReason(reason) ? "stopped" : "failed") : "done";
   const t0 = all.length ? tsToMs(all[0].ts) : null;
   const t1 = last ? tsToMs(last.ts) : null;
-  const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, t0 !== null && t1 !== null ? t1 - t0 : null);
+  const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, t0 !== null && t1 !== null ? t1 - t0 : null, agent?.tokens.output ?? 0);
   const [open, toggle] = useFold(`agent:${agent?.id ?? a.text}`, !running, card);
   useEffect(() => {
     if (asked && !open) toggle();
@@ -794,6 +806,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
             </span>
             <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
             {agent && <AgentModels agent={agent} />}
+            <TokenCount n={agent?.tokens.output} what="by this agent" className="shrink-0 text-small text-dim" />
             <span className="size-[7px] shrink-0 rounded-full bg-running" />
             <FoldChevron open={open} />
           </div>

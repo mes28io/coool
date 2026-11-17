@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 /// v2: Claude state records `entrypoint` / human turns, Codex state `originator`,
 /// `source` and the subagent parent (session origin).
 /// v3: activity entries keep their full text (`Activity::full`, `shortened`).
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 /// Bytes fingerprinted at the start and just before the saved offset.
 const PRINT: u64 = 4096;
 /// Total size the cache is kept under.

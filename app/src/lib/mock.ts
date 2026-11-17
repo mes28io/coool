@@ -19,7 +19,7 @@ const hhmmss = (t: number) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 const rnd = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
-const tok = (i = 0, o = 0, c = 0): Tokens => ({ input: i, cached: Math.floor(i * 3.2), output: o, context: c });
+const tok = (i = 0, o = 0, c = 0): Tokens => ({ input: i, cached: Math.floor(i * 3.2), output: o, context: c, turn_output: Math.floor(o / 5) });
 
 // Work scripts: what an agent "does" in each project.
 const WORK: Record<string, string[]> = {
@@ -604,6 +604,7 @@ export function mockBackend(): Backend {
         a.activity.push(parseStep(next, t));
         if (failed) a.activity.push({ ts: hhmmss(t + 1000), kind: "error", text: "test curves::bezier::split_at_cusp failed: left 3, right 4", step: true });
         a.tokens.output += 160 + Math.floor(Math.random() * 260);
+        ag3.tokens.turn_output = (ag3.tokens.turn_output ?? 0) + 120;
         a.tokens.input += 700;
         due[a.id] = el + gap[a.id] + Math.random() * 1200 + (failed ? 1200 : 0);
         changed = true;
@@ -646,6 +647,7 @@ export function mockBackend(): Backend {
         lj0.activity.push(a);
         lj0.current = a.kind === "tool" ? a.text : "thinking…";
         lj0.tokens.output += 180;
+        lj0.tokens.turn_output = (lj0.tokens.turn_output ?? 0) + 180;
       }
       lj0.updated = t;
       emitSessions();

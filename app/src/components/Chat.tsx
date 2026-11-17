@@ -29,7 +29,7 @@ import { NoteRows } from "./SteerStrip";
 import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
-import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot } from "./primitives";
+import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot, TokenCount } from "./primitives";
 import { useStore } from "../store";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
@@ -350,7 +350,7 @@ export function ChatTimeline({
         <AnimatePresence>
           {showRow && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
-              <LiveIndicator since={now.at ?? idleSince} mood={now.mood} detail={now.detail} agents={now.agents} mainActive={now.mainActive} timerSince={chat.turnStart ?? idleSince} />
+              <LiveIndicator since={now.at ?? idleSince} mood={now.mood} detail={now.detail} agents={now.agents} mainActive={now.mainActive} timerSince={chat.turnStart ?? idleSince} tokens={Math.max(0, chat.tokens.output - chat.turnOut0)} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -685,6 +685,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const models = Object.keys(chat.agents[tool.id]?.models ?? {});
   const fromText = [...new Set(texts.map((t) => t.model).filter(Boolean) as string[])];
   const modelIds = models.length ? models : fromText;
+  const agentOut = Object.values(chat.agents[tool.id]?.models ?? {}).reduce((n, u) => n + u.output, 0);
   const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
   const card = useRef<HTMLDivElement>(null);
   const focus = useStore((st) => st.agentFocus);
@@ -722,12 +723,13 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
             ))}
             <span className="flex items-center gap-1.5 text-small text-faint">
               <span className="size-[7px] shrink-0 rounded-full bg-running" />
+              <TokenCount n={agentOut} what="by this agent" />
               <LiveClock since={tool.ts} />
             </span>
             <FoldChevron open={open} />
           </div>
         ) : (
-          <FinishedAgentHead end={end} title={title} parts={agentResultParts(steps.length, (tool.endTs ?? tool.ts) - tool.ts)} reason={end === "done" ? null : reason} open={open} onToggle={toggle} />
+          <FinishedAgentHead end={end} title={title} parts={agentResultParts(steps.length, (tool.endTs ?? tool.ts) - tool.ts, agentOut)} reason={end === "done" ? null : reason} open={open} onToggle={toggle} />
         )}
         <FoldBody open={open}>
           {!running && (
