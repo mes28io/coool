@@ -258,7 +258,7 @@ function Bar({ card }: { card: AgentCardData }) {
             animate={{ opacity: 1 }}
             transition={{ duration: 0.3 }}
             className={cx("h-full flex-1 rounded-full", s.failed ? "seg-fail" : s.run && "seg-run")}
-            style={s.failed || s.run ? undefined : { background: "color-mix(in oklab, var(--text) 35%, transparent)" }}
+            style={s.failed || s.run ? undefined : { background: "var(--status-done)" }}
           />
         ))}
       </AnimatePresence>

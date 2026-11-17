@@ -177,7 +177,7 @@ const Row = memo(function Row({ c, last, left, fresh, now, onJump, onFiles }: { 
         className={cx(
           "absolute z-[1] -translate-x-1/2 -translate-y-1/2 rounded-full transition-[width,height,background-color,border-color,left] duration-300",
           dim ? "size-[7px] border-[1.5px] bg-raised" : newest ? "size-[8px]" : "size-[5px]",
-          newest && (c.live ? "bg-working" : "bg-fg"),
+          newest && (c.live ? "bg-running" : "bg-fg"),
         )}
         style={{ left: X0 + c.depth * STEP - 6, top: 14, ...(dim ? { borderColor: DOT } : newest ? null : { background: DOT }) }}
       />

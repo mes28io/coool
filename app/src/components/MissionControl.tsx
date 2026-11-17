@@ -153,7 +153,7 @@ function CardModel({ s }: { s: Session }) {
   );
 }
 
-/** State at the top right of a card: just a dot ("Needs you" keeps its word, in blue). */
+/** State at the top right of a card: just a dot ("Needs you" keeps its word, in yellow). */
 function StateLabel({ status, needs, background }: { status: "busy" | "idle" | "starting" | "ended"; needs?: boolean; background?: string | null }) {
   if (needs)
     return (

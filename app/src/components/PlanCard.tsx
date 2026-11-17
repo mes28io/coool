@@ -54,7 +54,7 @@ function Marker({ status, n }: { status: PlanStatus; n: number }) {
           {status === "pending" ? (
             <span className="flex size-[18px] items-center justify-center rounded-full border border-line text-micro font-medium text-faint tnum">{n}</span>
           ) : status === "active" ? (
-            <span className="text-working-text">
+            <span className="text-running-text">
               <Spinner size={16} />
             </span>
           ) : status === "done" ? (
@@ -208,7 +208,7 @@ export function PlanCard({
   else if (phase === "running")
     footer = (
       <>
-        <span className="text-working-text">
+        <span className="text-running-text">
           <Spinner />
         </span>
         <span className="text-small text-dim tnum">

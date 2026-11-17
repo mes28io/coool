@@ -526,8 +526,8 @@ function childItems(parentKey: string, kids: Session[], selected: string | null,
 const disclosure = "flex h-[28px] items-center rounded-[8px] text-left text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-dim";
 
 /**
- * One session: title only. State is a single dot at the right edge (green working,
- * blue needs you, yellow waiting, nothing for ended); hovering swaps it for the provider mark and the age.
+ * One session: title only. State is a single dot at the right edge (blue spinner working,
+ * yellow needs you, green waiting, nothing for ended); hovering swaps it for the provider mark and the age.
  * Rows are opaque so rows that trade places slide past each other.
  */
 function Row({

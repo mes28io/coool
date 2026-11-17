@@ -612,7 +612,7 @@ export function StepLine({
         onClick && "hover:bg-hover",
         open && "bg-hover",
       )}
-      style={active ? { ["--sweep" as string]: "var(--status-needs)" } : undefined}
+      style={active ? { ["--sweep" as string]: "var(--status-running)" } : undefined}
     >
       <span
         className={cx(

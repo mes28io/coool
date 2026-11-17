@@ -4,7 +4,7 @@
 // One IntersectionObserver for all of them; a MutationObserver picks up animated elements as they appear.
 // Without this, off-screen loops keep the renderer recalculating style and producing frames for nothing.
 
-const ANIMATED = ".needs-ring,.needs-badge,.breathe,.shimmer,.sweep,.attn-card,.seg-run,.spin,.think-dots,.caret,.skel,.mg,.md-live";
+const ANIMATED = ".needs-ring,.needs-badge,.breathe,.shimmer,.sweep,.attn-card,.seg-run,.spin,.dot-spin,.think-dots,.caret,.skel,.mg,.md-live";
 
 function start() {
   if (typeof IntersectionObserver === "undefined" || typeof MutationObserver === "undefined") return;

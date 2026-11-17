@@ -19,10 +19,11 @@ export function cx(...c: (string | false | null | undefined)[]) {
 }
 
 export const StatusDot = memo(function StatusDot({ status, size = 7, className }: { status: UiStatus; size?: number; className?: string }) {
-  const color = status === "busy" ? "var(--status-working)" : status === "idle" ? "var(--status-waiting)" : status === "needs" ? "var(--status-needs)" : "var(--dim)";
+  const color = status === "busy" ? "var(--status-running)" : status === "idle" ? "var(--status-waiting)" : status === "needs" ? "var(--status-needs)" : "var(--dim)";
+  if (status === "busy") return <span className={cx("dot-spin inline-block shrink-0", className)} style={{ width: size, height: size }} />;
   return (
     <span className={cx("relative inline-flex shrink-0", status === "needs" && "mx-[2px]", className)} style={{ width: size, height: size }}>
-      {/* Only "needs you" moves: working, waiting and starting are steady dots (calmer, and far less repaint). */}
+      {/* Only "needs you" pulses (working is a stepped spinner, in StatusDot above): waiting and starting are steady dots (calmer, and far less repaint). */}
       {status === "needs" && <span className="needs-ring absolute -inset-[2.5px] rounded-full" />}
       <motion.span
         className="relative rounded-full"
@@ -41,7 +42,7 @@ export const StatusDot = memo(function StatusDot({ status, size = 7, className }
 export const statusLabel = (s: UiStatus) =>
   s === "busy" ? "Working" : s === "idle" ? "Waiting" : s === "starting" ? "Starting" : s === "needs" ? "Needs you" : "Ended";
 
-/** `background`: idle, but child runs or background shells still work ("Background", green dot; the detail in the tooltip). */
+/** `background`: idle, but child runs or background shells still work ("Background", blue spinner; the detail in the tooltip). */
 export function StatusPill({ status, background }: { status: UiStatus; background?: string | null }) {
   if (status === "needs") return <NeedsBadge />;
   if (background)
@@ -241,7 +242,7 @@ export function AutoTag({ className }: { className?: string }) {
   );
 }
 
-/** The distinct "blocked on you" badge: solid blue with white ink, so it reads differently from "Waiting". */
+/** The distinct "blocked on you" badge: solid yellow with dark ink, so it reads differently from "Waiting". */
 export function NeedsBadge({ small, className }: { small?: boolean; className?: string }) {
   return (
     <span
@@ -494,7 +495,7 @@ export function Button({
 /**
  * "Scroll to bottom" for a timeline the reader has scrolled up in. Floats centred over the bottom edge of the timeline
  * (just above the composer): a small solid pill, just above the composer dock's fade (`.composer-dock`). `fresh`: new output arrived while away (dot + label); `needs`: an approval/question
- * arrived (blue, "Needs you"). Place it in a zero-height `relative` box right after the scroller.
+ * arrived (yellow, "Needs you"). Place it in a zero-height `relative` box right after the scroller.
  */
 export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; fresh: boolean; needs: boolean; onClick: () => void }) {
   const label = needs ? "Needs you" : fresh ? "New output" : null;
@@ -517,7 +518,7 @@ export function JumpToBottom({ away, fresh, needs, onClick }: { away: boolean; f
           <path d="M8 3v9.5M4 8.5l4 4 4-4" />
         </svg>
         {label}
-        {fresh && !needs && <span className="size-[6px] rounded-full bg-working" />}
+        {fresh && !needs && <span className="size-[6px] rounded-full bg-running" />}
       </button>
     </div>
   );

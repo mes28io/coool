@@ -32,14 +32,16 @@
   --accent-text: #28c840;
   --busy-text: #febc2e;
   --error-text: #ff5f57;
-  /* session status: green working, green working, yellow your turn, blue needs you */
-  --status-working: #28c840;
-  --status-working-text: #28c840;
-  --status-waiting: #febc2e;
-  --status-waiting-text: #febc2e;
-  --status-needs: #0a84ff; /* blue: blocked on you */
-  --status-needs-text: #4da3ff;
-  --status-needs-ink: #ffffff; /* text on the filled blue badge */
+  /* status, one meaning per token: running = blue, waiting for you = green, needs you = yellow, done = green (small marks only) */
+  --status-running: #0a84ff;
+  --status-running-text: #0a84ff;
+  --status-waiting: #28c840;
+  --status-waiting-text: #28c840;
+  --status-needs: #febc2e;
+  --status-needs-text: #febc2e;
+  --status-needs-ink: #2b1d00; /* dark text on the filled yellow badge */
+  --status-done: #28c840;
+  --status-done-text: #28c840;
   --claude: #d97757; /* logo only */
   --codex: var(--text);
   --shadow-card: none;
@@ -68,13 +70,15 @@
   --accent-text: #1a7f37;
   --busy-text: #9a6700;
   --error-text: #d92d20;
-  --status-working: #28c840;
-  --status-working-text: #1a7f37;
-  --status-waiting: #febc2e;
-  --status-waiting-text: #9a6700;
-  --status-needs: #007aff;
-  --status-needs-text: #0064d2;
-  --status-needs-ink: #ffffff;
+  --status-running: #007aff;
+  --status-running-text: #007aff;
+  --status-waiting: #28c840;
+  --status-waiting-text: #1a7f37;
+  --status-needs: #febc2e;
+  --status-needs-text: #9a6700;
+  --status-needs-ink: #2b1d00;
+  --status-done: #28c840;
+  --status-done-text: #1a7f37;
   --claude: #d97757;
   --codex: var(--text);
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
@@ -105,15 +109,15 @@
   --color-accent-soft: var(--accent-soft);
   --color-accent-ink: var(--accent-ink);
   --color-busy: var(--busy);
-  --color-working: var(--status-working);
-  /* jobs (subagents, shells) and steps while they run: Apple blue, like the Jobs button */
-  --color-running: var(--status-needs);
-  --color-working-text: var(--status-working-text);
+  --color-running: var(--status-running);
+  --color-running-text: var(--status-running-text);
   --color-waiting: var(--status-waiting);
   --color-waiting-text: var(--status-waiting-text);
   --color-needs: var(--status-needs);
   --color-needs-text: var(--status-needs-text);
   --color-needs-ink: var(--status-needs-ink);
+  --color-done: var(--status-done);
+  --color-done-text: var(--status-done-text);
   --color-err: var(--error);
   --color-claude: var(--claude);
   --color-codex: var(--codex);
@@ -329,13 +333,27 @@ html.no-transitions *::after {
 .spin {
   animation: spin 0.9s linear infinite;
 }
+/* Working dot: a thin ring with a brighter arc, same footprint as the steady dot. A rotated element (composited
+   transform), stepped at ~12 updates/s like the other loops; Reduce motion turns it back into the steady blue dot. */
+.dot-spin {
+  box-sizing: border-box;
+  border-radius: 9999px;
+  border: 1.5px solid color-mix(in oklab, var(--status-running) 20%, transparent);
+  border-top-color: var(--status-running);
+  animation: spin 1s steps(12) infinite;
+}
+.reduce-motion .dot-spin {
+  animation: none;
+  border-color: var(--status-running);
+  background: var(--status-running);
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-/* "Needs you": a slow accent ring, calmer than the working pulse. */
+/* "Needs you": a slow yellow ring, calmer than the working pulse. */
 .needs-ring {
   box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--status-needs) 70%, transparent);
   animation: needs-ring 2.4s ease-in-out infinite;
@@ -616,18 +634,22 @@ html.page-hidden *::after {
   opacity: 0.7;
 }
 
-/* Agents panel: segmented step bar (active = blue with a slow moving highlight, failed = hatched red). */
+/* Agents panel: segmented step bar (active = running blue with a slow moving highlight, failed = hatched red). */
 .seg-run {
   position: relative;
   overflow: hidden;
-  background: var(--status-needs);
+  /* a light blue base with a narrow band of full systemBlue passing over it, so the bar reads mostly light blue */
+  background: color-mix(in oklab, var(--status-running) 70%, white);
+}
+:root[data-theme="light"] .seg-run {
+  background: color-mix(in oklab, var(--status-running) 55%, white);
 }
 .seg-run::after {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
-  width: 55%;
-  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.6), transparent);
+  width: 35%;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--status-running) 55%, transparent), transparent);
   transform: translateX(-57%);
   /* A moving layer (transform), not a moving background: 30 steps per 2.6 s (~12/s). */
   animation: seg-run 2.6s steps(30) infinite;
