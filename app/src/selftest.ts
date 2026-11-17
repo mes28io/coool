@@ -6,8 +6,9 @@
 //
 // Scenarios (COOOL_SELFTEST=all, or a comma list): stream, approval, interrupt,
 // model, slash, question, steer, markdown, resume, codex, insights, quit, and `perf` (CPU phases; not in `all`),
-// `artifact` (preview sandbox in the browser panel; no model calls), `browser` (artifact, then the in-app browser's
-// native webview: layout tracking, hiding, IPC isolation; needs the network for example.com; no model calls).
+// `artifact` (the preview window and its sandbox; no model calls), `browser` (artifact, then the in-app browser's
+// tabs and native webviews: layout tracking, hiding, IPC isolation, pop-ups vs tabs, eviction, restoring; needs the
+// network for example.com; no model calls).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { newChat } from "./lib/actions";
@@ -17,7 +18,7 @@ import type { ArtifactInfo, ChatEvent } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { decideMotion, setMotionPref, type MotionHints, type MotionPref } from "./lib/motion";
 import { resolveTarget, useStore } from "./store";
-import { nativeId, useBrowserState } from "./lib/browser";
+import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 
 interface Config {
   scenario: string;
@@ -199,6 +200,18 @@ interface PopupProbe {
   visible: boolean;
 }
 const popups = () => invoke("selftest_popups") as Promise<PopupProbe[]>;
+interface PreviewProbe {
+  label: string;
+  url: string;
+  title: string;
+  page_title: string;
+  page_url: string;
+  frame: [number, number, number, number] | null;
+  visible: boolean;
+  child_of_main: boolean | null;
+  main_frame: [number, number, number, number] | null;
+}
+const previews = () => invoke("selftest_previews") as Promise<PreviewProbe[]>;
 const probeResults = async () => ((await invoke("selftest_probe_result")) as string[]).map((s) => JSON.parse(s) as Record<string, unknown>);
 /** What an IPC probe (`ipcProbe` in selftest.rs) got that it shouldn't have. */
 function ipcLeaks(r: Record<string, unknown>): string[] {
@@ -225,29 +238,39 @@ async function tracks(id: string): Promise<string | null> {
 
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
   /**
-   * The browser panel: an artifact preview, then https://example.com in the native child webview, which follows the
-   * panel through a window resize and a panel resize, hides under the palette, when the panel switches kind, and on
-   * another tab; a local probe page (a remote origin) can't reach coool's IPC or navigate anywhere but http(s); a
-   * `window.open` pop-up opens as its own window that keeps `window.opener`, posts back, closes itself, and has no
-   * IPC either; a pop-up left open closes with the panel; close.
+   * The browser panel: an artifact preview window, then https://example.com in a tab's native child webview, which
+   * follows the panel through a window resize and a panel resize, hides under the palette, when the panel switches
+   * kind, and on another tab; a local probe page (a remote origin) can't reach coool's IPC or navigate anywhere but
+   * http(s); a sized `window.open` opens a pop-up window that keeps `window.opener`, posts back, closes itself, and
+   * has no IPC either; `target=_blank` and a bare `window.open` open tabs; switching and closing tabs; Open adds or
+   * focuses a tab; at most 4 webviews stay alive and an evicted tab reloads where it was; a pop-up left open closes
+   * with the panel; closing remembers the tabs and the globe restores them; the address bar; the start view and "+".
    * Needs the network (example.com); no model calls.
    */
   async browser(ctx) {
     await scenarios.artifact(ctx);
     const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
     const st = () => useStore.getState();
-    const state = () => useBrowserState.getState().byKey[key];
+    const tabs = () => st().browser[key];
+    const activeKey = () => activeTabKey(key) ?? "";
+    const state = () => useBrowserState.getState().byKey[activeKey()];
+    /** The showing tab's webview, once it exists. */
+    const current = (what = "the webview") => waitFor(what, () => nativeId(activeKey()), 10_000);
+    const tabEl = (id: number) => document.querySelector<HTMLElement>(`[data-browser-tab="${id}"]`);
+    const activeTab = () => tabs()?.tabs.find((t) => t.id === tabs()?.active);
     let id = "";
-    await step("a web page opens in the panel's native webview, laid over the panel", async () => {
+    await step("a web page opens in a tab, in the panel's native webview, laid over the panel", async () => {
       st().openBrowser(key, { kind: "web", url: "https://example.com" });
-      id = await waitFor("the webview", () => nativeId(key), 10_000);
+      id = await current();
       await waitFor("the page title", () => /Example Domain/.test(state()?.title ?? ""), 30_000);
       await sleep(900);
       await shot("browser-web");
       const bad = await tracks(id);
       if (bad) throw new Fail(bad);
       const title = $("[data-browser-title]")?.textContent;
-      if (!/Example Domain/.test(title ?? "")) throw new Fail(`panel title ${title}`);
+      if (!/Example Domain/.test(title ?? "")) throw new Fail(`tab title ${title}`);
+      if (tabs()?.tabs.length !== 1) throw new Fail(`${tabs()?.tabs.length} tabs`);
+      if ($("[data-browser-tabs]")?.dataset.browserTabs !== "1") throw new Fail("no tab strip with one tab");
       return `${id}: ${state()?.url}`;
     });
     await step("it tracks the panel when the window resizes", async () => {
@@ -340,16 +363,20 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const bad = ipcLeaks(ipc);
       for (const g of got.filter((g) => g.tried)) if (!String(g.href).startsWith(url)) bad.push(`${g.step}: ended up at ${g.href}`);
       if (!got.some((g) => g.step === "done")) bad.push("the probe never finished");
+      if (tabs()?.tabs.length !== 2) bad.push(`${tabs()?.tabs.length} tabs, not 2`);
       if (bad.length) throw new Fail(`${bad.join("; ")} (${JSON.stringify(got)})`);
       return JSON.stringify(got);
     });
     let base = "";
+    let openerTab = 0;
     const seen = new Set<string>();
-    await step("window.open opens a pop-up window that keeps window.opener: it posts back and closes itself", async () => {
+    await step("window.open with a size opens a pop-up window that keeps window.opener: it posts back and closes itself", async () => {
       base = ((await invoke("selftest_probe_server")) as string).replace(/\/probe$/, "");
       st().openBrowser(key, { kind: "web", url: `${base}/opener` });
+      openerTab = tabs()!.active;
+      id = await current("the opener's webview");
       await waitFor("the opener page", () => state()?.title === "Opener ready", 20_000).catch((e) => {
-        throw new Fail(`${e.message}: ${JSON.stringify(state())} native ${nativeId(key)}`);
+        throw new Fail(`${e.message}: ${JSON.stringify(state())} native ${nativeId(activeKey())}`);
       });
       if ((await popups()).length) throw new Fail("a pop-up is already open");
       // Script the app evaluates counts as a user gesture, as the person's click on "Continue with Google" does.
@@ -373,6 +400,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await sleep(500);
       const left = await popups();
       if (left.length) bad.push(`pop-up window still open: ${JSON.stringify(left)}`);
+      if (tabs()?.active !== openerTab) bad.push("the pop-up changed the panel's tab");
       const res = await probeResults();
       const ipc = res.find((r) => r.step === "popup-ipc");
       if (!ipc) bad.push("no IPC probe result from the pop-up");
@@ -384,9 +412,128 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (bad.length) throw new Fail(`${bad.join("; ")} (${JSON.stringify({ pop, ipc })})`);
       return `${pop.label} "${pop.title}" ${pop.frame?.map(Math.round).join(",")}; opener: "${got}"; ${JSON.stringify(ipc)}`;
     });
+    const openerId = () => id;
+    let blankTab = 0;
+    let blankId = "";
+    await step("a target=_blank link opens a new tab (no window); the opener's webview hides behind it", async () => {
+      // A page that is one big target=_blank link, clicked for real (a script's click() isn't trusted).
+      st().navigateBrowserTab(key, openerTab, `${base}/blanklink`);
+      await waitFor("the link page", () => state()?.title === "Link page", 20_000);
+      await sleep(600);
+      const before = tabs()!.tabs.length;
+      const pops = (await popups()).length;
+      await invoke("selftest_click", { id: openerId() });
+      await waitFor("a new tab", () => tabs()!.tabs.length === before + 1, 10_000).catch((e) => {
+        throw new Fail(`${e.message} (link page title: "${state()?.title}")`);
+      });
+      blankTab = tabs()!.active;
+      blankId = await current("the new tab's webview");
+      await waitFor("the new tab's page", () => state()?.title === "Tab via=blank", 20_000);
+      await sleep(900);
+      await shot("browser-tab-blank");
+      const bad: string[] = [];
+      const order = tabs()!.tabs.map((t) => t.id);
+      if (order.indexOf(blankTab) !== order.indexOf(openerTab) + 1) bad.push(`new tab at ${order.indexOf(blankTab)}, opener at ${order.indexOf(openerTab)}`);
+      if ((await popups()).length !== pops) bad.push("a pop-up window opened");
+      if ((await webview(openerId())).hidden !== true) bad.push("the opener's webview is still shown");
+      const t = await tracks(blankId);
+      if (t) bad.push(t);
+      if (!/Tab via=blank/.test($("[data-browser-title]")?.textContent ?? "")) bad.push(`tab title ${$("[data-browser-title]")?.textContent}`);
+      if (bad.length) throw new Fail(bad.join("; "));
+      return `${blankId}: ${state()?.url}`;
+    });
+    await step("switching tabs swaps the visible webview", async () => {
+      const el = tabEl(openerTab);
+      if (!el) throw new Fail("no tab element for the opener");
+      el.click();
+      await sleep(1200);
+      const bad: string[] = [];
+      if (tabs()?.active !== openerTab) bad.push("the click did not switch");
+      const t = await tracks(openerId());
+      if (t) bad.push(`opener: ${t}`);
+      if ((await webview(blankId)).hidden !== true) bad.push("the other tab's webview is still shown");
+      await shot("browser-tab-switched");
+      tabEl(blankTab)?.click();
+      await sleep(1200);
+      const back = await tracks(blankId);
+      if (back) bad.push(`back: ${back}`);
+      if ((await webview(openerId())).hidden !== true) bad.push("the opener's webview shows over the other tab");
+      tabEl(openerTab)?.click();
+      await sleep(900);
+      if (bad.length) throw new Fail(bad.join("; "));
+    });
+    let plainTab = 0;
+    await step("window.open without features opens a tab too; closing that tab closes its webview", async () => {
+      st().navigateBrowserTab(key, openerTab, `${base}/opener`);
+      await waitFor("the opener page", () => state()?.title === "Opener ready", 20_000);
+      const before = tabs()!.tabs.length;
+      const pops = (await popups()).length;
+      await invoke("selftest_browser_eval", { id: openerId(), js: `document.getElementById("plain").click()` });
+      await waitFor("a new tab", () => tabs()!.tabs.length === before + 1, 10_000);
+      plainTab = tabs()!.active;
+      const plainId = await current("the new tab's webview");
+      await waitFor("the new tab's page", () => state()?.title === "Tab via=open", 20_000);
+      if ((await popups()).length !== pops) throw new Fail("a pop-up window opened");
+      await sleep(400);
+      const x = document.querySelector<HTMLElement>(`[data-browser-tab-close="${plainTab}"]`);
+      if (!x) throw new Fail("no close button on the tab");
+      x.click();
+      await sleep(900);
+      const w = await webview(plainId);
+      const bad: string[] = [];
+      if (w.frame || w.hidden !== null) bad.push(`its webview is still there: ${JSON.stringify(w)}`);
+      if (tabs()!.tabs.some((t) => t.id === plainTab)) bad.push("the tab is still listed");
+      if (tabs()!.tabs.length !== before) bad.push(`${tabs()!.tabs.length} tabs`);
+      // The neighbour shows (the tab to its right, else its left).
+      const now = await current();
+      const t = await tracks(now);
+      if (t) bad.push(`after closing: ${t}`);
+      if (bad.length) throw new Fail(bad.join("; "));
+      return `closed ${plainId}; showing ${activeTab()?.title}`;
+    });
+    await step("Open (an artifact card's) opens a tab, or focuses the tab already on that URL", async () => {
+      const u = `${base}/tabpage?via=card`;
+      const before = tabs()!.tabs.length;
+      st().openBrowser(key, { kind: "web", url: u });
+      const cardTab = tabs()!.active;
+      await waitFor("its page", () => state()?.title === "Tab via=card", 20_000);
+      if (tabs()!.tabs.length !== before + 1) throw new Fail(`${tabs()!.tabs.length} tabs after the first Open`);
+      tabEl(openerTab)?.click();
+      await sleep(600);
+      st().openBrowser(key, { kind: "web", url: u });
+      await sleep(600);
+      if (tabs()!.tabs.length !== before + 1) throw new Fail(`a second tab for the same URL (${tabs()!.tabs.length})`);
+      if (tabs()!.active !== cardTab) throw new Fail("the tab on that URL was not focused");
+      return `${tabs()!.tabs.length} tabs`;
+    });
+    await step("at most 4 webviews stay alive; an evicted tab reloads where it was when shown again", async () => {
+      // Show every tab once (most recently shown last), then the first is the least recently shown.
+      for (const t of tabs()!.tabs) {
+        tabEl(t.id)?.click();
+        await waitFor(`tab ${t.id}'s webview`, () => nativeId(tabKey(key, t.id)), 10_000);
+        await sleep(500);
+      }
+      const all = tabs()!.tabs;
+      const alive = all.filter((t) => nativeId(tabKey(key, t.id)));
+      if (all.length <= 4) throw new Fail(`only ${all.length} tabs`);
+      if (alive.length > 4) throw new Fail(`${alive.length} webviews alive`);
+      const gone = all.find((t) => !nativeId(tabKey(key, t.id)));
+      if (!gone) throw new Fail("no tab was evicted");
+      const was = gone.url;
+      tabEl(gone.id)?.click();
+      const again = await current("a new webview for the evicted tab");
+      await waitFor("its page again", () => !!state()?.url && !state()!.loading, 30_000);
+      await sleep(800);
+      await shot("browser-tab-evicted-back");
+      if (state()?.url !== was) throw new Fail(`reloaded at ${state()?.url}, was ${was}`);
+      const t = await tracks(again);
+      if (t) throw new Fail(t);
+      return `${all.length} tabs, ${alive.length} alive; tab ${gone.id} back at ${was} in ${again}`;
+    });
     let stay = "";
     await step("a pop-up left open closes with the panel's webview", async () => {
       st().openBrowser(key, { kind: "web", url: `${base}/opener?stay=1` });
+      id = await current();
       await waitFor("the opener page", () => state()?.title === "Opener ready", 20_000);
       await invoke("selftest_browser_eval", { id, js: `document.getElementById("open").click()` });
       for (const end = Date.now() + 10_000; !stay && Date.now() < end; await sleep(200)) stay = (await popups()).find((p) => !seen.has(p.label))?.label ?? "";
@@ -396,35 +543,51 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (!(await popups()).some((p) => p.label === stay)) throw new Fail("the ?stay pop-up closed by itself");
       return stay;
     });
-    await step("the panel's close button closes the webview", async () => {
+    let closed: { n: number; active: number; url: string; titles: string[] } = { n: 0, active: 0, url: "", titles: [] };
+    await step("the panel's close button closes every tab's webview (and their pop-ups), remembering the tabs", async () => {
+      const ids = tabs()!.tabs.map((t) => nativeId(tabKey(key, t.id))).filter(Boolean) as string[];
+      closed = { n: tabs()!.tabs.length, active: tabs()!.active, url: activeTab()?.url ?? "", titles: tabs()!.tabs.map((t) => t.title ?? "") };
       const close = ([...document.querySelectorAll("[data-browser-panel] button")] as HTMLElement[]).find((b) => b.title === "Close");
       if (!close) throw new Fail("no close button");
       close.click();
       await sleep(900);
-      const w = await webview(id);
       await shot("browser-closed");
-      if (w.frame || w.hidden !== null) throw new Fail(`still there: ${JSON.stringify(w)}`);
+      for (const i of ids) {
+        const w = await webview(i);
+        if (w.frame || w.hidden !== null) throw new Fail(`${i} still there: ${JSON.stringify(w)}`);
+      }
       const left = await popups();
       if (left.length) throw new Fail(`its pop-ups are still open: ${JSON.stringify(left)}`);
-      if (st().browser[key]) throw new Fail("the panel still has a page");
+      if (st().browser[key]) throw new Fail("the panel still has tabs");
       if ($("[data-right-panel]")?.dataset.rightPanel !== "closed") throw new Fail(`panel ${$("[data-right-panel]")?.dataset.rightPanel}`);
+      if (st().lastBrowser[key]?.tabs.length !== closed.n) throw new Fail(`remembered ${st().lastBrowser[key]?.tabs.length} tabs of ${closed.n}`);
+      return `${ids.length} webviews closed; ${closed.n} tabs remembered`;
     });
     const globe = () => ([...document.querySelectorAll("button")] as HTMLElement[]).find((b) => /^(Show|Hide) the browser/.test(b.title));
-    await step("after closing, the header's globe is still there and reopens the last page", async () => {
+    await step("after closing, the header's globe restores the tabs (URLs, titles, the active one)", async () => {
       const g = globe();
       if (!g) throw new Fail("no globe button in the header");
-      if (!/opener\?stay=1/.test(g.title)) throw new Fail(`globe title "${g.title}"`);
+      if (!/opener\?stay=1|Opener/.test(g.title) || !/more tabs/.test(g.title)) throw new Fail(`globe title "${g.title}"`);
       g.click();
-      const again = await waitFor("a new webview", () => nativeId(key), 10_000);
+      const again = await current("a new webview");
       await waitFor("the last page", () => state()?.title === "Opener ready", 20_000);
       await sleep(600);
       await shot("browser-reopened");
-      if (again === id) throw new Fail("the old webview came back (it should have been destroyed)");
-      if (!/\/opener\?stay=1$/.test(state()?.url ?? "")) throw new Fail(`reopened at ${state()?.url}`);
-      const bad = await tracks(again);
-      if (bad) throw new Fail(bad);
+      const bad: string[] = [];
+      if (again === id) bad.push("the old webview came back (it should have been destroyed)");
+      if (tabs()?.tabs.length !== closed.n) bad.push(`${tabs()?.tabs.length} tabs, not ${closed.n}`);
+      if (tabs()?.active !== closed.active) bad.push("another tab is active");
+      if (!/\/opener\?stay=1$/.test(state()?.url ?? "")) bad.push(`reopened at ${state()?.url}`);
+      const titles = [...document.querySelectorAll<HTMLElement>("[data-browser-tab]")].map((e) => e.textContent ?? "");
+      if (titles.length !== closed.n) bad.push(`${titles.length} tabs in the strip`);
+      // Only the showing tab has a webview; the others load when shown.
+      const live = tabs()!.tabs.filter((t) => nativeId(tabKey(key, t.id))).length;
+      if (live !== 1) bad.push(`${live} webviews alive right after restoring`);
+      const t = await tracks(again);
+      if (t) bad.push(t);
+      if (bad.length) throw new Fail(bad.join("; "));
       id = again;
-      return `${again}: ${state()?.url}`;
+      return `${again}: ${state()?.url}; tabs ${titles.join(" | ")}`;
     });
     /** Types into a React-controlled input and presses a key, as the person would. */
     const type = (el: HTMLInputElement, text: string, key: string) => {
@@ -433,11 +596,12 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
     };
-    await step("the address bar: Escape restores it, a non-http address is refused, Enter goes", async () => {
+    await step("the address bar: Escape restores it, a non-http address is refused, Enter goes (in this tab)", async () => {
       const addr = () => $("[data-browser-panel] input[aria-label=Address]") as HTMLInputElement | null;
       const a = addr();
       if (!a) throw new Fail("no address field");
       const before = state()?.url;
+      const n = tabs()!.tabs.length;
       type(a, "somewhere-else.example", "Escape");
       await sleep(300);
       if (addr()?.value.includes("somewhere-else")) throw new Fail(`Escape kept "${addr()?.value}"`);
@@ -445,11 +609,12 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await sleep(800);
       if (state()?.url !== before) throw new Fail(`file: navigated to ${state()?.url}`);
       addr()!.blur();
-      type(addr()!, `${base.replace(/^http:\/\//, "http://")}/opener`, "Enter");
+      type(addr()!, `${base}/opener`, "Enter");
       await waitFor("the typed page", () => /\/opener$/.test(state()?.url ?? ""), 20_000);
+      if (tabs()!.tabs.length !== n) throw new Fail("typing an address opened a tab");
       return state()?.url;
     });
-    await step("a chat with no page yet: the globe opens a start view whose address field opens a bare domain", async () => {
+    await step("no tabs yet: the globe opens a start view; its address field loads in that tab; + adds a start tab", async () => {
       const close = ([...document.querySelectorAll("[data-browser-panel] button")] as HTMLElement[]).find((b) => b.title === "Close");
       close?.click();
       await sleep(900);
@@ -470,49 +635,110 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await waitFor("example.com", () => /Example Domain/.test(state()?.title ?? ""), 30_000);
       const u = state()?.url ?? "";
       if (!u.startsWith("https://example.com")) throw new Fail(`opened ${u}`);
+      if (tabs()?.tabs.length !== 1) throw new Fail(`${tabs()?.tabs.length} tabs`);
+      const plus = ([...document.querySelectorAll("[data-browser-panel] button")] as HTMLElement[]).find((b) => b.title === "New tab");
+      if (!plus) throw new Fail("no + button");
+      plus.click();
+      await waitFor("a start view in a new tab", () => $("[data-browser-start]"), 5000);
+      await sleep(500);
+      await shot("browser-new-tab");
+      if (tabs()?.tabs.length !== 2) throw new Fail(`${tabs()?.tabs.length} tabs after +`);
+      return u;
+    });
+    await step("closing the last tab closes the panel; the globe brings that tab back", async () => {
+      // The new tab first, so the one left (example.com) is the last closed and the one remembered.
+      for (const t of [...tabs()!.tabs].reverse()) {
+        document.querySelector<HTMLElement>(`[data-browser-tab-close="${t.id}"]`)?.click();
+        await sleep(600);
+      }
+      if (st().browser[key]) throw new Fail(`still ${st().browser[key]?.tabs.length} tabs`);
+      if ($("[data-right-panel]")?.dataset.rightPanel !== "closed") throw new Fail(`panel ${$("[data-right-panel]")?.dataset.rightPanel}`);
+      const g = globe();
+      if (!g) throw new Fail("the globe went away");
+      const last = st().lastBrowser[key];
+      if (last?.tabs.length !== 1) throw new Fail(`remembered ${last?.tabs.length} tabs`);
+      g.click();
+      await waitFor("example.com again", () => /Example Domain/.test(state()?.title ?? ""), 30_000);
       const c = ([...document.querySelectorAll("[data-browser-panel] button")] as HTMLElement[]).find((b) => b.title === "Close");
       c?.click();
       await sleep(900);
-      if (!globe()) throw new Fail("the globe went away after closing");
-      return u;
+      return state()?.url;
     });
   },
-  /** Artifact preview: the page loads in the browser panel's sandboxed frame with its supporting file, and reaches nothing of coool's. */
+  /**
+   * Artifact preview: the local copy opens in a preview window of its own (a child window of the main one, sized to
+   * fit, centred, titled with the artifact and version), in a sandboxed frame with its supporting file, reaching
+   * nothing of coool's; the window's own top frame gets nothing from the IPC either; opening it again reuses it.
+   */
   async artifact(ctx) {
-    await step("an artifact previews in a sandboxed frame without coool's IPC", async () => {
-      const key = await browserHost(ctx);
-      const info = (await invoke("selftest_artifact")) as ArtifactInfo;
-      const probe = new Promise<Record<string, unknown>>((res) => {
-        const on = (e: MessageEvent) => {
-          const r = (e.data as { cooolArtifactProbe?: Record<string, unknown> } | null)?.cooolArtifactProbe;
-          if (!r) return;
-          window.removeEventListener("message", on);
-          res(r);
-        };
-        window.addEventListener("message", on);
+    await browserHost(ctx);
+    const info = (await invoke("selftest_artifact")) as ArtifactInfo;
+    let label = "";
+    await step("an artifact's Preview opens a window of its own with the local copy, sandboxed, without coool's IPC", async () => {
+      const ok = await api().artifactWindow(info.url);
+      if (!ok) throw new Fail("artifact_window said the local copy is gone");
+      let w: PreviewProbe | undefined;
+      for (const end = Date.now() + 10_000; !w && Date.now() < end; await sleep(200)) w = (await previews()).find((p) => p.url === info.url);
+      if (!w) throw new Fail("no preview window");
+      label = w.label;
+      // The host page hears the probe through postMessage and reports through its own title (no IPC).
+      await invoke("selftest_preview_eval", {
+        label,
+        ipcProbe: false,
+        js: `window.addEventListener("message", (e) => { const r = e.data && e.data.cooolArtifactProbe; if (r && !document.title.startsWith("probe:")) document.title = "probe:" + JSON.stringify(r); });`,
       });
-      useStore.getState().openBrowser(key, { kind: "artifact", info, versions: 1 });
-      const r = await Promise.race([probe, sleep(15_000).then(() => null)]);
-      if (!r) throw new Fail("the frame sent no probe result");
-      const frame = document.querySelector<HTMLIFrameElement>("[data-artifact-frame]");
-      await shot("artifact-preview");
+      let p = w;
+      for (const end = Date.now() + 15_000; Date.now() < end && !p.page_title.startsWith("probe:"); await sleep(250)) p = (await previews()).find((x) => x.label === label) ?? p;
+      await shot("artifact-preview-window", label);
+      await shot("artifact-preview-over-main");
+      if (!p.page_title.startsWith("probe:")) throw new Fail(`the frame sent no probe result (${JSON.stringify(p)})`);
+      const r = JSON.parse(p.page_title.slice(6)) as Record<string, unknown>;
       const bad: string[] = [];
-      const panel = $("[data-right-panel]");
-      if (panel?.dataset.rightPanel !== "browser") bad.push(`right panel ${panel?.dataset.rightPanel}`);
-      else if (panel.getBoundingClientRect().width <= 440) bad.push(`browser panel only ${panel.getBoundingClientRect().width}px wide`);
-      if (frame?.getAttribute("sandbox") !== "allow-scripts") bad.push(`sandbox=${frame?.getAttribute("sandbox")}`);
+      if (p.title !== `${info.title} · v${info.version}`) bad.push(`window title "${p.title}"`);
+      if (!p.page_url.startsWith("data:text/html")) bad.push(`host page ${p.page_url}`);
+      if (!p.visible) bad.push("not visible");
+      if (p.child_of_main !== true) bad.push(`child of the main window: ${p.child_of_main}`);
+      if (p.frame) {
+        const [x, y, fw, fh] = p.frame;
+        if (fw > 901 || fw < 320 || fh > 700 + 40 || fh < 240) bad.push(`size ${fw}x${fh}`);
+        const m = p.main_frame ?? [0, 0, 0, 0];
+        const mx = m[0] + m[2] / 2;
+        const my = m[1] + m[3] / 2;
+        if (Math.abs(x + fw / 2 - mx) > 4) bad.push(`not centred: x ${x + fw / 2} vs main ${mx}`);
+        if (Math.abs(y + fh / 2 - my) > 24) bad.push(`not centred: y ${y + fh / 2} vs main ${my}`);
+      } else bad.push("no frame");
       if (r.internals !== "undefined") bad.push(`__TAURI_INTERNALS__ ${r.internals}`);
       if (r.tauri !== "undefined") bad.push(`__TAURI__ ${r.tauri}`);
       if (r.parent !== "blocked") bad.push(`parent.document ${r.parent}`);
-      // The frame's effective origin is opaque (`self.origin` "null"; WebKit's `location.origin` still names the URL).
       if (r.origin !== "null") bad.push(`origin ${r.origin}`);
       if (r.img !== "loaded") bad.push(`supporting image ${r.img}`);
       if (r.secret === 200) bad.push("served a file outside the artifact's map");
       if (r.escape === 200) bad.push("served a path outside the folder");
-      // The probe asks the IPC to log this line; it must never arrive.
-      await sleep(500);
+      if (r.ipcFetch === 200) bad.push("raw ipc:// fetch answered 200");
+      if (bad.length) throw new Fail(`${bad.join("; ")} (${JSON.stringify({ p, r })})`);
+      return `${label} "${p.title}" ${p.frame?.map(Math.round).join(",")}; frame: ${JSON.stringify(r)}`;
+    });
+    await step("the preview window's own page (where Tauri's script runs) is refused every command", async () => {
+      if (!label) throw new Fail("no preview window");
+      await invoke("selftest_preview_eval", { label, ipcProbe: true, js: `ipcProbe("preview-ipc").then((r) => { document.title = "ipc:" + JSON.stringify(r); });` });
+      let p: PreviewProbe | undefined;
+      for (const end = Date.now() + 20_000; Date.now() < end && !p?.page_title.startsWith("ipc:"); await sleep(250)) p = (await previews()).find((x) => x.label === label);
+      if (!p?.page_title.startsWith("ipc:")) throw new Fail(`no IPC probe result (${JSON.stringify(p)})`);
+      const r = JSON.parse(p.page_title.slice(4)) as Record<string, unknown>;
+      const bad = ipcLeaks(r);
       if (bad.length) throw new Fail(`${bad.join("; ")} (${JSON.stringify(r)})`);
       return JSON.stringify(r);
+    });
+    await step("Preview again focuses the same window; closing it forgets it", async () => {
+      if (!label) throw new Fail("no preview window");
+      await api().artifactWindow(info.url);
+      await sleep(500);
+      const open = await previews();
+      if (open.length !== 1 || open[0].label !== label) throw new Fail(`windows ${JSON.stringify(open.map((p) => p.label))}`);
+      await invoke("selftest_close_preview", { label });
+      await sleep(800);
+      const left = await previews();
+      if (left.length) throw new Fail(`still open: ${JSON.stringify(left.map((p) => p.label))}`);
     });
   },
   async stream(ctx) {

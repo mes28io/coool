@@ -1,10 +1,11 @@
 // Claude Code artifacts: pages a session published to claude.ai with its Artifact tool.
 // A card in the timeline (the newest version; earlier publishes of the same page fold into it). "Preview" shows
-// the local copy, "Open link" the live claude.ai page, both in the session's browser panel (BrowserPanel.tsx).
+// the local copy in a window of its own (app/src-tauri/src/artifact.rs), "Open" the live claude.ai page in a tab of
+// the session's browser panel (BrowserPanel.tsx).
 
 import { createElement, useEffect, useState, type ComponentType } from "react";
 import { api } from "../lib/backend";
-import { useOpenPage } from "../lib/browser";
+import { previewArtifact, useOpenPage } from "../lib/browser";
 import type { ArtifactInfo } from "../lib/types";
 import { IActivity, IFile, IGear, IGlobe, IList, ISpark, ITerminal } from "./icons";
 import { Button } from "./primitives";
@@ -73,8 +74,8 @@ export function ArtifactCard({ info, versions }: { info: ArtifactInfo; versions:
   const available = useAvailable(info);
   const gone = available === false;
   const local = available === true;
-  // "Preview": the copy saved on this Mac (instant, no sign-in); hidden once that copy is gone. "Open link": the live
-  // claude.ai page. Both open beside the chat.
+  // "Preview": the copy saved on this Mac (instant, no sign-in), in a floating window; hidden once that copy is gone.
+  // "Open": the live claude.ai page, in a tab beside the chat.
   return (
     <div className="my-1 flex max-w-[620px] items-center gap-3 rounded-[12px] border border-line bg-raised py-2.5 pl-3 pr-2.5 shadow-card" data-artifact-card={info.url} data-artifact-available={available === null ? "unknown" : String(available)}>
       <span className="flex size-[36px] shrink-0 items-center justify-center rounded-[9px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] text-dim">
@@ -103,8 +104,8 @@ export function ArtifactCard({ info, versions }: { info: ArtifactInfo; versions:
           variant="outline"
           className="h-[30px] px-3"
           disabled={!local}
-          title="Preview the page beside the chat, from the copy saved on this Mac (no sign-in)"
-          onClick={() => open({ kind: "artifact", info, versions })}
+          title="Preview the page in its own window, from the copy saved on this Mac (no sign-in)"
+          onClick={() => previewArtifact(info.url)}
           data-artifact-preview
         >
           Preview
@@ -113,12 +114,12 @@ export function ArtifactCard({ info, versions }: { info: ArtifactInfo; versions:
       <Button
         variant={gone ? "outline" : "ghost"}
         className="h-[30px] gap-1.5 px-2.5"
-        title={`Open ${info.url} beside the chat (the live page; sign in to claude.ai once)`}
+        title={`Open ${info.url} in a tab beside the chat (the live page; sign in to claude.ai once)`}
         onClick={() => open({ kind: "web", url: info.url })}
         data-artifact-open
       >
         <IGlobe size={14} />
-        Open link
+        Open
       </Button>
     </div>
   );

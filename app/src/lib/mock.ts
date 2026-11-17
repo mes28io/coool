@@ -1303,9 +1303,11 @@ export function mockBackend(): Backend {
     async artifactStatus(urls) {
       return Object.fromEntries(urls.map((u) => [u, u === MOCK_ARTIFACT_URL]));
     },
-    async artifactPreview(url) {
-      await delay(120);
-      return { src: url === MOCK_ARTIFACT_URL ? "/mock-artifact/onboarding.html" : null };
+    // A plain browser has no preview window: a pop-up window of the mock page stands in.
+    async artifactWindow(url) {
+      if (url !== MOCK_ARTIFACT_URL) return false;
+      window.open("/mock-artifact/onboarding.html", `preview-${url.slice(-6)}`, "popup,width=900,height=700,noopener");
+      return true;
     },
     async openArtifact(url) {
       window.open(url, "_blank", "noopener");
@@ -1325,6 +1327,9 @@ export function mockBackend(): Backend {
       return () => {};
     },
     onBrowserClosed() {
+      return () => {};
+    },
+    onBrowserNewTab() {
       return () => {};
     },
 

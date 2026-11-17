@@ -135,8 +135,8 @@ pub fn selftest_log(core: State<'_, Arc<Core>>, line: String) -> Result<(), Stri
 pub fn selftest_shot(app: AppHandle, core: State<'_, Arc<Core>>, name: String, window: Option<String>) -> Result<String, String> {
     let t = active(&core)?;
     let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' }).collect();
-    // The main window, or one of the in-app browser's pop-ups.
-    let label = window.filter(|l| l.starts_with(crate::browser::POPUP_PREFIX)).unwrap_or_else(|| "main".into());
+    // The main window, one of the in-app browser's pop-ups, or an artifact preview window.
+    let label = window.filter(|l| l.starts_with(crate::browser::POPUP_PREFIX) || l.starts_with(crate::artifact::PREVIEW_PREFIX)).unwrap_or_else(|| "main".into());
     let w = app.get_window(&label).ok_or("no window")?;
     let wid = window_number(&w).ok_or("no window id")?;
     let path = t.shots.join(format!("real-{name}.png"));
@@ -223,7 +223,7 @@ pub fn selftest_probe_server(core: State<'_, Arc<Core>>) -> Result<String, Strin
                     let _ = r.read_exact(&mut body);
                     PROBE.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
                     let _ = out.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                } else if let Some(page) = [("GET /probe", BROWSER_PROBE), ("GET /opener", POPUP_OPENER), ("GET /popup", POPUP_PAGE)].iter().find(|(p, _)| first.starts_with(p)).map(|(_, b)| b.replace("/*IPC_PROBE*/", IPC_PROBE)) {
+                } else if let Some(page) = [("GET /probe", BROWSER_PROBE), ("GET /opener", POPUP_OPENER), ("GET /popup", POPUP_PAGE), ("GET /tabpage", TAB_PAGE), ("GET /blanklink", BLANK_LINK)].iter().find(|(p, _)| first.starts_with(p)).map(|(_, b)| b.replace("/*IPC_PROBE*/", IPC_PROBE)) {
                     let _ = write!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
                 } else {
                     let _ = out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -343,7 +343,8 @@ const IPC_PROBE: &str = r#"async function ipcProbe(step) {
 /// pop-up posts to it, then `…, pop-up closed` once the pop-up has closed itself.
 const POPUP_OPENER: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Opener ready</title>
 <style>body{font:16px -apple-system,sans-serif;padding:24px;background:#fff;color:#111}button{font:inherit;padding:8px 14px}</style></head>
-<body><h1>Pop-up opener</h1><button id="open">Continue with the probe</button><p id="out"></p>
+<body><h1>Pop-up opener</h1><button id="open">Continue with the probe</button>
+<p><a id="blank" href="/tabpage?via=blank" target="_blank">A target=_blank link</a> · <button id="plain">window.open without features</button></p><p id="out"></p>
 <script>
 let popup = null, got = null;
 const say = (t) => { document.title = t; document.getElementById("out").textContent = t; };
@@ -351,6 +352,7 @@ document.getElementById("open").addEventListener("click", () => {
   popup = window.open("/popup" + location.search, "coool-signin", "width=480,height=600");
   say(popup ? "Opener opened a pop-up" : "Opener: pop-up blocked");
 });
+document.getElementById("plain").addEventListener("click", () => { window.open("/tabpage?via=open"); });
 window.addEventListener("message", (e) => {
   got = e.source === popup && e.origin === location.origin ? String(e.data) : "foreign " + e.origin;
   say("Opener got: " + got);
@@ -381,6 +383,17 @@ const POPUP_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><ti
   window.close();
 })();
 </script></body></html>"#;
+
+/// A page for tabs: titled with its query (`Tab via=blank`), so the panel shows which one it is.
+const TAB_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Tab</title>
+<style>body{font:16px -apple-system,sans-serif;padding:24px;background:#fff;color:#111}</style></head>
+<body><h1 id="h">Tab</h1><p>A page the self-test opens in browser tabs.</p>
+<script>document.title = "Tab " + location.search.slice(1); document.getElementById("h").textContent = document.title;</script></body></html>"#;
+
+/// One `target=_blank` link covering the whole page, for a real click at the webview's centre ([`selftest_click`]).
+const BLANK_LINK: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Link page</title>
+<style>html,body{margin:0;height:100%}a{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font:20px -apple-system,sans-serif;background:#eef4ff;color:#124}</style></head>
+<body><a href="/tabpage?via=blank" target="_blank">A target=_blank link (click anywhere)</a></body></html>"#;
 
 #[derive(Serialize)]
 pub struct PopupProbe {
@@ -429,4 +442,177 @@ pub fn selftest_request_quit(app: AppHandle, core: State<'_, Arc<Core>>) -> Resu
     active(&core)?;
     crate::request_quit(&app);
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct PreviewProbe {
+    label: String,
+    /// The artifact URL it shows.
+    url: String,
+    /// The window's title.
+    title: String,
+    /// The host page's document title (the self-test's scripts report through it).
+    page_title: String,
+    /// Where the host page is (a `data:` URL; only its first characters).
+    page_url: String,
+    /// Outer frame, logical points: [x, y, w, h].
+    frame: Option<[f64; 4]>,
+    visible: bool,
+    /// macOS: a child window of the main window.
+    child_of_main: Option<bool>,
+    /// The main window's outer frame, for checking the preview is centred on it.
+    main_frame: Option<[f64; 4]>,
+}
+
+/// The open artifact preview windows.
+#[tauri::command(async)]
+pub fn selftest_previews(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<Vec<PreviewProbe>, String> {
+    active(&core)?;
+    let open = core.previews.windows.lock().unwrap().clone();
+    let main = app.get_window("main");
+    let main_ns = main.as_ref().and_then(|m| m.ns_window().ok()).map(|p| p as usize);
+    let main_frame = main.as_ref().and_then(|m| {
+        let scale = m.scale_factor().ok()?;
+        let p = m.outer_position().ok()?.to_logical::<f64>(scale);
+        let s = m.outer_size().ok()?.to_logical::<f64>(scale);
+        Some([p.x, p.y, s.width, s.height])
+    });
+    let mut out = Vec::new();
+    for (url, (label, _)) in open {
+        let Some(w) = app.get_webview_window(&label) else { continue };
+        let scale = w.scale_factor().unwrap_or(1.0);
+        let frame = (|| {
+            let p = w.outer_position().ok()?.to_logical::<f64>(scale);
+            let s = w.outer_size().ok()?.to_logical::<f64>(scale);
+            Some([p.x, p.y, s.width, s.height])
+        })();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let l = label.clone();
+        let _ = w.with_webview(move |pw| {
+            #[cfg(target_os = "macos")]
+            let _ = tx.send(Some(crate::browser::native::state(pw.inner(), l)));
+            #[cfg(not(target_os = "macos"))]
+            let _ = (tx.send(None), pw, l);
+        });
+        let st = rx.recv_timeout(std::time::Duration::from_secs(3)).ok().flatten();
+        let child_of_main = w.ns_window().ok().map(|ns| parent_window(ns) == main_ns);
+        out.push(PreviewProbe {
+            title: w.title().unwrap_or_default(),
+            page_title: st.as_ref().map(|s| s.title.clone()).unwrap_or_default(),
+            page_url: st.map(|s| s.url.chars().take(40).collect()).unwrap_or_default(),
+            visible: w.is_visible().unwrap_or(false),
+            frame,
+            child_of_main,
+            main_frame,
+            label,
+            url,
+        });
+    }
+    Ok(out)
+}
+
+/// `-[NSWindow parentWindow]`, by address.
+#[cfg(target_os = "macos")]
+fn parent_window(ns: *mut std::ffi::c_void) -> Option<usize> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    if ns.is_null() {
+        return None;
+    }
+    // SAFETY: `ns` is a live NSWindow owned by Tauri; `parentWindow` is a plain getter.
+    let p: *mut AnyObject = unsafe { msg_send![&*(ns as *mut AnyObject), parentWindow] };
+    (!p.is_null()).then_some(p as usize)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn parent_window(_ns: *mut std::ffi::c_void) -> Option<usize> {
+    None
+}
+
+/// Runs `js` in a preview window's host page (the top frame, where Tauri's own script and its invoke key live; the
+/// artifact's sandboxed frame is one level down). `ipc_probe`: the IPC probe of the browser scenario is defined first.
+#[tauri::command]
+pub fn selftest_preview_eval(app: AppHandle, core: State<'_, Arc<Core>>, label: String, js: String, ipc_probe: bool) -> Result<(), String> {
+    active(&core)?;
+    if !label.starts_with(crate::artifact::PREVIEW_PREFIX) {
+        return Err("not a preview window".into());
+    }
+    let js = if ipc_probe { format!("{IPC_PROBE}\n{js}") } else { js };
+    app.get_webview_window(&label).ok_or("no such window")?.eval(&js).map_err(|e| e.to_string())
+}
+
+/// Closes a preview window, as its close button does.
+#[tauri::command]
+pub fn selftest_close_preview(app: AppHandle, core: State<'_, Arc<Core>>, label: String) -> Result<(), String> {
+    active(&core)?;
+    if !label.starts_with(crate::artifact::PREVIEW_PREFIX) {
+        return Err("not a preview window".into());
+    }
+    app.get_webview_window(&label).ok_or("no such window")?.close().map_err(|e| e.to_string())
+}
+
+/// A real (trusted) mouse click at the centre of browser webview `id`: a left mouse down and up sent to the main
+/// window as AppKit events (`-[NSWindow sendEvent:]`: nothing is posted to the system and the pointer doesn't move).
+/// A page script's own `click()` isn't trusted, and WebKit won't follow a `target=_blank` link for it.
+#[tauri::command(async)]
+pub fn selftest_click(app: AppHandle, core: State<'_, Arc<Core>>, id: String) -> Result<(), String> {
+    active(&core)?;
+    if !id.starts_with(crate::browser::PREFIX) {
+        return Err("not a browser webview".into());
+    }
+    let w = app.get_webview(&id).ok_or("no such webview")?;
+    let win = w.window();
+    let scale = win.scale_factor().map_err(|e| e.to_string())?;
+    let b = w.bounds().map_err(|e| e.to_string())?;
+    let p = b.position.to_logical::<f64>(scale);
+    let sz = b.size.to_logical::<f64>(scale);
+    let (cx, cy) = (p.x + sz.width / 2.0, p.y + sz.height / 2.0);
+    let ns = win.ns_window().map_err(|e| e.to_string())? as usize;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(native_click(ns as *mut std::ffi::c_void, cx, cy));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn native_click(ns: *mut std::ffi::c_void, x: f64, y: f64) -> Result<(), String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::{NSPoint, NSRect};
+    if ns.is_null() {
+        return Err("no window".into());
+    }
+    // SAFETY: AppKit calls on the main thread (run_on_main_thread); `ns` is the live NSWindow; the event constructor
+    // is called with its documented argument types.
+    unsafe {
+        let win = &*(ns as *mut AnyObject);
+        let content: *mut AnyObject = msg_send![win, contentView];
+        if content.is_null() {
+            return Err("no content view".into());
+        }
+        let frame: NSRect = msg_send![&*content, frame];
+        // Window coordinates have their origin at the bottom left.
+        let at = NSPoint::new(x, frame.size.height - y);
+        let number: isize = msg_send![win, windowNumber];
+        let cls = AnyClass::get(c"NSEvent").ok_or("no NSEvent")?;
+        // Now, on the event clock (system uptime): WebKit counts a click as a user activation only while it is fresh.
+        let info: *mut AnyObject = msg_send![AnyClass::get(c"NSProcessInfo").ok_or("no NSProcessInfo")?, processInfo];
+        let now: f64 = msg_send![&*info, systemUptime];
+        // NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp.
+        for kind in [1usize, 2] {
+            let e: *mut AnyObject = msg_send![cls, mouseEventWithType: kind, location: at, modifierFlags: 0usize, timestamp: now, windowNumber: number, context: std::ptr::null_mut::<AnyObject>(), eventNumber: 0isize, clickCount: 1isize, pressure: 1.0f32];
+            if e.is_null() {
+                return Err("no event".into());
+            }
+            let _: () = msg_send![win, sendEvent: &*e];
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_click(_ns: *mut std::ffi::c_void, _x: f64, _y: f64) -> Result<(), String> {
+    Err("macOS only".into())
 }

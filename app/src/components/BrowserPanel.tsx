@@ -1,15 +1,14 @@
-// The browser panel: the right panel's third kind (next to Jobs and Models). It shows one page per session:
-// a Claude Code artifact's local copy in a sandboxed frame, or a web page (a claude.ai artifact link, a link from
-// the chat) in a native child webview laid over the panel's body (lib/browser.ts, app/src-tauri/src/browser.rs),
-// or, before anything was opened, a start view: an address field and the pages this chat mentions.
+// The browser panel: the right panel's third kind (next to Jobs and Models). Per session it holds tabs (a strip at
+// its top); each shows a web page (a claude.ai artifact link, a link from the chat) in a native child webview laid
+// over the panel's body (lib/browser.ts, app/src-tauri/src/browser.rs), or, in a new tab, a start view: an address
+// field and the pages this chat mentions. Artifact previews open in a window of their own (ArtifactCard.tsx).
 
 import { createElement, useEffect, useRef, useState } from "react";
 import { api } from "../lib/backend";
-import { addressUrl, hide, nativeId, onOverlays, overlayCovers, place, useBrowserState, type RecentPage } from "../lib/browser";
-import type { ArtifactInfo } from "../lib/types";
-import { useStore, type BrowserPage } from "../store";
+import { addressUrl, closeNative, hide, nativeId, onOverlays, overlayCovers, place, previewArtifact, tabKey, useBrowserState, type RecentPage } from "../lib/browser";
+import { useStore, type BrowserPage, type BrowserTab, type BrowserTabs } from "../store";
 import { artifactIcon } from "./ArtifactCard";
-import { IBack, IClose, IExternal, IForward, IGlobe, IRefresh } from "./icons";
+import { IBack, IClose, IExternal, IForward, IGlobe, IPlus, IRefresh } from "./icons";
 import { cx, IconButton } from "./primitives";
 
 const host = (url: string) => {
@@ -19,30 +18,34 @@ const host = (url: string) => {
     return url;
   }
 };
+const tabTitle = (t: BrowserTab) => (t.page.kind === "start" ? "New tab" : t.title?.trim() || host(t.url || t.page.url));
 
-export function BrowserPanel({ panelKey, page, active, onClose, recent }: { panelKey: string; page: BrowserPage; active: boolean; onClose: () => void; recent: RecentPage[] }) {
-  const st = useBrowserState((s) => s.byKey[panelKey]);
-  const openBrowser = useStore((s) => s.openBrowser);
+export function BrowserPanel({ panelKey, state, active, onClose, recent }: { panelKey: string; state: BrowserTabs; active: boolean; onClose: () => void; recent: RecentPage[] }) {
+  const tab = state.tabs.find((t) => t.id === state.active) ?? state.tabs[0];
+  const key = tabKey(panelKey, tab.id);
+  const st = useBrowserState((s) => s.byKey[key]);
+  const navigateBrowserTab = useStore((s) => s.navigateBrowserTab);
   const [frameKey, setFrameKey] = useState(0);
+  const page = tab.page;
   const web = page.kind === "web";
-  const start = page.kind === "start";
+  const start = !web;
   const native = web && api().nativeBrowser;
-  const url = page.kind === "web" ? st?.url || page.url : page.kind === "artifact" ? page.info.url : "";
-  const title = page.kind === "web" ? st?.title || host(url) : page.kind === "artifact" ? page.info.title : "New page";
+  const url = page.kind === "web" ? st?.url || tab.url || page.url : "";
   const go = (a: "back" | "forward" | "reload") => {
-    const id = nativeId(panelKey);
+    const id = nativeId(key);
     if (id) void api().browserGo(id, a).catch(() => {});
   };
   const openExternal = () => {
-    if (page.kind === "start") return;
-    if (page.kind === "artifact") return void api().openArtifact(page.info.url).catch(() => {});
-    const id = nativeId(panelKey);
+    if (!web) return;
+    const id = nativeId(key);
     if (native && id) void api().browserOpenExternal(id).catch((e) => useStore.getState().toast(`Couldn't open it: ${e}`, "error"));
     else if (!native) window.open(url, "_blank", "noopener");
   };
+  const open = (u: string) => navigateBrowserTab(panelKey, tab.id, u);
   return (
     <div className="flex h-full flex-col" data-browser-panel={page.kind}>
-      <div className="flex h-[44px] shrink-0 items-center gap-0.5 border-b border-hairline pl-2 pr-1.5">
+      <TabStrip panelKey={panelKey} state={state} />
+      <div className="flex h-[40px] shrink-0 items-center gap-0.5 border-b border-hairline pl-2 pr-1.5">
         <IconButton title="Back" disabled={!native || !st?.can_back} onClick={() => go("back")}>
           <IBack size={15} />
         </IconButton>
@@ -52,26 +55,9 @@ export function BrowserPanel({ panelKey, page, active, onClose, recent }: { pane
         <IconButton title="Reload" disabled={start} onClick={() => (native ? go("reload") : setFrameKey((k) => k + 1))}>
           <IRefresh size={15} className={cx(native && st?.loading && "animate-spin [animation-duration:1.2s]")} />
         </IconButton>
-        <div className="ml-1.5 min-w-0 flex-1 leading-tight" title={url}>
-          <div className="flex min-w-0 items-center gap-1.5">
-            {page.kind === "artifact" && createElement(artifactIcon(page.info.icon), { size: 13, className: "shrink-0 text-dim" })}
-            <span className="truncate text-small font-medium text-fg" data-browser-title>
-              {title}
-            </span>
-          </div>
-          {!start && (
-            <Address
-              url={url}
-              shown={web ? url.replace(/^https?:\/\//, "") : page.kind === "artifact" ? `Local copy${page.info.version != null ? ` · v${page.info.version}` : ""}${page.versions > 1 ? ` · ${page.versions} versions` : ""}` : ""}
-              onGo={(u) => openBrowser(panelKey, { kind: "web", url: u })}
-            />
-          )}
+        <div className="ml-1.5 min-w-0 flex-1" title={url}>
+          {!start && <Address key={key} url={url} shown={url.replace(/^https?:\/\//, "")} onGo={open} />}
         </div>
-        {page.kind === "artifact" && (
-          <IconButton title={`Open ${host(page.info.url)} here (sign in to claude.ai once)`} onClick={() => openBrowser(panelKey, { kind: "web", url: page.info.url })}>
-            <IGlobe size={15} />
-          </IconButton>
-        )}
         <IconButton title="Open in default browser" disabled={start} onClick={openExternal}>
           <IExternal size={15} />
         </IconButton>
@@ -81,21 +67,86 @@ export function BrowserPanel({ panelKey, page, active, onClose, recent }: { pane
       </div>
       <div className="relative min-h-0 flex-1">
         {page.kind === "start" ? (
-          <StartView recent={recent} onOpen={(p) => openBrowser(panelKey, p.kind === "web" ? { kind: "web", url: p.url } : p)} onGo={(u) => openBrowser(panelKey, { kind: "web", url: u })} />
-        ) : page.kind === "artifact" ? (
-          <ArtifactFrame key={frameKey} info={page.info} />
+          <StartView key={key} recent={recent} onOpen={(p) => (p.kind === "web" ? open(p.url) : previewArtifact(p.info.url, () => open(p.info.url)))} onGo={open} />
         ) : native ? (
-          <NativeHost panelKey={panelKey} page={page} active={active} loading={!st || st.loading} />
+          <NativeHost key={key} tabKey={key} page={page} active={active} loading={!st || st.loading} />
         ) : (
-          <iframe key={`${page.n}:${frameKey}`} title={title} src={page.url} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="absolute inset-0 size-full border-0 bg-white" />
+          <iframe key={`${key}:${page.n}:${frameKey}`} title={tabTitle(tab)} src={page.url} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="absolute inset-0 size-full border-0 bg-white" />
         )}
       </div>
     </div>
   );
 }
 
+/** The panel's tabs: click to switch, x (on hover, or a middle click) to close, + for a new tab. */
+function TabStrip({ panelKey, state }: { panelKey: string; state: BrowserTabs }) {
+  const selectBrowserTab = useStore((s) => s.selectBrowserTab);
+  const closeBrowserTab = useStore((s) => s.closeBrowserTab);
+  const openBrowser = useStore((s) => s.openBrowser);
+  const close = (t: BrowserTab) => {
+    closeNative(tabKey(panelKey, t.id));
+    closeBrowserTab(panelKey, t.id);
+  };
+  return (
+    <div className="flex h-[36px] shrink-0 items-center gap-1 border-b border-hairline pl-2 pr-1.5" role="tablist" data-browser-tabs={state.tabs.length}>
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
+        {state.tabs.map((t) => {
+          const on = t.id === state.active;
+          const title = tabTitle(t);
+          return (
+            <div
+              key={t.id}
+              role="tab"
+              aria-selected={on}
+              tabIndex={0}
+              title={t.page.kind === "web" ? `${title}\n${t.url || t.page.url}` : title}
+              onClick={() => selectBrowserTab(panelKey, t.id)}
+              onAuxClick={(e) => {
+                if (e.button === 1) close(t);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  selectBrowserTab(panelKey, t.id);
+                }
+              }}
+              className={cx(
+                "group relative flex h-[26px] min-w-[52px] max-w-[180px] flex-1 cursor-default items-center gap-1.5 rounded-[7px] pl-2 pr-1 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-[var(--dim)]",
+                on ? "bg-[color-mix(in_oklab,var(--dim)_13%,transparent)] text-fg" : "text-dim hover:bg-hover hover:text-fg",
+              )}
+              data-browser-tab={t.id}
+              data-browser-tab-active={on || undefined}
+            >
+              <IGlobe size={12} className="shrink-0 opacity-70" />
+              <span className="min-w-0 flex-1 truncate text-micro font-medium" {...(on ? { "data-browser-title": true } : {})}>
+                {title}
+              </span>
+              <button
+                type="button"
+                title="Close tab"
+                aria-label="Close tab"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  close(t);
+                }}
+                className="flex size-[18px] shrink-0 items-center justify-center rounded-[5px] text-dim opacity-0 transition-opacity duration-150 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                data-browser-tab-close={t.id}
+              >
+                <IClose size={10} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <IconButton title="New tab" onClick={() => openBrowser(panelKey, { kind: "start" })}>
+        <IPlus size={14} />
+      </IconButton>
+    </div>
+  );
+}
+
 /**
- * The address line under the title: shows where the page is; click it to type another address (Enter goes there,
+ * The address line: shows where the page is; click it to type another address (Enter goes there in this tab,
  * Escape puts the old one back). Accepts http(s) URLs and bare domains (https:// is added).
  */
 function Address({ url, shown, onGo }: { url: string; shown: string; onGo: (url: string) => void }) {
@@ -142,8 +193,8 @@ function Address({ url, shown, onGo }: { url: string; shown: string; onGo: (url:
         }
       }}
       className={cx(
-        "-mx-1 block w-[calc(100%+8px)] truncate rounded-[5px] bg-transparent px-1 text-micro outline-none placeholder:text-faint",
-        editing ? "bg-[color-mix(in_oklab,var(--dim)_10%,transparent)] text-fg" : "cursor-text text-faint hover:text-dim",
+        "block h-[26px] w-full truncate rounded-[7px] bg-[color-mix(in_oklab,var(--dim)_7%,transparent)] px-2 text-small outline-none placeholder:text-faint",
+        editing ? "bg-[color-mix(in_oklab,var(--dim)_12%,transparent)] text-fg" : "cursor-text text-dim hover:text-fg",
         bad && "text-err-text",
       )}
     />
@@ -195,7 +246,7 @@ function StartView({ recent, onOpen, onGo }: { recent: RecentPage[]; onOpen: (p:
                 key={`${p.kind}:${u}`}
                 type="button"
                 onClick={() => onOpen(p)}
-                title={p.kind === "artifact" ? `Preview ${p.info.title}` : u}
+                title={p.kind === "artifact" ? `Preview ${p.info.title} in its own window (the copy saved on this Mac; its claude.ai page here if that copy is gone)` : u}
                 className="flex min-w-0 items-center gap-2 rounded-[7px] px-1.5 py-1.5 text-left transition-colors duration-150 hover:bg-hover"
                 data-browser-recent={u}
               >
@@ -213,29 +264,12 @@ function StartView({ recent, onOpen, onGo }: { recent: RecentPage[]; onOpen: (p:
   );
 }
 
-/** The artifact's local copy in a sandboxed frame: scripts run, but no same-origin, no top navigation, no popups, no IPC. */
-function ArtifactFrame({ info }: { info: ArtifactInfo }) {
-  const [src, setSrc] = useState<string | null | undefined>(undefined);
-  useEffect(() => {
-    let live = true;
-    api()
-      .artifactPreview(info.url)
-      .then((r) => live && setSrc(r.src))
-      .catch(() => live && setSrc(null));
-    return () => {
-      live = false;
-    };
-  }, [info.url, info.version]);
-  if (!src) return <div className="flex h-full items-center justify-center text-base text-dim">{src === null ? "Local copy no longer available" : "Loading…"}</div>;
-  return <iframe title={info.title} src={src} sandbox="allow-scripts" referrerPolicy="no-referrer" allow="" className="absolute inset-0 size-full border-0 bg-white" data-artifact-frame={info.url} />;
-}
-
 /**
  * The spot the native webview covers. Its rect follows layout (ResizeObserver on it and its panel, window resizes,
  * then a few animation frames while springs settle); it is visible only while the panel shows it, fully open,
  * nothing (sheet, palette, popover) draws over it, and the window is visible.
  */
-function NativeHost({ panelKey, page, active, loading }: { panelKey: string; page: Extract<BrowserPage, { kind: "web" }>; active: boolean; loading: boolean }) {
+function NativeHost({ tabKey: viewKey, page, active, loading }: { tabKey: string; page: Extract<BrowserPage, { kind: "web" }>; active: boolean; loading: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const covered = useStore((s) => s.palette || s.sheet !== null);
   useEffect(() => {
@@ -252,7 +286,7 @@ function NativeHost({ panelKey, page, active, loading }: { panelKey: string; pag
       // The panel already switched kind (this one is fading out).
       const shown = panel?.dataset.rightPanel === "browser";
       const visible = active && shown && !covered && document.visibilityState === "visible" && inside && !overlayCovers(r);
-      place(panelKey, page, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), visible });
+      place(viewKey, page, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), visible });
     };
     const tick = () => {
       measure();
@@ -282,21 +316,21 @@ function NativeHost({ panelKey, page, active, loading }: { panelKey: string; pag
       document.removeEventListener("visibilitychange", kick);
       offOverlays();
     };
-  }, [panelKey, page, active, covered]);
-  // Hidden (not closed) when this view goes: another tab, another panel kind, the pane closed.
-  useEffect(() => () => hide(panelKey), [panelKey]);
+  }, [viewKey, page, active, covered]);
+  // Hidden (not closed) when this view goes: another browser tab, another pane tab, another panel kind, the pane closed.
+  useEffect(() => () => hide(viewKey), [viewKey]);
   // In-page navigations (pushState, hash changes) announce nothing: ask now and then while it is on screen.
   useEffect(() => {
     if (!active) return;
     const t = setInterval(() => {
-      const id = nativeId(panelKey);
+      const id = nativeId(viewKey);
       if (id && document.visibilityState === "visible") void api().browserPoll(id).catch(() => {});
     }, 1500);
     return () => clearInterval(t);
-  }, [panelKey, active]);
+  }, [viewKey, active]);
   return (
     // Clear of the panel's left edge, so its resize handle stays above the native view.
-    <div ref={ref} className="absolute inset-y-0 left-[5px] right-0 flex items-center justify-center bg-panel" data-browser-native={panelKey}>
+    <div ref={ref} className="absolute inset-y-0 left-[5px] right-0 flex items-center justify-center bg-panel" data-browser-native={viewKey}>
       {loading && <span className="text-small text-faint">Loading {host(page.url)}…</span>}
     </div>
   );

@@ -1,9 +1,10 @@
 // The in-app browser's native side, outside React (APP_SPEC "Browser panel").
 //
-// Each session's browser panel (by panel key, as in `store.rightPanel`) owns at most one native child webview
-// (app/src-tauri/src/browser.rs). It outlives the SessionView that shows it (only the active tab is mounted), so it
-// lives here: shown and laid over the panel while the panel shows a web page, hidden otherwise, closed by the
-// panel's own close button (or by the backend when too many are alive).
+// Each tab of a session's browser panel (by tab key: the panel key, as in `store.rightPanel`, plus the tab id) owns at
+// most one native child webview (app/src-tauri/src/browser.rs). It outlives the SessionView that shows it (only the
+// active pane tab and the active browser tab are mounted), so it lives here: shown and laid over the panel while its
+// tab shows, hidden otherwise, closed with its tab or the panel's close button, or by the backend when too many are
+// alive (then the tab remembers where it was and loads that again when it shows).
 //
 // A native view sits above every HTML element of the app, so anything that would draw over the panel hides it:
 // sheets and the palette (checked by the panel), and popovers (registered by `Popover` in lib/overlays.ts).
@@ -28,8 +29,22 @@ interface Native {
 }
 
 const natives = new Map<string, Native>();
+/** Tabs whose webview the backend closed (too many alive): where they were, for the open `n` they had. */
+const resume = new Map<string, { url: string; n: number }>();
 
-/** What each panel's page reports (URL, title, history), by panel key. */
+/** The key of a browser tab's webview. */
+export const tabKey = (panelKey: string, tab: number) => `${panelKey}#tab${tab}`;
+const splitKey = (key: string): [string, number] | null => {
+  const i = key.lastIndexOf("#tab");
+  return i < 0 ? null : [key.slice(0, i), Number(key.slice(i + 4))];
+};
+/** The tab key of the tab a session's browser shows. */
+export function activeTabKey(panelKey: string): string | null {
+  const b = useStore.getState().browser[panelKey];
+  return b ? tabKey(panelKey, b.active) : null;
+}
+
+/** What each tab's page reports (URL, title, history), by tab key. */
 export const useBrowserState = create<{ byKey: Record<string, BrowserState> }>(() => ({ byKey: {} }));
 /** The visible native views' rects, by panel key (toasts move out of their way). */
 export const useNativeRects = create<{ byKey: Record<string, BrowserBounds> }>(() => ({ byKey: {} }));
@@ -62,11 +77,24 @@ function wire() {
   wired = true;
   api().onBrowserState((s) => {
     const key = keyOf(s.id);
-    if (key) useBrowserState.setState((st) => ({ byKey: { ...st.byKey, [key]: s } }));
+    if (!key) return;
+    useBrowserState.setState((st) => ({ byKey: { ...st.byKey, [key]: s } }));
+    const k = splitKey(key);
+    if (k) useStore.getState().noteBrowserTab(k[0], k[1], s.url, s.title);
   });
   api().onBrowserClosed((id) => {
     const key = keyOf(id);
-    if (key) forget(key);
+    if (!key) return;
+    const nat = natives.get(key)!;
+    const url = useBrowserState.getState().byKey[key]?.url || nat.page.url;
+    resume.set(key, { url, n: nat.n });
+    forget(key);
+  });
+  // `target=_blank` and `window.open` without a size: a new tab next to the page's own.
+  api().onBrowserNewTab(({ id, url }) => {
+    const key = keyOf(id);
+    const k = key && splitKey(key);
+    if (k) useStore.getState().openBrowser(k[0], { kind: "web", url }, { after: k[1], fresh: true });
   });
 }
 
@@ -98,16 +126,20 @@ function navigate(nat: Native) {
     .catch((e) => useStore.getState().toast(`Couldn't open the page: ${e}`, "error"));
 }
 
-/** Lays panel `key`'s webview over `b`, opening it (or loading `page` in it) as needed. */
+/** Lays tab `key`'s webview over `b`, opening it (or loading `page` in it) as needed. */
 export function place(key: string, page: Extract<BrowserPage, { kind: "web" }>, b: BrowserBounds) {
   wire();
   const nat = natives.get(key);
   if (!nat) {
+    // Closed by the backend while hidden: back where it was, unless another page was asked for since.
+    const back = resume.get(key);
+    resume.delete(key);
+    const url = back && back.n === page.n ? back.url : page.url;
     const fresh: Native = { id: null, n: page.n, page, sent: b, want: b, busy: true, dead: false };
     natives.set(key, fresh);
     setRect(key, b);
     api()
-      .browserOpen(page.url, b)
+      .browserOpen(url, b)
       .then((id) => {
         fresh.id = id;
         fresh.busy = false;
@@ -127,7 +159,7 @@ export function place(key: string, page: Extract<BrowserPage, { kind: "web" }>, 
   flush(key, nat);
 }
 
-/** Hides panel `key`'s webview (it keeps its page and history). */
+/** Hides tab `key`'s webview (it keeps its page and history). */
 export function hide(key: string) {
   const nat = natives.get(key);
   if (!nat) return;
@@ -135,8 +167,9 @@ export function hide(key: string) {
   flush(key, nat);
 }
 
-/** Closes panel `key`'s webview for good. */
+/** Closes tab `key`'s webview for good. */
 export function closeNative(key: string) {
+  resume.delete(key);
   const nat = natives.get(key);
   if (!nat) return;
   nat.dead = true;
@@ -152,8 +185,8 @@ export { onOverlays, overlayCovers, registerOverlay } from "./overlays";
 
 // ---------- opening pages from anywhere in a session view ----------
 
-export type OpenPage = Extract<BrowserPage, { kind: "artifact" }> | { kind: "web"; url: string };
-/** Shows a page in the browser panel of the session view around it (provided by SessionView). */
+export type OpenPage = { kind: "web"; url: string };
+/** Shows a page in a tab of the browser panel of the session view around it (provided by SessionView). */
 export const BrowserContext = createContext<((p: OpenPage) => void) | null>(null);
 
 /** Only http(s) links open in the browser panel. */
@@ -167,13 +200,25 @@ export function webUrl(href: string | undefined | null): string | null {
   }
 }
 
-/** Opens a page in this session's browser panel; outside a session view, web pages go to the system browser when the opener allows them (claude.ai). */
+/** Opens a page in a tab of this session's browser panel; outside a session view, web pages go to the system browser when the opener allows them (claude.ai). */
 export function useOpenPage(): (p: OpenPage) => void {
   const ctx = useContext(BrowserContext);
   return (p) => {
     if (ctx) return ctx(p);
-    if (p.kind === "web") void api().openArtifact(p.url).catch(() => {});
+    void api().openArtifact(p.url).catch(() => {});
   };
+}
+
+/** Opens an artifact's local copy in its preview window; when that copy is gone, `fallback` (its claude.ai page in a tab). */
+export function previewArtifact(url: string, fallback?: () => void) {
+  void api()
+    .artifactWindow(url)
+    .then((ok) => {
+      if (ok) return;
+      if (fallback) fallback();
+      else useStore.getState().toast("The copy saved on this Mac is gone: open the claude.ai page instead");
+    })
+    .catch((e) => useStore.getState().toast(`Couldn't open the preview: ${e}`, "error"));
 }
 
 /** What the address field accepts: an http(s) URL, or a bare domain / host[:port][/path] (https:// is added). */
