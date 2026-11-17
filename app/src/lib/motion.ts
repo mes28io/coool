@@ -19,6 +19,10 @@ export interface MotionHints {
   thermal: Thermal;
   on_battery?: boolean | null;
   battery_pct?: number | null;
+  intel?: boolean;
+  memory_gb?: number | null;
+  perf_cores?: number | null;
+  busy_at_launch?: boolean;
   /** Auto would reduce now, from the device alone. */
   reduce: boolean;
   reason?: string | null;
@@ -125,11 +129,13 @@ export function useLive(): boolean {
   return scope && !reduce;
 }
 
-/** `?power=low|hot|battery` in the browser mock: a device hint, for frames. */
+/** `?power=low|hot|battery|weak|busy` in the browser mock: a device hint, for frames. */
 export function mockHints(search: string): MotionHints | null {
   const m = /[?&]power=(\w+)/.exec(search)?.[1];
   if (m === "low") return { low_power: true, thermal: "nominal", reduce: true, reason: "Low Power Mode" };
   if (m === "hot") return { low_power: false, thermal: "serious", reduce: true, reason: "Mac running hot" };
+  if (m === "weak") return { low_power: false, thermal: "nominal", reduce: true, reason: "8 GB memory", memory_gb: 8 };
+  if (m === "busy") return { low_power: false, thermal: "nominal", reduce: true, reason: "Mac busy at launch", busy_at_launch: true };
   if (m === "battery") return { low_power: false, thermal: "nominal", on_battery: true, battery_pct: 12, reduce: true, reason: "battery low" };
   return null;
 }
