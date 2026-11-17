@@ -418,7 +418,7 @@ export function ThinkingRow({
     );
   if (large)
     return (
-      <div className="live-layer flex items-center gap-2.5 pb-1 pt-12 text-base" data-live-row data-mood={mood}>
+      <div className="live-layer flex items-center gap-2.5 pb-1 pt-14 text-base" data-live-row data-mood={mood}>
         <span className="flex size-[20px] shrink-0 items-center justify-center">
           <MoodGlyph mood={mood} size={16} live={live} className="text-dim" />
         </span>
@@ -481,7 +481,7 @@ export function LiveIndicator({
   if (!quiet) return <ThinkingRow since={since} mood={mood} detail={detail} large timerSince={timerSince} timerTitle={timerTitle} tokens={tokens} />;
   const parts = [agents > 0 && `${agents} ${agents === 1 ? "agent" : "agents"}`, jobs > 0 && `${jobs} ${jobs === 1 ? "job" : "jobs"}`].filter(Boolean).join(", ");
   return (
-    <div className="flex items-center gap-2 pb-1 pt-12 text-small text-dim" data-live-quiet>
+    <div className="flex items-center gap-2 pb-1 pt-14 text-small text-dim" data-live-quiet>
       <span className="flex size-[22px] shrink-0 items-center justify-center">
         <span className="size-[7px] rounded-full bg-running" />
       </span>
