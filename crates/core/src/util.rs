@@ -13,6 +13,14 @@ pub fn short_time(ts: &str) -> String {
     }
 }
 
+/// Epoch milliseconds for an RFC 3339 timestamp (fraction kept to the ms).
+pub fn parse_rfc3339_ms(ts: &str) -> Option<u64> {
+    let secs = u64::try_from(parse_rfc3339(ts)?).ok()?;
+    let frac = ts.get(19..).and_then(|r| r.strip_prefix('.')).map(|r| r.bytes().take_while(u8::is_ascii_digit).take(3).fold((0u64, 0u32), |(a, n), c| (a * 10 + u64::from(c - b'0'), n + 1)));
+    let ms = frac.map_or(0, |(v, n)| v * 10u64.pow(3 - n));
+    Some(secs * 1000 + ms)
+}
+
 /// Seconds since the Unix epoch for `YYYY-MM-DDTHH:MM:SS[.frac](Z|±HH:MM)`.
 pub fn parse_rfc3339(ts: &str) -> Option<i64> {
     let b = ts.as_bytes();

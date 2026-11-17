@@ -38,6 +38,22 @@ struct ParseState {
     /// Output tokens of assistant messages since the last prompt.
     #[serde(default)]
     turn_out: u64,
+    /// Newest real conversation event, epoch ms (see [`event_ms`]).
+    #[serde(default)]
+    last_event: Option<u64>,
+}
+
+/// When a transcript line is a real conversation event: a user entry, an
+/// assistant message or a turn end (`system` / `turn_duration`). Metadata
+/// (queue-operation, api-request, file-history-snapshot, summary, ai-title...)
+/// is not activity, even though it also lands in the file.
+pub(crate) fn event_ms(v: &Value) -> Option<u64> {
+    let real = match v["type"].as_str()? {
+        "user" | "assistant" => true,
+        "system" => v["subtype"] == "turn_duration",
+        _ => false,
+    };
+    if real { parse_rfc3339_ms(v["timestamp"].as_str()?) } else { None }
 }
 
 /// Everything parsed from one transcript (main session or subagent).
@@ -73,6 +89,7 @@ impl Parsed {
             models,
             origin: self.p.entrypoint.as_ref().map(|e| crate::origin::claude(Some(e), self.p.human)),
             bash: self.p.bash.clone(),
+            last_event: self.p.last_event,
             ..View::default()
         }
     }
@@ -99,6 +116,9 @@ struct Entry {
     /// Origin from the registry's `entrypoint` or the transcript's first records,
     /// for before the parse knows (see [`crate::origin::sniff`]).
     early_origin: Option<Origin>,
+    /// Newest real event from the file's tail, for while the transcript isn't
+    /// parsed yet: (file length, mtime it was read at, result).
+    tail_event: Option<(u64, SystemTime, Option<u64>)>,
     /// In first-seen order.
     agents: Vec<AgentEntry>,
 }
@@ -196,9 +216,13 @@ impl ClaudeSource {
                 reg_title: String::new(),
                 reg_cwd: String::new(),
                 early_origin: None,
+                tail_event: None,
                 agents: Vec::new(),
             });
             e.mtime = mtime;
+            if !e.slot.view().loaded && e.tail_event.is_none_or(|(l, t, _)| (l, t) != (meta.len(), mtime)) {
+                e.tail_event = Some((meta.len(), mtime, loader::tail_event(path, Kind::Claude)));
+            }
             e.live = live.remove(id);
             if let Some(r) = &e.live {
                 if !r.name.is_empty() {
@@ -341,6 +365,7 @@ fn session(id: &str, e: &Entry) -> Session {
         activity: v.activity.clone(),
         agents,
         updated: e.mtime,
+        last_event: if v.loaded { v.last_event } else { e.tail_event.and_then(|t| t.2) },
         managed: None,
         chat: None,
         models,
@@ -467,6 +492,9 @@ fn parse_line(
     }
     let Ok(v) = serde_json::from_str::<Value>(line) else { return };
     let ts = v["timestamp"].as_str().map(short_time).unwrap_or_default();
+    if let Some(t) = event_ms(&v) {
+        st.last_event = st.last_event.max(Some(t));
+    }
     if st.entrypoint.is_none()
         && let Some(e) = v["entrypoint"].as_str()
     {
@@ -926,6 +954,51 @@ mod tests {
         let all = session_models(own, &[agent]);
         let rows: Vec<_> = all.iter().map(|m| (m.model.as_str(), m.via_agent, m.messages)).collect();
         assert_eq!(rows, vec![("claude-haiku-5-5", true, 3), ("claude-haiku-5-5", false, 1), ("claude-opus-5-5", false, 1)]);
+    }
+
+    const REPLY: &str = r#"{"type":"assistant","timestamp":"2026-11-15T13:02:00.250Z","message":{"id":"m1","content":[{"type":"text","text":"done"}]}}"#;
+    const TURN_END: &str = r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-11-15T13:02:05Z"}"#;
+    const NOISE: &str = concat!(
+        r#"{"type":"queue-operation","timestamp":"2026-11-17T18:19:00Z"}"#,
+        "\n",
+        r#"{"type":"api-request","timestamp":"2026-11-17T18:19:01Z"}"#,
+        "\n",
+        r#"{"type":"file-history-snapshot","timestamp":"2026-11-17T18:19:02Z"}"#,
+        "\n",
+        r#"{"type":"system","subtype":"other","timestamp":"2026-11-17T18:19:03Z"}"#,
+        "\n",
+        r#"{"type":"ai-title","aiTitle":"T"}"#,
+        "\n",
+    );
+
+    fn last_event(jsonl: &str) -> Option<u64> {
+        let mut p = Parsed::default();
+        for l in jsonl.lines() {
+            p.line(l);
+        }
+        p.view().last_event
+    }
+
+    #[test]
+    fn last_event_ignores_metadata_after_the_last_real_event() {
+        let want = parse_rfc3339_ms("2026-11-15T13:02:00.250Z");
+        assert_eq!(want.map(|m| m % 1000), Some(250));
+        assert_eq!(last_event(&format!("{REPLY}\n{NOISE}")), want);
+        let end = parse_rfc3339_ms("2026-11-15T13:02:05Z");
+        assert_eq!(last_event(&format!("{REPLY}\n{TURN_END}\n{NOISE}")), end);
+        assert_eq!(last_event(NOISE), None);
+    }
+
+    #[test]
+    fn last_event_from_the_file_tail_only() {
+        let dir = crate::loader::tests::tmpdir("claude-tail-event");
+        let p = dir.join("s.jsonl");
+        let pad = format!("{{\"type\":\"user\",\"timestamp\":\"2026-11-01T00:00:00Z\",\"pad\":\"{}\"}}\n", "x".repeat(200_000));
+        std::fs::write(&p, format!("{pad}{REPLY}\n{NOISE}")).unwrap();
+        assert_eq!(crate::loader::tail_event(&p, Kind::Claude), parse_rfc3339_ms("2026-11-15T13:02:00.250Z"));
+        std::fs::write(&p, format!("{REPLY}\n{NOISE}{pad}")).unwrap();
+        // The only real event is outside the tail window.
+        assert_eq!(crate::loader::tail_event(&p, Kind::Claude), None);
     }
 
     #[test]

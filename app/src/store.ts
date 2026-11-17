@@ -296,6 +296,8 @@ function readSeen(): Seen {
   }
   return out;
 }
+/** When the chat last had real activity (a prompt, a reply, a turn end): what unread compares against. `updated` is the transcript file's mtime, which other tools also bump. */
+export const seenAt = (s: { last_event?: number | null; updated: number }) => s.last_event ?? s.updated;
 /** True while the session finished a turn the person has not looked at yet. */
 export const isUnseen = (seen: Seen, key: string, updated: number) => updated > (seen.m[key] ?? seen.base);
 
@@ -647,7 +649,7 @@ export const useStore = create<State>((set, get) => ({
     if (t.kind === "chat" && get().chatOwner[t.id]) target = { kind: "session", key: get().chatOwner[t.id] };
     if (target.kind === "session") {
       const s = get().sessions.find((x) => sessionKey(x) === (target as { key: string }).key);
-      if (s) get().markSeen(sessionKey(s), s.updated);
+      if (s) get().markSeen(sessionKey(s), seenAt(s));
     }
     // Already visible somewhere: go there.
     for (const tab of tabs) {

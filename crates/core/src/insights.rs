@@ -524,6 +524,7 @@ mod tests {
             activity: std::sync::Arc::new((0..n).map(|i| act(ActivityKind::Text, &format!("line {i}"))).collect()),
             agents: vec![],
             updated: SystemTime::now(),
+            last_event: None,
             managed: None,
             chat: None,
             models: vec![],

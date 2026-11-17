@@ -87,7 +87,9 @@ export interface Session {
   tokens: Tokens;
   activity: Activity[];
   agents: Agent[];
-  updated: number; // epoch ms
+  updated: number; // epoch ms (transcript file mtime: sorting, "ago")
+  /** Epoch ms of the newest real conversation event (prompt, reply, turn end); what unread compares against. Missing/null: use `updated`. */
+  last_event?: number | null;
   managed: number | null;
   /**
    * false = only the cheap facts are known yet (provider, title, cwd, status,

@@ -4,7 +4,7 @@
 
 import { useMemo } from "react";
 import { chatNeeds, chatStatus, useChats } from "./chat";
-import { isUnseen, useStore } from "../store";
+import { seenAt, isUnseen, useStore } from "../store";
 import { sessionKey, type Agent, type Session, type Status } from "./types";
 
 export interface ChatDigest {
@@ -106,5 +106,5 @@ export function useAttention(s: Session | null): Attention | null {
 
 /** A narrow boolean: this session finished a turn the person has not looked at (the green dot). */
 export function useUnseen(s: Session | null): boolean {
-  return useStore((st) => !!s && isUnseen(st.seen, sessionKey(s), s.updated));
+  return useStore((st) => !!s && isUnseen(st.seen, sessionKey(s), seenAt(s)));
 }
