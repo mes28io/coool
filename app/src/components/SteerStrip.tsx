@@ -27,16 +27,20 @@ export function SteerStrip({ chat }: { chat: Chat }) {
       <AnimatePresence initial={false}>
         {queued.length > 0 && (
           <motion.div key="queued" {...slide()} className="overflow-hidden" data-steer-queued={queued.length}>
-            <div className="px-3.5 pb-0.5 pt-2.5">
-              <div className="flex items-center gap-1.5 font-mono text-micro font-medium uppercase tracking-[0.06em] text-faint">
-                {local ? "Queued for when this turn ends" : "Queued for the next step"}
-                {queued.length > 1 && <span className="tnum">{queued.length}</span>}
+            <div className="flex flex-col gap-1.5 px-2.5 pb-1 pt-2.5">
+              <div className="flex items-center gap-1.5 px-1 text-small font-medium text-running-text">
+                <span className="relative flex size-[7px]" aria-hidden>
+                  <span className="absolute inset-0 rounded-full bg-running opacity-40 motion-safe:animate-ping" />
+                  <span className="relative size-[7px] rounded-full bg-running" />
+                </span>
+                {queued.length > 1 ? `${queued.length} queued` : "Queued"}
+                <span className="font-normal text-faint">· {local ? "sends when this turn ends" : "goes in at the next step"}</span>
               </div>
               <AnimatePresence initial={false}>
                 {queued.map((n) => (
                   <motion.div key={n.id} {...slide()} className="overflow-hidden">
-                    <div className="group/note flex h-[30px] items-center gap-2 text-base">
-                      <span className="min-w-0 flex-1 truncate text-fg/85" title={n.text}>
+                    <div className="group/note flex min-h-[34px] items-center gap-2 rounded-[12px] border border-[color-mix(in_oklab,var(--status-running)_22%,var(--border))] bg-[color-mix(in_oklab,var(--status-running)_7%,transparent)] py-1 pl-3 pr-1 text-base">
+                      <span className="min-w-0 flex-1 truncate text-fg" title={n.text}>
                         {n.text}
                       </span>
                       {!local && canCancel(chat, n) && (

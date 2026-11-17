@@ -719,3 +719,8 @@ html.page-hidden *::after {
   transform: translateZ(0);
   will-change: transform;
 }
+
+/* Queued-note dot (SteerStrip): no ping when motion is reduced. */
+.reduce-motion .animate-ping {
+  animation: none;
+}
