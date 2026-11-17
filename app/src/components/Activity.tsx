@@ -778,7 +778,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   const end: AgentEnd = failedEnd ? (isStopReason(reason) ? "stopped" : "failed") : "done";
   const t0 = all.length ? tsToMs(all[0].ts) : null;
   const t1 = last ? tsToMs(last.ts) : null;
-  const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, t0 !== null && t1 !== null ? t1 - t0 : null, agent?.tokens.output ?? 0);
+  const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, t0 !== null && t1 !== null ? t1 - t0 : null, agent?.tokens.total || agent?.tokens.output || 0);
   const [open, toggle] = useFold(`agent:${agent?.id ?? a.text}`, !running, card);
   useEffect(() => {
     if (asked && !open) toggle();
@@ -806,7 +806,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
             </span>
             <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
             {agent && <AgentModels agent={agent} />}
-            <TokenCount n={agent?.tokens.output} what="by this agent" className="shrink-0 text-small text-dim" />
+            <TokenCount n={agent?.tokens.total || agent?.tokens.output} total={!!agent?.tokens.total} what="by this agent" className="shrink-0 text-small text-dim" />
             <span className="size-[7px] shrink-0 rounded-full bg-running" />
             <FoldChevron open={open} />
           </div>

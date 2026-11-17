@@ -553,6 +553,16 @@ fn parse_line(
             }
             // Usage is repeated on every content block of a message; count it once.
             let mid = msg["id"].as_str().or(v["requestId"].as_str()).unwrap_or("").to_string();
+            {
+                // Claude Code's subagent count: the latest response's context plus its output.
+                // Every record counts (a message's later records can carry a larger output).
+                let u = &msg["usage"];
+                let g = |k: &str| u[k].as_u64().unwrap_or(0);
+                let ctx = g("input_tokens") + g("cache_creation_input_tokens") + g("cache_read_input_tokens");
+                if ctx > 0 {
+                    tokens.total = ctx + g("output_tokens");
+                }
+            }
             if !mid.is_empty() && st.seen_msgs.insert(mid) {
                 let u = &msg["usage"];
                 let g = |k: &str| u[k].as_u64().unwrap_or(0);
@@ -869,6 +879,7 @@ mod tests {
         feed(&mut o, &rec(r#"{"type":"text","text":"hi"}"#));
         feed(&mut o, &rec(r#"{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/x"}}"#));
         assert_eq!((o.tokens.input, o.tokens.cached, o.tokens.output, o.tokens.context), (15, 100, 7, 115));
+        assert_eq!(o.tokens.total, 122, "context + output of the latest response");
         assert_eq!(o.model, "claude-x");
     }
 

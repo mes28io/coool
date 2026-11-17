@@ -171,12 +171,12 @@ function useCountUp(n: number): number {
   return shown;
 }
 
-/** "↓ 3.2k tokens": output tokens, dim, next to a timer. Nothing when 0/unknown. Rises count up (see useCountUp). */
-export function TokenCount({ n, what = "this turn", className }: { n: number | null | undefined; what?: string; className?: string }) {
+/** "↓ 3.2k tokens": output tokens (`total`: a subagent's context plus output, Claude Code's count), dim, next to a timer. Nothing when 0/unknown. Rises count up (see useCountUp). */
+export function TokenCount({ n, what = "this turn", total, className }: { n: number | null | undefined; what?: string; total?: boolean; className?: string }) {
   const shown = useCountUp(n && n > 0 ? n : 0);
   if (!n || n <= 0) return null;
   return (
-    <span className={cx("tnum", className)} title={`${Math.round(n).toLocaleString("en-US")} output tokens ${what}`} data-token-count>
+    <span className={cx("tnum", className)} title={total ? `${Math.round(n).toLocaleString("en-US")} tokens: the agent's context plus its output, as Claude Code counts it` : `${Math.round(n).toLocaleString("en-US")} output tokens ${what}`} data-token-count>
       ↓ {fmtTokens(shown)} tokens
     </span>
   );

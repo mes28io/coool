@@ -19,7 +19,7 @@ const hhmmss = (t: number) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 const rnd = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
-const tok = (i = 0, o = 0, c = 0): Tokens => ({ input: i, cached: Math.floor(i * 3.2), output: o, context: c, turn_output: Math.floor(o / 5) });
+const tok = (i = 0, o = 0, c = 0): Tokens => ({ input: i, cached: Math.floor(i * 3.2), output: o, context: c, turn_output: Math.floor(o / 5), total: c + o });
 
 // Work scripts: what an agent "does" in each project.
 const WORK: Record<string, string[]> = {
@@ -606,6 +606,7 @@ export function mockBackend(): Backend {
         a.tokens.output += 160 + Math.floor(Math.random() * 260);
         ag3.tokens.turn_output = (ag3.tokens.turn_output ?? 0) + 120;
         a.tokens.input += 700;
+        a.tokens.total = (a.tokens.total ?? 0) + 900;
         due[a.id] = el + gap[a.id] + Math.random() * 1200 + (failed ? 1200 : 0);
         changed = true;
       }

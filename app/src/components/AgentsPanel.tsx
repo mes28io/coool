@@ -123,7 +123,7 @@ function CardTotal({ card }: { card: AgentCardData }) {
   if (text === null) return null;
   return (
     <span className="flex shrink-0 items-center gap-2 text-small text-faint">
-      <TokenCount n={card.tokens} what="by this agent" />
+      <TokenCount n={card.tokens} total={card.source !== "job"} what="by this agent" />
       <span className="tnum" title="Total time" data-card-total>
         {text}
       </span>

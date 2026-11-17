@@ -144,6 +144,10 @@ pub struct Tokens {
     /// Output tokens of the current (or latest) turn: since its last prompt. 0 when unknown.
     #[serde(default)]
     pub turn_output: u64,
+    /// The most recent response's context plus its output: what Claude Code
+    /// shows as a subagent's `↓ N tokens`. 0 when unknown.
+    #[serde(default)]
+    pub total: u64,
 }
 
 /// Tokens one model consumed within a session or subagent.

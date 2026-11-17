@@ -92,6 +92,8 @@ export interface AgentUse {
   /** Tool call id that launched the subagent. */
   tool: string;
   models: Record<string, ModelUse>;
+  /** Claude Code's count for the agent: its latest response's context plus output. */
+  total?: number;
 }
 
 export interface Chat {
@@ -117,6 +119,10 @@ export interface Chat {
   turnStart: number | null;
   /** Output tokens (chat total) when the turn began, to get the turn's own. */
   turnOut0: number;
+  /** Estimated output tokens of the response now streaming (not yet in `tokens`). */
+  liveOut: number;
+  /** Output tokens as shown during a turn: totals plus the live estimate, never decreasing until the turn ends. */
+  outShown: number;
   /** Epoch ms of the last event of any kind. */
   lastTs: number;
   /** Epoch ms the run state last changed. */
@@ -166,6 +172,8 @@ export function emptyChat(id: number, info?: Partial<ChatInfo>): Chat {
     seq: 0,
     turnStart: null,
     turnOut0: 0,
+    liveOut: 0,
+    outShown: 0,
     lastTs: Date.now(),
     stateSince: Date.now(),
     context: 0,
@@ -377,6 +385,16 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
             context: parent ? prev.context : e.tokens.context || prev.context,
           },
         };
+        // The exact count replaces the estimate; the shown number never steps back within a turn.
+        c = { ...c, liveOut: 0, outShown: Math.max(c.outShown, c.tokens.output) };
+        break;
+      }
+      case "live_output":
+        c = { ...c, liveOut: e.tokens, outShown: Math.max(c.outShown, c.tokens.output + e.tokens) };
+        break;
+      case "agent_total": {
+        const ag = c.agents[e.tool_id] ?? { tool: e.tool_id, models: {} };
+        c = { ...c, agents: { ...c.agents, [e.tool_id]: { ...ag, total: e.tokens } } };
         break;
       }
       case "state": {
@@ -431,7 +449,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           its().push({ kind: "turn", key, ts: e.ts, durationMs: e.duration_ms, ok: e.ok, failed, tools, tokens: out > 0 ? out : null });
         }
         // Notes the agent never reached arrive as `steer` events with state "unused" (they wait for the person).
-        c = { ...c, turnStart: null };
+        c = { ...c, turnStart: null, liveOut: 0, outShown: c.tokens.output };
         break;
       case "notice":
         its().push({ kind: "notice", key, level: e.level, text: e.text, needsTerminal: e.needs_terminal, ts: e.ts });

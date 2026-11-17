@@ -114,7 +114,7 @@ impl Parsed {
         let mut v = self.view();
         if let Parsed::Claude(_) = self {
             // Claude totals are sums over every message: unknown until backfilled.
-            v.tokens = Tokens { context: v.tokens.context, ..Tokens::default() };
+            v.tokens = Tokens { context: v.tokens.context, total: v.tokens.total, ..Tokens::default() };
         }
         // Codex totals are cumulative counters, so the last one seen is exact;
         // per-model rows are sums of their growth.

@@ -241,6 +241,18 @@ pub enum ChatEventKind {
         tokens: Tokens,
         context_window: Option<u64>,
     },
+    /// Running estimate of the output tokens of the model response now streaming
+    /// (~4 characters per token), not yet part of any `usage` total. The exact
+    /// count arrives with the response's `usage`, which supersedes it.
+    LiveOutput {
+        tokens: u64,
+    },
+    /// A subagent's running count as Claude Code shows it: its latest response's
+    /// context plus its output.
+    AgentTotal {
+        tool_id: String,
+        tokens: u64,
+    },
     State {
         state: ChatState,
     },
