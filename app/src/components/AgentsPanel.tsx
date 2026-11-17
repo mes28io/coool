@@ -152,8 +152,7 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
         </div>
         <span className="-mt-[2px] flex shrink-0 items-center gap-1">
           {/* No status pill: the strip under the title already says Running / Done / Failed / Stopped / Needs you.
-              Time and tokens sit in the footer while the card is open; folded, the header keeps them. */}
-          {collapsed && <CardTotal card={card} />}
+              Steps, time and tokens are in the footer, which stays visible when the card is folded. */}
           <button
             type="button"
             onClick={(e) => {
@@ -173,31 +172,33 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
           <IChevron size={14} />
         </motion.span>
       </div>
-      <div className="px-3 pb-2.5 pt-1.5">
+      <div className="px-3 pb-1.5 pt-1.5">
         <Strip card={card} />
       </div>
       <AnimatePresence initial={false}>
         {!collapsed && (
           <motion.div key="body" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reducedMotion() ? 0 : 0.26, ease }} className="overflow-hidden">
-            <div className="px-3 pb-2.5">
+            <div className="px-3 pb-1">
               <Bar card={card} />
               <Recent card={card} />
-              <div className="mt-1.5 flex h-[24px] items-center gap-2 text-small text-faint">
-                <span className="tnum">
-                  {card.steps.length} {card.steps.length === 1 ? "step" : "steps"}
-                </span>
-                {card.stoppable && (
-                  <button type="button" onClick={onStop} className="-my-px h-[24px] rounded-[6px] px-1.5 text-small text-dim transition-colors duration-150 hover:bg-hover hover:text-fg">
-                    Stop
-                  </button>
-                )}
-                <span className="flex-1" />
-                <CardTotal card={card} />
-              </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+      <div className="px-3 pb-2">
+        <div className="flex h-[24px] items-center gap-2 text-small text-faint">
+          <span className="tnum">
+            {card.steps.length} {card.steps.length === 1 ? "step" : "steps"}
+          </span>
+          {card.stoppable && (
+            <button type="button" onClick={onStop} className="-my-px h-[24px] rounded-[6px] px-1.5 text-small text-dim transition-colors duration-150 hover:bg-hover hover:text-fg">
+              Stop
+            </button>
+          )}
+          <span className="flex-1" />
+          <CardTotal card={card} />
+        </div>
+      </div>
     </div>
   );
 }
