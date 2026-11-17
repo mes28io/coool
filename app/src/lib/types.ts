@@ -38,6 +38,8 @@ export interface Tokens {
   context: number;
   /** Output tokens of the current (or latest) turn; absent/0 when unknown. */
   turn_output?: number;
+  /** The latest response's context plus its output: Claude Code's `↓ N tokens` for a subagent. */
+  total?: number;
 }
 
 /** CHAT_SPEC "Models used". Additive; the backend may not send it yet. */
@@ -299,6 +301,8 @@ export type ChatEvent = Ev &
     | { type: "tool_end"; id: string; ok: boolean; output: string; artifact?: ArtifactInfo }
     | { type: "permission_request"; request_id: string; tool: string; summary: string; input: unknown; remember?: RememberOption[] }
     | { type: "usage"; model: string | null; tokens: Tokens; context_window: number | null }
+    | { type: "live_output"; tokens: number }
+    | { type: "agent_total"; tool_id: string; tokens: number }
     | { type: "state"; state: ChatRunState }
     | { type: "turn_end"; duration_ms: number; ok: boolean }
     | { type: "notice"; level: "info" | "warn" | "error"; text: string; needs_terminal: boolean }

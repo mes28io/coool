@@ -594,6 +594,7 @@ impl Codex {
                     output: g(tot, "outputTokens"),
                     context: g(last, "inputTokens"),
                     turn_output: 0,
+                    total: 0,
                 };
                 if let Some(w) = u["modelContextWindow"].as_u64() {
                     self.context_window = Some(w);

@@ -277,6 +277,10 @@ pub(crate) struct Claude {
     stream_blocks: HashMap<String, u32>,
     final_blocks: HashMap<String, u32>,
     totals: Tokens,
+    /// Output estimate for the response now streaming.
+    live: LiveOutput,
+    /// Last reported subagent totals, by launching tool id.
+    agent_totals: HashMap<String, u64>,
     user_n: u64,
     /// uuids of user lines written and not yet answered (by a `result` or a
     /// terminal `command_lifecycle`): the chat is working while any is left.
@@ -334,6 +338,8 @@ impl Claude {
             stream_blocks: HashMap::new(),
             final_blocks: HashMap::new(),
             totals: Tokens::default(),
+            live: LiveOutput::default(),
+            agent_totals: HashMap::new(),
             user_n: 0,
             cmds: Vec::new(),
             interrupted: false,
@@ -740,6 +746,16 @@ impl Claude {
             o.ev(e);
             return;
         }
+        if let Some(tool_id) = &parent {
+            let u = &msg["usage"];
+            let g = |k: &str| u[k].as_u64().unwrap_or(0);
+            let ctx = g("input_tokens") + g("cache_creation_input_tokens") + g("cache_read_input_tokens");
+            let total = ctx + g("output_tokens");
+            if ctx > 0 && self.agent_totals.get(tool_id) != Some(&total) {
+                self.agent_totals.insert(tool_id.clone(), total);
+                o.ev(ChatEventKind::AgentTotal { tool_id: tool_id.clone(), tokens: total });
+            }
+        }
         for b in &blocks {
             match b["type"].as_str() {
                 Some("text") => {
@@ -786,6 +802,7 @@ impl Claude {
             Some("message_start") if parent.is_none() => {
                 let m = &e["message"];
                 self.stream_msg = Some((m["id"].as_str().unwrap_or("").to_string(), m["model"].as_str().unwrap_or("").to_string()));
+                self.live.reset();
             }
             Some("content_block_start") if e["content_block"]["type"] == "text" => {
                 let id = self.msg_id(v);
@@ -799,17 +816,24 @@ impl Claude {
                         let n = self.stream_blocks.get(&id).copied().unwrap_or(1);
                         let text = d["text"].as_str().unwrap_or("").to_string();
                         if !text.is_empty() {
-                            o.ev(ChatEventKind::TextDelta { message_id: block_id(&id, n), text, parent_tool_id: parent });
+                            o.ev(ChatEventKind::TextDelta { message_id: block_id(&id, n), text, parent_tool_id: parent.clone() });
                         }
                     }
                     // Often redacted (empty) with only a token estimate.
                     Some("thinking_delta") => {
                         let text = d["thinking"].as_str().unwrap_or("").to_string();
                         if !text.is_empty() {
-                            o.ev(ChatEventKind::ThinkingDelta { message_id: id, text, parent_tool_id: parent });
+                            o.ev(ChatEventKind::ThinkingDelta { message_id: id, text, parent_tool_id: parent.clone() });
                         }
                     }
                     _ => {}
+                }
+                // Like Claude Code: count streamed characters (text, thinking, tool inputs) live.
+                if parent.is_none() {
+                    let chars = ["text", "thinking", "partial_json"].iter().filter_map(|k| d[*k].as_str()).map(|t| t.chars().count()).sum::<usize>();
+                    if let Some(tokens) = self.live.push(chars, std::time::Instant::now()) {
+                        o.ev(ChatEventKind::LiveOutput { tokens });
+                    }
                 }
             }
             // Final usage of one model response.
@@ -819,6 +843,7 @@ impl Claude {
                     return;
                 }
                 let g = |k: &str| u[k].as_u64().unwrap_or(0);
+                self.live.reset();
                 let fresh = g("input_tokens") + g("cache_creation_input_tokens");
                 self.totals.input += fresh;
                 self.totals.cached += g("cache_read_input_tokens");
@@ -960,6 +985,37 @@ fn result_text(c: &Value) -> String {
 }
 
 use serde_json::json;
+
+/// Live estimate of one streaming response's output tokens: ~4 characters per
+/// token, reported at most every [`LiveOutput::EVERY`]. The exact usage at
+/// `message_delta` replaces it (the `usage` event; see `reset`).
+#[derive(Default)]
+struct LiveOutput {
+    chars: usize,
+    last: Option<std::time::Instant>,
+}
+
+impl LiveOutput {
+    const EVERY: std::time::Duration = std::time::Duration::from_millis(120);
+
+    fn reset(&mut self) {
+        self.chars = 0;
+        self.last = None;
+    }
+
+    /// Adds streamed characters; the estimate to report now, if one is due.
+    fn push(&mut self, chars: usize, now: std::time::Instant) -> Option<u64> {
+        if chars == 0 {
+            return None;
+        }
+        self.chars += chars;
+        if self.last.is_some_and(|t| now.duration_since(t) < Self::EVERY) {
+            return None;
+        }
+        self.last = Some(now);
+        Some(self.chars.div_ceil(4) as u64)
+    }
+}
 
 impl Backend for Claude {
     fn start(&mut self, o: &mut Out) {
@@ -1760,5 +1816,33 @@ mod tests {
         c.on_line(r#"{"type":"control_request","request_id":"h1","request":{"subtype":"hook_callback"}}"#, &mut o);
         let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
         assert_eq!((w["response"]["subtype"].as_str(), w["response"]["request_id"].as_str()), (Some("error"), Some("h1")));
+    }
+
+    #[test]
+    fn live_output_estimates_while_streaming_then_exact_usage_replaces_it() {
+        use std::time::{Duration, Instant};
+        let mut l = LiveOutput::default();
+        let t0 = Instant::now();
+        assert_eq!(l.push(0, t0), None);
+        assert_eq!(l.push(40, t0), Some(10), "first delta reports at once, 4 chars per token");
+        assert_eq!(l.push(8, t0 + Duration::from_millis(50)), None, "throttled");
+        assert_eq!(l.push(8, t0 + Duration::from_millis(130)), Some(14), "the estimate includes throttled deltas (56 chars)");
+        l.reset();
+        assert_eq!(l.push(3, t0 + Duration::from_millis(140)), Some(1), "a new response starts over");
+
+        // Through the backend: deltas of all kinds produce LiveOutput, message_delta the exact usage.
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        let ev = |e: &str| format!(r#"{{"type":"stream_event","event":{e}}}"#);
+        c.on_line(&ev(r#"{"type":"message_start","message":{"id":"m1","model":"claude-x"}}"#), &mut o);
+        c.on_line(&ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\": \"ls\"}"}}"#), &mut o);
+        let live: Vec<u64> = o.events.iter().filter_map(|e| if let ChatEventKind::LiveOutput { tokens } = e { Some(*tokens) } else { None }).collect();
+        assert_eq!(live, vec![5], "tool input counts: 18 chars");
+        c.on_line(&ev(r#"{"type":"message_delta","delta":{},"usage":{"input_tokens":3,"output_tokens":4}}"#), &mut o);
+        let u = o.events.iter().find_map(|e| if let ChatEventKind::Usage { tokens, .. } = e { Some(tokens.output) } else { None });
+        assert_eq!(u, Some(4), "exact usage lands below the estimate; the UI holds its maximum");
+        c.on_line(&ev(r#"{"type":"message_start","message":{"id":"m2","model":"claude-x"}}"#), &mut o);
+        c.on_line(&ev(r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"abcdefgh"}}"#), &mut o);
+        assert!(matches!(o.events.last(), Some(ChatEventKind::LiveOutput { tokens: 2 })), "estimate restarts per response");
     }
 }

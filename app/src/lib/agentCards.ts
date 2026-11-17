@@ -37,7 +37,7 @@ export interface AgentCardData {
   kind: string;
   description: string;
   state: CardState;
-  /** Output tokens. */
+  /** Claude Code's count for an agent (latest context plus output); output tokens for a job. */
   tokens: number;
   /** The now strip while running. */
   label: string;
@@ -139,7 +139,7 @@ function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provi
 export function cardFromAgent(s: Session, a: Agent): AgentCardData {
   const live = !a.finished && s.status !== "ended";
   return fromTimeline(
-    { id: `agent:${a.id}`, source: "agent", ref: a.id, provider: s.provider, model: a.model ?? a.models?.[0]?.model ?? null, kind: a.kind, description: a.description, tokens: a.tokens.output, stoppable: false },
+    { id: `agent:${a.id}`, source: "agent", ref: a.id, provider: s.provider, model: a.model ?? a.models?.[0]?.model ?? null, kind: a.kind, description: a.description, tokens: a.tokens.total || a.tokens.output, stoppable: false },
     a.activity,
     { current: a.current, live },
   );
@@ -190,7 +190,7 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
     kind: (tool.input as { subagent_type?: string } | null)?.subagent_type || "subagent",
     description: stripToolName(tool.name, tool.summary),
     state,
-    tokens: uses.reduce((n, u) => n + u.output, 0),
+    tokens: chat.agents[tool.id]?.total || uses.reduce((n, u) => n + u.output, 0),
     label,
     labelTool: run >= 0 ? steps[run].name : null,
     since: live ? (run >= 0 ? tools[run].ts : lastEnd) : end,

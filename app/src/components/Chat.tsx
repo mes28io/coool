@@ -350,7 +350,7 @@ export function ChatTimeline({
         <AnimatePresence>
           {showRow && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
-              <LiveIndicator since={now.at ?? idleSince} mood={now.mood} detail={now.detail} agents={now.agents} mainActive={now.mainActive} timerSince={chat.turnStart ?? idleSince} tokens={Math.max(0, chat.tokens.output - chat.turnOut0)} />
+              <LiveIndicator since={now.at ?? idleSince} mood={now.mood} detail={now.detail} agents={now.agents} mainActive={now.mainActive} timerSince={chat.turnStart ?? idleSince} tokens={Math.max(0, Math.max(chat.outShown, chat.tokens.output) - chat.turnOut0)} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -685,7 +685,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const models = Object.keys(chat.agents[tool.id]?.models ?? {});
   const fromText = [...new Set(texts.map((t) => t.model).filter(Boolean) as string[])];
   const modelIds = models.length ? models : fromText;
-  const agentOut = Object.values(chat.agents[tool.id]?.models ?? {}).reduce((n, u) => n + u.output, 0);
+  const agentOut = chat.agents[tool.id]?.total || Object.values(chat.agents[tool.id]?.models ?? {}).reduce((n, u) => n + u.output, 0);
   const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
   const card = useRef<HTMLDivElement>(null);
   const focus = useStore((st) => st.agentFocus);
@@ -723,7 +723,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
             ))}
             <span className="flex items-center gap-1.5 text-small text-faint">
               <span className="size-[7px] shrink-0 rounded-full bg-running" />
-              <TokenCount n={agentOut} what="by this agent" />
+              <TokenCount n={agentOut} total={!!chat.agents[tool.id]?.total} what="by this agent" />
               <LiveClock since={tool.ts} />
             </span>
             <FoldChevron open={open} />
