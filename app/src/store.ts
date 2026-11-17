@@ -28,7 +28,9 @@ export type BrowserPage =
   /** A Claude Code artifact's local copy, in a sandboxed frame. */
   | { kind: "artifact"; info: ArtifactInfo; versions: number }
   /** A web page (http/https), in the native child webview. `n` changes on every open, so opening the same URL again loads it again. */
-  | { kind: "web"; url: string; n: number };
+  | { kind: "web"; url: string; n: number }
+  /** Nothing yet: an address field and the pages this chat mentions. */
+  | { kind: "start" };
 export type RightPanelKind = "agents" | "models" | "browser";
 
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
@@ -179,9 +181,11 @@ interface State {
   /** Per session (same keys as `rightPanel`): the browser panel's page; this run only. Absent = no browser opened. */
   browser: Record<string, BrowserPage>;
   /** Shows `page` in that session's browser panel (and opens the panel, replacing Jobs / Models). */
-  openBrowser(key: string, page: Extract<BrowserPage, { kind: "artifact" }> | { kind: "web"; url: string }): void;
-  /** The browser's own close: forgets its page (the panel closes its webview). */
-  closeBrowser(key: string): void;
+  openBrowser(key: string, page: Extract<BrowserPage, { kind: "artifact" | "start" }> | { kind: "web"; url: string }): void;
+  /** The browser's own close: forgets its page (the panel closes its webview) but remembers it in `lastBrowser`; `url` is where a web page had got to. */
+  closeBrowser(key: string, url?: string): void;
+  /** Per session: the page the browser showed when it was last closed (the header's globe reopens it); this run only. */
+  lastBrowser: Record<string, Extract<BrowserPage, { kind: "artifact" | "web" }>>;
   /** Width of the browser panel (wider than the others; persisted). The pane may clamp it. */
   browserWidth: number;
   setBrowserWidth(w: number): void;
@@ -409,12 +413,17 @@ export const useStore = create<State>((set, get) => ({
       browser: { ...s.browser, [key]: page.kind === "web" ? { kind: "web", url: page.url, n: ++browserOpens } : page },
       rightPanel: { ...s.rightPanel, [key]: "browser" },
     })),
-  closeBrowser: (key) =>
+  closeBrowser: (key, url) =>
     set((s) => {
       const browser = { ...s.browser };
+      const page = browser[key];
       delete browser[key];
-      return { browser, rightPanel: { ...s.rightPanel, [key]: "closed" } };
+      const lastBrowser = { ...s.lastBrowser };
+      if (page?.kind === "web") lastBrowser[key] = { ...page, url: url || page.url };
+      else if (page?.kind === "artifact") lastBrowser[key] = page;
+      return { browser, lastBrowser, rightPanel: { ...s.rightPanel, [key]: "closed" } };
     }),
+  lastBrowser: {},
   browserWidth: clampBrowser(readNum("coool.browserWidth", BROWSER_DEFAULT)),
   setBrowserWidth(w) {
     const v = clampBrowser(w);

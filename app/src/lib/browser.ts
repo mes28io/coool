@@ -12,6 +12,7 @@ import { createContext, useContext } from "react";
 import { create } from "zustand";
 import { useStore, type BrowserPage } from "../store";
 import { api, type BrowserBounds, type BrowserState } from "./backend";
+import type { ArtifactInfo } from "./types";
 
 interface Native {
   id: string | null;
@@ -173,4 +174,49 @@ export function useOpenPage(): (p: OpenPage) => void {
     if (ctx) return ctx(p);
     if (p.kind === "web") void api().openArtifact(p.url).catch(() => {});
   };
+}
+
+/** What the address field accepts: an http(s) URL, or a bare domain / host[:port][/path] (https:// is added). */
+export function addressUrl(text: string): string | null {
+  const t = text.trim();
+  if (!t || /\s/.test(t)) return null;
+  // A scheme (but not `host:port`, which also looks like one).
+  if (/^[a-z][a-z0-9+.-]*:/i.test(t) && !/^[^/:]+:\d+(\/|$)/.test(t)) return webUrl(t);
+  const u = webUrl(`https://${t}`);
+  if (!u) return null;
+  // A bare word is not a site: a dot in the host (example.com), localhost or an IP.
+  const h = new URL(u).hostname;
+  return h.includes(".") || h === "localhost" || h.startsWith("[") ? u : null;
+}
+
+/** A page this chat mentions, for the browser's start view. */
+export type RecentPage = { kind: "artifact"; info: ArtifactInfo; versions: number } | { kind: "web"; url: string };
+
+const LINK = /https?:\/\/[^\s<>()"'`[\]{}]+/g;
+
+/** The chat's artifacts (newest publish of each) and the http(s) links in its messages, newest first, each once. */
+export function recentPages(entries: { text?: string; artifact?: ArtifactInfo }[], max = 12): RecentPage[] {
+  const versions = new Map<string, number>();
+  for (const e of entries) if (e.artifact) versions.set(e.artifact.url, Math.max((versions.get(e.artifact.url) ?? 0) + 1, e.artifact.version ?? 0));
+  const out: RecentPage[] = [];
+  const seen = new Set<string>();
+  for (let i = entries.length - 1; i >= 0 && out.length < max; i--) {
+    const e = entries[i];
+    if (e.artifact) {
+      if (!seen.has(e.artifact.url)) {
+        seen.add(e.artifact.url);
+        out.push({ kind: "artifact", info: e.artifact, versions: versions.get(e.artifact.url) ?? 1 });
+      }
+      continue;
+    }
+    const links = [...(e.text ?? "").matchAll(LINK)].map((m) => m[0].replace(/[.,;:!?*_~]+$/, ""));
+    for (let j = links.length - 1; j >= 0 && out.length < max; j--) {
+      const u = webUrl(links[j]);
+      if (!u || seen.has(u) || seen.has(links[j])) continue;
+      seen.add(u);
+      seen.add(links[j]);
+      out.push({ kind: "web", url: u });
+    }
+  }
+  return out;
 }

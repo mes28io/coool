@@ -1,10 +1,11 @@
 // The browser panel: the right panel's third kind (next to Jobs and Models). It shows one page per session:
 // a Claude Code artifact's local copy in a sandboxed frame, or a web page (a claude.ai artifact link, a link from
-// the chat) in a native child webview laid over the panel's body (lib/browser.ts, app/src-tauri/src/browser.rs).
+// the chat) in a native child webview laid over the panel's body (lib/browser.ts, app/src-tauri/src/browser.rs),
+// or, before anything was opened, a start view: an address field and the pages this chat mentions.
 
 import { createElement, useEffect, useRef, useState } from "react";
 import { api } from "../lib/backend";
-import { hide, nativeId, onOverlays, overlayCovers, place, useBrowserState } from "../lib/browser";
+import { addressUrl, hide, nativeId, onOverlays, overlayCovers, place, useBrowserState, type RecentPage } from "../lib/browser";
 import type { ArtifactInfo } from "../lib/types";
 import { useStore, type BrowserPage } from "../store";
 import { artifactIcon } from "./ArtifactCard";
@@ -19,20 +20,22 @@ const host = (url: string) => {
   }
 };
 
-export function BrowserPanel({ panelKey, page, active, onClose }: { panelKey: string; page: BrowserPage; active: boolean; onClose: () => void }) {
+export function BrowserPanel({ panelKey, page, active, onClose, recent }: { panelKey: string; page: BrowserPage; active: boolean; onClose: () => void; recent: RecentPage[] }) {
   const st = useBrowserState((s) => s.byKey[panelKey]);
   const openBrowser = useStore((s) => s.openBrowser);
   const [frameKey, setFrameKey] = useState(0);
   const web = page.kind === "web";
+  const start = page.kind === "start";
   const native = web && api().nativeBrowser;
-  const url = web ? st?.url || page.url : page.info.url;
-  const title = web ? st?.title || host(url) : page.info.title;
+  const url = page.kind === "web" ? st?.url || page.url : page.kind === "artifact" ? page.info.url : "";
+  const title = page.kind === "web" ? st?.title || host(url) : page.kind === "artifact" ? page.info.title : "New page";
   const go = (a: "back" | "forward" | "reload") => {
     const id = nativeId(panelKey);
     if (id) void api().browserGo(id, a).catch(() => {});
   };
   const openExternal = () => {
-    if (!web) return void api().openArtifact(page.info.url).catch(() => {});
+    if (page.kind === "start") return;
+    if (page.kind === "artifact") return void api().openArtifact(page.info.url).catch(() => {});
     const id = nativeId(panelKey);
     if (native && id) void api().browserOpenExternal(id).catch((e) => useStore.getState().toast(`Couldn't open it: ${e}`, "error"));
     else if (!native) window.open(url, "_blank", "noopener");
@@ -46,26 +49,30 @@ export function BrowserPanel({ panelKey, page, active, onClose }: { panelKey: st
         <IconButton title="Forward" disabled={!native || !st?.can_forward} onClick={() => go("forward")}>
           <IForward size={15} />
         </IconButton>
-        <IconButton title="Reload" onClick={() => (native ? go("reload") : setFrameKey((k) => k + 1))}>
+        <IconButton title="Reload" disabled={start} onClick={() => (native ? go("reload") : setFrameKey((k) => k + 1))}>
           <IRefresh size={15} className={cx(native && st?.loading && "animate-spin [animation-duration:1.2s]")} />
         </IconButton>
         <div className="ml-1.5 min-w-0 flex-1 leading-tight" title={url}>
           <div className="flex min-w-0 items-center gap-1.5">
-            {!web && createElement(artifactIcon(page.info.icon), { size: 13, className: "shrink-0 text-dim" })}
+            {page.kind === "artifact" && createElement(artifactIcon(page.info.icon), { size: 13, className: "shrink-0 text-dim" })}
             <span className="truncate text-small font-medium text-fg" data-browser-title>
               {title}
             </span>
           </div>
-          <div className="truncate text-micro text-faint" data-browser-url={url}>
-            {web ? url.replace(/^https?:\/\//, "") : `Local copy${page.info.version != null ? ` · v${page.info.version}` : ""}${page.versions > 1 ? ` · ${page.versions} versions` : ""}`}
-          </div>
+          {!start && (
+            <Address
+              url={url}
+              shown={web ? url.replace(/^https?:\/\//, "") : page.kind === "artifact" ? `Local copy${page.info.version != null ? ` · v${page.info.version}` : ""}${page.versions > 1 ? ` · ${page.versions} versions` : ""}` : ""}
+              onGo={(u) => openBrowser(panelKey, { kind: "web", url: u })}
+            />
+          )}
         </div>
-        {!web && (
+        {page.kind === "artifact" && (
           <IconButton title={`Open ${host(page.info.url)} here (sign in to claude.ai once)`} onClick={() => openBrowser(panelKey, { kind: "web", url: page.info.url })}>
             <IGlobe size={15} />
           </IconButton>
         )}
-        <IconButton title="Open in default browser" onClick={openExternal}>
+        <IconButton title="Open in default browser" disabled={start} onClick={openExternal}>
           <IExternal size={15} />
         </IconButton>
         <IconButton title="Close" onClick={onClose}>
@@ -73,7 +80,9 @@ export function BrowserPanel({ panelKey, page, active, onClose }: { panelKey: st
         </IconButton>
       </div>
       <div className="relative min-h-0 flex-1">
-        {page.kind === "artifact" ? (
+        {page.kind === "start" ? (
+          <StartView recent={recent} onOpen={(p) => openBrowser(panelKey, p.kind === "web" ? { kind: "web", url: p.url } : p)} onGo={(u) => openBrowser(panelKey, { kind: "web", url: u })} />
+        ) : page.kind === "artifact" ? (
           <ArtifactFrame key={frameKey} info={page.info} />
         ) : native ? (
           <NativeHost panelKey={panelKey} page={page} active={active} loading={!st || st.loading} />
@@ -81,6 +90,125 @@ export function BrowserPanel({ panelKey, page, active, onClose }: { panelKey: st
           <iframe key={`${page.n}:${frameKey}`} title={title} src={page.url} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="absolute inset-0 size-full border-0 bg-white" />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The address line under the title: shows where the page is; click it to type another address (Enter goes there,
+ * Escape puts the old one back). Accepts http(s) URLs and bare domains (https:// is added).
+ */
+function Address({ url, shown, onGo }: { url: string; shown: string; onGo: (url: string) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const [bad, setBad] = useState(false);
+  const editing = text !== null;
+  const end = () => {
+    setText(null);
+    setBad(false);
+  };
+  return (
+    <input
+      value={editing ? text : shown}
+      placeholder="Type an address"
+      spellCheck={false}
+      autoCapitalize="off"
+      autoCorrect="off"
+      aria-label="Address"
+      title={bad ? "Only http and https addresses open here" : url}
+      data-browser-url={url}
+      onFocus={(e) => {
+        setText(url);
+        const el = e.currentTarget;
+        requestAnimationFrame(() => el.select());
+      }}
+      onBlur={end}
+      onChange={(e) => {
+        setText(e.target.value);
+        setBad(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          end();
+          e.currentTarget.blur();
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          const u = addressUrl(text ?? "");
+          if (!u) return setBad(true);
+          end();
+          e.currentTarget.blur();
+          onGo(u);
+        }
+      }}
+      className={cx(
+        "-mx-1 block w-[calc(100%+8px)] truncate rounded-[5px] bg-transparent px-1 text-micro outline-none placeholder:text-faint",
+        editing ? "bg-[color-mix(in_oklab,var(--dim)_10%,transparent)] text-fg" : "cursor-text text-faint hover:text-dim",
+        bad && "text-err-text",
+      )}
+    />
+  );
+}
+
+/** Before anything is open: an address field and the pages this chat mentions (its artifacts, the links in its messages), newest first. */
+function StartView({ recent, onOpen, onGo }: { recent: RecentPage[]; onOpen: (p: RecentPage) => void; onGo: (url: string) => void }) {
+  const [text, setText] = useState("");
+  const [bad, setBad] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => ref.current?.focus(), []);
+  return (
+    <div className="absolute inset-0 overflow-y-auto px-4 py-4" data-browser-start>
+      <input
+        ref={ref}
+        value={text}
+        placeholder="Type an address, like example.com"
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        aria-label="Address"
+        onChange={(e) => {
+          setText(e.target.value);
+          setBad(false);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          const u = addressUrl(text);
+          if (u) onGo(u);
+          else setBad(true);
+        }}
+        className={cx(
+          "h-[32px] w-full rounded-[8px] border bg-transparent px-2.5 text-small text-fg outline-none placeholder:text-faint",
+          bad ? "border-[var(--error)]" : "border-hairline focus:border-[color-mix(in_oklab,var(--dim)_45%,transparent)]",
+        )}
+      />
+      {bad && <div className="mt-1.5 text-micro text-dim">Only http and https addresses open here.</div>}
+      <div className="mt-5 mb-1.5 text-micro font-medium text-faint">From this chat</div>
+      {recent.length === 0 ? (
+        <div className="text-small text-faint">No pages or links yet.</div>
+      ) : (
+        <div className="-mx-1.5 flex flex-col">
+          {recent.map((p) => {
+            const u = p.kind === "web" ? p.url : p.info.url;
+            return (
+              <button
+                key={`${p.kind}:${u}`}
+                type="button"
+                onClick={() => onOpen(p)}
+                title={p.kind === "artifact" ? `Preview ${p.info.title}` : u}
+                className="flex min-w-0 items-center gap-2 rounded-[7px] px-1.5 py-1.5 text-left transition-colors duration-150 hover:bg-hover"
+                data-browser-recent={u}
+              >
+                {createElement(p.kind === "artifact" ? artifactIcon(p.info.icon) : IGlobe, { size: 14, className: "shrink-0 text-dim" })}
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block truncate text-small text-fg">{p.kind === "artifact" ? p.info.title : host(u)}</span>
+                  <span className="block truncate text-micro text-faint">{p.kind === "artifact" ? `Artifact${p.versions > 1 ? ` · ${p.versions} versions` : ""}` : u.replace(/^https?:\/\//, "")}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

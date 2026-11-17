@@ -1,7 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion } from "motion/react";
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
-import { BrowserContext, closeNative, type OpenPage } from "../lib/browser";
+import { BrowserContext, closeNative, recentPages, useBrowserState, type OpenPage } from "../lib/browser";
 import { BrowserPanel } from "./BrowserPanel";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
@@ -100,6 +100,13 @@ export function SessionView({
   const setBrowserWidth = useStore((st) => st.setBrowserWidth);
   const openBrowser = useStore((st) => st.openBrowser);
   const closeBrowser = useStore((st) => st.closeBrowser);
+  const lastPage = useStore((st) => (panelKey ? st.lastBrowser[panelKey] : undefined));
+  // The start view's list: this chat's artifacts and the links in its messages.
+  const recent = useMemo(() => {
+    if (page?.kind !== "start") return [];
+    if (chat) return recentPages(chat.items.map((it) => (it.kind === "prompt" || it.kind === "text" ? { text: it.text } : it.kind === "tool" && !it.parent ? { artifact: it.artifact } : {})));
+    return recentPages((r.session?.activity ?? []).map((a) => (a.kind === "prompt" || a.kind === "text" ? { text: a.full ?? a.text, artifact: a.artifact } : { artifact: a.artifact })));
+  }, [page?.kind, chat, r.session]);
   const showing: RightKind | null =
     panelState === "browser" && page && browserFits ? "browser" : !wide ? null : panelState === "agents" && hasAgents ? "agents" : panelState === "models" ? "models" : null;
   const agentsOpen = showing === "agents";
@@ -120,10 +127,20 @@ export function SessionView({
     },
     [panelKey, browserFits, openBrowser],
   );
+  // Closing destroys the page (and its webview) but remembers where it was: the globe reopens it.
   const onCloseBrowser = () => {
     if (!panelKey) return;
+    const at = useBrowserState.getState().byKey[panelKey]?.url;
     closeNative(panelKey);
-    closeBrowser(panelKey);
+    closeBrowser(panelKey, at);
+  };
+  const pageName = (p: typeof page | typeof lastPage) => (!p || p.kind === "start" ? null : p.kind === "web" ? p.url.replace(/^https?:\/\//, "") : p.info.title);
+  const onGlobe = () => {
+    if (!panelKey) return;
+    if (browserOpen) return setRightPanel(panelKey, "closed");
+    if (!browserFits) return useStore.getState().toast("Make this pane wider to open the browser beside the chat");
+    if (page) return setRightPanel(panelKey, "browser");
+    openBrowser(panelKey, lastPage ? (lastPage.kind === "web" ? { kind: "web", url: lastPage.url } : lastPage) : { kind: "start" });
   };
 
   const { session, pty, starting, startingChat } = r;
@@ -234,8 +251,8 @@ export function SessionView({
             Resume
           </Button>
         )}
-        {page && browserFits && panelKey && (
-          <IconButton title={browserOpen ? "Hide the browser" : `Show the browser (${page.kind === "web" ? page.url.replace(/^https?:\/\//, "") : page.info.title})`} active={browserOpen} onClick={() => toggleRight("browser")}>
+        {panelKey && (
+          <IconButton title={browserOpen ? "Hide the browser" : `Show the browser${pageName(page ?? lastPage) ? ` (${pageName(page ?? lastPage)})` : ""}`} active={browserOpen} onClick={onGlobe}>
             <IGlobe size={15} />
           </IconButton>
         )}
@@ -297,7 +314,7 @@ export function SessionView({
               k === "agents" ? (
                 <AgentsBody cards={cards} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
               ) : k === "browser" ? (
-                page ? <BrowserPanel panelKey={panelKey} page={page} active={active} onClose={onCloseBrowser} /> : null
+                page ? <BrowserPanel panelKey={panelKey} page={page} active={active} onClose={onCloseBrowser} recent={recent} /> : null
               ) : (
                 <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} />
               )

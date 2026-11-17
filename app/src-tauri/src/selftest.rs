@@ -132,10 +132,12 @@ pub fn selftest_log(core: State<'_, Arc<Core>>, line: String) -> Result<(), Stri
 /// recorded, even when other windows overlap it: nothing else on the screen
 /// can end up in a screenshot.
 #[tauri::command(async)]
-pub fn selftest_shot(app: AppHandle, core: State<'_, Arc<Core>>, name: String) -> Result<String, String> {
+pub fn selftest_shot(app: AppHandle, core: State<'_, Arc<Core>>, name: String, window: Option<String>) -> Result<String, String> {
     let t = active(&core)?;
     let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' }).collect();
-    let w = app.get_window("main").ok_or("no window")?;
+    // The main window, or one of the in-app browser's pop-ups.
+    let label = window.filter(|l| l.starts_with(crate::browser::POPUP_PREFIX)).unwrap_or_else(|| "main".into());
+    let w = app.get_window(&label).ok_or("no window")?;
     let wid = window_number(&w).ok_or("no window id")?;
     let path = t.shots.join(format!("real-{name}.png"));
     let _ = std::fs::remove_file(&path);
@@ -196,33 +198,37 @@ pub fn selftest_probe_server(core: State<'_, Arc<Core>>) -> Result<String, Strin
     let port = l.local_addr().map_err(|e| e.to_string())?.port();
     std::thread::spawn(move || {
         for s in l.incoming().flatten() {
-            let Ok(c) = s.try_clone() else { continue };
-            let mut r = BufReader::new(c);
-            let mut first = String::new();
-            if r.read_line(&mut first).is_err() {
-                continue;
-            }
-            let mut len = 0usize;
-            loop {
-                let mut h = String::new();
-                if r.read_line(&mut h).is_err() || h.trim().is_empty() {
-                    break;
+            // A connection each: WebKit opens speculative connections that send nothing, which would stall the rest.
+            std::thread::spawn(move || {
+                let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+                let Ok(c) = s.try_clone() else { return };
+                let mut r = BufReader::new(c);
+                let mut first = String::new();
+                if r.read_line(&mut first).is_err() {
+                    return;
                 }
-                if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
-                    len = v.trim().parse().unwrap_or(0);
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).is_err() || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
                 }
-            }
-            let mut out = s;
-            if first.starts_with("POST /result") {
-                let mut body = vec![0; len.min(64 * 1024)];
-                let _ = r.read_exact(&mut body);
-                PROBE.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
-                let _ = out.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            } else if first.starts_with("GET /probe") {
-                let _ = write!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{BROWSER_PROBE}", BROWSER_PROBE.len());
-            } else {
-                let _ = out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            }
+                let mut out = s;
+                if first.starts_with("POST /result") {
+                    let mut body = vec![0; len.min(64 * 1024)];
+                    let _ = r.read_exact(&mut body);
+                    PROBE.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
+                    let _ = out.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                } else if let Some(page) = [("GET /probe", BROWSER_PROBE), ("GET /opener", POPUP_OPENER), ("GET /popup", POPUP_PAGE)].iter().find(|(p, _)| first.starts_with(p)).map(|(_, b)| b.replace("/*IPC_PROBE*/", IPC_PROBE)) {
+                    let _ = write!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+                } else {
+                    let _ = out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+            });
         }
     });
     Ok(format!("http://127.0.0.1:{port}/probe"))
@@ -292,25 +298,10 @@ const BROWSER_PROBE: &str = r#"<!doctype html><html><head><meta charset="utf-8">
 <style>body{font:16px -apple-system,sans-serif;padding:24px;background:#fff;color:#111}pre{white-space:pre-wrap;font-size:12px}</style></head>
 <body><h1>In-app browser probe</h1><pre id="out">running…</pre>
 <script>
+/*IPC_PROBE*/
 (async () => {
   const post = (o) => fetch("/result", { method: "POST", body: JSON.stringify(o) }).catch(() => {});
-  const I = window.__TAURI_INTERNALS__;
-  const tryInvoke = async (cmd, args) => {
-    if (!I || typeof I.invoke !== "function") return "no invoke";
-    try {
-      await Promise.race([I.invoke(cmd, args || {}), new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 4000))]);
-      return "ALLOWED";
-    } catch (e) { return "refused: " + String((e && e.message) || e).slice(0, 160); }
-  };
-  const r = { step: "ipc", origin: location.origin, internals: typeof I, tauri: typeof window.__TAURI__ };
-  r.selftestLog = await tryInvoke("selftest_log", { line: "BROWSER-IPC-REACHED" });
-  r.listSessions = await tryInvoke("list_sessions");
-  r.windowPlugin = await tryInvoke("plugin:window|is_maximized", { label: "main" });
-  r.eventListen = await tryInvoke("plugin:event|listen", { event: "sessions", target: { kind: "Any" }, handler: 1 });
-  try {
-    const res = await fetch("ipc://localhost/selftest_log", { method: "POST", body: JSON.stringify({ line: "BROWSER-IPC-FETCH-REACHED" }), headers: { "Content-Type": "application/json", "Tauri-Callback": "1", "Tauri-Error": "2" } });
-    r.ipcFetch = res.status;
-  } catch (e) { r.ipcFetch = "error"; }
+  const r = await ipcProbe("ipc");
   document.getElementById("out").textContent = JSON.stringify(r, null, 1);
   await post(r);
   const app = new URLSearchParams(location.search).get("app") || "";
@@ -323,6 +314,114 @@ const BROWSER_PROBE: &str = r#"<!doctype html><html><head><meta charset="utf-8">
   await post({ step: "done" });
 })();
 </script></body></html>"#;
+
+/// Tries coool's IPC every way a page could (Tauri's internals, a plugin, the event system, a raw `ipc://` fetch);
+/// `ipcProbe(step)` resolves to what happened to each. Spliced into the probe pages at `/*IPC_PROBE*/`.
+const IPC_PROBE: &str = r#"async function ipcProbe(step) {
+  const I = window.__TAURI_INTERNALS__;
+  const tryInvoke = async (cmd, args) => {
+    if (!I || typeof I.invoke !== "function") return "no invoke";
+    try {
+      await Promise.race([I.invoke(cmd, args || {}), new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 4000))]);
+      return "ALLOWED";
+    } catch (e) { return "refused: " + String((e && e.message) || e).slice(0, 160); }
+  };
+  const r = { step, origin: location.origin, internals: typeof I, tauri: typeof window.__TAURI__ };
+  r.selftestLog = await tryInvoke("selftest_log", { line: "BROWSER-IPC-REACHED from " + step });
+  r.listSessions = await tryInvoke("list_sessions");
+  r.windowPlugin = await tryInvoke("plugin:window|is_maximized", { label: "main" });
+  r.eventListen = await tryInvoke("plugin:event|listen", { event: "sessions", target: { kind: "Any" }, handler: 1 });
+  try {
+    const res = await fetch("ipc://localhost/selftest_log", { method: "POST", body: JSON.stringify({ line: "BROWSER-IPC-FETCH-REACHED from " + step }), headers: { "Content-Type": "application/json", "Tauri-Callback": "1", "Tauri-Error": "2" } });
+    r.ipcFetch = res.status;
+  } catch (e) { r.ipcFetch = "error"; }
+  return r;
+}"#;
+
+/// Loaded in the in-app browser: its button opens [`POPUP_PAGE`] with `window.open` (as Google's sign-in does) and
+/// the page reports through its own title, which the panel shows (no IPC needed): `Opener got: <message>` when the
+/// pop-up posts to it, then `…, pop-up closed` once the pop-up has closed itself.
+const POPUP_OPENER: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Opener ready</title>
+<style>body{font:16px -apple-system,sans-serif;padding:24px;background:#fff;color:#111}button{font:inherit;padding:8px 14px}</style></head>
+<body><h1>Pop-up opener</h1><button id="open">Continue with the probe</button><p id="out"></p>
+<script>
+let popup = null, got = null;
+const say = (t) => { document.title = t; document.getElementById("out").textContent = t; };
+document.getElementById("open").addEventListener("click", () => {
+  popup = window.open("/popup" + location.search, "coool-signin", "width=480,height=600");
+  say(popup ? "Opener opened a pop-up" : "Opener: pop-up blocked");
+});
+window.addEventListener("message", (e) => {
+  got = e.source === popup && e.origin === location.origin ? String(e.data) : "foreign " + e.origin;
+  say("Opener got: " + got);
+  const t = setInterval(() => { if (popup && popup.closed) { clearInterval(t); say("Opener got: " + got + ", pop-up closed"); } }, 200);
+});
+</script></body></html>"#;
+
+/// The pop-up: reports what it sees (its opener, user agent, IPC) to the probe server, holds a moment for a
+/// screenshot, posts "hi" to its opener and closes itself, as a sign-in pop-up does (`?stay`: stays open).
+const POPUP_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Sign-in pop-up probe</title>
+<style>body{font:16px -apple-system,sans-serif;padding:24px;background:#fff;color:#111}pre{white-space:pre-wrap;font-size:12px}</style></head>
+<body><h1>Sign-in pop-up probe</h1><pre id="out">running…</pre>
+<script>
+/*IPC_PROBE*/
+(async () => {
+  const post = (o) => fetch("/result", { method: "POST", body: JSON.stringify(o) }).catch(() => {});
+  const r = await ipcProbe("popup-ipc");
+  r.hasOpener = !!window.opener;
+  r.userAgent = navigator.userAgent;
+  r.size = [window.innerWidth, window.innerHeight];
+  document.getElementById("out").textContent = JSON.stringify(r, null, 1);
+  await post(r);
+  await new Promise((res) => setTimeout(res, 3000));
+  if (window.opener) window.opener.postMessage("hi", "*");
+  await post({ step: "popup-posted", hasOpener: !!window.opener });
+  if (new URLSearchParams(location.search).has("stay")) return;
+  await new Promise((res) => setTimeout(res, 300));
+  window.close();
+})();
+</script></body></html>"#;
+
+#[derive(Serialize)]
+pub struct PopupProbe {
+    label: String,
+    opener: String,
+    title: String,
+    /// Outer frame, logical points: [x, y, w, h].
+    frame: Option<[f64; 4]>,
+    visible: bool,
+}
+
+/// The in-app browser's open pop-up windows.
+#[tauri::command]
+pub fn selftest_popups(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<Vec<PopupProbe>, String> {
+    active(&core)?;
+    let popups = core.browsers.popups.lock().unwrap().clone();
+    Ok(popups
+        .into_iter()
+        .filter_map(|(label, opener)| {
+            let w = app.get_webview_window(&label)?;
+            let scale = w.scale_factor().unwrap_or(1.0);
+            let frame = (|| {
+                let p = w.outer_position().ok()?.to_logical::<f64>(scale);
+                let s = w.outer_size().ok()?.to_logical::<f64>(scale);
+                Some([p.x, p.y, s.width, s.height])
+            })();
+            Some(PopupProbe { title: w.title().unwrap_or_default(), visible: w.is_visible().unwrap_or(false), frame, label, opener })
+        })
+        .collect())
+}
+
+/// Runs `js` in a browser webview as the app does when it evaluates script: WebKit treats it as a user gesture, so a
+/// probe page's `click()` may open a pop-up (pages may not open one on their own).
+#[tauri::command]
+pub fn selftest_browser_eval(app: AppHandle, core: State<'_, Arc<Core>>, id: String, js: String) -> Result<(), String> {
+    active(&core)?;
+    if !id.starts_with(crate::browser::PREFIX) {
+        return Err("not a browser webview".into());
+    }
+    app.get_webview(&id).ok_or("no such webview")?.eval(&js).map_err(|e| e.to_string())
+}
 
 /// The same path as Cmd+Q (asks first when anything runs).
 #[tauri::command]

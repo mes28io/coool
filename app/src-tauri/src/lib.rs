@@ -1054,6 +1054,8 @@ pub fn run() {
             selftest::selftest_probe_result,
             selftest::selftest_resize,
             selftest::selftest_webview,
+            selftest::selftest_popups,
+            selftest::selftest_browser_eval,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
@@ -1077,6 +1079,13 @@ pub fn run() {
         .on_window_event(|win, ev| {
             if let WindowEvent::Focused(f) = ev {
                 win.state::<Arc<Core>>().usage.set_active(*f);
+            }
+            // The rest is the main window's: pop-ups of the in-app browser (browser.rs) close freely.
+            if win.label() != "main" {
+                return;
+            }
+            if let WindowEvent::Destroyed = ev {
+                browser::close_all_popups(win.app_handle());
             }
             if let WindowEvent::CloseRequested { api, .. } = ev {
                 let core = win.state::<Arc<Core>>();
