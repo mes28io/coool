@@ -1,6 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion } from "motion/react";
-import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
+import { BrowserContext, closeNative, type OpenPage } from "../lib/browser";
+import { BrowserPanel } from "./BrowserPanel";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
@@ -8,7 +10,7 @@ import { chatModels, chatTitle, pendingPermission, useChats } from "../lib/chat"
 import { displayTitle, folderName } from "../lib/format";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
-import { resolveTarget, useStore, type Target, type ViewMode } from "../store";
+import { BROWSER_CHAT_MIN, BROWSER_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
 import { liveTime, Timeline, ThinkingRow } from "./Activity";
 import { AgentsButton } from "./AgentsButton";
 import { AgentsBody } from "./AgentsPanel";
@@ -16,7 +18,7 @@ import { RightPanel, type RightKind } from "./RightPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IPlay, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IGlobe, IPlay, ITerminal } from "./icons";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
@@ -65,14 +67,17 @@ export function SessionView({
 
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
-  const [wide, setWide] = useState(false);
+  const [paneW, setPaneW] = useState(0);
   useLayoutEffect(() => {
     if (!root) return;
-    const ro = new ResizeObserver(() => setWide(root.clientWidth >= 900));
+    const ro = new ResizeObserver(() => setPaneW(root.clientWidth));
     ro.observe(root);
-    setWide(root.clientWidth >= 900);
+    setPaneW(root.clientWidth);
     return () => ro.disconnect();
   }, [root]);
+  const wide = paneW >= 900;
+  // The browser panel fits a narrower pane: it only needs room for itself and a readable chat beside it.
+  const browserFits = paneW >= BROWSER_MIN + BROWSER_CHAT_MIN;
   const cards = useAgentCards(r.session, chat);
   const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
   const panelState = useStore((st) => (panelKey ? st.rightPanel[panelKey] : undefined));
@@ -90,10 +95,36 @@ export function SessionView({
   }, [panelKey, wide, liveCards, panelState, setRightPanel]);
   const hasAgents = cards.length > 0 || shells.length > 0;
   const panelOn = wide && hasAgents;
-  const showing: RightKind | null = !wide ? null : panelState === "agents" && hasAgents ? "agents" : panelState === "models" ? "models" : null;
+  const page = useStore((st) => (panelKey ? st.browser[panelKey] : undefined));
+  const browserWidth = useStore((st) => st.browserWidth);
+  const setBrowserWidth = useStore((st) => st.setBrowserWidth);
+  const openBrowser = useStore((st) => st.openBrowser);
+  const closeBrowser = useStore((st) => st.closeBrowser);
+  const showing: RightKind | null =
+    panelState === "browser" && page && browserFits ? "browser" : !wide ? null : panelState === "agents" && hasAgents ? "agents" : panelState === "models" ? "models" : null;
   const agentsOpen = showing === "agents";
   const modelsOpen = showing === "models";
+  const browserOpen = showing === "browser";
   const toggleRight = (k: RightKind) => panelKey && setRightPanel(panelKey, showing === k ? "closed" : k);
+  const panelWidth = (k: RightKind) => (k === "browser" ? Math.max(BROWSER_MIN, Math.min(browserWidth, paneW - BROWSER_CHAT_MIN)) : agentsWidth);
+  const onPanelWidth = (k: RightKind, w: number) => (k === "browser" ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN)) : setAgentsWidth(w));
+  // Artifact cards and links in this view open in its browser panel.
+  const openPage = useCallback(
+    (p: OpenPage) => {
+      if (!panelKey) return;
+      if (!browserFits) {
+        useStore.getState().toast("Make this pane wider to open the page beside the chat");
+        return;
+      }
+      openBrowser(panelKey, p);
+    },
+    [panelKey, browserFits, openBrowser],
+  );
+  const onCloseBrowser = () => {
+    if (!panelKey) return;
+    closeNative(panelKey);
+    closeBrowser(panelKey);
+  };
 
   const { session, pty, starting, startingChat } = r;
   const isChat = r.chat !== null;
@@ -163,6 +194,7 @@ export function SessionView({
   };
 
   return (
+    <BrowserContext.Provider value={openPage}>
     <div ref={setRoot} className="flex h-full min-w-0 flex-col">
       {/* header */}
       <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[48px] px-3" : "h-[52px] px-4")}>
@@ -201,6 +233,11 @@ export function SessionView({
             <IPlay size={14} />
             Resume
           </Button>
+        )}
+        {page && browserFits && panelKey && (
+          <IconButton title={browserOpen ? "Hide the browser" : `Show the browser (${page.kind === "web" ? page.url.replace(/^https?:\/\//, "") : page.info.title})`} active={browserOpen} onClick={() => toggleRight("browser")}>
+            <IGlobe size={15} />
+          </IconButton>
         )}
         {panelOn && panelKey && <AgentsButton cards={cards} shells={shells.length} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
         {onClosePane && (
@@ -254,11 +291,13 @@ export function SessionView({
             <ExternalNotice session={session!} leaf={leaf} compact={compact} />
           ) : null}
         </div>
-        {wide && panelKey && (
-          <RightPanel which={showing} width={agentsWidth} dragging={resizing} onWidth={setAgentsWidth} onDragging={setResizing} onClose={() => setRightPanel(panelKey, "closed")}>
-            {(k) =>
+        {(wide || browserFits) && panelKey && (
+          <RightPanel which={showing} width={panelWidth} dragging={resizing} onWidth={onPanelWidth} onDragging={setResizing} onClose={() => setRightPanel(panelKey, "closed")}>
+            {(k, active) =>
               k === "agents" ? (
                 <AgentsBody cards={cards} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
+              ) : k === "browser" ? (
+                page ? <BrowserPanel panelKey={panelKey} page={page} active={active} onClose={onCloseBrowser} /> : null
               ) : (
                 <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} />
               )
@@ -267,6 +306,7 @@ export function SessionView({
         )}
       </div>
     </div>
+    </BrowserContext.Provider>
   );
 }
 

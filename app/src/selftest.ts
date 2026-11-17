@@ -6,7 +6,8 @@
 //
 // Scenarios (COOOL_SELFTEST=all, or a comma list): stream, approval, interrupt,
 // model, slash, question, steer, markdown, resume, codex, insights, quit, and `perf` (CPU phases; not in `all`),
-// `artifact` (preview sandbox; no model calls).
+// `artifact` (preview sandbox in the browser panel; no model calls), `browser` (artifact, then the in-app browser's
+// native webview: layout tracking, hiding, IPC isolation; needs the network for example.com; no model calls).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { newChat } from "./lib/actions";
@@ -15,7 +16,8 @@ import { chatNeeds, useChats, type Chat, type ChatItem } from "./lib/chat";
 import type { ArtifactInfo, ChatEvent } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { decideMotion, setMotionPref, type MotionHints, type MotionPref } from "./lib/motion";
-import { useStore } from "./store";
+import { resolveTarget, useStore } from "./store";
+import { nativeId, useBrowserState } from "./lib/browser";
 
 interface Config {
   scenario: string;
@@ -164,10 +166,182 @@ async function ensureMain(ctx: Ctx): Promise<number> {
   return ctx.main;
 }
 
+/** The right-panel key of the active pane (as SessionView computes it). */
+function activePanelKey(): string | null {
+  const st = useStore.getState();
+  const tab = st.tabs.find((t) => t.id === st.activeTab);
+  const leaf = tab && (tab.root.type === "leaf" ? tab.root : null);
+  if (!leaf?.target) return null;
+  const r = resolveTarget(leaf.target, st);
+  return r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
+}
+
+/** A chat on screen (no prompt: nothing reaches a model) whose browser panel the browser scenarios use. */
+async function browserHost(ctx: Ctx): Promise<string> {
+  await ensureMain(ctx);
+  await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+  await sleep(1500); // let the chat link to its session, so the panel key settles
+  return waitFor("the pane's panel key", activePanelKey, 10_000);
+}
+
+interface WebviewProbe {
+  asked: [boolean, [number, number, number, number]] | null;
+  hidden: boolean | null;
+  frame: [number, number, number, number] | null;
+}
+const webview = (id: string) => invoke("selftest_webview", { id }) as Promise<WebviewProbe>;
+/** The native view's frame against the spot in the panel it should cover (CSS px, ±2). */
+async function tracks(id: string): Promise<string | null> {
+  const el = $("[data-browser-native]");
+  if (!el) return "no native host in the panel";
+  const r = el.getBoundingClientRect();
+  const w = await webview(id);
+  if (w.hidden !== false) return `webview hidden=${w.hidden}`;
+  if (!w.frame) return "no frame";
+  const want = [r.left, r.top, r.width, r.height];
+  const off = w.frame.map((v, i) => Math.abs(v - want[i]));
+  return off.some((d) => d > 2) ? `frame ${w.frame.map(Math.round).join(",")} vs panel ${want.map(Math.round).join(",")}` : null;
+}
+
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
-  /** Artifact preview: the page loads in its sandboxed frame with its supporting file, and reaches nothing of coool's. */
-  async artifact() {
+  /**
+   * The browser panel: an artifact preview, then https://example.com in the native child webview, which follows the
+   * panel through a window resize and a panel resize, hides under the palette, when the panel switches kind, and on
+   * another tab; a local probe page (a remote origin) can't reach coool's IPC or navigate anywhere but http(s); close.
+   * Needs the network (example.com); no model calls.
+   */
+  async browser(ctx) {
+    await scenarios.artifact(ctx);
+    const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+    const st = () => useStore.getState();
+    const state = () => useBrowserState.getState().byKey[key];
+    let id = "";
+    await step("a web page opens in the panel's native webview, laid over the panel", async () => {
+      st().openBrowser(key, { kind: "web", url: "https://example.com" });
+      id = await waitFor("the webview", () => nativeId(key), 10_000);
+      await waitFor("the page title", () => /Example Domain/.test(state()?.title ?? ""), 30_000);
+      await sleep(900);
+      await shot("browser-web");
+      const bad = await tracks(id);
+      if (bad) throw new Fail(bad);
+      const title = $("[data-browser-title]")?.textContent;
+      if (!/Example Domain/.test(title ?? "")) throw new Fail(`panel title ${title}`);
+      return `${id}: ${state()?.url}`;
+    });
+    await step("it tracks the panel when the window resizes", async () => {
+      await invoke("selftest_resize", { width: 1180, height: 760 });
+      await sleep(1500);
+      await shot("browser-resized");
+      const bad = await tracks(id);
+      await invoke("selftest_resize", { width: 1440, height: 900 });
+      await sleep(1200);
+      if (bad) throw new Fail(bad);
+      const back = await tracks(id);
+      if (back) throw new Fail(`after resizing back: ${back}`);
+    });
+    await step("it tracks the panel's own width (remembered)", async () => {
+      const before = st().browserWidth;
+      st().setBrowserWidth(760);
+      await sleep(1000);
+      const bad = await tracks(id);
+      const saved = localStorage.getItem("coool.browserWidth");
+      st().setBrowserWidth(before);
+      await sleep(800);
+      if (bad) throw new Fail(bad);
+      if (saved !== "760") throw new Fail(`width saved as ${saved}`);
+    });
+    await step("it hides under the palette and comes back", async () => {
+      st().setPalette(true);
+      await sleep(500);
+      const under = await webview(id);
+      await shot("browser-palette");
+      st().setPalette(false);
+      await sleep(800);
+      if (under.hidden !== true) throw new Fail(`under the palette hidden=${under.hidden}`);
+      const bad = await tracks(id);
+      if (bad) throw new Fail(`after the palette: ${bad}`);
+    });
+    await step("switching the panel to Models / Jobs hides it; the header globe brings it back", async () => {
+      st().setRightPanel(key, "models");
+      await sleep(900);
+      const models = await webview(id);
+      await shot("browser-switched-models");
+      // Jobs: the chat has none, so asking for it closes the panel; the webview hides the same way.
+      st().setRightPanel(key, "agents");
+      await sleep(900);
+      const jobs = await webview(id);
+      if (models.hidden !== true) throw new Fail(`with Models showing hidden=${models.hidden}`);
+      if (jobs.hidden !== true) throw new Fail(`with Jobs asked for hidden=${jobs.hidden}`);
+      const globe = ([...document.querySelectorAll("button")] as HTMLElement[]).find((b) => /Show the browser/.test(b.title));
+      if (!globe) throw new Fail("no header button to show the browser again");
+      globe.click();
+      await sleep(1200);
+      const bad = await tracks(id);
+      if (bad) throw new Fail(`after showing it again: ${bad}`);
+    });
+    await step("another tab hides it; coming back shows it", async () => {
+      const tab = st().activeTab;
+      st().activate(null);
+      await sleep(900);
+      const home = await webview(id);
+      await shot("browser-home");
+      st().activate(tab);
+      await sleep(1500);
+      if (home.hidden !== true) throw new Fail(`on Home hidden=${home.hidden}`);
+      const bad = await tracks(id);
+      if (bad) throw new Fail(`back on the tab: ${bad}`);
+    });
+    await step("only http(s) pages load: other schemes are refused", async () => {
+      const refused: string[] = [];
+      for (const u of ["file:///etc/hosts", "javascript:alert(1)", "coool-artifact://localhost/x/y.html", "tauri://localhost/", location.origin + "/"]) {
+        const ok = await invoke("browser_navigate", { id, url: u }).then(
+          () => true,
+          () => false,
+        );
+        if (ok) refused.push(`navigated to ${u}`);
+      }
+      if (refused.length) throw new Fail(refused.join("; "));
+    });
+    await step("a remote page in it reaches none of coool's IPC and can't navigate out of http(s)", async () => {
+      const url = (await invoke("selftest_probe_server")) as string;
+      st().openBrowser(key, { kind: "web", url: `${url}?app=${encodeURIComponent(location.origin + "/")}` });
+      const end = Date.now() + 40_000;
+      let got: Record<string, unknown>[] = [];
+      while (Date.now() < end) {
+        got = ((await invoke("selftest_probe_result")) as string[]).map((s) => JSON.parse(s) as Record<string, unknown>);
+        if (got.some((g) => g.step === "done")) break;
+        await sleep(500);
+      }
+      await shot("browser-probe");
+      const ipc = got.find((g) => g.step === "ipc");
+      if (!ipc) throw new Fail(`no probe result (${JSON.stringify(got)})`);
+      const bad: string[] = [];
+      for (const k of ["selftestLog", "listSessions", "windowPlugin", "eventListen"]) {
+        const v = String(ipc[k]);
+        if (!/^refused|^no invoke/.test(v)) bad.push(`${k}: ${v}`);
+      }
+      if (ipc.ipcFetch === 200) bad.push("raw ipc:// fetch answered 200");
+      for (const g of got.filter((g) => g.tried)) if (!String(g.href).startsWith(url)) bad.push(`${g.step}: ended up at ${g.href}`);
+      if (!got.some((g) => g.step === "done")) bad.push("the probe never finished");
+      if (bad.length) throw new Fail(`${bad.join("; ")} (${JSON.stringify(got)})`);
+      return JSON.stringify(got);
+    });
+    await step("the panel's close button closes the webview", async () => {
+      const close = ([...document.querySelectorAll("[data-browser-panel] button")] as HTMLElement[]).find((b) => b.title === "Close");
+      if (!close) throw new Fail("no close button");
+      close.click();
+      await sleep(900);
+      const w = await webview(id);
+      await shot("browser-closed");
+      if (w.frame || w.hidden !== null) throw new Fail(`still there: ${JSON.stringify(w)}`);
+      if (st().browser[key]) throw new Fail("the panel still has a page");
+      if ($("[data-right-panel]")?.dataset.rightPanel !== "closed") throw new Fail(`panel ${$("[data-right-panel]")?.dataset.rightPanel}`);
+    });
+  },
+  /** Artifact preview: the page loads in the browser panel's sandboxed frame with its supporting file, and reaches nothing of coool's. */
+  async artifact(ctx) {
     await step("an artifact previews in a sandboxed frame without coool's IPC", async () => {
+      const key = await browserHost(ctx);
       const info = (await invoke("selftest_artifact")) as ArtifactInfo;
       const probe = new Promise<Record<string, unknown>>((res) => {
         const on = (e: MessageEvent) => {
@@ -178,13 +352,15 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         };
         window.addEventListener("message", on);
       });
-      useStore.getState().setSheet({ kind: "artifact", info, versions: 1 });
+      useStore.getState().openBrowser(key, { kind: "artifact", info, versions: 1 });
       const r = await Promise.race([probe, sleep(15_000).then(() => null)]);
       if (!r) throw new Fail("the frame sent no probe result");
       const frame = document.querySelector<HTMLIFrameElement>("[data-artifact-frame]");
       await shot("artifact-preview");
-      useStore.getState().setSheet(null);
       const bad: string[] = [];
+      const panel = $("[data-right-panel]");
+      if (panel?.dataset.rightPanel !== "browser") bad.push(`right panel ${panel?.dataset.rightPanel}`);
+      else if (panel.getBoundingClientRect().width <= 440) bad.push(`browser panel only ${panel.getBoundingClientRect().width}px wide`);
       if (frame?.getAttribute("sandbox") !== "allow-scripts") bad.push(`sandbox=${frame?.getAttribute("sandbox")}`);
       if (r.internals !== "undefined") bad.push(`__TAURI_INTERNALS__ ${r.internals}`);
       if (r.tauri !== "undefined") bad.push(`__TAURI__ ${r.tauri}`);

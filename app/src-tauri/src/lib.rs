@@ -10,6 +10,7 @@
 //! See docs/APP_SPEC.md ("Backend contract") and docs/CHAT_SPEC.md.
 
 mod artifact;
+mod browser;
 mod env;
 mod motion;
 mod selftest;
@@ -75,6 +76,8 @@ struct Core {
     trace: Option<trace::Trace>,
     /// Artifact previews (see [`artifact`]).
     previews: artifact::Previews,
+    /// The in-app browser's child webviews (see [`browser`]).
+    browsers: browser::Browsers,
 }
 
 /// The last payload the UI got, per session, so the next refresh sends only
@@ -990,6 +993,7 @@ pub fn run() {
         show_automation: AtomicBool::new(prefs.show_automation),
         trace: trace::Trace::from_env(),
         previews: artifact::Previews::default(),
+        browsers: browser::Browsers::default(),
     });
 
     let app = tauri::Builder::default()
@@ -1039,11 +1043,24 @@ pub fn run() {
             artifact::artifact_status,
             artifact::artifact_preview,
             artifact::selftest_artifact,
+            browser::browser_open,
+            browser::browser_bounds,
+            browser::browser_navigate,
+            browser::browser_go,
+            browser::browser_poll,
+            browser::browser_close,
+            browser::browser_open_external,
+            selftest::selftest_probe_server,
+            selftest::selftest_probe_result,
+            selftest::selftest_resize,
+            selftest::selftest_webview,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
             let handle = app.handle().clone();
             let c = app.state::<Arc<Core>>().inner().clone();
+            // The dev server serves the app itself in `tauri dev`: never a page for the in-app browser.
+            c.browsers.set_app_origin(if tauri::is_dev() { app.config().build.dev_url.as_ref() } else { None });
             if let Some(t) = &c.selftest {
                 t.prepare_window(&handle);
             }

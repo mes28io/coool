@@ -123,6 +123,10 @@ export const IGauge = mk(
     <path d="M4.2 7.2l.6.6M8 4.6v.8M11.8 7.2l-.6.6" />
   </>,
 );
+export const IBack = mk(<path d="M12.5 8h-9M7.5 4l-4 4 4 4" />);
+export const IForward = mk(<path d="M3.5 8h9M8.5 4l4 4-4 4" />);
+/** Open elsewhere (the system browser). */
+export const IExternal = mk(<path d="M9.25 2.75h4v4M13.25 2.75L7.5 8.5M11.75 9.25v2.5a1.5 1.5 0 01-1.5 1.5h-6a1.5 1.5 0 01-1.5-1.5v-6a1.5 1.5 0 011.5-1.5h2.5" />);
 export const IRefresh = mk(<path d="M13 3.5v3h-3M3 12.5v-3h3M12.4 6.5A4.75 4.75 0 004.2 5M3.6 9.5a4.75 4.75 0 008.2 1.5" />);
 
 /** The subagent mark (a cube), static, in the parent's colour. Takes the same props as the stroke icons. */

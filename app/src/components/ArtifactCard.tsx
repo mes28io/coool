@@ -1,14 +1,13 @@
 // Claude Code artifacts: pages a session published to claude.ai with its Artifact tool.
-// A card in the timeline (the newest version; earlier publishes of the same page fold into it), and a large sheet
-// that previews the local copy in a sandboxed frame. The sheet rather than the right panel: the panel tops out at
-// 440px and only shows in panes at least 900px wide, too small to read a page in.
+// A card in the timeline (the newest version; earlier publishes of the same page fold into it). Preview shows the
+// local copy, Open the claude.ai page, both in the session's browser panel beside the chat (BrowserPanel.tsx).
 
 import { createElement, useEffect, useState, type ComponentType } from "react";
 import { api } from "../lib/backend";
+import { useOpenPage } from "../lib/browser";
 import type { ArtifactInfo } from "../lib/types";
-import { useStore } from "../store";
-import { IActivity, IClose, IFile, IGear, IGlobe, IList, ISpark, ITerminal } from "./icons";
-import { Button, cx } from "./primitives";
+import { IActivity, IFile, IGear, IGlobe, IList, ISpark, ITerminal } from "./icons";
+import { Button } from "./primitives";
 
 type Icon = ComponentType<{ size?: number; className?: string }>;
 const ICONS: [RegExp, Icon][] = [
@@ -70,7 +69,7 @@ function useAvailable(a: ArtifactInfo): boolean | null {
 }
 
 export function ArtifactCard({ info, versions }: { info: ArtifactInfo; versions: number }) {
-  const setSheet = useStore((s) => s.setSheet);
+  const open = useOpenPage();
   const available = useAvailable(info);
   const gone = available === false;
   return (
@@ -106,72 +105,15 @@ export function ArtifactCard({ info, versions }: { info: ArtifactInfo; versions:
         variant="outline"
         className="h-[30px] px-2.5"
         disabled={available !== true}
-        title={gone ? "The local copy is gone (scratch folders get cleaned); Open still works" : "Preview the page here"}
-        onClick={() => setSheet({ kind: "artifact", info, versions })}
+        title={gone ? "The local copy is gone (scratch folders get cleaned); Open still works" : "Preview the local copy beside the chat"}
+        onClick={() => open({ kind: "artifact", info, versions })}
         data-artifact-preview
       >
         Preview
       </Button>
-      <Button variant="ghost" className="h-[30px] px-2.5" title={`Open ${info.url} in the browser`} onClick={() => void api().openArtifact(info.url)} data-artifact-open>
+      <Button variant="ghost" className="h-[30px] px-2.5" title={`Open ${info.url} beside the chat`} onClick={() => open({ kind: "web", url: info.url })} data-artifact-open>
         Open
-        <span aria-hidden className="text-faint">
-          ↗
-        </span>
       </Button>
-    </div>
-  );
-}
-
-/** The page's local copy in a sandboxed frame: scripts run, but no same-origin, no top navigation, no popups, no IPC. */
-export function ArtifactSheet({ info, versions, close }: { info: ArtifactInfo; versions: number; close: () => void }) {
-  const [src, setSrc] = useState<string | null | undefined>(undefined);
-  useEffect(() => {
-    let live = true;
-    api()
-      .artifactPreview(info.url)
-      .then((r) => live && setSrc(r.src))
-      .catch(() => live && setSrc(null));
-    return () => {
-      live = false;
-    };
-  }, [info.url, info.version]);
-  return (
-    <div className="flex h-full flex-col" data-artifact-sheet={info.url}>
-      <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-hairline pl-4 pr-2">
-        {createElement(artifactIcon(info.icon), { size: 16, className: "shrink-0 text-dim" })}
-        <span className="min-w-0 truncate text-base font-medium text-fg">{info.title}</span>
-        <span className="tnum shrink-0 text-small text-faint">
-          {info.version != null && `v${info.version}`}
-          {versions > 1 && ` · ${versions} versions`}
-          {" · "}
-          {host(info.url)}
-        </span>
-        <span className="flex-1" />
-        <Button variant="ghost" className="h-[30px] px-2.5" title={`Open ${info.url} in the browser`} onClick={() => void api().openArtifact(info.url)}>
-          Open
-          <span aria-hidden className="text-faint">
-            ↗
-          </span>
-        </Button>
-        <button type="button" onClick={close} title="Close (Esc)" aria-label="Close" className="flex size-[30px] items-center justify-center rounded-[8px] text-dim transition-colors duration-150 hover:bg-hover hover:text-fg">
-          <IClose size={16} />
-        </button>
-      </div>
-      <div className={cx("relative min-h-0 flex-1", src ? "bg-white" : "bg-panel")}>
-        {src ? (
-          <iframe
-            title={info.title}
-            src={src}
-            sandbox="allow-scripts"
-            referrerPolicy="no-referrer"
-            allow=""
-            className="absolute inset-0 size-full border-0"
-            data-artifact-frame
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center text-base text-dim">{src === null ? "Local copy no longer available" : "Loading…"}</div>
-        )}
-      </div>
     </div>
   );
 }

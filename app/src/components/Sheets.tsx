@@ -6,7 +6,6 @@ import { folderName, homeShort, projectOf } from "../lib/format";
 import { estimateSize } from "../lib/termlite";
 import type { Provider } from "../lib/types";
 import { useStore, type Sheet } from "../store";
-import { ArtifactSheet } from "./ArtifactCard";
 import { IFolder, ITerminal } from "./icons";
 import { Button, cx, Kbd, ProviderMark } from "./primitives";
 
@@ -19,7 +18,7 @@ export function Sheets() {
       {sheet && (
         <motion.div
           key={sheet.kind}
-          className={cx("fixed inset-0 z-50 flex items-start justify-center", sheet.kind === "artifact" ? "pt-[5vh]" : "pt-[14vh]")}
+          className="fixed inset-0 z-50 flex items-start justify-center pt-[14vh]"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0.14 } }}
@@ -31,10 +30,7 @@ export function Sheets() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.99, transition: { duration: 0.14 } }}
             transition={{ type: "spring", stiffness: 460, damping: 36 }}
-            className={cx(
-              "relative max-w-[calc(100vw-32px)] overflow-hidden rounded-[18px] border border-line bg-raised shadow-pop",
-              sheet.kind === "artifact" ? "h-[88vh] w-[1100px]" : "w-[480px]",
-            )}
+            className="relative w-[480px] max-w-[calc(100vw-32px)] overflow-hidden rounded-[18px] border border-line bg-raised shadow-pop"
             onKeyDown={(e) => e.key === "Escape" && close()}
           >
             <SheetBody sheet={sheet} close={close} />
@@ -48,7 +44,6 @@ export function Sheets() {
 function SheetBody({ sheet, close }: { sheet: NonNullable<Sheet>; close: () => void }) {
   if (sheet.kind === "new") return <NewSession initialCwd={sheet.cwd} initialProvider={sheet.provider} close={close} />;
   if (sheet.kind === "quit") return <QuitConfirm running={sheet.running} close={close} />;
-  if (sheet.kind === "artifact") return <ArtifactSheet info={sheet.info} versions={sheet.versions} close={close} />;
   return <StopConfirm label={sheet.label} managed={sheet.managed} pid={sheet.pid} chat={sheet.chat ?? null} close={close} />;
 }
 

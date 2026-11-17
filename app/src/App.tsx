@@ -1,6 +1,7 @@
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useEffect, useLayoutEffect } from "react";
 import { api } from "./lib/backend";
+import { useNativeRects } from "./lib/browser";
 import { openAgentsDemo } from "./lib/agentsDemo";
 import { rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
@@ -221,8 +222,12 @@ export default function App() {
 function Toasts() {
   const toasts = useStore((s) => s.toasts);
   const dismiss = useStore((s) => s.dismissToast);
+  // A browser panel's native webview draws over everything: toasts sit left of one that reaches the bottom right.
+  const inset = useNativeRects((s) =>
+    Object.values(s.byKey).reduce((m, b) => (b.x + b.w >= window.innerWidth - 24 && b.y + b.h >= window.innerHeight - 80 ? Math.max(m, window.innerWidth - b.x) : m), 0),
+  );
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col items-end gap-2">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col items-end gap-2" style={inset ? { right: inset + 16 } : undefined}>
       <AnimatePresence initial={false}>
         {toasts.map((t) => (
           <motion.div

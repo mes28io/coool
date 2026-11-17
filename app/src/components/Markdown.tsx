@@ -4,6 +4,7 @@
 import { Children, isValidElement, memo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useOpenPage, webUrl } from "../lib/browser";
 import { ICheck, IFile } from "./icons";
 import { cx } from "./primitives";
 
@@ -89,6 +90,29 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
+/** A link (markdown or a bare URL, which remark-gfm links): http(s) opens in the session's browser panel; nothing else opens. */
+function Link({ href, children }: { href?: string; children?: ReactNode }) {
+  const open = useOpenPage();
+  const url = webUrl(href);
+  return (
+    <a
+      href={href}
+      title={href}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => {
+        // Never navigate the app's own webview.
+        e.preventDefault();
+        if (url) open({ kind: "web", url });
+      }}
+      data-chat-link={url ?? undefined}
+      className="text-fg underline decoration-faint underline-offset-2 transition-colors hover:decoration-fg"
+    >
+      {children}
+    </a>
+  );
+}
+
 const heading = (Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6", cls: string) =>
   function H({ node: _n, ...p }: ComponentPropsWithoutRef<"h2"> & { node?: unknown }) {
     return <Tag className={cx("mb-1 mt-4 first:mt-0", cls)} {...p} />;
@@ -116,22 +140,7 @@ const components: Components = {
     ) : null,
   blockquote: ({ node: _n, ...p }) => <blockquote className="my-2 border-l-2 border-line pl-3 text-dim" {...p} />,
   hr: () => <hr className="my-3 border-0 border-t border-hairline" />,
-  a: ({ node: _n, href, children }) => (
-    <a
-      href={href}
-      title={href}
-      target="_blank"
-      rel="noreferrer"
-      onClick={(e) => {
-        // Never navigate the app's own webview.
-        e.preventDefault();
-        if (href) window.open(href, "_blank", "noreferrer");
-      }}
-      className="text-fg underline decoration-faint underline-offset-2 transition-colors hover:decoration-fg"
-    >
-      {children}
-    </a>
-  ),
+  a: ({ node: _n, href, children }) => <Link href={href}>{children}</Link>,
   // Remote images are never loaded: an image is its alt text as a link.
   img: ({ node: _n, src, alt }) => (
     <a href={src} title={src} target="_blank" rel="noreferrer" onClick={(e) => e.preventDefault()} className="text-dim underline decoration-faint underline-offset-2">

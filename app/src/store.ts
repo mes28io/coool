@@ -21,9 +21,15 @@ export type Sheet =
   | null
   | { kind: "new"; cwd?: string; provider?: Provider }
   | { kind: "quit"; running: number }
-  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null }
-  /** A Claude Code artifact's page, previewed from its local copy (components/ArtifactCard.tsx). */
-  | { kind: "artifact"; info: ArtifactInfo; versions: number };
+  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null };
+
+/** What a session's browser panel shows (components/BrowserPanel.tsx). */
+export type BrowserPage =
+  /** A Claude Code artifact's local copy, in a sandboxed frame. */
+  | { kind: "artifact"; info: ArtifactInfo; versions: number }
+  /** A web page (http/https), in the native child webview. `n` changes on every open, so opening the same URL again loads it again. */
+  | { kind: "web"; url: string; n: number };
+export type RightPanelKind = "agents" | "models" | "browser";
 
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
 export type SidebarView = "projects" | "usage" | "needs" | "settings";
@@ -79,6 +85,13 @@ function readPref(): ThemePref {
   return "system";
 }
 const systemTheme = () => (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+let browserOpens = 0;
+const BROWSER_DEFAULT = 600;
+/** The browser panel's narrowest; the pane's chat keeps at least `BROWSER_CHAT_MIN` beside it. */
+export const BROWSER_MIN = 360;
+export const BROWSER_CHAT_MIN = 320;
+const clampBrowser = (w: number) => Math.round(Math.min(1600, Math.max(BROWSER_MIN, w)));
+
 function readNum(k: string, d: number) {
   try {
     const v = Number(localStorage.getItem(k));
@@ -158,11 +171,20 @@ interface State {
   agentFocus: { id: string; at: number } | null;
   focusAgent(id: string): void;
   /** The right side panel per session (key: session key, or `chat:<id>`): one at a time, set by the person or by the Agents panel's first auto-open; this run only. Absent = never opened. */
-  rightPanel: Record<string, "agents" | "models" | "closed">;
-  setRightPanel(key: string, v: "agents" | "models" | "closed"): void;
+  rightPanel: Record<string, RightPanelKind | "closed">;
+  setRightPanel(key: string, v: RightPanelKind | "closed"): void;
   /** Width of the right panel (min 300, max 440); this run only. */
   agentsWidth: number;
   setAgentsWidth(w: number): void;
+  /** Per session (same keys as `rightPanel`): the browser panel's page; this run only. Absent = no browser opened. */
+  browser: Record<string, BrowserPage>;
+  /** Shows `page` in that session's browser panel (and opens the panel, replacing Jobs / Models). */
+  openBrowser(key: string, page: Extract<BrowserPage, { kind: "artifact" }> | { kind: "web"; url: string }): void;
+  /** The browser's own close: forgets its page (the panel closes its webview). */
+  closeBrowser(key: string): void;
+  /** Width of the browser panel (wider than the others; persisted). The pane may clamp it. */
+  browserWidth: number;
+  setBrowserWidth(w: number): void;
   toggleCollapsed(project: string): void;
   setRevealed(project: string, n: number): void;
 
@@ -381,6 +403,26 @@ export const useStore = create<State>((set, get) => ({
   setRightPanel: (key, v) => set((s) => ({ rightPanel: { ...s.rightPanel, [key]: v } })),
   agentsWidth: 340,
   setAgentsWidth: (w) => set({ agentsWidth: Math.round(Math.min(440, Math.max(300, w))) }),
+  browser: {},
+  openBrowser: (key, page) =>
+    set((s) => ({
+      browser: { ...s.browser, [key]: page.kind === "web" ? { kind: "web", url: page.url, n: ++browserOpens } : page },
+      rightPanel: { ...s.rightPanel, [key]: "browser" },
+    })),
+  closeBrowser: (key) =>
+    set((s) => {
+      const browser = { ...s.browser };
+      delete browser[key];
+      return { browser, rightPanel: { ...s.rightPanel, [key]: "closed" } };
+    }),
+  browserWidth: clampBrowser(readNum("coool.browserWidth", BROWSER_DEFAULT)),
+  setBrowserWidth(w) {
+    const v = clampBrowser(w);
+    try {
+      localStorage.setItem("coool.browserWidth", String(v));
+    } catch {}
+    set({ browserWidth: v });
+  },
   toggleCollapsed(project) {
     const collapsed = { ...get().collapsed };
     if (collapsed[project]) delete collapsed[project];

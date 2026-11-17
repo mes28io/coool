@@ -88,8 +88,41 @@ export interface Backend {
   artifactStatus(urls: string[]): Promise<Record<string, boolean>>;
   /** Where the preview frame loads an artifact's page from; `src` null when the local copy is gone. */
   artifactPreview(url: string): Promise<{ src: string | null }>;
-  /** Open a claude.ai artifact link in the default browser. */
+  /** Open a claude.ai artifact link in the default browser (the opener plugin, scoped to https://claude.ai/*). */
   openArtifact(url: string): Promise<void>;
+
+  // ---- In-app browser (APP_SPEC "Browser panel"; app/src-tauri/src/browser.rs) ----
+  /** Whether web pages show in a native child webview (Tauri); the browser mock frames them instead. */
+  nativeBrowser: boolean;
+  /** Opens an http(s) page in a new child webview at `bounds` (CSS px of the window); returns its id. */
+  browserOpen(url: string, bounds: BrowserBounds): Promise<string>;
+  browserBounds(id: string, bounds: BrowserBounds): Promise<void>;
+  browserNavigate(id: string, url: string): Promise<void>;
+  browserGo(id: string, action: "back" | "forward" | "reload" | "stop"): Promise<void>;
+  /** Asks for a `browser-state` now (in-page navigations announce nothing). */
+  browserPoll(id: string): Promise<void>;
+  browserClose(id: string): Promise<void>;
+  /** "Open in default browser": the page that webview shows, validated in Rust. */
+  browserOpenExternal(id: string): Promise<void>;
+  onBrowserState(cb: (s: BrowserState) => void): Unlisten;
+  /** A webview the backend closed itself (too many alive). */
+  onBrowserClosed(cb: (id: string) => void): Unlisten;
+}
+
+export interface BrowserBounds {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  visible: boolean;
+}
+export interface BrowserState {
+  id: string;
+  url: string;
+  title: string;
+  loading: boolean;
+  can_back: boolean;
+  can_forward: boolean;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -248,6 +281,16 @@ async function tauriBackend(): Promise<Backend> {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
       await openUrl(url);
     },
+    nativeBrowser: true,
+    browserOpen: (url, bounds) => invoke("browser_open", { url, bounds }),
+    browserBounds: (id, bounds) => invoke("browser_bounds", { id, bounds }),
+    browserNavigate: (id, url) => invoke("browser_navigate", { id, url }),
+    browserGo: (id, action) => invoke("browser_go", { id, action }),
+    browserPoll: (id) => invoke("browser_poll", { id }),
+    browserClose: (id) => invoke("browser_close", { id }),
+    browserOpenExternal: (id) => invoke("browser_open_external", { id }),
+    onBrowserState: (cb) => sub<BrowserState>("browser-state", cb),
+    onBrowserClosed: (cb) => sub<string>("browser-closed", cb),
   };
 }
 

@@ -4,6 +4,7 @@ import type { Provider, Status } from "../lib/types";
 import { homeShort, fmtApprox, fmtClock, fmtElapsed, fmtTokens } from "../lib/format";
 import { useClock } from "../lib/clock";
 import { reducedMotion } from "../lib/motion";
+import { registerOverlay } from "../lib/overlays";
 import { contextWindow } from "../lib/models";
 import claudeSvg from "../assets/brands/claude.svg?raw";
 import openaiSvg from "../assets/brands/openai.svg?raw";
@@ -319,6 +320,10 @@ export function Popover({
       window.removeEventListener("keydown", key, true);
     };
   }, [open, onClose]);
+  // A native browser webview it overlaps hides meanwhile (it would draw over the popover).
+  useEffect(() => {
+    if (open && ref.current) return registerOverlay(ref.current);
+  }, [open]);
   const y = side === "bottom" ? -6 : 6;
   return (
     <AnimatePresence>

@@ -1310,6 +1310,23 @@ export function mockBackend(): Backend {
     async openArtifact(url) {
       window.open(url, "_blank", "noopener");
     },
+    // No native webviews in a plain browser: the panel frames the page instead (BrowserPanel's MockFrame).
+    nativeBrowser: false,
+    async browserOpen() {
+      return "mock";
+    },
+    async browserBounds() {},
+    async browserNavigate() {},
+    async browserGo() {},
+    async browserPoll() {},
+    async browserClose() {},
+    async browserOpenExternal() {},
+    onBrowserState() {
+      return () => {};
+    },
+    onBrowserClosed() {
+      return () => {};
+    },
 
     // ---------- chats ----------
     async startChat({ provider, cwd, resume, model, permission_mode }) {
