@@ -138,3 +138,21 @@ export function MoodGlyph({ mood, size = 14, live = true, className }: { mood: M
     </span>
   );
 }
+
+/** The browser button's globe: still, it is IGlobe; `live` (a page of this chat's browser is loading), it spins. */
+export function GlobeGlyph({ size = 16, live = false, className }: { size?: number; live?: boolean; className?: string }) {
+  const on = useLive() && live;
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={cx("mg", className)} data-live={on ? "true" : "false"} data-globe aria-hidden>
+      <circle cx="8" cy="8" r="6.25" />
+      <g strokeWidth={1} opacity={0.8}>
+        <path d="M1.75 8h12.5" />
+        {on ? (
+          [0, 1, 2].map((i) => <path key={i} d="M8 1.75a6.25 6.25 0 010 12.5" className={`mg-meridian mg-meridian-${i}`} />)
+        ) : (
+          <path d="M8 1.75c-2 2-3 3.9-3 6.25s1 4.25 3 6.25M8 1.75c2 2 3 3.9 3 6.25s-1 4.25-3 6.25" />
+        )}
+      </g>
+    </svg>
+  );
+}

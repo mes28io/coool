@@ -217,3 +217,26 @@
 .reduce-motion .mg.mg-in {
   animation: none;
 }
+
+/* globe (the browser button, while a page loads): meridians turn from the right edge across to the left, three a third
+   of a turn apart, so the globe reads as spinning; the equator and outline stay put. */
+.mg-meridian {
+  transform-origin: 8px 8px;
+  animation: mg-meridian 3s;
+  animation-timing-function: steps(3);
+}
+.mg-meridian-1 { animation-delay: -1s; }
+.mg-meridian-2 { animation-delay: -2s; }
+@keyframes mg-meridian {
+  0% { transform: scaleX(1.000); }
+  10% { transform: scaleX(0.951); }
+  20% { transform: scaleX(0.809); }
+  30% { transform: scaleX(0.588); }
+  40% { transform: scaleX(0.309); }
+  50% { transform: scaleX(0.000); }
+  60% { transform: scaleX(-0.309); }
+  70% { transform: scaleX(-0.588); }
+  80% { transform: scaleX(-0.809); }
+  90% { transform: scaleX(-0.951); }
+  100% { transform: scaleX(-1.000); }
+}

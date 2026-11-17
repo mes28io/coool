@@ -1,7 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion } from "motion/react";
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
-import { BrowserContext, closeNative, recentPages, tabKey, type OpenPage } from "../lib/browser";
+import { BrowserContext, closeNative, recentPages, tabKey, useBrowserState, type OpenPage } from "../lib/browser";
+import { GlobeGlyph } from "./MoodGlyph";
 import { BrowserPanel } from "./BrowserPanel";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
@@ -18,7 +19,7 @@ import { RightPanel, type RightKind } from "./RightPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IGlobe, IPlay, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IPlay, ITerminal } from "./icons";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
@@ -114,6 +115,8 @@ export function SessionView({
   const agentsOpen = showing === "agents";
   const modelsOpen = showing === "models";
   const browserOpen = showing === "browser";
+  // The globe spins while any page of this chat's browser is loading (like the Jobs glyph while jobs run).
+  const browserLoading = useBrowserState((b) => !!panelKey && Object.entries(b.byKey).some(([k, v]) => k.startsWith(`${panelKey}#tab`) && v.loading));
   const toggleRight = (k: RightKind) => panelKey && setRightPanel(panelKey, showing === k ? "closed" : k);
   const panelWidth = (k: RightKind) => (k === "browser" ? Math.max(BROWSER_MIN, Math.min(browserWidth, paneW - BROWSER_CHAT_MIN)) : agentsWidth);
   const onPanelWidth = (k: RightKind, w: number) => (k === "browser" ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN)) : setAgentsWidth(w));
@@ -245,7 +248,7 @@ export function SessionView({
         )}
         {panelKey && (
           <IconButton title={browserOpen ? "Hide the browser" : `Show the browser${pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`} active={browserOpen} onClick={onGlobe}>
-            <IGlobe size={17} />
+            <GlobeGlyph size={17} live={browserLoading} />
           </IconButton>
         )}
         {panelOn && panelKey && <AgentsButton cards={cards} shells={shells.length} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
