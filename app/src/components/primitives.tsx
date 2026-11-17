@@ -18,9 +18,30 @@ export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
 }
 
+/** Spokes of the working spinner: 8 rounded bars fading round the circle, macOS activity-indicator style. */
+const SPOKES = Array.from({ length: 8 }, (_, i) => i);
+
+/**
+ * A session at work: a small macOS-style activity indicator in the running blue. It turns in 8 steps (one spoke per
+ * step, like the system one), so the stepped timing is the natural look, not a cost cut. Drawn at ~14px but keeps the
+ * dot's footprint (`size`), so rows never shift between states. Reduce motion stops it on its first frame.
+ */
+function WorkSpinner({ size, className }: { size: number; className?: string }) {
+  const px = Math.max(14, size + 6);
+  return (
+    <span className={cx("relative inline-flex shrink-0 items-center justify-center", className)} style={{ width: size, height: size }}>
+      <svg aria-hidden width={px} height={px} viewBox="0 0 24 24" className="work-spin absolute text-running" style={{ left: (size - px) / 2, top: (size - px) / 2 }}>
+        {SPOKES.map((i) => (
+          <rect key={i} x="10.75" y="2" width="2.5" height="6.5" rx="1.25" fill="currentColor" opacity={1 - i * 0.11} transform={`rotate(${-i * 45} 12 12)`} />
+        ))}
+      </svg>
+    </span>
+  );
+}
+
 export const StatusDot = memo(function StatusDot({ status, size = 7, className }: { status: UiStatus; size?: number; className?: string }) {
   const color = status === "busy" ? "var(--status-running)" : status === "idle" ? "var(--status-waiting)" : status === "needs" ? "var(--status-needs)" : "var(--dim)";
-  if (status === "busy") return <span className={cx("dot-spin inline-block shrink-0", className)} style={{ width: size, height: size }} />;
+  if (status === "busy") return <WorkSpinner size={size} className={className} />;
   return (
     <span className={cx("relative inline-flex shrink-0", status === "needs" && "mx-[2px]", className)} style={{ width: size, height: size }}>
       {/* Only "needs you" pulses (working is a stepped spinner, in StatusDot above): waiting and starting are steady dots (calmer, and far less repaint). */}
