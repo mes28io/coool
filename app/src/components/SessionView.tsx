@@ -245,7 +245,7 @@ export function SessionView({
         )}
         {panelKey && (
           <IconButton title={browserOpen ? "Hide the browser" : `Show the browser${pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`} active={browserOpen} onClick={onGlobe}>
-            <IGlobe size={15} />
+            <IGlobe size={17} />
           </IconButton>
         )}
         {panelOn && panelKey && <AgentsButton cards={cards} shells={shells.length} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}

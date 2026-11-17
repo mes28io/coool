@@ -88,7 +88,8 @@ export const IPencil = mk(<path d="M10.5 2.25l3.25 3.25-8.25 8.25H2.25V10.5zM8.7
 export const IGlobe = mk(
   <>
     <circle cx="8" cy="8" r="6.25" />
-    <path d="M1.75 8h12.5M8 1.75C6.25 3.5 5.5 5.5 5.5 8s.75 4.5 2.5 6.25C9.75 12.5 10.5 10.5 10.5 8S9.75 3.5 8 1.75z" />
+    <ellipse cx="8" cy="8" rx="2.5" ry="6.25" />
+    <path d="M1.75 8h12.5" />
   </>,
 );
 export const ISpark = mk(<path d="M8 1.75l1.5 4.75 4.75 1.5-4.75 1.5L8 14.25 6.5 9.5 1.75 8 6.5 6.5z" strokeLinejoin="round" />);
@@ -105,19 +106,19 @@ export const IStack = mk(<path d="M8 1.75l6 3.25-6 3.25L2 5zM2 8l6 3.25L14 8M2 1
 export const ICommand = mk(
   <path d="M5.75 5.75h4.5v4.5h-4.5zM5.75 5.75V4A1.75 1.75 0 104 5.75h1.75M10.25 5.75V4A1.75 1.75 0 1112 5.75h-1.75M10.25 10.25V12A1.75 1.75 0 1012 10.25h-1.75M5.75 10.25V12A1.75 1.75 0 114 10.25h1.75" />,
 );
+/** Settings: two sliders (minimal, as Geist draws settings). */
 export const IGear = mk(
   <>
-    <path
-      d="M6.79 3.15L6.87 1.6h2.26l.08 1.55 1.37.56 1.15-1.03 1.59 1.59-1.03 1.15.56 1.37 1.55.08v2.26l-1.55.08-.56 1.37 1.03 1.15-1.59 1.59-1.15-1.03-1.37.56-.08 1.55H6.87l-.08-1.55-1.37-.56-1.15 1.03-1.59-1.59 1.03-1.15-.56-1.37-1.55-.08V6.87l1.55-.08.56-1.37-1.03-1.15 1.59-1.59 1.15 1.03z"
-      strokeLinejoin="round"
-    />
-    <circle cx="8" cy="8" r="2" />
+    <path d="M1.75 5h6.5M12.75 5h1.5M1.75 11h1.5M7.75 11h6.5" />
+    <circle cx="10.5" cy="5" r="2.25" />
+    <circle cx="5.5" cy="11" r="2.25" />
   </>,
 );
 export const IArrowDown = mk(<path d="M8 1.75V13M3.75 9.25L8 13.5l4.25-4.25" />);
 export const IArrowUp = mk(<path d="M8 14.25V3M3.75 6.75L8 2.5l4.25 4.25" />);
 
-export const IHome = mk(<path d="M2.25 6.5L8 1.75l5.75 4.75v7.75H2.25zM6.25 14.25v-4h3.5v4" />);
+/** Home: just the house outline, no door. */
+export const IHome = mk(<path d="M2.25 6.75L8 2l5.75 4.75v6.5a1 1 0 01-1 1H3.25a1 1 0 01-1-1z" />);
 export const IBell = mk(<path d="M3.25 11.25V6.5a4.75 4.75 0 019.5 0v4.75l1.5 1.5H1.75zM6.25 14.75h3.5" />);
 export const ICompose = mk(<path d="M7.25 2.75h-4a1.5 1.5 0 00-1.5 1.5v8.5a1.5 1.5 0 001.5 1.5h8.5a1.5 1.5 0 001.5-1.5v-4M11.75 1.75l2.5 2.5L8.5 10H6V7.5z" />);
 export const IFolderOpen = mk(<path d="M1.75 13.25v-9.5a1 1 0 011-1h3.69l1.5 1.5h4.31a1 1 0 011 1v2M1.75 13.25l1.75-6h10.75l-1.75 6z" />);

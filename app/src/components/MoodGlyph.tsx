@@ -72,12 +72,12 @@ const GLYPHS: Record<Mood, ReactNode> = {
   // One node handing work to two; a bead travels down each branch in turn.
   delegate: (
     <>
-      <circle cx="3.75" cy="8" r="1.5" />
-      <circle cx="12.25" cy="4" r="1.5" />
-      <circle cx="12.25" cy="12" r="1.5" />
-      <path d="M5.25 8C8 8 8 4 10.75 4M5.25 8C8 8 8 12 10.75 12" className="mg-dim" />
-      <path d="M5.25 8C8 8 8 4 10.75 4" pathLength={1} className="mg-bead mg-bead-0" />
-      <path d="M5.25 8C8 8 8 12 10.75 12" pathLength={1} className="mg-bead mg-bead-1" />
+      <circle cx="3.5" cy="8" r="1.75" />
+      <circle cx="12.5" cy="3.75" r="1.75" />
+      <circle cx="12.5" cy="12.25" r="1.75" />
+      <path d="M5.25 8C8 8 8 3.75 10.75 3.75M5.25 8C8 8 8 12.25 10.75 12.25" className="mg-dim" />
+      <path d="M5.25 8C8 8 8 3.75 10.75 3.75" pathLength={1} className="mg-bead mg-bead-0" />
+      <path d="M5.25 8C8 8 8 12.25 10.75 12.25" pathLength={1} className="mg-bead mg-bead-1" />
     </>
   ),
   // A ring of points filling one by one.

@@ -22,7 +22,7 @@
   animation-timing-function: steps(9);
 }
 .mg .mg-dim {
-  opacity: 0.4;
+  opacity: 0.6;
 }
 
 /* think: the bubble's three dots light in turn (equal dim weight when still). */
