@@ -2,12 +2,12 @@ import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, homeShort, projectOf } from "../lib/format";
-import { attention, sameAttention, useChatDigest, type Attention, type ChatDigest } from "../lib/live";
+import { attention, sameAttention, useChatDigest, useUnseen, type Attention, type ChatDigest } from "../lib/live";
 import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
 import { sessionKey } from "../lib/types";
 import { useMoveKeys, useStableOrder } from "../lib/stable";
-import { leaves, resolveTarget, useStore } from "../store";
+import { isUnseen, leaves, resolveTarget, useStore } from "../store";
 import { IChevron, ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
@@ -45,6 +45,7 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
   const ptys = useStore((s) => s.ptys);
   const pendingChats = useStore((s) => s.pendingChats);
   const chatInfos = useStore((s) => s.chatInfos);
+  const seen = useStore((s) => s.seen);
   const digest = useChatDigest();
   const projects = useMemo(() => {
     const by = new Map<string, Project>();
@@ -102,7 +103,8 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
           if (s.updated > needsAt) [needsAt, p.needsKey] = [s.updated, sessionKey(s)];
         } else if (a.status === "busy") {
           p.working++;
-        } else {
+        } else if (isUnseen(seen, sessionKey(s), s.updated)) {
+          // Waiting counts only until the person has looked at the chat (the green dot is an unread mark).
           p.waiting++;
         }
       }
@@ -122,7 +124,7 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
       const lb = b.status === "ended" ? 1 : 0;
       return la - lb || b.updated - a.updated || a.name.localeCompare(b.name);
     });
-  }, [sessions, pending, ptys, pendingChats, chatInfos, digest]);
+  }, [sessions, pending, ptys, pendingChats, chatInfos, digest, seen]);
   return { projects, digest };
 }
 
@@ -640,7 +642,9 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
   const setKidsOpen = useStore((st) => st.setKidsOpen);
   // The age (shown on hover) re-renders the row only when its text changes, not every second.
   const age = useClock((now) => ago(s.updated, now));
-  const status = att.needs ? "needs" : att.status;
+  const unseen = useUnseen(s);
+  // A waiting chat shows its green dot only until the person opens it.
+  const status = att.needs ? "needs" : att.status === "idle" && !unseen ? "ended" : att.status;
   return (
     <Row
       selected={selected}

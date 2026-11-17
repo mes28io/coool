@@ -160,7 +160,17 @@ function session(p: Partial<Session> & Pick<Session, "provider" | "id" | "cwd">)
 const MOCK_ARTIFACT_URL = "https://claude.ai/artifact/9xQmT4kVdR2wLpE7";
 
 export function mockBackend(): Backend {
-  const now = Date.now();
+  // Stable across reloads (refreshed every 6h) so "seen" state, which compares session times, survives a reload in the browser demo.
+  const now = (() => {
+    try {
+      const v = Number(localStorage.getItem("coool.mockEpoch"));
+      if (v > 0 && Date.now() - v < 6 * 3600_000) return v;
+      localStorage.setItem("coool.mockEpoch", String(Date.now()));
+    } catch {
+      /* private mode */
+    }
+    return Date.now();
+  })();
   let showAutomation = (() => {
     try {
       return localStorage.getItem(SHOW_AUTOMATION_KEY) === "1";

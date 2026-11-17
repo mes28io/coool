@@ -3,7 +3,7 @@ import { AnimatePresence, motion, Reorder } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chatTitle, needsAnswer, useChats } from "../lib/chat";
 import { displayTitle, folderName, projectOf } from "../lib/format";
-import { useAttention } from "../lib/live";
+import { useAttention, useUnseen } from "../lib/live";
 import { reducedMotion } from "../lib/motion";
 import type { Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -121,6 +121,7 @@ function TabChipBody({ tab, active, index }: { tab: Tab; active: boolean; index:
   const leaf = panes.find((l) => l.id === tab.focus) ?? panes[0];
   const r = useStore(useShallow((st) => resolveTarget(leaf.target, st)));
   const att = useAttention(r.session);
+  const unseen = useUnseen(r.session);
   const chatBits = useChats(
     useShallow((st) => {
       const c = r.chat !== null ? st.chats[r.chat] : undefined;
@@ -145,7 +146,7 @@ function TabChipBody({ tab, active, index }: { tab: Tab; active: boolean; index:
   const status = needs
     ? "needs"
     : r.session
-      ? (att?.status ?? r.session.status)
+      ? (att?.status === "idle" && !unseen ? "ended" : (att?.status ?? r.session.status))
       : chatBits.state
         ? chatBits.state === "ended"
           ? "ended"
