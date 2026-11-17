@@ -10,12 +10,18 @@ import { ago, displayTitle } from "../lib/format";
 import { attention } from "../lib/live";
 import { sessionKey } from "../lib/types";
 import { useStore } from "../store";
-import { Button, cx, ease, ProviderMark } from "./primitives";
+import { IBack } from "./icons";
+import { Button, cx, ease, IconButton, ProviderMark } from "./primitives";
 import { useProjects } from "./Sidebar";
 
-function Header({ title, aside }: { title: string; aside?: ReactNode }) {
+function Header({ title, aside, onBack }: { title: string; aside?: ReactNode; onBack?: () => void }) {
   return (
-    <div data-tauri-drag-region className="flex h-[44px] shrink-0 items-center gap-2 pl-4 pr-3">
+    <div data-tauri-drag-region className={cx("flex h-[44px] shrink-0 items-center gap-2 pr-3", onBack ? "pl-2" : "pl-4")}>
+      {onBack && (
+        <IconButton title="Back to projects" onClick={onBack} className="-mr-0.5">
+          <IBack size={15} />
+        </IconButton>
+      )}
       <span className="text-base font-semibold text-fg">{title}</span>
       {aside && <span className="min-w-0 flex-1 truncate text-small text-dim tnum">{aside}</span>}
     </div>
@@ -150,9 +156,10 @@ function NeedsRow({ s, a, order }: Needed & { order: string }) {
 export function NeedsView() {
   const list = useNeedsYou();
   const order = list.map((n) => sessionKey(n.s)).join();
+  const setView = useStore((s) => s.setSidebarView);
   return (
     <div className="flex h-full flex-col" data-sidebar-view="needs">
-      <Header title="Needs you" aside={list.length ? `${list.length} waiting` : undefined} />
+      <Header title="Needs you" aside={list.length ? `${list.length} waiting` : undefined} onBack={() => setView("projects")} />
       <div className="scroll min-h-0 flex-1 px-2 pb-3">
         {list.length === 0 && (
           <div className="mx-1 mt-1 rounded-[10px] border border-dashed border-line px-3 py-4 text-center text-base text-dim" data-needs-empty>
