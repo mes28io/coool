@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { displayTitle, folderName, homeShort, projectOf } from "../lib/format";
 import { sessionKey } from "../lib/types";
-import { isUnseen, leaves, resolveTarget, useStore } from "../store";
+import { seenAt, isUnseen, leaves, resolveTarget, useStore } from "../store";
 import { openChatInTerminal } from "../lib/actions";
 import { IFolder, IGauge, IGear, IGrid, IMoon, IPlus, ISearch, ISplitDown, ISplitRight, IStop, ISun, ITerminal } from "./icons";
 import { cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
@@ -61,7 +61,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         hint: s.origin === "automation" ? `${folderName(projectOf(s))} · by another tool` : folderName(projectOf(s)),
         icon: (
           <span className="flex items-center gap-1.5">
-            <StatusDot status={s.status === "idle" && !isUnseen(st.seen, sessionKey(s), s.updated) ? "ended" : s.status} size={7} />
+            <StatusDot status={s.status === "idle" && !isUnseen(st.seen, sessionKey(s), seenAt(s)) ? "ended" : s.status} size={7} />
             <ProviderMark provider={s.provider} size={13} />
           </span>
         ),

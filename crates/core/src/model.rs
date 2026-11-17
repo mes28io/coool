@@ -227,6 +227,11 @@ pub struct Session {
     /// Serialized as epoch milliseconds.
     #[serde(serialize_with = "epoch_ms")]
     pub updated: SystemTime,
+    /// Epoch ms of the newest real conversation event (a prompt, a reply or a
+    /// turn end) in the transcript; None until one is seen. Unlike `updated`
+    /// (the file's mtime, which other tools also bump) this only moves on new
+    /// activity: it is what "unread" compares against.
+    pub last_event: Option<u64>,
     /// Set when this session runs inside one of coool's own PTYs.
     pub managed: Option<usize>,
     /// Set when this session is driven by one of coool's structured chats ([`crate::chat`]).

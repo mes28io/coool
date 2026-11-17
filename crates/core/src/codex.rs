@@ -29,6 +29,24 @@ struct ParseState {
     /// Last cumulative (input incl. cached, cached, output) seen in token_count;
     /// each increase is attributed to the model in effect at that point.
     last_total: (u64, u64, u64),
+    /// Newest real conversation event, epoch ms (see [`event_ms`]).
+    #[serde(default)]
+    last_event: Option<u64>,
+}
+
+/// When a rollout line is a real conversation event: a response item (message,
+/// tool call or output) or a turn / message event. Bookkeeping (session_meta,
+/// turn_context, token_count, thread settings) is not activity.
+pub(crate) fn event_ms(v: &Value) -> Option<u64> {
+    let real = match v["type"].as_str()? {
+        "response_item" => true,
+        "event_msg" => matches!(
+            v["payload"]["type"].as_str(),
+            Some("user_message" | "agent_message" | "task_started" | "task_complete" | "turn_aborted")
+        ),
+        _ => false,
+    };
+    if real { parse_rfc3339_ms(v["timestamp"].as_str()?) } else { None }
 }
 
 /// The session fields a rollout determines.
@@ -78,6 +96,7 @@ impl Parsed {
             activity: Arc::new(s.activity.clone()),
             models: s.models.clone(),
             in_turn: self.st.in_turn,
+            last_event: self.st.last_event,
             started: self.st.started,
             origin: self.st.meta_seen.then(|| crate::origin::codex(&s.originator, &s.source)),
             parent: s.parent.clone(),
@@ -98,6 +117,8 @@ struct Entry {
     mtime: SystemTime,
     /// From the rollout's first line, for before the parse knows.
     early_origin: Option<Origin>,
+    /// Newest real event from the file's tail, while the rollout isn't parsed yet.
+    tail_event: Option<(u64, SystemTime, Option<u64>)>,
 }
 
 /// The walk of every day folder runs on the pool; its result lands here.
@@ -251,8 +272,11 @@ impl CodexSource {
         wanted.sort_by_key(|(_, _, t)| std::cmp::Reverse(*t));
 
         for (path, meta, mtime) in &wanted {
-            let e = self.entries.entry(path.clone()).or_insert_with(|| Entry { slot: Slot::new(Kind::Codex, path), mtime: *mtime, early_origin: None });
+            let e = self.entries.entry(path.clone()).or_insert_with(|| Entry { slot: Slot::new(Kind::Codex, path), mtime: *mtime, early_origin: None, tail_event: None });
             e.mtime = *mtime;
+            if !e.slot.view().loaded && e.tail_event.is_none_or(|(l, t, _)| (l, t) != (meta.len(), *mtime)) {
+                e.tail_event = Some((meta.len(), *mtime, loader::tail_event(path, Kind::Codex)));
+            }
             if e.early_origin.is_none() && !e.slot.view().loaded {
                 e.early_origin = Some(crate::origin::sniff(path, Provider::Codex).unwrap_or_default());
             }
@@ -374,6 +398,7 @@ impl CodexSource {
             activity: v.activity.clone(),
             agents: Vec::new(),
             updated: e.mtime,
+            last_event: if v.loaded { v.last_event } else { e.tail_event.and_then(|t| t.2) },
             managed: None,
             chat: None,
             models: v.models.clone(),
@@ -407,6 +432,9 @@ pub(crate) fn date_path(t: SystemTime) -> PathBuf {
 fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return };
     let ts = v["timestamp"].as_str().map(short_time).unwrap_or_default();
+    if let Some(t) = event_ms(&v) {
+        st.last_event = st.last_event.max(Some(t));
+    }
     let p = &v["payload"];
     match (v["type"].as_str(), p["type"].as_str()) {
         (Some("session_meta"), _) if !st.meta_seen => {
@@ -528,6 +556,24 @@ mod tests {
         assert_eq!((s.id.as_str(), s.cwd.as_str()), ("child", "/work"));
         let want = SystemTime::UNIX_EPOCH + Duration::from_secs(parse_rfc3339("2026-11-08T11:17:56Z").unwrap() as u64);
         assert_eq!(st.started, Some(want));
+    }
+
+    #[test]
+    fn last_event_ignores_bookkeeping_after_the_last_real_event() {
+        let (st, _) = run(r#"
+{"timestamp":"2026-11-14T08:00:01Z","type":"session_meta","payload":{"id":"a","cwd":"/w"}}
+{"timestamp":"2026-11-14T08:00:03.500Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}
+{"timestamp":"2026-11-14T08:00:04Z","type":"event_msg","payload":{"type":"task_complete"}}
+{"timestamp":"2026-11-17T18:19:00Z","type":"event_msg","payload":{"type":"token_count","info":null}}
+{"timestamp":"2026-11-17T18:19:01Z","type":"turn_context","payload":{"model":"m"}}
+"#);
+        assert_eq!(st.last_event, parse_rfc3339_ms("2026-11-14T08:00:04Z"));
+        let dir = crate::loader::tests::tmpdir("codex-tail-event");
+        let p = dir.join("r.jsonl");
+        std::fs::write(&p, r#"{"timestamp":"2026-11-14T08:00:03.500Z","type":"response_item","payload":{"type":"message"}}
+{"timestamp":"2026-11-17T18:19:00Z","type":"event_msg","payload":{"type":"token_count"}}
+"#).unwrap();
+        assert_eq!(crate::loader::tail_event(&p, Kind::Codex), parse_rfc3339_ms("2026-11-14T08:00:03.500Z"));
     }
 
     #[test]

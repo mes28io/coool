@@ -7,7 +7,7 @@ import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
 import { sessionKey } from "../lib/types";
 import { useMoveKeys, useStableOrder } from "../lib/stable";
-import { isUnseen, leaves, resolveTarget, useStore } from "../store";
+import { seenAt, isUnseen, leaves, resolveTarget, useStore } from "../store";
 import { IChevron, ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
@@ -103,7 +103,7 @@ export function useProjects(): { projects: Project[]; digest: ChatDigest } {
           if (s.updated > needsAt) [needsAt, p.needsKey] = [s.updated, sessionKey(s)];
         } else if (a.status === "busy") {
           p.working++;
-        } else if (isUnseen(seen, sessionKey(s), s.updated)) {
+        } else if (isUnseen(seen, sessionKey(s), seenAt(s))) {
           // Waiting counts only until the person has looked at the chat (the green dot is an unread mark).
           p.waiting++;
         }

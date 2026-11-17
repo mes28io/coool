@@ -61,6 +61,8 @@ pub(crate) struct View {
     /// Own model rows, most used first.
     pub models: Vec<ModelUse>,
     pub in_turn: bool,
+    /// Epoch ms of the newest real conversation event (see [`crate::model::Session::last_event`]).
+    pub last_event: Option<u64>,
     pub started: Option<SystemTime>,
     /// How the transcript says it was started; None until that is known.
     pub origin: Option<crate::model::Origin>,
@@ -69,6 +71,36 @@ pub(crate) struct View {
     pub agent_name: String,
     /// Claude: recent Bash tool calls (see [`crate::shells`]).
     pub bash: Vec<crate::shells::BashCall>,
+}
+
+/// Bytes read from the end of a file for [`tail_event`].
+const EVENT_TAIL: u64 = 64 << 10;
+
+/// The newest real conversation event time in the last [`EVENT_TAIL`] bytes of
+/// a transcript: the cheap answer for sessions not parsed yet. None when the
+/// tail holds no such event.
+pub(crate) fn tail_event(path: &Path, kind: Kind) -> Option<u64> {
+    let mut f = File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let start = len.saturating_sub(EVENT_TAIL);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    f.take(EVENT_TAIL).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines = text.lines();
+    if start > 0 {
+        lines.next(); // starts mid-line
+    }
+    lines
+        .filter(|l| !l.contains("\"type\":\"api-request"))
+        .filter_map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).ok()?;
+            match kind {
+                Kind::Claude => crate::claude::event_ms(&v),
+                Kind::Codex => crate::codex::event_ms(&v),
+            }
+        })
+        .max()
 }
 
 /// Parse state of one transcript (what the cache persists).

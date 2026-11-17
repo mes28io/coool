@@ -16,7 +16,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { cx } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
-import { leaves, useStore } from "./store";
+import { leaves, seenAt, useStore } from "./store";
 import { sessionKey } from "./lib/types";
 
 function applyTheme(t: "dark" | "light") {
@@ -74,7 +74,7 @@ function useMarkSeen() {
         if (l.target?.kind !== "session") continue;
         const key = l.target.key;
         const s = st.sessions.find((x) => sessionKey(x) === key);
-        if (s) st.markSeen(key, s.updated);
+        if (s) st.markSeen(key, seenAt(s));
       }
     };
     const view = () => {
