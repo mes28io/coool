@@ -478,7 +478,7 @@ export function LiveIndicator({
   // Only the flag drives a re-render, not every tick.
   const launching = useClock((now) => mood === "delegate" && since !== null && now - since < 1500);
   const quiet = !mainActive && agents + jobs > 0 && !launching;
-  const parts = [agents > 0 && `${agents} ${agents === 1 ? "agent" : "agents"}`, jobs > 0 && `${jobs} ${jobs === 1 ? "job" : "jobs"}`].filter(Boolean).join(", ");
+  const parts = [agents > 0 && `${agents} ${agents === 1 ? "agent" : "agents"}`, jobs > 0 && `${jobs} ${jobs === 1 ? "job" : "jobs"}`].filter(Boolean) as string[];
   const still = reducedMotion();
   // Thinking <-> "N agents running" hand over instead of cutting: the old row lifts and fades out while the new one
   // settles in from just below (the timer sits in the same spot in both, so the eye stays on it).
@@ -497,7 +497,17 @@ export function LiveIndicator({
               <span className="flex size-[20px] shrink-0 items-center justify-center">
                 <span className="size-[7px] rounded-full bg-running" />
               </span>
-              <span>{parts} running</span>
+              <span className="flex items-baseline whitespace-pre">
+                {parts.map((p, i) => (
+                  <motion.span key={i === 0 ? (agents > 0 ? "agents" : "jobs") : "jobs"} layout={still ? false : "position"} transition={{ duration: 0.28, ease }} className="flex items-baseline whitespace-pre">
+                    {i > 0 && ", "}
+                    <Roll text={p} still={still} />
+                  </motion.span>
+                ))}
+                <motion.span layout={still ? false : "position"} transition={{ duration: 0.28, ease }} className="whitespace-pre">
+                  {" running"}
+                </motion.span>
+              </span>
               {/* No token count here: the main agent is idle, so its count isn't moving; each job shows its own. */}
               <span className="ml-auto flex shrink-0 items-center gap-2 pr-2 text-small text-dim">
                 <LiveClock since={timerSince !== undefined ? timerSince : since} title={timerTitle} />
@@ -509,6 +519,29 @@ export function LiveIndicator({
         </motion.div>
       </AnimatePresence>
     </div>
+  );
+}
+
+/**
+ * Text that rolls when it changes ("1 agent" -> "2 agents"): the old value slides up and out while the new one comes
+ * in from below. Its width follows the new text (layout animation), so the words after it move along smoothly.
+ */
+function Roll({ text, still }: { text: string; still: boolean }) {
+  return (
+    <motion.span layout={still ? false : "position"} className="relative inline-flex overflow-hidden" transition={{ duration: 0.28, ease }}>
+      <AnimatePresence mode="popLayout" initial={false}>
+        <motion.span
+          key={text}
+          className="inline-block whitespace-pre"
+          initial={still ? false : { y: "0.9em", opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={still ? { opacity: 0, transition: { duration: 0 } } : { y: "-0.9em", opacity: 0 }}
+          transition={{ duration: 0.28, ease }}
+        >
+          {text}
+        </motion.span>
+      </AnimatePresence>
+    </motion.span>
   );
 }
 
