@@ -14,11 +14,13 @@
 //!   scheme (`file:`, `javascript:`, `tauri:`, `ipc:`, `coool-artifact:`, app links …) or to the app's own origin
 //!   (the dev server in `tauri dev`) are cancelled. `about:`, `blob:` and `data:` frames are allowed (they inherit
 //!   or get an opaque origin, nothing local). Downloads are refused.
-//! - Pop-ups (`window.open`, `target=_blank`) open as small windows of their own ([`open_popup`], labels
-//!   `popup-<n>`), as in Safari: built from the configuration WebKit hands the UI delegate, so the pop-up shares the
-//!   panel's data store and its page keeps `window.opener` (sign-in pop-ups such as Google's post their result back
-//!   to the opener and close themselves). Same rules as the panel: no capability names them, http(s) only, downloads
-//!   refused, desktop Safari user agent. They close with their opener webview (and with the main window).
+//! - New windows a page asks for ([`new_window_kind`]): a link with `target=_blank` or a `window.open` without a size
+//!   or position opens as a new tab of the panel (`browser-new-tab` to the app; the page gets no window back).
+//!   `window.open` with a size or position (sign-in pop-ups, such as Google's) opens a small window of its own
+//!   ([`open_popup`], labels `popup-<n>`), as in Safari: built from the configuration WebKit hands the UI delegate,
+//!   so the pop-up shares the panel's data store and its page keeps `window.opener` (it posts its result back to the
+//!   opener and closes itself). Same rules as the panel: no capability names them, http(s) only, downloads refused,
+//!   desktop Safari user agent. They close with their opener webview (and with the main window).
 //! - "Open in default browser" opens what the webview shows, re-validated, from Rust ([`browser_open_external`]);
 //!   the opener plugin's JS scope stays `https://claude.ai/*`.
 
@@ -98,8 +100,8 @@ fn navigable(url: &Url, app_origin: Option<&str>) -> bool {
 #[derive(Serialize, Clone, Default)]
 pub struct BrowserState {
     id: String,
-    url: String,
-    title: String,
+    pub(crate) url: String,
+    pub(crate) title: String,
     loading: bool,
     can_back: bool,
     can_forward: bool,
@@ -293,22 +295,69 @@ pub fn browser_close(app: AppHandle, id: String) -> Result<(), String> {
 
 // ---------- pop-ups ----------
 
-/// The new-window handler of a browser webview or pop-up labelled `opener`: a pop-up window of its own for a page
-/// it may show, nothing otherwise.
+/// What a page's request for a new window becomes.
+#[derive(Debug, PartialEq, Eq)]
+enum NewWindow {
+    /// A new tab in the panel: `target=_blank` links and a bare `window.open(url)` (WebKit passes no size and no
+    /// position). The page gets no window back (`window.open` returns null).
+    Tab,
+    /// A pop-up window that keeps `window.opener`: `window.open` with `width`+`height` or `left`+`top` (sign-in
+    /// pop-ups), or of a page that is not http(s) yet (`window.open()` / `about:blank`, which the opener then
+    /// scripts or navigates).
+    Popup,
+    Deny,
+}
+
+/// The rule (APP_SPEC "Pop-ups and new tabs"). `sized`: WebKit's window features carry a size or a position.
+fn new_window_kind(url: &Url, app_origin: Option<&str>, sized: bool) -> NewWindow {
+    if !navigable(url, app_origin) {
+        NewWindow::Deny
+    } else if !sized && loadable(url.as_str(), app_origin).is_some() {
+        NewWindow::Tab
+    } else {
+        NewWindow::Popup
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct NewTab {
+    /// The panel webview the tab opens next to.
+    id: String,
+    url: String,
+}
+
+/// The panel webview a webview or pop-up belongs to (a pop-up's opener, up the chain).
+fn root_browser(app: &AppHandle, label: &str) -> Option<String> {
+    let popups = app.state::<std::sync::Arc<crate::Core>>().browsers.popups.lock().unwrap().clone();
+    let mut l = label.to_string();
+    for _ in 0..32 {
+        if l.starts_with(PREFIX) {
+            return Some(l);
+        }
+        l = popups.get(&l)?.clone();
+    }
+    None
+}
+
+/// The new-window handler of a browser webview or pop-up labelled `opener` (see [`NewWindow`]).
 fn popup_handler(app: &AppHandle, opener: &str, origin: Option<String>) -> impl Fn(Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
     let app = app.clone();
     let opener = opener.to_string();
-    move |u, features| {
-        if !navigable(&u, origin.as_deref()) {
-            return NewWindowResponse::Deny;
+    move |u, features| match new_window_kind(&u, origin.as_deref(), features.size().is_some() || features.position().is_some()) {
+        NewWindow::Deny => NewWindowResponse::Deny,
+        NewWindow::Tab => {
+            if let Some(id) = root_browser(&app, &opener) {
+                let _ = app.emit_to("main", "browser-new-tab", NewTab { id, url: u.to_string() });
+            }
+            NewWindowResponse::Deny
         }
-        match open_popup(&app, &opener, origin.clone(), &u, features) {
+        NewWindow::Popup => match open_popup(&app, &opener, origin.clone(), &u, features) {
             Ok(window) => NewWindowResponse::Create { window },
             Err(e) => {
                 eprintln!("coool: pop-up refused: {e}");
                 NewWindowResponse::Deny
             }
-        }
+        },
     }
 }
 
@@ -402,7 +451,7 @@ pub fn browser_open_external(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-mod native {
+pub(crate) mod native {
     //! WKWebView's own history and state (the cross-platform API has no back / forward).
     use super::BrowserState;
     use objc2::msg_send;
@@ -560,6 +609,21 @@ mod tests {
         assert!(loadable("http://localhost:1420/", Some("http://localhost:1420")).is_none());
         assert!(loadable("http://localhost:1420/src/main.tsx", Some("http://localhost:1420")).is_none());
         assert!(loadable("http://localhost:3000/", Some("http://localhost:1420")).is_some());
+    }
+
+    #[test]
+    fn new_windows_become_tabs_unless_sized() {
+        let k = |s: &str, sized: bool| new_window_kind(&Url::parse(s).unwrap(), Some("http://localhost:1420"), sized);
+        // target=_blank, window.open(url): a tab.
+        assert_eq!(k("https://example.com/next", false), NewWindow::Tab);
+        // window.open(url, name, "width=480,height=600"): a pop-up that keeps window.opener.
+        assert_eq!(k("https://accounts.google.com/o/oauth2", true), NewWindow::Popup);
+        // window.open() then scripted: a pop-up.
+        assert_eq!(k("about:blank", false), NewWindow::Popup);
+        for bad in ["file:///etc/hosts", "http://localhost:1420/", "coool-artifact://localhost/x/y.html", "javascript:alert(1)"] {
+            assert_eq!(k(bad, false), NewWindow::Deny, "{bad}");
+            assert_eq!(k(bad, true), NewWindow::Deny, "{bad}");
+        }
     }
 
     #[test]

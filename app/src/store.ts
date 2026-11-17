@@ -2,7 +2,7 @@
 // everything else here is UI state (tabs, splits, theme, overlays).
 
 import { create } from "zustand";
-import type { ArtifactInfo, ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
+import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { api, isTauri } from "./lib/backend";
 
@@ -23,14 +23,24 @@ export type Sheet =
   | { kind: "quit"; running: number }
   | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null };
 
-/** What a session's browser panel shows (components/BrowserPanel.tsx). */
+/** What a browser tab shows (components/BrowserPanel.tsx). */
 export type BrowserPage =
-  /** A Claude Code artifact's local copy, in a sandboxed frame. */
-  | { kind: "artifact"; info: ArtifactInfo; versions: number }
-  /** A web page (http/https), in the native child webview. `n` changes on every open, so opening the same URL again loads it again. */
+  /** A web page (http/https), in a native child webview. `n` changes on every load asked for, so asking for the same URL again loads it again. */
   | { kind: "web"; url: string; n: number }
-  /** Nothing yet: an address field and the pages this chat mentions. */
+  /** A new tab: an address field and the pages this chat mentions. */
   | { kind: "start" };
+export interface BrowserTab {
+  id: number;
+  page: BrowserPage;
+  /** Where the page has got to and its title, as it last reported (kept when its webview is closed). */
+  url?: string;
+  title?: string;
+}
+/** A session's browser panel: its tabs in order, and the id of the one showing. */
+export interface BrowserTabs {
+  tabs: BrowserTab[];
+  active: number;
+}
 export type RightPanelKind = "agents" | "models" | "browser";
 
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
@@ -88,6 +98,11 @@ function readPref(): ThemePref {
 }
 const systemTheme = () => (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
 let browserOpens = 0;
+let browserTabIds = 0;
+const webTab = (id: number, url: string): BrowserTab => ({ id, page: { kind: "web", url, n: ++browserOpens }, url });
+/** Remembered tabs, as new loads (their webviews were closed). */
+const reviveTabs = (t: BrowserTabs | undefined): BrowserTabs | undefined =>
+  t && t.tabs.length ? { ...t, tabs: t.tabs.map((x) => (x.page.kind === "web" ? { ...x, page: { ...x.page, n: ++browserOpens } } : x)) } : undefined;
 const BROWSER_DEFAULT = 600;
 /** The browser panel's narrowest; the pane's chat keeps at least `BROWSER_CHAT_MIN` beside it. */
 export const BROWSER_MIN = 360;
@@ -178,14 +193,27 @@ interface State {
   /** Width of the right panel (min 300, max 440); this run only. */
   agentsWidth: number;
   setAgentsWidth(w: number): void;
-  /** Per session (same keys as `rightPanel`): the browser panel's page; this run only. Absent = no browser opened. */
-  browser: Record<string, BrowserPage>;
-  /** Shows `page` in that session's browser panel (and opens the panel, replacing Jobs / Models). */
-  openBrowser(key: string, page: Extract<BrowserPage, { kind: "artifact" | "start" }> | { kind: "web"; url: string }): void;
-  /** The browser's own close: forgets its page (the panel closes its webview) but remembers it in `lastBrowser`; `url` is where a web page had got to. */
-  closeBrowser(key: string, url?: string): void;
-  /** Per session: the page the browser showed when it was last closed (the header's globe reopens it); this run only. */
-  lastBrowser: Record<string, Extract<BrowserPage, { kind: "artifact" | "web" }>>;
+  /** Per session (same keys as `rightPanel`): the browser panel's tabs; this run only. Absent = no browser open. */
+  browser: Record<string, BrowserTabs>;
+  /**
+   * Opens a page in that session's browser panel (and shows the panel, replacing Jobs / Models): a web page goes to
+   * the tab already on that URL, else into the showing tab if it is a new-tab view, else a new tab after `after` (or
+   * the showing one); `fresh` always makes a new tab. `start`: a new tab with the start view.
+   */
+  openBrowser(key: string, page: { kind: "web"; url: string } | { kind: "start" }, opts?: { after?: number; fresh?: boolean }): void;
+  /** Loads `url` in that tab (the address field, the start view). */
+  navigateBrowserTab(key: string, tab: number, url: string): void;
+  selectBrowserTab(key: string, tab: number): void;
+  /** Closes a tab (the caller closes its webview); the last one closes the browser like `closeBrowser`. */
+  closeBrowserTab(key: string, tab: number): void;
+  /** What a tab's page reported (where it is, its title). */
+  noteBrowserTab(key: string, tab: number, url: string, title: string): void;
+  /** The browser's own close: forgets its tabs (the panel closes their webviews) but remembers them in `lastBrowser`. */
+  closeBrowser(key: string): void;
+  /** Shows the remembered tabs again (fresh webviews), or a start view when there are none. */
+  restoreBrowser(key: string): void;
+  /** Per session: the tabs the browser had when it was last closed (URLs, titles, the active one; the header's globe restores them); this run only. */
+  lastBrowser: Record<string, BrowserTabs>;
   /** Width of the browser panel (wider than the others; persisted). The pane may clamp it. */
   browserWidth: number;
   setBrowserWidth(w: number): void;
@@ -408,21 +436,68 @@ export const useStore = create<State>((set, get) => ({
   agentsWidth: 340,
   setAgentsWidth: (w) => set({ agentsWidth: Math.round(Math.min(440, Math.max(300, w))) }),
   browser: {},
-  openBrowser: (key, page) =>
-    set((s) => ({
-      browser: { ...s.browser, [key]: page.kind === "web" ? { kind: "web", url: page.url, n: ++browserOpens } : page },
-      rightPanel: { ...s.rightPanel, [key]: "browser" },
-    })),
-  closeBrowser: (key, url) =>
+  openBrowser: (key, page, opts) =>
+    set((s) => {
+      const cur = s.browser[key] ?? reviveTabs(s.lastBrowser[key]) ?? { tabs: [], active: -1 };
+      const showing = cur.tabs.find((t) => t.id === cur.active);
+      let next: BrowserTabs;
+      const there = page.kind === "web" && !opts?.fresh ? cur.tabs.find((t) => t.page.kind === "web" && (t.url === page.url || t.page.url === page.url)) : undefined;
+      if (there) next = { ...cur, active: there.id };
+      else if (page.kind === "web" && !opts?.fresh && showing?.page.kind === "start") next = { ...cur, tabs: cur.tabs.map((t) => (t === showing ? webTab(t.id, page.url) : t)) };
+      else {
+        const tab = page.kind === "web" ? webTab(++browserTabIds, page.url) : { id: ++browserTabIds, page: { kind: "start" as const } };
+        const at = cur.tabs.findIndex((t) => t.id === (opts?.after ?? cur.active));
+        const tabs = [...cur.tabs];
+        tabs.splice(at < 0 ? tabs.length : at + 1, 0, tab);
+        next = { tabs, active: tab.id };
+      }
+      return { browser: { ...s.browser, [key]: next }, rightPanel: { ...s.rightPanel, [key]: "browser" } };
+    }),
+  navigateBrowserTab: (key, id, url) =>
+    set((s) => {
+      const cur = s.browser[key];
+      if (!cur) return s;
+      return { browser: { ...s.browser, [key]: { ...cur, tabs: cur.tabs.map((t) => (t.id === id ? webTab(id, url) : t)) } } };
+    }),
+  selectBrowserTab: (key, id) =>
+    set((s) => {
+      const cur = s.browser[key];
+      if (!cur || cur.active === id || !cur.tabs.some((t) => t.id === id)) return s;
+      return { browser: { ...s.browser, [key]: { ...cur, active: id } } };
+    }),
+  closeBrowserTab: (key, id) => {
+    const cur = get().browser[key];
+    if (!cur) return;
+    if (cur.tabs.length <= 1) return get().closeBrowser(key);
+    set((s) => {
+      const i = cur.tabs.findIndex((t) => t.id === id);
+      const tabs = cur.tabs.filter((t) => t.id !== id);
+      const active = cur.active === id ? tabs[Math.min(Math.max(i, 0), tabs.length - 1)].id : cur.active;
+      return { browser: { ...s.browser, [key]: { tabs, active } } };
+    });
+  },
+  noteBrowserTab: (key, id, url, title) =>
+    set((s) => {
+      const cur = s.browser[key];
+      const t = cur?.tabs.find((x) => x.id === id);
+      if (!cur || !t || (t.url === (url || t.url) && t.title === (title || t.title))) return s;
+      return { browser: { ...s.browser, [key]: { ...cur, tabs: cur.tabs.map((x) => (x === t ? { ...t, url: url || t.url, title: title || t.title } : x)) } } };
+    }),
+  closeBrowser: (key) =>
     set((s) => {
       const browser = { ...s.browser };
-      const page = browser[key];
+      const cur = browser[key];
       delete browser[key];
       const lastBrowser = { ...s.lastBrowser };
-      if (page?.kind === "web") lastBrowser[key] = { ...page, url: url || page.url };
-      else if (page?.kind === "artifact") lastBrowser[key] = page;
+      // Remembered at where each page had got to.
+      if (cur) lastBrowser[key] = { ...cur, tabs: cur.tabs.map((t) => (t.page.kind === "web" ? { ...t, page: { ...t.page, url: t.url || t.page.url } } : t)) };
       return { browser, lastBrowser, rightPanel: { ...s.rightPanel, [key]: "closed" } };
     }),
+  restoreBrowser: (key) =>
+    set((s) => ({
+      browser: { ...s.browser, [key]: reviveTabs(s.lastBrowser[key]) ?? { tabs: [{ id: ++browserTabIds, page: { kind: "start" } }], active: browserTabIds } },
+      rightPanel: { ...s.rightPanel, [key]: "browser" },
+    })),
   lastBrowser: {},
   browserWidth: clampBrowser(readNum("coool.browserWidth", BROWSER_DEFAULT)),
   setBrowserWidth(w) {

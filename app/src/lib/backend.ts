@@ -86,8 +86,8 @@ export interface Backend {
 
   /** Whether each artifact's local page is still on disk (by claude.ai URL). */
   artifactStatus(urls: string[]): Promise<Record<string, boolean>>;
-  /** Where the preview frame loads an artifact's page from; `src` null when the local copy is gone. */
-  artifactPreview(url: string): Promise<{ src: string | null }>;
+  /** Opens the artifact's local copy in its preview window (or focuses the one showing it); false when the local copy is gone. */
+  artifactWindow(url: string): Promise<boolean>;
   /** Open a claude.ai artifact link in the default browser (the opener plugin, scoped to https://claude.ai/*). */
   openArtifact(url: string): Promise<void>;
 
@@ -107,6 +107,8 @@ export interface Backend {
   onBrowserState(cb: (s: BrowserState) => void): Unlisten;
   /** A webview the backend closed itself (too many alive). */
   onBrowserClosed(cb: (id: string) => void): Unlisten;
+  /** A page asked for a new window that opens as a tab (`target=_blank`, `window.open` without a size); `id` is its panel webview. */
+  onBrowserNewTab(cb: (t: { id: string; url: string }) => void): Unlisten;
 }
 
 export interface BrowserBounds {
@@ -275,7 +277,7 @@ async function tauriBackend(): Promise<Backend> {
     motionHints: () => soft<MotionHints>("motion_hints").catch(() => null),
     onMotionHints: (cb) => sub<MotionHints>("motion-hints", cb),
     artifactStatus: (urls) => invoke("artifact_status", { urls }),
-    artifactPreview: (url) => invoke("artifact_preview", { url }),
+    artifactWindow: (url) => invoke("artifact_window", { url }),
     openArtifact: async (url) => {
       if (!url.startsWith("https://claude.ai/")) return;
       const { openUrl } = await import("@tauri-apps/plugin-opener");
@@ -291,6 +293,7 @@ async function tauriBackend(): Promise<Backend> {
     browserOpenExternal: (id) => invoke("browser_open_external", { id }),
     onBrowserState: (cb) => sub<BrowserState>("browser-state", cb),
     onBrowserClosed: (cb) => sub<string>("browser-closed", cb),
+    onBrowserNewTab: (cb) => sub<{ id: string; url: string }>("browser-new-tab", cb),
   };
 }
 

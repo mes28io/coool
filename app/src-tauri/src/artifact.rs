@@ -1,5 +1,6 @@
 //! Artifact previews: a page a session published to claude.ai (see
-//! `coool_core::artifact`), shown from its local copy in a sandboxed iframe.
+//! `coool_core::artifact`), shown from its local copy in a sandboxed iframe, in
+//! a preview window of its own ([`artifact_window`]).
 //!
 //! The page is served over the `coool-artifact` scheme at
 //! `coool-artifact://localhost/<token>/<published path>`. A token is made only
@@ -12,14 +13,14 @@
 use coool_core::artifact::ArtifactInfo;
 use coool_core::chat::ChatEventKind;
 use coool_core::model::Activity;
-use serde::Serialize;
+
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::http::{Request, Response, StatusCode};
-use tauri::State;
+use tauri::{AppHandle, Manager, State, WebviewWindowBuilder};
 
 use crate::Core;
 
@@ -35,6 +36,9 @@ pub struct Previews {
     tokens: Mutex<HashMap<String, Allowed>>,
     /// Self-test only (see [`selftest_artifact`]).
     extra: Mutex<Vec<ArtifactInfo>>,
+    /// Open preview windows: artifact URL -> (window label, the version it shows).
+    pub(crate) windows: Mutex<HashMap<String, (String, u32)>>,
+    next_window: std::sync::atomic::AtomicU32,
 }
 
 struct Allowed {
@@ -104,12 +108,6 @@ fn base_url() -> &'static str {
     if cfg!(windows) || cfg!(target_os = "android") { "http://coool-artifact.localhost" } else { "coool-artifact://localhost" }
 }
 
-#[derive(Serialize)]
-pub struct Preview {
-    /// The iframe's `src`, or `None` when the local copy is gone.
-    src: Option<String>,
-}
-
 /// Whether each artifact's local page is still there.
 #[tauri::command(async)]
 pub fn artifact_status(core: State<'_, Arc<Core>>, urls: Vec<String>) -> HashMap<String, bool> {
@@ -121,21 +119,163 @@ pub fn artifact_status(core: State<'_, Arc<Core>>, urls: Vec<String>) -> HashMap
         .collect()
 }
 
-/// A URL the preview frame loads the artifact's page from.
-#[tauri::command(async)]
-pub fn artifact_preview(core: State<'_, Arc<Core>>, url: String) -> Result<Preview, String> {
-    let a = find(&core, &url).ok_or("no such artifact")?;
+/// The artifact at `url` and the `coool-artifact://` URL its page is served from (`None` when the local copy is
+/// gone). One token per artifact: a new version replaces what it serves.
+fn mint(core: &Core, url: &str) -> Result<(ArtifactInfo, Option<String>), String> {
+    let a = find(core, url).ok_or("no such artifact")?;
     let page = page_name(&a).ok_or("bad page name")?;
     if !safe_file(Path::new(&a.file_path)) {
-        return Ok(Preview { src: None });
+        return Ok((a, None));
     }
     let mut files: HashMap<String, PathBuf> = a.files.iter().filter_map(|(k, v)| Some((clean_rel(k)?, PathBuf::from(v)))).collect();
     files.insert(page.clone(), PathBuf::from(&a.file_path));
     let mut tokens = core.previews.tokens.lock().unwrap();
-    // One token per artifact: a new version replaces what it serves.
     let token = tokens.iter().find(|(_, v)| v.url == url).map(|(k, _)| k.clone()).unwrap_or_else(new_token);
-    tokens.insert(token.clone(), Allowed { url, files });
-    Ok(Preview { src: Some(format!("{}/{token}/{}", base_url(), encode(&page))) })
+    tokens.insert(token.clone(), Allowed { url: url.to_string(), files });
+    Ok((a, Some(format!("{}/{token}/{}", base_url(), encode(&page)))))
+}
+
+// ---------- the preview window ----------
+
+/// Preview windows (window and webview share the label).
+pub const PREVIEW_PREFIX: &str = "preview-";
+/// A preview window's size when the screen has room.
+const PREVIEW_SIZE: (f64, f64) = (900.0, 700.0);
+
+/// The page a preview window loads, as a `data:` URL: nothing but the artifact's page in
+/// `<iframe sandbox="allow-scripts">`. Its own CSP allows no script, no fetch, and frames only from the artifact
+/// scheme. A `data:` document is an opaque, non-local origin to Tauri, so its IPC is refused everything (see
+/// [`artifact_window`]).
+fn host_url(src: &str) -> String {
+    let attr = src.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+    let html = format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; frame-src {SCHEME}: http://{SCHEME}.localhost"><style>html,body{{margin:0;height:100%;background:#fff}}iframe{{display:block;border:0;width:100%;height:100%}}</style></head><body><iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer" src="{attr}"></iframe></body></html>"#
+    );
+    format!("data:text/html;charset=utf-8,{}", encode(&html).replace('/', "%2F"))
+}
+
+/// What a preview window may load: its host page (`data:`), blank frames, and this artifact's token on the artifact
+/// scheme. The web, `file:`, the app's own pages and other tokens are cancelled.
+fn preview_navigable(u: &tauri::webview::Url, token: &str) -> bool {
+    let mine = || u.path().starts_with(&format!("/{token}/"));
+    match u.scheme() {
+        "data" | "about" => true,
+        s if s == SCHEME => u.host_str() == Some("localhost") && mine(),
+        // Windows / Android serve custom schemes as http://<scheme>.localhost.
+        "http" | "https" => u.host_str() == Some(&format!("{SCHEME}.localhost")) && mine(),
+        _ => false,
+    }
+}
+
+fn preview_title(a: &ArtifactInfo) -> String {
+    match a.version {
+        Some(v) => format!("{} · v{v}", a.title),
+        None => a.title.clone(),
+    }
+}
+
+/// Opens the artifact's local copy in a preview window of its own (APP_SPEC "Artifacts"), or focuses the one already
+/// showing it (reloaded when a newer version was published). `false` when the local copy is gone.
+///
+/// Isolation: the window's label (`preview-<n>`) is in no capability (the only one names the webview `main`), and
+/// the page it loads is a `data:` document, which Tauri treats as a remote origin: every command and plugin call
+/// from it is checked against the ACL and refused. The artifact runs one level down, in a sandboxed frame (opaque
+/// origin, no Tauri script, so no invoke key), exactly as it used to in the panel. Non-persistent data store; no
+/// new windows, no downloads.
+#[tauri::command(async)]
+pub fn artifact_window(app: AppHandle, core: State<'_, Arc<Core>>, url: String) -> Result<bool, String> {
+    let (a, src) = mint(&core, &url)?;
+    let Some(src) = src else { return Ok(false) };
+    let title = preview_title(&a);
+    let version = a.version.unwrap_or(0);
+    let open = core.previews.windows.lock().unwrap().get(&url).cloned();
+    if let Some((label, shown)) = open
+        && let Some(w) = app.get_webview_window(&label)
+    {
+        if shown != version {
+            let to = tauri::webview::Url::parse(&host_url(&src)).map_err(|e| e.to_string())?;
+            let _ = w.navigate(to);
+            let _ = w.set_title(&title);
+            core.previews.windows.lock().unwrap().insert(url, (label, version));
+        }
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(true);
+    }
+    let token = src.trim_start_matches(base_url()).trim_start_matches('/').split('/').next().unwrap_or_default().to_string();
+    let label = format!("{PREVIEW_PREFIX}{}", core.previews.next_window.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1);
+    let host = tauri::webview::Url::parse(&host_url(&src)).map_err(|e| e.to_string())?;
+    let main = app.get_window("main").ok_or("no window")?;
+    let (pos, size) = place_preview(&main);
+    let mut builder = WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(host))
+        .title(&title)
+        .inner_size(size.0, size.1)
+        .min_inner_size(320.0, 240.0)
+        .resizable(true)
+        .focused(true)
+        .incognito(true)
+        .on_navigation(move |u| preview_navigable(u, &token))
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+        .on_download(|_, _| false);
+    builder = match pos {
+        Some((x, y)) => builder.position(x, y),
+        None => builder.center(),
+    };
+    // A child window of the main one (macOS: addChildWindow): it stays above it and moves with it, as Safari's
+    // pop-ups do, without blocking it.
+    #[cfg(target_os = "macos")]
+    if let Ok(ns) = main.ns_window() {
+        builder = builder.parent_raw(ns);
+    }
+    let win = builder.build().map_err(|e| e.to_string())?;
+    core.previews.windows.lock().unwrap().insert(url.clone(), (label.clone(), version));
+    let gone = app.clone();
+    win.on_window_event(move |e| {
+        if matches!(e, tauri::WindowEvent::Destroyed) {
+            let st = gone.state::<Arc<Core>>();
+            st.previews.windows.lock().unwrap().retain(|_, (l, _)| l != &label);
+        }
+    });
+    Ok(true)
+}
+
+/// 900×700 (smaller if the screen's work area is), centred on the main window, kept on its screen.
+fn place_preview(main: &tauri::Window) -> (Option<(f64, f64)>, (f64, f64)) {
+    let (mut w, mut h) = PREVIEW_SIZE;
+    let Ok(scale) = main.scale_factor() else { return (None, (w, h)) };
+    let area = main.current_monitor().ok().flatten().map(|m| {
+        let wa = m.work_area();
+        let p = wa.position.to_logical::<f64>(scale);
+        let s = wa.size.to_logical::<f64>(scale);
+        (p.x, p.y, s.width, s.height)
+    });
+    if let Some((_, _, aw, ah)) = area {
+        w = w.min(aw - 40.0).max(320.0);
+        // Room for the title bar.
+        h = h.min(ah - 68.0).max(240.0);
+    }
+    let pos = (|| {
+        let p = main.outer_position().ok()?.to_logical::<f64>(scale);
+        let s = main.outer_size().ok()?.to_logical::<f64>(scale);
+        let (mut x, mut y) = (p.x + (s.width - w) / 2.0, p.y + (s.height - h - 28.0) / 2.0);
+        if let Some((ax, ay, aw, ah)) = area {
+            x = x.clamp(ax, (ax + aw - w).max(ax));
+            y = y.clamp(ay, (ay + ah - h - 28.0).max(ay));
+        }
+        Some((x, y))
+    })();
+    (pos, (w, h))
+}
+
+/// Closes every preview window (the main window is going away).
+pub fn close_previews(app: &AppHandle) {
+    let labels: Vec<String> = app.state::<Arc<Core>>().previews.windows.lock().unwrap().values().map(|(l, _)| l.clone()).collect();
+    for l in labels {
+        if let Some(w) = app.get_webview_window(&l) {
+            let _ = w.destroy();
+        }
+    }
 }
 
 fn encode(s: &str) -> String {
@@ -250,7 +390,8 @@ pub fn serve(previews: &Previews, req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
 
 /// Self-test only: writes a probe page (and a supporting image, and a file that is not in its map) into the
 /// self-test folder and makes it previewable without a session (the self-test lists no real sessions). The page
-/// reports to its parent what it can reach (see the `artifact` scenario in app/src/selftest.ts).
+/// reports to its parent (the preview window's host page) what it can reach (see the `artifact` scenario in
+/// app/src/selftest.ts).
 #[tauri::command]
 pub fn selftest_artifact(core: State<'_, Arc<Core>>) -> Result<ArtifactInfo, String> {
     let t = core.selftest.as_ref().ok_or("not in self-test")?;
@@ -289,7 +430,8 @@ const PROBE_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><ti
   } catch (e) { r.ipcFetch = "error"; }
   try { const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ipc; r.webkitIpc = h ? "present" : "absent"; } catch (e) { r.webkitIpc = "error"; }
   document.getElementById("out").textContent = JSON.stringify(r, null, 1);
-  window.parent.postMessage({ cooolArtifactProbe: r }, "*");
+  // Repeated for a while: whoever listens (the self-test, in the preview window's host page) may start late.
+  for (let i = 0; i < 60; i++) { window.parent.postMessage({ cooolArtifactProbe: r }, "*"); await new Promise((res) => setTimeout(res, 250)); }
 })();
 </script></body></html>"#;
 
@@ -328,6 +470,22 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(get(&p, "/tok/link.png"), StatusCode::NOT_FOUND, "a symlink is never followed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preview_windows_load_only_their_artifact() {
+        let n = |s: &str| preview_navigable(&tauri::webview::Url::parse(s).unwrap(), "tok");
+        assert!(n(&host_url("coool-artifact://localhost/tok/page.html")));
+        assert!(n("about:blank"));
+        assert!(n("coool-artifact://localhost/tok/page.html"));
+        assert!(n("coool-artifact://localhost/tok/sub/next.html?x=1"));
+        for bad in ["coool-artifact://localhost/other/page.html", "coool-artifact://evil/tok/page.html", "https://example.com/", "http://localhost:1420/", "tauri://localhost/", "file:///etc/hosts", "javascript:alert(1)", "ipc://localhost/x"] {
+            assert!(!n(bad), "{bad}");
+        }
+        // The host page frames the artifact, sandboxed, and runs nothing itself.
+        let html = decode(host_url("coool-artifact://localhost/tok/a%20b.html").trim_start_matches("data:text/html;charset=utf-8,")).unwrap();
+        assert!(html.contains(r#"<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer" src="coool-artifact://localhost/tok/a%20b.html">"#), "{html}");
+        assert!(html.contains("default-src 'none'") && !html.contains("<script"), "{html}");
     }
 
     #[test]

@@ -998,7 +998,9 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        // No click-to-open script: it would run in the in-app browser's pages too, swallowing every `target=_blank`
+        // link click (its IPC call is refused there). The app's own links open through its handlers.
+        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
         .manage(core.clone())
         .invoke_handler(tauri::generate_handler![
@@ -1041,7 +1043,7 @@ pub fn run() {
             trace::trace_sessions,
             motion::motion_hints,
             artifact::artifact_status,
-            artifact::artifact_preview,
+            artifact::artifact_window,
             artifact::selftest_artifact,
             browser::browser_open,
             browser::browser_bounds,
@@ -1056,6 +1058,10 @@ pub fn run() {
             selftest::selftest_webview,
             selftest::selftest_popups,
             selftest::selftest_browser_eval,
+            selftest::selftest_previews,
+            selftest::selftest_preview_eval,
+            selftest::selftest_close_preview,
+            selftest::selftest_click,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
@@ -1080,12 +1086,13 @@ pub fn run() {
             if let WindowEvent::Focused(f) = ev {
                 win.state::<Arc<Core>>().usage.set_active(*f);
             }
-            // The rest is the main window's: pop-ups of the in-app browser (browser.rs) close freely.
+            // The rest is the main window's: pop-ups of the in-app browser (browser.rs) and artifact previews close freely.
             if win.label() != "main" {
                 return;
             }
             if let WindowEvent::Destroyed = ev {
                 browser::close_all_popups(win.app_handle());
+                artifact::close_previews(win.app_handle());
             }
             if let WindowEvent::CloseRequested { api, .. } = ev {
                 let core = win.state::<Arc<Core>>();

@@ -1,7 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion } from "motion/react";
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
-import { BrowserContext, closeNative, recentPages, useBrowserState, type OpenPage } from "../lib/browser";
+import { BrowserContext, closeNative, recentPages, tabKey, type OpenPage } from "../lib/browser";
 import { BrowserPanel } from "./BrowserPanel";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
@@ -95,27 +95,29 @@ export function SessionView({
   }, [panelKey, wide, liveCards, panelState, setRightPanel]);
   const hasAgents = cards.length > 0 || shells.length > 0;
   const panelOn = wide && hasAgents;
-  const page = useStore((st) => (panelKey ? st.browser[panelKey] : undefined));
+  const tabs = useStore((st) => (panelKey ? st.browser[panelKey] : undefined));
+  const activeKind = tabs?.tabs.find((t) => t.id === tabs.active)?.page.kind;
   const browserWidth = useStore((st) => st.browserWidth);
   const setBrowserWidth = useStore((st) => st.setBrowserWidth);
   const openBrowser = useStore((st) => st.openBrowser);
   const closeBrowser = useStore((st) => st.closeBrowser);
-  const lastPage = useStore((st) => (panelKey ? st.lastBrowser[panelKey] : undefined));
+  const restoreBrowser = useStore((st) => st.restoreBrowser);
+  const lastTabs = useStore((st) => (panelKey ? st.lastBrowser[panelKey] : undefined));
   // The start view's list: this chat's artifacts and the links in its messages.
   const recent = useMemo(() => {
-    if (page?.kind !== "start") return [];
+    if (activeKind !== "start") return [];
     if (chat) return recentPages(chat.items.map((it) => (it.kind === "prompt" || it.kind === "text" ? { text: it.text } : it.kind === "tool" && !it.parent ? { artifact: it.artifact } : {})));
     return recentPages((r.session?.activity ?? []).map((a) => (a.kind === "prompt" || a.kind === "text" ? { text: a.full ?? a.text, artifact: a.artifact } : { artifact: a.artifact })));
-  }, [page?.kind, chat, r.session]);
+  }, [activeKind, chat, r.session]);
   const showing: RightKind | null =
-    panelState === "browser" && page && browserFits ? "browser" : !wide ? null : panelState === "agents" && hasAgents ? "agents" : panelState === "models" ? "models" : null;
+    panelState === "browser" && tabs && browserFits ? "browser" : !wide ? null : panelState === "agents" && hasAgents ? "agents" : panelState === "models" ? "models" : null;
   const agentsOpen = showing === "agents";
   const modelsOpen = showing === "models";
   const browserOpen = showing === "browser";
   const toggleRight = (k: RightKind) => panelKey && setRightPanel(panelKey, showing === k ? "closed" : k);
   const panelWidth = (k: RightKind) => (k === "browser" ? Math.max(BROWSER_MIN, Math.min(browserWidth, paneW - BROWSER_CHAT_MIN)) : agentsWidth);
   const onPanelWidth = (k: RightKind, w: number) => (k === "browser" ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN)) : setAgentsWidth(w));
-  // Artifact cards and links in this view open in its browser panel.
+  // Artifact cards' Open and links in this view open in a tab of its browser panel.
   const openPage = useCallback(
     (p: OpenPage) => {
       if (!panelKey) return;
@@ -127,20 +129,24 @@ export function SessionView({
     },
     [panelKey, browserFits, openBrowser],
   );
-  // Closing destroys the page (and its webview) but remembers where it was: the globe reopens it.
+  // Closing destroys the tabs' webviews but remembers the tabs (where each was, the active one): the globe restores them.
   const onCloseBrowser = () => {
-    if (!panelKey) return;
-    const at = useBrowserState.getState().byKey[panelKey]?.url;
-    closeNative(panelKey);
-    closeBrowser(panelKey, at);
+    if (!panelKey || !tabs) return;
+    for (const t of tabs.tabs) closeNative(tabKey(panelKey, t.id));
+    closeBrowser(panelKey);
   };
-  const pageName = (p: typeof page | typeof lastPage) => (!p || p.kind === "start" ? null : p.kind === "web" ? p.url.replace(/^https?:\/\//, "") : p.info.title);
+  const pageName = (b: typeof tabs) => {
+    const t = b?.tabs.find((x) => x.id === b.active);
+    if (!t || t.page.kind === "start") return null;
+    const name = t.title?.trim() || (t.url || t.page.url).replace(/^https?:\/\//, "");
+    return b!.tabs.length > 1 ? `${name} and ${b!.tabs.length - 1} more tab${b!.tabs.length > 2 ? "s" : ""}` : name;
+  };
   const onGlobe = () => {
     if (!panelKey) return;
     if (browserOpen) return setRightPanel(panelKey, "closed");
     if (!browserFits) return useStore.getState().toast("Make this pane wider to open the browser beside the chat");
-    if (page) return setRightPanel(panelKey, "browser");
-    openBrowser(panelKey, lastPage ? (lastPage.kind === "web" ? { kind: "web", url: lastPage.url } : lastPage) : { kind: "start" });
+    if (tabs) return setRightPanel(panelKey, "browser");
+    restoreBrowser(panelKey);
   };
 
   const { session, pty, starting, startingChat } = r;
@@ -252,7 +258,7 @@ export function SessionView({
           </Button>
         )}
         {panelKey && (
-          <IconButton title={browserOpen ? "Hide the browser" : `Show the browser${pageName(page ?? lastPage) ? ` (${pageName(page ?? lastPage)})` : ""}`} active={browserOpen} onClick={onGlobe}>
+          <IconButton title={browserOpen ? "Hide the browser" : `Show the browser${pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`} active={browserOpen} onClick={onGlobe}>
             <IGlobe size={15} />
           </IconButton>
         )}
@@ -314,7 +320,7 @@ export function SessionView({
               k === "agents" ? (
                 <AgentsBody cards={cards} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
               ) : k === "browser" ? (
-                page ? <BrowserPanel panelKey={panelKey} page={page} active={active} onClose={onCloseBrowser} recent={recent} /> : null
+                tabs ? <BrowserPanel panelKey={panelKey} state={tabs} active={active} onClose={onCloseBrowser} recent={recent} /> : null
               ) : (
                 <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} />
               )
