@@ -8,8 +8,8 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { answerPermission, answerQuestion } from "../lib/actions";
 import { type Chat, type ChatItem, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
-import { rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
-import { agentFill, handoffLine, taskPrompt } from "../lib/agentFill";
+import { permissionWhat, rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
+import { agentFill, fillModel, handoffLine, taskPrompt } from "../lib/agentFill";
 import { FillBar, Handoff } from "./AgentFill";
 import { LiveTurnBar, TurnBar, useTurnBreakdown, Waterfall } from "./TurnBreakdown";
 import { modelLabel } from "../lib/models";
@@ -690,7 +690,8 @@ const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${M
  */
 function PilotRun({ t, chat, fresh }: { t: Tool; chat: number; fresh?: boolean }) {
   const goal = String((t.input as { goal?: unknown } | null)?.goal ?? "");
-  const target = (t.input as { target?: unknown } | null)?.target === "browser" ? "Browser" : "iPhone";
+  const to = (t.input as { target?: unknown } | null)?.target;
+  const target = to === "browser" ? "Browser" : to === "mac" ? "Mac" : "iPhone";
   const live = usePilot((s) => liveRun(s.runs, chat, t.ts, goal));
   const running = t.endTs === null;
   const done = useMemo(() => (running ? null : parseOutcome(t.output)), [running, t.output]);
@@ -804,7 +805,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const end: AgentEnd = tool.ok === false ? (tool.stopped || !tool.output.trim() || isStopReason(tool.output) ? "stopped" : "failed") : "done";
   const reason = tool.ok === false ? tool.output.split("\n").find((l) => l.trim())?.trim().replace(/^\[(.*)\]$/, "$1") || null : null;
   const title = stripToolName(tool.name, tool.summary);
-  const fill = agentFill(chat.agents[tool.id]?.total, modelIds[0] ?? null);
+  const fill = agentFill(chat.agents[tool.id]?.total, fillModel(modelIds[0], tool.input, chat.model));
   const prompt = taskPrompt(tool.input);
   const handoff = handoffLine(prompt, title);
   const extra = (fill || handoff) && (
@@ -913,7 +914,9 @@ function permDetail(p: Perm, cwd: string): { lead: string; body: string; full?: 
   if (typeof i.command === "string") return { lead: "run a command", body: i.command, note: typeof i.description === "string" ? i.description : undefined };
   if (typeof i.file_path === "string") return { lead: /write/i.test(p.tool) ? "create a file" : "edit a file", body: cwd ? relPath(i.file_path, cwd) : i.file_path, full: i.file_path };
   if (typeof i.url === "string") return { lead: "fetch a page", body: i.url };
-  return { lead: `use ${p.tool}`, body: p.summary };
+  // Any other tool reads as rows name it ("weather" + "Get forecast Paris"), never as `mcp__weather__get_forecast`.
+  const w = permissionWhat(p.tool, p.input, p.summary);
+  return { lead: `use ${w.name}`, body: w.detail || w.name };
 }
 
 /** "Allow `npm test` commands" -> text with `code` spans. */

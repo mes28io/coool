@@ -376,12 +376,17 @@ export function toolRow(t: ToolCallLike): ToolRow {
   const i = inputOf(t.input);
   if (!mcp) {
     const agent = /^(task|agent)$/i.test(t.name);
+    // ToolSearch loads tools by name ("select:mcp__coool-device__browser_click,…"): the names read as they do in rows.
+    if (t.name === "ToolSearch") {
+      const q = str(i.query) || stripName(t.name, t.summary ?? "");
+      return { family: "tool", label: t.name, detail: readableToolNames(q), group: t.name, raw: t.name };
+    }
     return { family: "tool", label: t.name, detail: stripName(t.name, t.summary ?? ""), group: agent ? "Agent" : t.name, raw: t.name };
   }
   const { server, tool } = mcp;
   if (isDevice(server)) {
     if (tool === "pilot_run") {
-      const target = str(i.target) === "browser" ? "Browser" : "iPhone";
+      const target = str(i.target) === "browser" ? "Browser" : str(i.target) === "mac" ? "Mac" : "iPhone";
       return { family: "pilot", label: `Pilot · ${target}`, detail: clip(str(i.goal)), group: "Pilot", raw: t.name };
     }
     if (tool.startsWith("browser_")) return browserRow(t, tool.slice(8), i);
@@ -391,6 +396,27 @@ export function toolRow(t: ToolCallLike): ToolRow {
   const srv = serverLabel(server);
   const detail = Object.keys(i).length ? genericArg(i) : stripName(t.name, t.summary ?? "");
   return { family: "mcp", label: tool ? `${srv} · ${words(tool)}` : srv, detail, group: srv, raw: t.name };
+}
+
+/**
+ * Tool names inside a text (a ToolSearch query) as rows name them: "select:mcp__coool-device__browser_click,
+ * mcp__weather__get_forecast" -> "Browser click, weather · Get forecast". Other text is left as it is.
+ */
+export function readableToolNames(text: string): string {
+  const one = (name: string) => {
+    const m = parseMcp(name);
+    if (!m) return name;
+    if (isDevice(m.server)) {
+      const g = groupOf(name);
+      const rest = m.tool.replace(/^(browser|mac)_/, "");
+      return g === "Pilot" ? "Pilot" : `${g} ${words(rest).toLowerCase()}`;
+    }
+    return m.tool ? `${serverLabel(m.server)} · ${words(m.tool)}` : serverLabel(m.server);
+  };
+  return text
+    .replace(/^select:\s*/i, "")
+    .replace(/mcp__[A-Za-z0-9_-]+(?:__[A-Za-z0-9_.-]+)?/g, one)
+    .replace(/\s*,\s*/g, ", ");
 }
 
 /** For a transcript's "name · detail" line, the input key the core's summary took its detail from (its first string value). */

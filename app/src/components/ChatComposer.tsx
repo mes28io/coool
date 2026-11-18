@@ -382,7 +382,8 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             onKeyDown={onKey}
             className="selectable block max-h-[200px] min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-prose outline-none placeholder:text-faint"
           />
-          <div className="flex items-center gap-1 px-2 pb-2">
+          {/* A container: the hints below fit the composer's own width (a narrow pane or a wide side panel), not the window's. */}
+          <div className="@container flex items-center gap-1 px-2 pb-2">
             {/* model */}
             <div className="relative">
               <Chip active={pop === "model"} onClick={() => openPop(pop === "model" ? null : "model")} title="Model (/model)">
@@ -487,13 +488,19 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
               </Popover>
             </div>
             <span className="flex-1" />
+            {/* One line or nothing: never wrapped or clipped. The full hint needs ~620px of composer, a short one ~470px. */}
             {!compact && working && (
-              <span className="hidden items-center gap-1.5 font-mono text-micro text-faint md:flex" data-steer-hint>
+              <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-micro text-faint @min-[620px]:flex" data-steer-hint>
                 <Kbd>↵</Kbd> next step <span>·</span> <Kbd>⌘↵</Kbd> interrupt now <span>·</span> <Kbd>esc</Kbd> stop
               </span>
             )}
+            {!compact && working && (
+              <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-micro text-faint @min-[470px]:flex @min-[620px]:hidden" data-steer-hint-short>
+                <Kbd>⌘↵</Kbd> now <span>·</span> <Kbd>esc</Kbd> stop
+              </span>
+            )}
             {!compact && !working && (
-              <span className="hidden items-center gap-1 text-small text-faint md:flex">
+              <span className="hidden shrink-0 items-center gap-1 whitespace-nowrap text-small text-faint @min-[400px]:flex">
                 <Kbd>⇧</Kbd>
                 <Kbd>↵</Kbd> newline
               </span>

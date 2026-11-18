@@ -23,6 +23,20 @@ export function agentFill(used: number | null | undefined, model: string | null 
   return { used, window: w.tokens, share, estimate: w.source !== "reported", high: share > 0.8 };
 }
 
+/**
+ * The model to size a chat sub-agent's window by: the one it reported, else the one the lead asked for in the Task
+ * call (`model: "haiku"`), else the lead's own (what Claude Code runs a sub-agent on when none is named). Before its
+ * first usage record a sub-agent reports no model, and the family default (200k) made two cards of one run disagree.
+ */
+export function fillModel(reported: string | null | undefined, input: unknown, lead: string | null | undefined): string | null {
+  const raw = (input as { model?: unknown } | null)?.model;
+  const asked = typeof raw === "string" && raw.trim() ? raw.trim() : null;
+  // A bare alias ("haiku") of the lead's own family is the lead's model: the alias alone only gets the family's
+  // oldest window.
+  const same = !!asked && !!lead && /^(opus|sonnet|haiku)$/i.test(asked) && lead.toLowerCase().includes(`claude-${asked.toLowerCase()}-`);
+  return reported || (same ? lead : asked) || lead || null;
+}
+
 /** "32k", "1M", "272k", "1.2k". */
 export function fmtK(n: number): string {
   if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`.replace(".0M", "M");

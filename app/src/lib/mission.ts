@@ -163,8 +163,9 @@ export function projectPath(p: string, root: string): string | null {
   const a = normPath(p);
   if (!a.startsWith("/") && !a.startsWith("~")) rel = a.replace(/^(\.\/)+/, "");
   else {
-    if (TEMP.test(p) || TEMP.test(a)) return null;
     const base = normPath(root);
+    // A temp folder is never the project's, unless the project itself lives there (a scratch repo in /tmp).
+    if ((TEMP.test(p) || TEMP.test(a)) && !(base && a.startsWith(base + "/"))) return null;
     const tail = base.replace(/^\/(Users|home)\/[^/]+/, "~");
     if (base && a.startsWith(base + "/")) rel = a.slice(base.length + 1);
     else if (tail.startsWith("~") && a.startsWith(tail + "/")) rel = a.slice(tail.length + 1);
@@ -702,7 +703,10 @@ export function foldAgentRows(rows: Change[], agentOf: (c: Change) => string | n
 export interface TrailCommitLike {
   time_ms: number;
   files: string[];
-  merge?: { commits: { time_ms: number; files: string[] }[] } | null;
+  /** The subject and how many more files than `files` it touched (git_trail's fields), when known. */
+  subject?: string;
+  files_more?: number;
+  merge?: { commits: { time_ms: number; files: string[]; subject?: string; files_more?: number }[] } | null;
 }
 
 /** Git history: the commit trail shows these, so the ledger leaves them to it. ("Merged PR" happens on the host; it stays.) */
@@ -731,11 +735,23 @@ const onTrail = (commits: TrailCommitLike[], file: string, ts: number) => commit
 /** Whether a file change is committed: its author (the session, or that subagent) committed after it, or a commit on the trail made after it lists the file. */
 function committedBy(rows: Change[], agentOf: (c: Change) => string | null, trail: TrailCommitLike[] | null): (c: Change, file?: string) => boolean {
   const author = (c: Change) => `${c.session}|${agentOf(c) ?? ""}`;
-  // Each author's latest commit.
-  const lastCommit = new Map<string, number>();
-  for (const c of rows) if (c.kind === "commit") lastCommit.set(author(c), Math.max(lastCommit.get(author(c)) ?? 0, c.ts));
   const commits = trailCommits(trail);
-  return (c, file = c.object) => (lastCommit.get(author(c)) ?? -1) >= c.ts || onTrail(commits, file, c.ts);
+  // Each author's commits (time, message).
+  const mine = new Map<string, Change[]>();
+  for (const c of rows) if (c.kind === "commit") mine.set(author(c), [...(mine.get(author(c)) ?? []), c]);
+  // A commit of the author's covers the file unless the trail has that commit (same message, made after the edit)
+  // with its whole file list, and the file isn't in it: `git add other.txt && git commit` leaves notes.txt pending.
+  const covers = (k: Change, file: string, ts: number) => {
+    const t = commits.find((x) => x.subject !== undefined && x.time_ms >= ts - 1000 && sameSubject(x.subject, k.object));
+    return !t || (t.files_more ?? 0) > 0 || t.files.includes(file);
+  };
+  return (c, file = c.object) => (mine.get(author(c)) ?? []).some((k) => k.ts >= c.ts && covers(k, file, c.ts)) || onTrail(commits, file, c.ts);
+}
+
+/** A trail subject and a ledger commit message (clipped to 72 with "…") name the same commit. */
+function sameSubject(subject: string, msg: string): boolean {
+  const m = msg.replace(/…$/, "");
+  return subject === msg || (msg.endsWith("…") && subject.startsWith(m)) || subject === m.split("\n")[0];
 }
 
 // ---------- file overlap between live sessions ----------

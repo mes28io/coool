@@ -137,3 +137,11 @@ test("helpers", () => {
   assert.equal(shortUrl("https://www.example.com/"), "example.com");
   assert.equal(shortUrl("example.com/a?x=1"), "example.com/a");
 });
+
+test("ToolSearch: the names it loads read as rows do; pilot_run on the Mac says Mac", () => {
+  const r = toolRow({ name: "ToolSearch", input: { query: "select:mcp__coool-device__browser_navigate,mcp__coool-device__browser_click,mcp__weather__get_forecast" }, ok: true });
+  assert.equal(r.detail, "Browser navigate, Browser click, weather · Get forecast");
+  assert.ok(!/mcp__/.test(toolRow({ name: "ToolSearch", summary: "ToolSearch · select:mcp__coool-device__tap", ok: true }).detail));
+  assert.equal(toolRow({ name: "ToolSearch", input: { query: "slack send" }, ok: true }).detail, "slack send");
+  assert.equal(toolRow({ name: "mcp__coool-device__pilot_run", input: { target: "mac", goal: "Open Calculator" }, ok: true }).label, "Pilot · Mac");
+});

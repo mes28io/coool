@@ -651,7 +651,7 @@ fn shells_focus(core: State<'_, Arc<Core>>, ids: Vec<String>) {
 #[tauri::command(async)]
 fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> Res<usize> {
     let mut opts = opts;
-    opts.cwd = expand_tilde(&opts.cwd);
+    opts.cwd = private_alias(&expand_tilde(&opts.cwd));
     check_launch(opts.provider, &opts.cwd)?;
     let provider = opts.provider;
     let cwd = opts.cwd.clone();
@@ -666,6 +666,15 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
     // The chat row (and a pending tab) shows up right away.
     core.publish(&app);
     Ok(id)
+}
+
+/// macOS's `/tmp` and `/var` are links into `/private`, and the CLIs record the real path: a chat started in
+/// `/tmp/x` would otherwise show as its own project next to its transcript's `/private/tmp/x` until it has one.
+fn private_alias(cwd: &str) -> String {
+    if cfg!(target_os = "macos") && (cwd == "/tmp" || cwd.starts_with("/tmp/") || cwd.starts_with("/var/")) && std::path::Path::new(&format!("/private{cwd}")).is_dir() {
+        return format!("/private{cwd}");
+    }
+    cwd.to_string()
 }
 
 #[tauri::command(async)]
@@ -1537,6 +1546,7 @@ pub fn run() {
             selftest::selftest_preview_eval,
             selftest::selftest_close_preview,
             selftest::selftest_click,
+            selftest::selftest_native,
             selftest::selftest_sim_delete,
             selftest::selftest_sim_screen,
             selftest::selftest_pilot_log,

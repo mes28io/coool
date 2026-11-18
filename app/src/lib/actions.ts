@@ -133,6 +133,10 @@ export function answerPermission(chat: number, requestId: string, a: Exclude<Per
 export function answerPermission(chat: number, requestId: string, a: "always", remember: RememberOption): void;
 export function answerPermission(chat: number, requestId: string, a: Exclude<PermissionAnswer, "answered">, remember?: RememberOption) {
   if (a === "always" && !remember) return;
+  // A second click while the card fades out (or Allow on the card and in Mission control) answers nothing: the CLI
+  // already has the answer, and asking again only raised "no pending permission request".
+  const done = useChats.getState().chats[chat]?.items.some((i) => i.kind === "permission" && i.requestId === requestId && i.answer);
+  if (done) return;
   useChats.getState().answer(chat, requestId, a, remember);
   void chatCall(chat, () => api().chatRespondPermission(chat, requestId, a !== "deny", false, a === "always" ? remember!.id : null));
 }
