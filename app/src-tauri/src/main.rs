@@ -10,5 +10,11 @@ fn main() {
         let dir = std::env::args().nth(2).expect("usage: coool --coool-device-serve <dir>");
         std::process::exit(coool_app_lib::device_serve_headless(std::path::Path::new(&dir)));
     }
+    // The device pilot's decision log, summarised for a future fine-tune's eval (device/pilot/dataset.rs).
+    if std::env::args().nth(1).as_deref() == Some("--coool-pilot-eval") {
+        let file = std::env::args().nth(2).expect("usage: coool --coool-pilot-eval <file.decisions.jsonl>");
+        println!("{}", coool_app_lib::pilot_eval_report(std::path::Path::new(&file)));
+        return;
+    }
     coool_app_lib::run()
 }

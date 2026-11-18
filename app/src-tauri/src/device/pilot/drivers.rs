@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 /// suggestion bar). Elements below it are covered.
 const KEYBOARD_TOP: f64 = 0.55;
 
+/// A screen read counts once a second read this long after agrees (see `perceive`), for at most `STABLE_MAX_MS`.
+const STABLE_GAP_MS: u64 = 80;
+const STABLE_MAX_MS: u64 = 1200;
+
 /// The pilot's view of an accessibility tree (see [`observe::parse`]).
 pub fn iphone_screen(t: &Tree) -> Screen {
     let (w, h) = (if t.w > 0.0 { t.w } else { 402.0 }, if t.h > 0.0 { t.h } else { 874.0 });
@@ -170,16 +174,58 @@ impl Driver for Iphone<'_> {
                 break;
             }
             prev = sig;
-            std::thread::sleep(Duration::from_millis(150));
+            // While SpringBoard still answers (the launch animation, ~2 s) a read takes ~10 ms: poll often.
+            std::thread::sleep(Duration::from_millis(if s.home { 50 } else { 100 }));
         }
         Ok(format!("launched {app} (simctl {launch_ms} ms, its first screen ready after {} ms)", t.elapsed().as_millis()))
     }
 
+    fn resume(&mut self, goal: &Goal, name: &str) -> Result<Option<String>, String> {
+        let Some(app) = &goal.app else { return Ok(None) };
+        self.activity("app", None, None, Some("pilot".into()));
+        let t = Instant::now();
+        let s = iphone_screen(&self.tree()?);
+        if !s.home && !s.alert && s.app == name {
+            return Ok(Some(format!("{name} was in front ({} ms)", t.elapsed().as_millis())));
+        }
+        // Running in the background (or not at all): bring it to the front as it is (no terminate), then wait for its
+        // screen as a launch does.
+        simctl::activate(&self.udid, app)?;
+        let until = Instant::now() + Duration::from_secs(6);
+        let mut prev = String::new();
+        while Instant::now() < until {
+            let s = iphone_screen(&self.tree()?);
+            let sig = super::signature(&s);
+            if !s.home && !s.alert && s.app == name && sig == prev {
+                // The tree answers before the app takes touches: let the switch animation finish.
+                self.idle(150, 500, 2500);
+                return Ok(Some(format!("brought {name} to the front ({} ms)", t.elapsed().as_millis())));
+            }
+            prev = sig;
+            std::thread::sleep(Duration::from_millis(if s.home { 50 } else { 100 }));
+        }
+        Ok(None)
+    }
+
     fn perceive(&mut self) -> Result<(Screen, u64), String> {
         let t = Instant::now();
-        let tree = self.tree()?;
+        // Read until two reads agree: the tree lags the frames, so right after a push a read can still hold the
+        // previous screen's toolbar and lack the new back button, a signature no later run sees again (muscle
+        // memory and warm starts match signatures exactly).
+        let mut tree = self.tree()?;
+        let mut s = iphone_screen(&tree);
+        let until = Instant::now() + Duration::from_millis(STABLE_MAX_MS);
+        while Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(STABLE_GAP_MS));
+            let t2 = self.tree()?;
+            let s2 = iphone_screen(&t2);
+            let same = super::signature(&s2) == super::signature(&s);
+            (tree, s) = (t2, s2);
+            if same {
+                break;
+            }
+        }
         let ms = t.elapsed().as_millis() as u64;
-        let s = iphone_screen(&tree);
         // The caller's own tools (tap by id, …) see what the pilot saw last.
         self.devices.mcp.remember(self.chat, tree, &self.devices.name(&self.udid));
         Ok((s, ms))

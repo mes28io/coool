@@ -457,6 +457,22 @@ pub fn selftest_sim_screen(core: State<'_, Arc<Core>>, devices: State<'_, Arc<cr
     Ok(crate::device::observe::render(&crate::device::observe::parse(&r), &d.name))
 }
 
+/// The device pilot's decision log as written (every line of every log file in the test's own pilot folder), so a
+/// scenario can check its records and that no input value is in them.
+#[tauri::command(async)]
+pub fn selftest_pilot_log(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>) -> Result<Vec<String>, String> {
+    let t = active(&core)?;
+    let dir = crate::device::pilot::dir(&devices).ok_or("no pilot folder")?;
+    if !dir.starts_with(t.dir()) {
+        return Err("not the self-test's pilot folder".into());
+    }
+    let mut lines = Vec::new();
+    for f in crate::device::pilot::dataset::files(&dir) {
+        lines.extend(std::fs::read_to_string(&f).map_err(|e| e.to_string())?.lines().map(String::from));
+    }
+    Ok(lines)
+}
+
 #[derive(Serialize)]
 pub struct PopupProbe {
     label: String,

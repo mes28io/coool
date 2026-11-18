@@ -382,6 +382,7 @@ interface PilotRunResult {
   steps: { n: number; decider: string; action: string; perceive_ms: number; decide_ms: number; act_ms: number; settle_ms: number }[];
   wall_ms: number;
   start_ms: number;
+  start: string;
   deciders: Record<string, number>;
   decide_ms: number;
   haiku_usd: number;
@@ -410,6 +411,27 @@ function pilotLine(o: PilotRunResult): string {
   const lat = model.map((s) => s.decide_ms);
   const by = Object.entries(o.deciders).map(([k, n]) => `${n} ${k}`).join(", ");
   return `${o.status}${o.verified ? " verified" : ""}: wall ${o.wall_ms} ms (start ${o.start_ms} ms, steps ${o.wall_ms - o.start_ms} ms), ${o.steps.length} steps (${by}); model decisions ${lat.length ? `${lat.join("/")} ms` : "none"}; memory decisions ${o.steps.filter((s) => s.decider === "memory").map((s) => s.decide_ms).join("/") || "none"} ms; haiku $${o.haiku_usd.toFixed(5)}, ${o.haiku_tokens} input tokens (${o.haiku_cached_tokens} cached); steps: ${o.steps.map((s) => `${s.n}.${s.action}[${s.decider} p${s.perceive_ms}/d${s.decide_ms}/a${s.act_ms}/s${s.settle_ms}]`).join(" ")}`;
+}
+/** A pilot decision-log record (device/pilot/dataset.rs `Record`). */
+interface PilotRecord {
+  run: string;
+  step: number;
+  target: string;
+  goal: string;
+  input_keys: string[];
+  screen: { summary: string; candidates: { id: number; verb: string; input_key?: string }[] };
+  prev: string;
+  decider: string;
+  chosen: number;
+  decision_ms: number;
+  outcome: string;
+  verified: boolean;
+  on_success_path: boolean | null;
+}
+/** The test's pilot decision log: the raw lines and the records. */
+async function pilotLog(): Promise<{ raw: string; recs: PilotRecord[] }> {
+  const lines = (await invoke("selftest_pilot_log")) as string[];
+  return { raw: lines.join("\n"), recs: lines.map((l) => JSON.parse(l) as PilotRecord) };
 }
 /** After a turn: the panels' "Agent" marks must be off (they used to linger for 3 s after the agent's last action). */
 async function marksOff(sel: string): Promise<string> {
@@ -1751,9 +1773,45 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         const [a, b] = runs;
         const mem = b.deciders.memory ?? 0;
         if (mem * 2 < b.steps.length) throw new Fail(`only ${mem} of ${b.steps.length} steps from memory`);
-        const steps = (o: PilotRunResult) => o.wall_ms - o.start_ms;
-        if (steps(b) >= steps(a)) throw new Fail(`second run's steps took ${steps(b)} ms vs ${steps(a)} ms`);
-        return `run 1: ${a.wall_ms} ms (steps ${steps(a)} ms, ${JSON.stringify(a.deciders)}); run 2: ${b.wall_ms} ms (steps ${steps(b)} ms, ${JSON.stringify(b.deciders)})`;
+        if (b.wall_ms >= a.wall_ms) throw new Fail(`second run took ${b.wall_ms} ms vs ${a.wall_ms} ms`);
+        return `run 1: ${a.wall_ms} ms (start ${a.start_ms} ms, ${JSON.stringify(a.deciders)}); run 2: ${b.wall_ms} ms (start ${b.start_ms} ms, ${JSON.stringify(b.deciders)})`;
+      });
+      await step("pilot-iphone: the second run is a warm start (Settings was in front: no relaunch), about 3 s or less", async () => {
+        if (runs.length < 2) throw new Fail("a run failed");
+        const b = runs[1];
+        if (!/^warm:/.test(b.start)) throw new Fail(`start: ${b.start}`);
+        if (b.wall_ms > 3500) throw new Fail(`the warm run took ${b.wall_ms} ms (start ${b.start_ms} ms: ${b.start})`);
+        await log(`PILOT iphone warm ${b.wall_ms} ms: ${b.start}`);
+        return `${b.wall_ms} ms; ${b.start}`;
+      });
+      await step("pilot-iphone: the decision log has both runs' decisions, on the successful path", async () => {
+        const { recs } = await pilotLog();
+        const mine = recs.filter((r) => r.target === "iphone");
+        const byRun = new Map<string, PilotRecord[]>();
+        for (const r of mine) byRun.set(r.run, [...(byRun.get(r.run) ?? []), r]);
+        const all = [...byRun.values()];
+        if (all.length < 2) throw new Fail(`${all.length} runs logged (${mine.length} records)`);
+        const [r1, r2] = all.slice(-2);
+        const who = (rs: PilotRecord[]) => rs.map((r) => r.decider).join(",");
+        if (!r1.some((r) => r.decider === "haiku") || r1[r1.length - 1].decider !== "checks") throw new Fail(`run 1 deciders ${who(r1)}`);
+        if (!r2.some((r) => r.decider === "memory") || r2.some((r) => r.decider === "haiku")) throw new Fail(`run 2 deciders ${who(r2)}`);
+        for (const r of [...r1, ...r2]) {
+          if (r.outcome !== "done" || !r.verified || r.on_success_path !== true) throw new Fail(`record ${JSON.stringify(r).slice(0, 300)}`);
+          if (!r.screen.candidates.length || !r.screen.summary || r.chosen >= r.screen.candidates.length) throw new Fail(`screen of ${r.run}/${r.step}`);
+        }
+        await log(`PILOT log sample ${JSON.stringify(r2[0]).slice(0, 1500)}`);
+        return `${mine.length} iphone records; run 1 ${who(r1)}, run 2 ${who(r2)} (prev ${r2.map((r) => r.prev).join(" / ")})`;
+      });
+      await step("pilot-iphone: Settings > Device pilot shows the log's folder and size", async () => {
+        useStore.getState().openSettings("pilot");
+        const el = await waitFor("the log's size", () => $("[data-pilot-log-size]"), 10_000);
+        const bytes = Number(el.getAttribute("data-pilot-log-size"));
+        const dir = $("[data-pilot-log-dir]")?.textContent ?? "";
+        if (!(bytes > 0) || !dir.includes(".coool-device")) throw new Fail(`size ${bytes}, dir ${dir}`);
+        if (!$('[data-setting="pilot-log"] [role="switch"][aria-checked="true"]')) throw new Fail("the toggle isn't on");
+        await shot("pilot-settings");
+        useStore.getState().closeSettings();
+        return `${dir}: ${el.textContent}`;
       });
     } finally {
       await step("pilot-iphone: the test's simulator is shut down and deleted", async () => {
@@ -1830,6 +1888,19 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const mem = b.deciders.memory ?? 0;
       if (mem * 2 < b.steps.length) throw new Fail(`only ${mem} of ${b.steps.length} steps from memory`);
       return `run 1: ${a.wall_ms} ms ${JSON.stringify(a.deciders)}; run 2: ${b.wall_ms} ms ${JSON.stringify(b.deciders)}`;
+    });
+    await step("pilot-browser: the decision log has the form's decisions, and nothing that was typed", async () => {
+      const { raw, recs } = await pilotLog();
+      const mine = recs.filter((r) => r.target === "browser");
+      if (mine.length < 4) throw new Fail(`${mine.length} browser records`);
+      const low = raw.toLowerCase();
+      for (const v of [NAME.toLowerCase(), "ada@example.com"]) if (low.includes(v)) throw new Fail(`the log holds the input value ${JSON.stringify(v)}`);
+      if (!mine.every((r) => r.input_keys.join(",") === "email,name")) throw new Fail(`input keys ${JSON.stringify(mine[0].input_keys)}`);
+      const typed = mine.filter((r) => r.screen.candidates[r.chosen]?.verb === "set_text");
+      if (typed.length < 2) throw new Fail(`${typed.length} set_text decisions`);
+      if (!raw.includes("<filled>")) throw new Fail("no filled field recorded as <filled>");
+      const done = mine.filter((r) => r.outcome === "done" && r.on_success_path === true).length;
+      return `${mine.length} browser records (${done} on a successful path), set_text by key ${typed.map((r) => r.screen.candidates[r.chosen].input_key).join(", ")}; no input values`;
     });
     useStore.getState().closeBrowser(chatPanelKey(id));
   },

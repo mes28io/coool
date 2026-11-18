@@ -1016,6 +1016,7 @@ export function mockBackend(): Backend {
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 
   const insights: InsightsStatus = readInsights();
+  const pilotLog = { enabled: true, dir: "~/Library/Application Support/sh.coool.app/pilot", bytes: 184_320, files: 1 };
   const saveInsights = () => {
     try {
       localStorage.setItem(INSIGHTS_KEY, JSON.stringify({ enabled: insights.enabled, has_key: insights.has_key }));
@@ -1456,6 +1457,19 @@ export function mockBackend(): Backend {
       insights.enabled = enabled;
       saveInsights();
       emitSessions();
+    },
+    async pilotLogStatus() {
+      return { ...pilotLog };
+    },
+    async pilotLogSetEnabled(enabled) {
+      pilotLog.enabled = enabled;
+      return { ...pilotLog };
+    },
+    async pilotLogReveal() {},
+    async pilotLogDelete() {
+      pilotLog.bytes = 0;
+      pilotLog.files = 0;
+      return { ...pilotLog };
     },
     async setShowAutomation(enabled) {
       showAutomation = enabled;

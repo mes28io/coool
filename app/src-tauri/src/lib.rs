@@ -724,6 +724,62 @@ fn set_show_automation(core: State<'_, Arc<Core>>, enabled: bool) -> Res<()> {
     Ok(())
 }
 
+// ---- The device pilot's decision log (APP_SPEC "Device pilot") ----
+
+#[derive(Serialize)]
+struct PilotLogStatus {
+    enabled: bool,
+    /// The folder (muscle memory and decision logs), when coool has a data folder.
+    dir: Option<String>,
+    bytes: u64,
+    files: usize,
+}
+
+fn pilot_log_status_of(core: &Core, devices: &device::Devices) -> PilotLogStatus {
+    let dir = device::pilot::dir(devices);
+    let (bytes, files) = dir.as_deref().map(device::pilot::dataset::size).unwrap_or((0, 0));
+    PilotLogStatus { enabled: settings::load(core.selftest.as_ref()).pilot_log, dir: dir.map(|d| d.to_string_lossy().into_owned()), bytes, files }
+}
+
+/// Settings: "Save pilot decisions for training", with where the log is and its size.
+#[tauri::command(async)]
+fn pilot_log_status(core: State<'_, Arc<Core>>, devices: State<'_, Arc<device::Devices>>) -> PilotLogStatus {
+    pilot_log_status_of(&core, &devices)
+}
+
+#[tauri::command(async)]
+fn pilot_log_set_enabled(core: State<'_, Arc<Core>>, devices: State<'_, Arc<device::Devices>>, enabled: bool) -> Res<PilotLogStatus> {
+    device::pilot::dataset::set_enabled(enabled);
+    let mut s = settings::load(core.selftest.as_ref());
+    s.pilot_log = enabled;
+    settings::save(core.selftest.as_ref(), &s).map_err(err)?;
+    Ok(pilot_log_status_of(&core, &devices))
+}
+
+/// Shows the log's folder in Finder (created first, so there is something to show).
+#[tauri::command(async)]
+fn pilot_log_reveal(devices: State<'_, Arc<device::Devices>>) -> Res<()> {
+    let dir = device::pilot::dir(&devices).ok_or("coool has no data folder")?;
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let target = device::pilot::dataset::files(&dir).into_iter().next();
+    let mut cmd = std::process::Command::new("open");
+    match &target {
+        Some(f) => cmd.arg("-R").arg(f),
+        None => cmd.arg(&dir),
+    };
+    cmd.status().map_err(err)?;
+    Ok(())
+}
+
+/// Deletes the decision logs (the muscle memory stays).
+#[tauri::command(async)]
+fn pilot_log_delete(core: State<'_, Arc<Core>>, devices: State<'_, Arc<device::Devices>>) -> PilotLogStatus {
+    if let Some(d) = device::pilot::dir(&devices) {
+        device::pilot::dataset::delete(&d);
+    }
+    pilot_log_status_of(&core, &devices)
+}
+
 // ---- Plan usage (CHAT_SPEC "Plan usage") ----
 
 /// Refresh one provider's plan usage now (a hidden CLI probe that runs no
@@ -777,14 +833,27 @@ mod settings {
     use serde::{Deserialize, Serialize};
     use std::path::PathBuf;
 
-    /// Preferences that live in the backend. Off by default.
-    #[derive(Default, Serialize, Deserialize)]
+    /// Preferences that live in the backend. Off by default, but for the pilot's decision log.
+    #[derive(Serialize, Deserialize)]
     pub struct Settings {
         #[serde(default)]
         pub insights: bool,
         /// Show sessions started by other tools / agents (off: hidden).
         #[serde(default)]
         pub show_automation: bool,
+        /// "Save pilot decisions for training" (on by default; local only).
+        #[serde(default = "yes")]
+        pub pilot_log: bool,
+    }
+
+    fn yes() -> bool {
+        true
+    }
+
+    impl Default for Settings {
+        fn default() -> Self {
+            Settings { insights: false, show_automation: false, pilot_log: true }
+        }
     }
 
     fn path(t: Option<&super::selftest::SelfTest>) -> Option<PathBuf> {
@@ -964,6 +1033,11 @@ pub fn device_mcp_proxy() -> i32 {
     device::mcp::proxy()
 }
 
+/// `coool --coool-pilot-eval <file>`: a pilot decision log's summary (device/pilot/dataset.rs).
+pub fn pilot_eval_report(file: &std::path::Path) -> String {
+    device::pilot::dataset::report(file)
+}
+
 /// `coool --coool-device-serve <dir>`: the device MCP server without the UI, for scripted tests (device/mod.rs).
 pub fn device_serve_headless(dir: &std::path::Path) -> i32 {
     device::Devices::serve_headless(dir)
@@ -978,6 +1052,7 @@ pub fn run() {
 
     let selftest = selftest::SelfTest::from_env();
     let prefs = settings::load(selftest.as_ref());
+    device::pilot::dataset::set_enabled(prefs.pilot_log);
     let mut ins = Insights::new();
     ins.set_enabled(prefs.insights);
     let mut hub = Hub::new(Duration::from_secs(24 * 3600));
@@ -1047,6 +1122,10 @@ pub fn run() {
             insights_clear_key,
             insights_set_enabled,
             set_show_automation,
+            pilot_log_status,
+            pilot_log_set_enabled,
+            pilot_log_reveal,
+            pilot_log_delete,
             usage_refresh,
             pick_folder,
             environment,
@@ -1089,6 +1168,7 @@ pub fn run() {
             selftest::selftest_click,
             selftest::selftest_sim_delete,
             selftest::selftest_sim_screen,
+            selftest::selftest_pilot_log,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
