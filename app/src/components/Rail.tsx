@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNow } from "../lib/clock";
 import { registerOverlay } from "../lib/overlays";
-import type { UsageWindow } from "../lib/types";
+import type { PlanUsages, Provider, UsageWindow } from "../lib/types";
 import { useStore } from "../store";
 import { IBell, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
 import { cx, ease, ProviderMark } from "./primitives";
@@ -192,6 +192,7 @@ function UsageButton() {
   const providers = useUsageProviders();
   const hide = (["claude", "codex"] as const).filter((p) => !providers.includes(p));
   const high = usageHighest(usage, [...hide]);
+  const rings = usageRings(usage, [...hide]);
   return (
     <RailButton
       label={high ? `Usage · ${high.label} ${high.percent}%` : "Usage"}
@@ -200,8 +201,55 @@ function UsageButton() {
       dot={high?.tone ?? null}
       tip={<UsageTip />}
     >
-      <IGauge size={20} />
+      {rings ? <UsageRing size={20} outer={rings.short} inner={rings.week} /> : <IGauge size={20} />}
     </RailButton>
+  );
+}
+
+/** The tightest short (5-hour) and weekly windows across the providers shown: what the rail's two rings draw. */
+function usageRings(usage: PlanUsages, hide: Provider[]): { short: UsageWindow | null; week: UsageWindow | null } | null {
+  let short: UsageWindow | null = null;
+  let week: UsageWindow | null = null;
+  for (const u of [usage.claude, usage.codex]) {
+    if (!u || hide.includes(u.provider)) continue;
+    for (const w of u.windows) {
+      if (w.used_percent === null || w.window_minutes === null || w.model) continue;
+      if (w.window_minutes <= 24 * 60) {
+        if (!short || w.used_percent > short.used_percent!) short = w;
+      } else if (!week || w.used_percent > week.used_percent!) week = w;
+    }
+  }
+  return short || week ? { short, week } : null;
+}
+
+/** Two rings that empty as the limits are used: outer = the 5-hour window, inner = the weekly one (what is left of each). */
+function UsageRing({ size, outer, inner }: { size: number; outer: UsageWindow | null; inner: UsageWindow | null }) {
+  const arc = (w: UsageWindow | null, r: number) => {
+    const c = 2 * Math.PI * r;
+    const left = w ? Math.max(0, Math.min(100, 100 - w.used_percent!)) / 100 : 0;
+    const tone = w ? usageTone(w) : "neutral";
+    return (
+      <>
+        <circle cx="8" cy="8" r={r} opacity={0.22} />
+        {w && left > 0 && (
+          <circle
+            cx="8"
+            cy="8"
+            r={r}
+            transform="rotate(-90 8 8)"
+            strokeDasharray={`${Math.max(0.01, left * c)} ${c}`}
+            stroke={tone === "neutral" ? undefined : toneColor[tone]}
+            style={{ transition: "stroke-dasharray 600ms cubic-bezier(0.2, 0, 0, 1)" }}
+          />
+        )}
+      </>
+    );
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" aria-hidden data-usage-ring>
+      {arc(outer, 6.25)}
+      {arc(inner, 3.25)}
+    </svg>
   );
 }
 
