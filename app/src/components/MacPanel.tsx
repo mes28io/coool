@@ -7,13 +7,13 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { api, type MacInput, type MacStatus } from "../lib/backend";
+import { api, MAC_NETWORK_TRUTH, type MacInput, type MacNetworkMode, type MacStatus } from "../lib/backend";
 import { macKeyCode } from "../lib/macKeys";
 import { simTarget, usePresenceOf } from "../lib/presence";
 import { Spinner, useBox } from "./DevicePanel";
-import { IClose, IFolder, IInfo, IMac } from "./icons";
+import { IClose, IFolder, IGlobe, IGlobeLocal, IGlobeOff, IInfo, IMac } from "./icons";
 import { PanelBeam, PresenceLayer } from "./Presence";
-import { Button, cx, IconButton, Popover } from "./primitives";
+import { Button, cx, IconButton, Popover, Segmented } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
 /** The agent's actions on the Mac arrive as `sim-activity` with this udid. */
@@ -221,6 +221,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
               Boot
             </Button>
           ))}
+        {status && available && st !== "absent" && <NetworkMark status={status} />}
         {status && available && st !== "absent" && <MacInfo status={status} />}
         <IconButton title="Close" onClick={onClose}>
           <IClose size={14} />
@@ -241,7 +242,28 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
   );
 }
 
-/** The header's details: CPUs, memory, disk, and the folder shared with the guest. */
+export const NETWORK_LABEL: Record<MacNetworkMode, string> = { on: "On", local: "This computer only", off: "Off" };
+
+/** What the Mac's network is now (running: what is attached; else the setting for the next boot), and when a change lands. */
+export function macNetworkShown(s: Pick<MacStatus, "state" | "network" | "networkNow">): { now: MacNetworkMode; pending: MacNetworkMode | null } {
+  const setting = s.network ?? "on";
+  const now = s.state === "running" && s.networkNow ? s.networkNow : setting;
+  return { now, pending: now !== setting ? setting : null };
+}
+
+/** The header's network mark: a globe (on), a globe around a house (this computer only), a crossed-out globe (off). */
+function NetworkMark({ status }: { status: MacStatus }) {
+  const { now, pending } = macNetworkShown(status);
+  const Icon = now === "on" ? IGlobe : now === "local" ? IGlobeLocal : IGlobeOff;
+  const tip = `Network: ${NETWORK_LABEL[now]}${pending ? ` (${NETWORK_LABEL[pending]} at the next boot)` : ""}. ${MAC_NETWORK_TRUTH[now]}`;
+  return (
+    <span className={cx("flex size-[26px] shrink-0 items-center justify-center", now === "on" ? "text-dim" : "text-fg")} title={tip} aria-label={tip} data-mac-network={now} data-mac-network-pending={pending ?? undefined}>
+      <Icon size={14} />
+    </span>
+  );
+}
+
+/** The header's details: CPUs, memory, disk, the network, and the folder shared with the guest. */
 function MacInfo({ status }: { status: MacStatus }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
@@ -272,6 +294,7 @@ function MacInfo({ status }: { status: MacStatus }) {
         <div className="flex flex-col gap-2 p-3 text-small" data-mac-info>
           <div className="font-medium text-fg">{status.os ?? "macOS"}</div>
           {specs.length > 0 && <div className="text-dim">{specs.join(" · ")}</div>}
+          <NetworkSwitch status={status} />
           {status.sharedDir && (
             <div className="flex flex-col gap-1 border-t border-hairline pt-2">
               <div className="flex items-center gap-1.5 text-dim">
@@ -291,6 +314,43 @@ function MacInfo({ status }: { status: MacStatus }) {
           )}
         </div>
       </Popover>
+    </div>
+  );
+}
+
+/** The network switch (also in Settings > Devices), with its one line of plain truth. */
+export function NetworkSwitch({ status }: { status: Pick<MacStatus, "state" | "network" | "networkNow"> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const { now, pending } = macNetworkShown(status);
+  const pick = (m: MacNetworkMode) => {
+    if (m === (status.network ?? "on")) return;
+    setBusy(true);
+    setErr(null);
+    void api()
+      .macNetwork(m)
+      .then((r) => setNote(r.applies === "next boot" && status.state === "running" ? `${NETWORK_LABEL[m]} from the next boot: this Mac started without a network device.` : null))
+      .catch((e) => setErr(msg(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-hairline pt-2" data-mac-network-switch>
+      <div className="flex items-center gap-2 text-dim">
+        <span className="min-w-0 flex-1">Network</span>
+        <Segmented<MacNetworkMode>
+          size="sm"
+          value={status.network ?? "on"}
+          onChange={pick}
+          options={(["on", "local", "off"] as const).map((m) => ({ value: m, label: m === "local" ? "Local" : NETWORK_LABEL[m], disabled: busy, title: MAC_NETWORK_TRUTH[m] }))}
+        />
+      </div>
+      <div className="text-faint" data-mac-network-truth>
+        {MAC_NETWORK_TRUTH[now]}
+        {pending ? ` ${NETWORK_LABEL[pending]} from the next boot.` : ""}
+      </div>
+      {note && <div className="text-faint">{note}</div>}
+      {err && <div className="text-err-text">{err}</div>}
     </div>
   );
 }

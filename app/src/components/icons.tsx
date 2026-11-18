@@ -92,6 +92,20 @@ export const IGlobe = mk(
     <path d="M8 1.75c-2 2-3 3.9-3 6.25s1 4.25 3 6.25M8 1.75c2 2 3 3.9 3 6.25s-1 4.25-3 6.25M1.75 8h12.5" strokeWidth={1} opacity={0.8} />
   </>,
 );
+/** No network (the sandbox Mac's network is off): the globe's outline, crossed out. */
+export const IGlobeOff = mk(
+  <>
+    <path d="M12.42 12.42A6.25 6.25 0 013.58 3.58M5.1 2.47a6.25 6.25 0 018.43 8.43" />
+    <path d="M2.25 2.25l11.5 11.5" />
+  </>,
+);
+/** This computer only (the sandbox Mac's host-only network): the globe's outline around a small house. */
+export const IGlobeLocal = mk(
+  <>
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M5.5 8.5L8 6.25l2.5 2.25v2.25h-5z" strokeWidth={1.25} />
+  </>,
+);
 /** iPhone (the right panel's device): a tall rounded frame, the dynamic-island pill drawn thinner and lighter like the globe's lines. */
 export const IPhone = mk(
   <>

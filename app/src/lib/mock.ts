@@ -204,6 +204,12 @@ function mockProjectCap(): number {
 
 const MOCK_ARTIFACT_URL = "https://claude.ai/artifact/9xQmT4kVdR2wLpE7";
 
+/** Settings > Devices > Agent permissions in the mock: what two projects allowed for good. */
+let deviceGrants: { project: string; devices: ("browser" | "iphone" | "mac")[]; sites: string[] }[] = [
+  { project: "/Users/you/code/atlas", devices: ["browser", "iphone"], sites: ["localhost", "stripe.com"] },
+  { project: "/Users/you/code/notes-app", devices: ["mac"], sites: [] },
+];
+
 export function mockBackend(): Backend {
   // Stable across reloads (refreshed every 6h) so "seen" state, which compares session times, survives a reload in the browser demo.
   const now = (() => {
@@ -1807,6 +1813,19 @@ export function mockBackend(): Backend {
     async pilotLogSetEnabled(enabled) {
       pilotLog.enabled = enabled;
       return { ...pilotLog };
+    },
+    async deviceGrants() {
+      return deviceGrants.map((g) => ({ ...g, devices: [...g.devices], sites: [...g.sites] }));
+    },
+    async deviceGrantsRevoke(project, device, site) {
+      const g = deviceGrants.find((x) => x.project === project);
+      if (g) {
+        if (device) g.devices = g.devices.filter((d) => d !== device);
+        else if (site) g.sites = g.sites.filter((s) => s !== site);
+        else g.devices = g.sites = [];
+      }
+      deviceGrants = deviceGrants.filter((x) => x.devices.length || x.sites.length);
+      return this.deviceGrants();
     },
     async pilotLogReveal() {},
     async pilotLogDelete() {

@@ -16,7 +16,10 @@
 // creates for itself, "coool selftest iPhone", and deletes at the end), `pilot-iphone` / `pilot-browser` (a Haiku chat hands
 // Settings > About / the coffee form to the device pilot, `pilot_run`, twice: learned, then from muscle memory),
 // `agent-mac` (a Haiku chat opens TextEdit in coool's sandbox Mac, types a sentence and reads it back; the harness
-// reads the document from the Mac itself).
+// reads the document from the Mac itself). Those answer the device gate's requests as they come ("this chat" for using
+// a device or a site, "Allow once" for the rest). `gate-browser` / `gate-browser-codex` and `gate-mac` /
+// `gate-mac-codex` (a chat in an asking mode: a form submit in the Browser panel, a `mac_shell` command; each stops
+// and shows a request, Allow lets it run, Deny returns the denial to the agent and nothing happens).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { ignoreChatDefaults } from "./lib/prefs";
@@ -298,16 +301,32 @@ interface AgentRun {
   tokens: number | null;
   /** Per mark selector: ms after the prompt it first showed (absent: never). */
   seen: Record<string, number>;
+  /** The device gate's requests during the turn, as they showed and were answered. */
+  asks: DeviceAskSeen[];
 }
+
+/** A request of coool's device gate as the harness saw it: its kind, the card's text, "Needs you", the answer. */
+interface DeviceAskSeen {
+  kind: string;
+  tool: string;
+  text: string;
+  needs: string | null;
+  answer: "chat" | "once" | "deny";
+  ms: number;
+}
+/** The default answers: "this chat" for using a device or a site, Allow once for the always-ask kinds. */
+const allowAll = (a: Pick<DeviceAskSeen, "kind">): DeviceAskSeen["answer"] => (a.kind === "use" || a.kind === "site" ? "chat" : "once");
 
 /**
  * Sends `prompt` to chat `id` and waits for the turn to end, meanwhile watching for each mark (a selector, with a
  * screenshot the first time it shows) and allowing any approval for a coool-device tool (other approvals: denied).
  */
-async function agentTurn(id: number, o: { prompt: string; marks: [string, string][]; probes?: Probe[]; ms: number }): Promise<AgentRun> {
+async function agentTurn(id: number, o: { prompt: string; marks: [string, string][]; probes?: Probe[]; ms: number; answer?: (a: Omit<DeviceAskSeen, "answer" | "ms">) => DeviceAskSeen["answer"] }): Promise<AgentRun> {
   const turns = turnEnds(id).length;
   const n = items(id).length;
   const seen: Record<string, number> = {};
+  const asks: DeviceAskSeen[] = [];
+  const answered = new Set<string>();
   const t0 = Date.now();
   let busy = false;
   const watch = setInterval(() => {
@@ -323,6 +342,32 @@ async function agentTurn(id: number, o: { prompt: string; marks: [string, string
       }
     }
     if (busy) return;
+    // coool's own device gate: answered per `o.answer`, each request once, after a screenshot of the first of a kind.
+    const dev = $("[data-device-approval]");
+    if (dev && !answered.has(dev.dataset.approval ?? "")) {
+      const rid = dev.dataset.approval ?? "";
+      answered.add(rid);
+      const perm = after(id, n).find((i) => i.kind === "permission" && i.requestId === rid) as Extract<ChatItem, { kind: "permission" }> | undefined;
+      const base = { kind: dev.dataset.deviceApproval ?? "", tool: perm?.tool ?? "", text: (dev.textContent ?? "").replace(/\s+/g, " ").trim(), needs: chatNeeds(chat(id)) };
+      const answer = (o.answer ?? allowAll)(base);
+      asks.push({ ...base, answer, ms: Date.now() - t0 });
+      busy = true;
+      void (async () => {
+        await log(`INFO device ask ${base.kind} (${answer}): ${base.text.slice(0, 200)} | needs: ${base.needs}`);
+        if (asks.filter((a) => a.kind === base.kind).length === 1) await shot(`ask-${base.kind}-${id}`, undefined, 350);
+        const target = answer === "deny" ? button("Deny", dev) : answer === "chat" ? (dev.querySelector('[data-remember="chat"]') as HTMLElement | null) : button("Allow once", dev);
+        (target ?? button("Allow once", dev))?.click();
+      })().finally(() => (busy = false));
+      return;
+    }
+    const card = $("[data-approval]");
+    if (card && !card.hasAttribute("data-device-approval")) {
+      const pending = after(id, n).find((i) => i.kind === "permission") as { tool?: string; name?: string } | undefined;
+      const what = JSON.stringify(pending ?? {}).slice(0, 160);
+      const mine = /coool-device/.test(card.textContent ?? "") || /coool-device/.test(what);
+      void log(`INFO approval (${mine ? "allowing" : "denying"}): ${what}`);
+      (button(mine ? "Allow once" : /Deny|Decline|Don't allow/, card) ?? button("Allow once", card))?.click();
+    }
     // Probes (async checks, e.g. the page's own cursor): one at a time, each until it first holds.
     const p = (o.probes ?? []).find((x) => seen[x.name] === undefined);
     if (p) {
@@ -339,14 +384,6 @@ async function agentTurn(id: number, o: { prompt: string; marks: [string, string
         .finally(() => (busy = false));
       return;
     }
-    const card = $("[data-approval]");
-    if (card) {
-      const pending = after(id, n).find((i) => i.kind === "permission") as { tool?: string; name?: string } | undefined;
-      const what = JSON.stringify(pending ?? {}).slice(0, 160);
-      const mine = /coool-device/.test(card.textContent ?? "") || /coool-device/.test(what);
-      void log(`INFO approval (${mine ? "allowing" : "denying"}): ${what}`);
-      (button(mine ? "Allow once" : /Deny|Decline|Don't allow/, card) ?? button("Allow once", card))?.click();
-    }
   }, 100);
   try {
     await say(o.prompt);
@@ -359,7 +396,8 @@ async function agentTurn(id: number, o: { prompt: string; marks: [string, string
       const m = /\(act (\d+) ms · settle (\d+) ms(?: · observe (\d+) ms)?\)|· (\d+) ms$/m.exec(t.output);
       if (m) await log(`ACT ${toolName(t)} act=${m[1] ?? m[4]} settle=${m[2] ?? "-"} observe=${m[3] ?? "-"}`);
     }
-    return { tools: deviceTools(id, n), all: all.map((t) => t.name), reply: lastText(id)?.text ?? "", turnMs: end.durationMs || Date.now() - t0, tokens: end.tokens, seen };
+    for (const a of asks) await log(`ASK ${a.kind} ${a.answer} after ${a.ms} ms: ${a.text.slice(0, 160)}`);
+    return { tools: deviceTools(id, n), all: all.map((t) => t.name), reply: lastText(id)?.text ?? "", turnMs: end.durationMs || Date.now() - t0, tokens: end.tokens, seen, asks };
   } finally {
     clearInterval(watch);
   }
@@ -438,6 +476,125 @@ async function agentBrowser(ctx: Ctx, provider: "claude" | "codex", model: strin
     return `tab mark after ${r.seen["[data-browser-agent-tab]"]} ms`;
   });
   if (key) useStore.getState().closeBrowser(key);
+}
+
+// ---------- the device gate (APP_SPEC "Device permissions") ----------
+
+/** A chat of `provider` in permission mode `mode`, on screen, its panels closed. */
+async function gateChat(ctx: Ctx, provider: "claude" | "codex", model: string, mode: string): Promise<{ id: number; key: string }> {
+  const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+  await newChat({ provider, cwd: ctx.cfg.dir, model, permissionMode: mode });
+  const id = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+  await waitFor("ready", () => chat(id)?.ready, 90_000);
+  await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+  await sleep(1500);
+  const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+  if (chat(id)?.permissionMode !== mode) throw new Fail(`mode ${chat(id)?.permissionMode}, not ${mode}`);
+  return { id, key };
+}
+
+/** The denial the agent got back from a gated call in this run, if any. */
+const denial = (r: AgentRun) => r.tools.find((t) => /Denied by the person/.test(t.output));
+
+async function gateBrowser(ctx: Ctx, provider: "claude" | "codex", model: string, mode: string) {
+  const label = provider === "codex" ? "gate-browser-codex" : "gate-browser";
+  let id = -1;
+  let url = "";
+  await step(`${label}: a ${provider} chat in ${mode} mode starts`, async () => {
+    url = ((await invoke("selftest_probe_server")) as string).replace(/\/probe$/, "/form");
+    ({ id } = await gateChat(ctx, provider, model, mode));
+    return `chat ${id}, ${url}`;
+  });
+  if (id < 0) return;
+  const earlier = (await probeResults()).length;
+  const allow = await agentTurn(id, {
+    prompt: `Use the browser_* tools (the Browser panel beside this chat), not the shell or curl. Open ${url} , type the name Ada, press "Add cup" once, then press "Submit order". Reply with the confirmation sentence the page shows, nothing else.`,
+    marks: [],
+    ms: 240_000,
+  });
+  await step(`${label}: using the Browser asked once (with the site), the submit stopped and asked with its label, Allow submitted`, async () => {
+    const use = allow.asks.find((a) => a.kind === "use");
+    const sub = allow.asks.find((a) => a.kind === "submit");
+    if (!use || !/127\.0\.0\.1/.test(use.text)) throw new Fail(`no "use the Browser" request naming the site: ${JSON.stringify(allow.asks)}`);
+    if (!sub) throw new Fail(`the submit didn't ask: ${JSON.stringify(allow.asks)}; tools ${allow.tools.map(toolLine).join("; ")}`);
+    if (!/Submit order/.test(sub.text) || !/127\.0\.0\.1/.test(sub.text)) throw new Fail(`the submit card doesn't say what and where: ${sub.text}`);
+    if (!sub.needs || !/^Approve Browser/.test(sub.needs)) throw new Fail(`"Needs you" while it waited: ${sub.needs}`);
+    if (allow.asks.filter((a) => a.kind === "use" || a.kind === "site").length > 1) throw new Fail(`asked again after "this chat": ${JSON.stringify(allow.asks)}`);
+    const forms = (await probeResults()).slice(earlier).filter((p) => p.step === "form");
+    const last = forms[forms.length - 1];
+    if (!last?.submitted || last.name !== "Ada") throw new Fail(`the page wasn't submitted: ${JSON.stringify(last)}`);
+    if (denial(allow)) throw new Fail("a call was denied");
+    return `${allow.asks.map((a) => `${a.kind}→${a.answer} @${a.ms}ms`).join(", ")}; needs "${sub.needs}"; reply ${JSON.stringify(allow.reply.trim().slice(0, 120))}; turn ${allow.turnMs} ms`;
+  });
+  const mid = (await probeResults()).length;
+  const deny = await agentTurn(id, {
+    prompt: `Open ${url} again, type the name Bob, press "Add cup" once, then press "Submit order". If coool says the person denied it, don't try another way: reply with exactly DENIED.`,
+    marks: [],
+    ms: 240_000,
+    answer: (a) => (a.kind === "submit" ? "deny" : allowAll(a)),
+  });
+  await step(`${label}: Deny returned the denial to the agent and the page was not submitted`, async () => {
+    const sub = deny.asks.find((a) => a.kind === "submit");
+    if (!sub) throw new Fail(`the submit didn't ask: ${JSON.stringify(deny.asks)}; tools ${deny.tools.map(toolLine).join("; ")}`);
+    if (deny.asks.some((a) => a.kind === "use" || a.kind === "site")) throw new Fail(`asked to use the Browser again in the same chat: ${JSON.stringify(deny.asks)}`);
+    const d = denial(deny);
+    if (!d) throw new Fail(`no tool result carried the denial: ${deny.tools.map((t) => `${toolLine(t)} ${t.output.slice(0, 80)}`).join("; ")}`);
+    const sent = (await probeResults()).slice(mid).filter((p) => p.step === "form" && p.submitted);
+    if (sent.length) throw new Fail(`the page was submitted anyway: ${JSON.stringify(sent)}`);
+    await shot(`${label}-denied`);
+    return `denied ${toolName(d)}: ${JSON.stringify(d.output.slice(0, 140))}; reply ${JSON.stringify(deny.reply.trim().slice(0, 80))}; turn ${deny.turnMs} ms`;
+  });
+  useStore.getState().closeBrowser(chatPanelKey(id));
+}
+
+async function gateMac(ctx: Ctx, provider: "claude" | "codex", model: string, mode: string) {
+  const label = provider === "codex" ? "gate-mac-codex" : "gate-mac";
+  const mac = (request: Record<string, unknown>) => invoke("selftest_mac", { request }) as Promise<Record<string, unknown>>;
+  const token = `gate-ok-${Math.floor(Math.random() * 1e6)}`;
+  const denied = "/tmp/coool-gate-denied";
+  let id = -1;
+  try {
+    await step(`${label}: the sandbox Mac is up and a ${provider} chat in ${mode} mode starts`, async () => {
+      const st = await api().macStatus();
+      if (!st.available || !st.installed) throw new Fail(`no sandbox Mac: ${st.reason ?? "not installed"}`);
+      await api().macBoot();
+      await mac({ cmd: "run", sh: `rm -f /tmp/coool-gate.txt ${denied}`, timeout: 10 });
+      ({ id } = await gateChat(ctx, provider, model, mode));
+      return `chat ${id}; network ${(await api().macStatus()).networkNow ?? "?"}`;
+    });
+    if (id < 0) return;
+    const allow = await agentTurn(id, {
+      prompt: `Use the coool-device tool mac_shell (it runs in coool's sandbox Mac) to run exactly this command: echo ${token} > /tmp/coool-gate.txt && cat /tmp/coool-gate.txt . Don't use your own shell. Reply with the command's output, nothing else.`,
+      marks: [],
+      ms: 240_000,
+    });
+    await step(`${label}: mac_shell stopped and asked, showing the command; Allow ran it`, async () => {
+      const sh = allow.asks.find((a) => a.kind === "shell");
+      if (!sh) throw new Fail(`mac_shell didn't ask: ${JSON.stringify(allow.asks)}; tools ${allow.tools.map(toolLine).join("; ")}`);
+      if (!sh.text.includes(`echo ${token}`)) throw new Fail(`the card doesn't show the command: ${sh.text}`);
+      if (!sh.needs || !/^Approve Mac/.test(sh.needs)) throw new Fail(`"Needs you" while it waited: ${sh.needs}`);
+      const out = (await mac({ cmd: "run", sh: "cat /tmp/coool-gate.txt", timeout: 10 })) as { output?: string };
+      if (!String(out.output ?? "").includes(token)) throw new Fail(`the file in the Mac holds ${JSON.stringify(out.output)}`);
+      return `asked after ${sh.ms} ms: ${sh.text.slice(0, 140)}; needs "${sh.needs}"; the Mac's file holds ${token}; turn ${allow.turnMs} ms`;
+    });
+    const deny = await agentTurn(id, {
+      prompt: `Use mac_shell again to run exactly: touch ${denied} . If coool says the person denied it, don't try another way: reply with exactly DENIED.`,
+      marks: [],
+      ms: 240_000,
+      answer: (a) => (a.kind === "shell" ? "deny" : allowAll(a)),
+    });
+    await step(`${label}: Deny returned the denial to the agent and the command didn't run`, async () => {
+      const sh = deny.asks.find((a) => a.kind === "shell");
+      if (!sh) throw new Fail(`mac_shell didn't ask: ${JSON.stringify(deny.asks)}`);
+      const d = denial(deny);
+      if (!d) throw new Fail(`no tool result carried the denial: ${deny.tools.map((t) => `${toolLine(t)} ${t.output.slice(0, 80)}`).join("; ")}`);
+      const out = (await mac({ cmd: "run", sh: `test -e ${denied} && echo present || echo absent`, timeout: 10 })) as { output?: string };
+      if (!/absent/.test(String(out.output))) throw new Fail(`the command ran anyway: ${out.output}`);
+      return `denied: ${JSON.stringify(d.output.slice(0, 140))}; ${denied} absent; reply ${JSON.stringify(deny.reply.trim().slice(0, 60))}`;
+    });
+  } finally {
+    await mac({ cmd: "run", sh: `rm -f /tmp/coool-gate.txt ${denied}`, timeout: 10 }).catch(() => {});
+  }
 }
 
 // ---------- the device pilot (pilot_run) ----------
@@ -1789,6 +1946,90 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
   /** The same on Codex's cheapest model. */
   async "agent-browser-codex"(ctx) {
     await agentBrowser(ctx, "codex", CODEX_MODEL);
+  },
+
+  /** The device gate in an asking mode (Claude "default"): a form submit stops and asks; Allow submits, Deny doesn't. */
+  async "gate-browser"(ctx) {
+    await gateBrowser(ctx, "claude", PERF_MODEL, "default");
+  },
+  async "gate-browser-codex"(ctx) {
+    await gateBrowser(ctx, "codex", CODEX_MODEL, "on-request");
+  },
+  /** The device gate on the sandbox Mac: a `mac_shell` command stops and asks, showing the command; Allow runs it, Deny doesn't. */
+  async "gate-mac"(ctx) {
+    await gateMac(ctx, "claude", PERF_MODEL, "default");
+  },
+  async "gate-mac-codex"(ctx) {
+    await gateMac(ctx, "codex", CODEX_MODEL, "on-request");
+  },
+
+  /**
+   * The sandbox Mac's network switch (no model calls): booted Off it has no network interface and no route out while
+   * coool's tools still work; booted Local it reaches this computer only; switched to On live it reaches the internet.
+   * Ends shut down, with the setting back to On.
+   */
+  async "mac-network"() {
+    const mac = (sh: string) => invoke("selftest_mac", { request: { cmd: "run", sh, timeout: 20 } }) as Promise<{ output?: string; status?: number }>;
+    const NET = "ifconfig -l; echo; ifconfig en0 2>&1 | grep -E 'inet |status' ; echo ROUTE; route -n get default 2>&1 | grep -E 'gateway|interface|not in table'; echo DNS; scutil --dns | grep -m2 nameserver; echo CURL; curl -sS -m 6 -o /dev/null -w '%{http_code}' https://example.com 2>&1; echo; echo PING; ping -c1 -t3 1.1.1.1 2>&1 | tail -2";
+    const bootWith = async (m: "on" | "local" | "off") => {
+      await api().macShutdown().catch(() => {});
+      await api().macNetwork(m);
+      const t = Date.now();
+      await api().macBoot();
+      return Date.now() - t;
+    };
+    try {
+      await step("mac-network: booted Off, the Mac has no network device, no route out, and coool's tools work", async () => {
+        const st = await api().macStatus();
+        if (!st.available || !st.installed) throw new Fail(`no sandbox Mac: ${st.reason ?? "not installed"}`);
+        const ms = await bootWith("off");
+        const s = await api().macStatus();
+        if (s.network !== "off" || s.networkNow !== "off") throw new Fail(`status network ${s.network}/${s.networkNow}`);
+        const out = String((await mac(NET)).output);
+        await log(`INFO off: ${out.replace(/\n/g, " | ")}`);
+        if (/\ben0\b/.test(out.split("\n")[0])) throw new Fail(`en0 exists: ${out}`);
+        if (!/not in table/.test(out)) throw new Fail(`a default route exists: ${out}`);
+        if (/\b200\b/.test(out.split("CURL")[1] ?? "")) throw new Fail(`reached example.com: ${out}`);
+        const screen = (await invoke("selftest_mac_screen")) as string;
+        if (!/elements/.test(screen)) throw new Fail(`no screen read: ${screen.slice(0, 200)}`);
+        await shot("mac-network-off");
+        return `boot ${ms} ms; ${out.replace(/\n/g, " | ").slice(0, 300)}; screen: ${screen.split("\n")[0]}`;
+      });
+      await step("mac-network: booted Local, the Mac reaches this computer only", async () => {
+        const ms = await bootWith("local");
+        // DHCP on the host-only network can take a moment after the agent answers.
+        let addr = "";
+        for (let i = 0; i < 20 && !/\d+\.\d+/.test(addr); i++) {
+          addr = String((await mac("ipconfig getifaddr en0 2>&1")).output);
+          if (!/\d+\.\d+/.test(addr)) await sleep(2000);
+        }
+        await log(`INFO local en0: ${addr.trim()} | ${String((await mac("ipconfig getpacket en0 2>&1 | head -30")).output).replace(/\n/g, " | ")}`);
+        const out = String((await mac(NET + "; echo GW; G=$(ipconfig getoption en0 server_identifier 2>/dev/null); echo $G; ping -c1 -t3 $G 2>&1 | tail -2")).output);
+        await log(`INFO local: ${out.replace(/\n/g, " | ")}`);
+        if (!/\d+\.\d+/.test(addr)) throw new Fail(`no address on en0: ${out}`);
+        if (/\b200\b/.test((out.split("CURL")[1] ?? "").split("PING")[0])) throw new Fail(`reached example.com: ${out}`);
+        if (!/1 packets received|1 received/.test(out.split("GW")[1] ?? "")) throw new Fail(`can't reach this computer: ${out}`);
+        return `boot ${ms} ms; ${out.replace(/\n/g, " | ").slice(0, 400)}`;
+      });
+      await step("mac-network: switched to On while running, it reaches the internet at once", async () => {
+        const r = await api().macNetwork("on");
+        if (r.applies !== "now" || r.networkNow !== "on") throw new Fail(`applies ${r.applies}, now ${r.networkNow}`);
+        let out = "";
+        for (let i = 0; i < 10 && !/\b200\b/.test(out); i++) {
+          await sleep(2000);
+          out = String((await mac("curl -sS -m 6 -o /dev/null -w '%{http_code}' https://example.com 2>&1")).output);
+        }
+        if (!/\b200\b/.test(out)) throw new Fail(`no internet after switching on: ${out}`);
+        return `example.com ${out}`;
+      });
+    } finally {
+      await step("mac-network: the Mac is shut down and its setting is On again", async () => {
+        await api().macShutdown().catch(() => {});
+        const r = await api().macNetwork("on");
+        if (r.network !== "on") throw new Fail(`setting ${r.network}`);
+        return r.truth;
+      });
+    }
   },
 
   /**

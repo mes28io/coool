@@ -1032,6 +1032,21 @@ static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1)
 /// (`pilot-progress` events), and answers with [`result_text`].
 pub fn call(devices: &super::Devices, chat: usize, a: &Value) -> Result<String, String> {
     let goal = Goal::parse(a)?;
+    // The gate asks once for the run (goal, target, where it starts); inside it the run's device and start site are
+    // allowed, while a submit, a password, a new site or a command still stops it and asks.
+    let dev = match goal.target {
+        Target::Iphone => super::gate::Dev::Iphone,
+        Target::Browser => super::gate::Dev::Browser,
+        Target::Mac => super::gate::Dev::Mac,
+    };
+    let start = match (&goal.url, &goal.app) {
+        (Some(u), _) => format!("Starts at {u}"),
+        (None, Some(app)) => format!("Starts in {app}"),
+        _ => "Starts where the screen is now".to_string(),
+    };
+    devices.gate_check(chat, super::gate::Act { pilot: Some((goal.goal.clone(), start)), ..super::gate::Act::new(dev, "Run the pilot") })?;
+    let sites = goal.url.as_deref().and_then(super::gate::site).into_iter().collect();
+    let _scope = super::gate::pilot_scope(super::gate::PilotScope { chat, dev, sites });
     let project = devices.mcp.cwd(chat).unwrap_or_default();
     let dir = dir(devices);
     let mut mem = match &dir {

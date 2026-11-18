@@ -174,9 +174,41 @@ export interface Backend extends SettingsBackend {
   macInput(input: MacInput): Promise<void>;
   /** The Mac panel shows for this chat (`on`), or was closed: the chat's agent tools act on the Mac while bound. */
   macBind(chat: number, on: boolean): Promise<void>;
+  /** The Mac's network switch: reads it, or sets it (`on`, `local`, `off`); applies now when it can, else at next boot. */
+  macNetwork(mode?: MacNetworkMode): Promise<MacNetwork>;
   /** A partial status (state, progress, step, error) to merge into the last `macStatus`. */
   onMacState(cb: (s: Partial<MacStatus>) => void): Unlisten;
+
+  /** What projects allowed the agents' device tools to do without asking ("Always in this project"; APP_SPEC "Device permissions"). */
+  deviceGrants(): Promise<DeviceGrant[]>;
+  /** Revokes a device, a site, or (neither) everything a project allowed. */
+  deviceGrantsRevoke(project: string, device?: DeviceKind | null, site?: string | null): Promise<DeviceGrant[]>;
 }
+
+export type DeviceKind = "browser" | "iphone" | "mac";
+export interface DeviceGrant {
+  project: string;
+  devices: DeviceKind[];
+  sites: string[];
+}
+/** on: the internet and this computer (NAT); local: this computer only (host-only); off: no network device. */
+export type MacNetworkMode = "on" | "local" | "off";
+export interface MacNetwork {
+  network: MacNetworkMode;
+  /** What the running Mac has attached now (absent while it is off). */
+  networkNow?: MacNetworkMode | null;
+  /** When a change takes effect. */
+  applies?: "now" | "next boot";
+  /** One line of plain truth about what the Mac can reach. */
+  truth: string;
+}
+
+/** The one line of plain truth about each network setting (the backend's `Network::truth`, for the mock and the panel). */
+export const MAC_NETWORK_TRUTH: Record<MacNetworkMode, string> = {
+  on: "The Mac reaches the internet and this computer's network services. Anything in its shared folder can leave this computer.",
+  local: "The Mac reaches only this computer (a dev server here, for example), not the internet. coool's own tools work.",
+  off: "The Mac has no network at all: nothing in it, or in its shared folder, can leave through it. coool's own tools still work.",
+};
 
 export type MacState = "absent" | "downloading" | "installing" | "stopped" | "starting" | "setting-up" | "running" | "stopping";
 export interface MacStatus {
@@ -201,6 +233,9 @@ export interface MacStatus {
   progress?: { phase: string; fraction?: number; done?: number; total?: number };
   step?: string;
   error?: string;
+  /** The network setting (next boot), and what the running Mac has now. */
+  network?: MacNetworkMode;
+  networkNow?: MacNetworkMode | null;
 }
 /** Input to the guest, in guest display pixels (top-left origin). `code`: a macOS virtual key code (lib/macKeys.ts). */
 export type MacInput =
@@ -584,7 +619,10 @@ async function tauriBackend(): Promise<Backend> {
     macDetach: (stream) => soft("mac_detach", { stream }),
     macInput: (input) => soft("mac_input", { input }),
     macBind: (chat, on) => soft("mac_bind", { chat, on }),
+    macNetwork: (mode) => soft("mac_network", { mode: mode ?? null }),
     onMacState: (cb) => sub<Partial<MacStatus>>("mac-state", cb),
+    deviceGrants: () => soft("device_grants"),
+    deviceGrantsRevoke: (project, device, site) => soft("device_grants_revoke", { project, device: device ?? null, site: site ?? null }),
   };
 }
 

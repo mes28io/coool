@@ -754,3 +754,73 @@ fn the_callers_choice_after_stuck_is_logged_and_the_toggle_stops_logging() {
     assert_eq!(dataset::match_call(&c, "browser_type", &json!({ "id": 7, "text": "hi" })), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------- the permission gate inside a run ----------
+
+/// The form's driver, with the gate the Browser panel's actions pass: a password and the submit are risky kinds.
+struct GatedForm<'a>(Fake, &'a crate::device::gate::Gate);
+
+impl Driver for GatedForm<'_> {
+    fn start(&mut self, _g: &Goal) -> Result<String, String> {
+        self.0.at = "empty".into();
+        Ok(String::new())
+    }
+    fn perceive(&mut self) -> Result<(Screen, u64), String> {
+        self.0.perceive()
+    }
+    fn act(&mut self, a: &Action, s: &Screen, i: &BTreeMap<String, String>) -> Result<String, String> {
+        use crate::device::gate::{Act, Dev, Risk, site};
+        let label = a.target.as_ref().map(|t| t.label.clone()).unwrap_or_default();
+        let risk = match (a.verb, label.as_str()) {
+            (Verb::SetText, "Password") => Some(Risk::Secret { kind: "password", field: label.clone() }),
+            (Verb::Tap, "Sign in") => Some(Risk::Submit { label: label.clone() }),
+            _ => None,
+        };
+        self.1.check(1, None, Act::new(Dev::Browser, format!("{:?} {label}", a.verb)).site(site("http://x/signin")).risk(risk))?;
+        self.0.act(a, s, i)
+    }
+    fn settle(&mut self, v: Verb) -> u64 {
+        self.0.settle(v)
+    }
+}
+
+struct Answers(std::sync::Mutex<Vec<String>>, Vec<coool_core::chat::ExternalAnswer>);
+
+impl crate::device::gate::Asker for std::sync::Arc<Answers> {
+    fn mode(&self, _c: usize) -> Option<String> {
+        Some("default".into())
+    }
+    fn ask(&self, _c: usize, _t: &str, summary: &str, input: Value, _r: Vec<coool_core::chat::RememberOption>) -> Option<(String, std::sync::mpsc::Receiver<coool_core::chat::ExternalAnswer>)> {
+        let mut asked = self.0.lock().unwrap();
+        asked.push(format!("{} {summary}", input["coool_device"]["kind"].as_str().unwrap_or("")));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(self.1.get(asked.len() - 1).cloned().unwrap_or(coool_core::chat::ExternalAnswer::Deny));
+        Some((format!("coool-{}", asked.len()), rx))
+    }
+    fn withdraw(&self, _c: usize, _id: &str, _n: &str) {}
+}
+
+/// An approved run doesn't ask step by step, but its password and submit steps stop and ask: allowed, the run goes
+/// on; denied, it ends stuck with the denial as the reason (and the step didn't happen).
+#[test]
+fn a_pilot_run_stops_and_asks_on_a_risky_step() {
+    use coool_core::chat::ExternalAnswer::{Allow, Deny};
+    use crate::device::gate::{Dev, Gate, PilotScope, pilot_scope, site};
+    for (answers, want) in [(vec![Allow, Allow], Status::Done), (vec![Allow, Deny], Status::Stuck)] {
+        let asker = std::sync::Arc::new(Answers(Default::default(), answers.clone()));
+        let gate = Gate::default();
+        gate.set_asker(Box::new(asker.clone()));
+        let (d, g) = form();
+        let _scope = pilot_scope(PilotScope { chat: 1, dev: Dev::Browser, sites: site("http://x/signin").into_iter().collect() });
+        let mut drv = GatedForm(d, &gate);
+        let o = run(&g, &mut drv, &mut Memory::in_memory(), Some(&mut Seq(SIGN_IN.to_vec(), 0)), "", &mut |_, _| {});
+        let asked = asker.0.lock().unwrap().clone();
+        assert_eq!(asked.len(), 2, "only the password and the submit asked: {asked:?}");
+        assert!(asked[0].starts_with("secret ") && asked[1].starts_with("submit "), "{asked:?}");
+        assert_eq!(o.status, want, "{answers:?}: {}", o.reason);
+        if want == Status::Stuck {
+            assert!(o.reason.contains("Denied by the person"), "{}", o.reason);
+            assert!(!drv.0.acted.iter().any(|k| k.contains("Sign in")), "the denied submit didn't happen");
+        }
+    }
+}
