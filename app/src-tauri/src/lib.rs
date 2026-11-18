@@ -1076,6 +1076,14 @@ pub fn run() {
             device::sim_detach,
             device::sim_input,
             device::sim_bind,
+            device::vm::mac_status,
+            device::vm::mac_install,
+            device::vm::mac_boot,
+            device::vm::mac_shutdown,
+            device::vm::mac_attach,
+            device::vm::mac_detach,
+            device::vm::mac_input,
+            device::vm::mac_bind,
             device::web::browser_agent_sync,
             selftest::selftest_probe_server,
             selftest::selftest_probe_result,
@@ -1089,6 +1097,8 @@ pub fn run() {
             selftest::selftest_click,
             selftest::selftest_sim_delete,
             selftest::selftest_sim_screen,
+            selftest::selftest_mac,
+            selftest::selftest_mac_screen,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;

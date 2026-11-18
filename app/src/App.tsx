@@ -5,6 +5,7 @@ import { useNativeRects } from "./lib/browser";
 import { openAgentsDemo } from "./lib/agentsDemo";
 import { rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
+import { keysCaptured } from "./lib/macKeys";
 import { useMotion } from "./lib/motion";
 import { syncWindow } from "./lib/boot";
 import { setTerminalTheme } from "./lib/termlite";
@@ -35,7 +36,7 @@ function useShortcuts() {
     const onKey = (e: KeyboardEvent) => {
       const st = useStore.getState();
       const mod = e.metaKey || e.ctrlKey;
-      if (!mod) return;
+      if (!mod || keysCaptured(e)) return;
       const k = e.key.toLowerCase();
       let hit = true;
       // While the Settings page is up, pane and sidebar shortcuts would act on things out of sight: they wait.

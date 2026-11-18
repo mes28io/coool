@@ -9,6 +9,7 @@ import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import { SessionsMerge } from "./sessionsMerge";
 import { mockHints } from "./motion";
 import { mockSim } from "./mockSim";
+import { mockMac } from "./mockMac";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -1349,6 +1350,8 @@ export function mockBackend(): Backend {
     },
     // The iPhone panel (lib/mockSim.ts).
     ...mockSim(),
+    // The Mac panel (lib/mockMac.ts).
+    ...mockMac(),
 
     // ---------- chats ----------
     async startChat({ provider, cwd, resume, model, permission_mode }) {

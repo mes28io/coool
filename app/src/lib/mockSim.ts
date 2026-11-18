@@ -54,12 +54,17 @@ async function frame(touch: { x: number; y: number } | null): Promise<ArrayBuffe
   return blob.arrayBuffer();
 }
 
+/** Agent activity listeners, shared with the Mac mock (its actions arrive as `sim-activity` with `udid: "mac"`). */
+const activity = new Set<(a: SimActivity) => void>();
+export const emitMockSimActivity = (a: SimActivity) => {
+  for (const cb of activity) cb(a);
+};
+
 export function mockSim(): Sim {
   const devices: SimDevice[] = [
     { udid: "MOCK-COOOL-1", name: "coool iPhone", state: "Shutdown", runtime: "iOS 27.0", deviceType: "iPhone 18 Pro", coool: true },
     { udid: "MOCK-USER-1", name: "iPhone 18 Pro", state: "Shutdown", runtime: "iOS 27.0", deviceType: "iPhone 18 Pro", coool: false },
   ];
-  const activity = new Set<(a: SimActivity) => void>();
   const state = new Set<(s: { udid: string; state: string }) => void>();
   const streams = new Map<number, { udid: string; timers: ReturnType<typeof setInterval>[]; onFrame: (b: ArrayBuffer) => void }>();
   const touches = new Map<string, { x: number; y: number } | null>();

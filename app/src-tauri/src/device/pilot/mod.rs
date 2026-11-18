@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 pub enum Target {
     Iphone,
     Browser,
+    Mac,
 }
 
 /// A condition the pilot checks on the screen after every step; all of them holding is `done`.
@@ -115,7 +116,8 @@ impl Goal {
         let target = match a["target"].as_str().unwrap_or("iphone") {
             "iphone" => Target::Iphone,
             "browser" => Target::Browser,
-            t => return Err(format!("target is \"iphone\" or \"browser\", not {t:?}")),
+            "mac" => Target::Mac,
+            t => return Err(format!("target is \"iphone\", \"browser\" or \"mac\", not {t:?}")),
         };
         let mut inputs = BTreeMap::new();
         if let Some(m) = a["inputs"].as_object() {
@@ -403,7 +405,7 @@ pub fn candidates(s: &Screen, inputs: &BTreeMap<String, String>, target: Target)
             a.dir = Some(d);
             out.push(a);
         }
-        if target == Target::Browser || !s.home {
+        if target != Target::Iphone || !s.home {
             out.push(Action::new(Verb::Back));
         }
     }
@@ -822,11 +824,16 @@ pub fn call(devices: &super::Devices, chat: usize, a: &Value) -> Result<String, 
             let mut d = drivers::Web { b: super::web::Browser::new(devices, chat) };
             run(&goal, &mut d, &mut mem, decider, &note, &mut emit)
         }
+        Target::Mac => {
+            devices.vm.ensure(devices, chat)?;
+            let mut d = drivers::Mac { t: super::vm::MacTools { d: devices, chat } };
+            run(&goal, &mut d, &mut mem, decider, &note, &mut emit)
+        }
     };
     Ok(result_text(&out))
 }
 
-pub const TOOL_DESCRIPTION: &str = "Hand a routine multi-step goal on the iPhone or the Browser panel to coool's fast device pilot \
+pub const TOOL_DESCRIPTION: &str = "Hand a routine multi-step goal on the iPhone, the Browser panel or the sandbox Mac to coool's fast device pilot \
 instead of driving it yourself step by step. It loops perceive → decide → act → settle on its own (a remembered path \
 for screens it has done before, else a small fast model), far faster and cheaper than one observe/tap call per step, and \
 returns when your success checks hold. Use it for navigation and form filling: \"Settings > General > About\", \"fill \
@@ -844,8 +851,8 @@ pub fn tool() -> Value {
         "description": TOOL_DESCRIPTION,
         "inputSchema": { "type": "object", "required": ["goal", "target"], "properties": {
             "goal": { "type": "string", "description": "What to do, plainly, naming the path when you know it: \"Open General, then About\"." },
-            "target": { "type": "string", "enum": ["iphone", "browser"] },
-            "app": { "type": "string", "description": "iPhone: bundle id to launch fresh first (e.g. com.apple.Preferences)." },
+            "target": { "type": "string", "enum": ["iphone", "browser", "mac"] },
+            "app": { "type": "string", "description": "iPhone: bundle id to launch fresh first (e.g. com.apple.Preferences). Mac: an app name or bundle id to launch (bring to the front) first." },
             "url": { "type": "string", "description": "Browser: the page to open first." },
             "inputs": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Values the pilot may type, by name." },
             "success": { "type": "array", "items": { "type": "object" }, "description": "Checks that all hold when the goal is done: {\"text_visible\":s}, {\"text_gone\":s}, {\"element\":{\"label\":s,\"value\"?:s}}, {\"url_matches\":s}." },

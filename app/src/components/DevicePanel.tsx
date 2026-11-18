@@ -243,7 +243,7 @@ export function DevicePanel({ panelKey, chat, active, onClose }: { panelKey: str
   );
 }
 
-function useBox(el: HTMLElement | null) {
+export function useBox(el: HTMLElement | null) {
   const [box, setBox] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
     if (!el) return;
@@ -530,7 +530,7 @@ function DrivingPill({ on }: { on: boolean }) {
   );
 }
 
-function Spinner() {
+export function Spinner() {
   return <span className={cx("size-[20px] rounded-full border-2 border-white/20 border-t-white/85", !reducedMotion() && "spin")} aria-label="Loading" />;
 }
 
