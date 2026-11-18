@@ -164,6 +164,8 @@ const BEAM_LAYERS = { "--beam-stroke-opacity": 3.8, "--beam-inner-opacity": 2.2,
  */
 const BEAM_LINE = 4;
 const BEAM_INSET = 1.5;
+/** The gutter a `rim` panel leaves round its child (the Browser's page): the line plus dark on both sides, as a bezel. */
+export const RIM = BEAM_LINE + 2 * BEAM_INSET;
 /**
  * The package's stroke and bloom rings at [`BEAM_LINE`], `inset` in from the edge (its `css` prop; `{id}` is its
  * instance). The stroke's own light is a white band at three quarters at most, with the colours only in a few fixed
@@ -202,7 +204,7 @@ export function PanelBeam({
   mark?: string;
   /** A dark rim this many px wide around the child (a device's bezel): the beam's line rides on it, so it reads over any screen. */
   bezel?: number;
-  /** No bezel of its own, but a gutter the child leaves clear (the Browser's page): it goes dark while the beam runs, for the same reason. */
+  /** No bezel of its own, but a gutter of [`RIM`] px the child leaves clear (the Browser's page): it goes dark while the beam runs, for the same reason. */
   rim?: boolean;
   children: ReactNode;
   style?: CSSProperties;
@@ -235,7 +237,7 @@ export function PanelBeam({
           active={on}
           theme="dark"
           borderRadius={radius}
-          css={beamCss(radius, bezel >= BEAM_LINE + 2 * BEAM_INSET ? BEAM_INSET : 0)}
+          css={beamCss(radius, rim || bezel >= RIM ? BEAM_INSET : 0)}
           style={{ ...BEAM_LAYERS, position: "absolute", inset: 0, zIndex: 3, pointerEvents: "none" }}
           data-presence-beam
           aria-hidden

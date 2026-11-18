@@ -13,7 +13,7 @@ import { addressUrl, closeNative, hide, nativeId, onOverlays, overlayCovers, pla
 import { useStore, type BrowserPage, type BrowserTab, type BrowserTabs } from "../store";
 import { artifactIcon } from "./ArtifactCard";
 import { IBack, IClose, IExternal, IForward, IGlobe, IPlus, IRefresh } from "./icons";
-import { PanelBeam } from "./Presence";
+import { PanelBeam, RIM } from "./Presence";
 import { cx, IconButton } from "./primitives";
 
 const host = (url: string) => {
@@ -23,9 +23,10 @@ const host = (url: string) => {
     return url;
   }
 };
-/** Where a page sits in its beam box (2 px in from the panel's left edge): a 4 px gutter all round, where the beam shows
- * (the panel's resize handle covers the first 6 px). */
-const PAGE_INSET = "inset-[4px]";
+/** Where a page sits in its beam box (2 px in from the panel's left edge): a gutter all round as wide as a device's bezel
+ * under the beam (`RIM`: its 4 px line set in, dark on both sides while it runs, so it reads beside a white page in the
+ * light theme as it does around the iPhone and the Mac; the panel's resize handle covers the first 6 px). */
+const PAGE_INSET = { inset: RIM } as const;
 const tabTitle = (t: BrowserTab) => (t.page.kind === "start" ? "New tab" : t.title?.trim() || host(t.url || t.page.url));
 
 export function BrowserPanel({
@@ -104,7 +105,7 @@ export function BrowserPanel({
             {native ? (
               <NativeHost key={key} tabKey={key} page={page} active={active} loading={!st || st.loading} />
             ) : (
-              <div className={cx("absolute", PAGE_INSET)}>
+              <div className="absolute" style={PAGE_INSET}>
                 <iframe key={`${key}:${page.n}:${frameKey}`} title={tabTitle(tab)} src={page.url} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="block size-full border-0 bg-white" />
               </div>
             )}
@@ -376,7 +377,7 @@ function NativeHost({ tabKey: viewKey, page, active, loading }: { tabKey: string
   return (
     // Clear of the panel's left edge, so its resize handle stays above the native view; a thin gutter all round for the
     // beam (its box is the PanelBeam around it).
-    <div ref={ref} className={cx("absolute flex items-center justify-center bg-panel", PAGE_INSET)} data-browser-native={viewKey}>
+    <div ref={ref} className="absolute flex items-center justify-center bg-panel" style={PAGE_INSET} data-browser-native={viewKey}>
       {loading && <span className="text-small text-faint">Loading {host(page.url)}…</span>}
     </div>
   );

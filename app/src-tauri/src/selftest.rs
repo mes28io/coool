@@ -20,6 +20,11 @@
 //!   `http://127.0.0.1:8741/`, serving the pages that scenario names).
 //! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
 //!   frosted glass shows what is behind it (the `glass` scenario).
+//! - `COOOL_SELFTEST_WINDOW`: `quiet` (on top, never focused, no Dock icon) or `back` (never focused, behind the
+//!   person's windows: checks that need no picture of the window, like `mac-cycles` and `mac-idle`).
+//!
+//! A run kept apart from the person's own data sets `HOME` to a throwaway folder too (the CLIs' `~/.claude` and
+//! `~/.codex`, coool's app data), with `COOOL_VM_DIR` pointing at the one sandbox Mac when a scenario uses it.
 //!
 //! Settings (the insights and "runs by other tools" toggles) and the list of
 //! sessions coool started are kept in the folder too, never in the real ones;
@@ -95,16 +100,31 @@ impl SelfTest {
         self.dir.join(".coool-selftest-titles.json")
     }
 
-    /// A fixed size, on top, so screenshots are comparable and unobstructed.
+    /// A fixed size, so screenshots are comparable. `COOOL_SELFTEST_WINDOW`: unset, on top and focused (as before);
+    /// `quiet`, on top but never focused (no Dock icon, never the active app: the person's typing stays theirs);
+    /// `back`, never focused and behind the person's windows (checks that need no picture of the window).
     pub fn prepare_window(&self, app: &AppHandle) {
+        let mode = std::env::var("COOOL_SELFTEST_WINDOW").unwrap_or_default();
+        let quiet = self.quiet_window();
         // `get_window`, not `get_webview_window`: once the in-app browser adds a child webview, `main` is a window
         // with several webviews and no longer counts as a webview window.
         if let Some(w) = app.get_window("main") {
             let _ = w.set_size(tauri::LogicalSize::new(1440.0, 900.0));
             let _ = w.center();
-            let _ = w.set_always_on_top(true);
-            let _ = w.set_focus();
+            let _ = w.set_always_on_top(mode != "back");
+            if !quiet {
+                let _ = w.set_focus();
+            }
+            #[cfg(target_os = "macos")]
+            if mode == "back" {
+                order_back(&w);
+            }
         }
+    }
+
+    /// The window must never take focus (`COOOL_SELFTEST_WINDOW` quiet or back).
+    pub fn quiet_window(&self) -> bool {
+        matches!(std::env::var("COOOL_SELFTEST_WINDOW").as_deref(), Ok("quiet" | "back"))
     }
 
     fn log(&self, line: &str) {
@@ -204,6 +224,27 @@ fn window_number(w: &tauri::Window) -> Option<i64> {
 #[cfg(not(target_os = "macos"))]
 fn window_number(_w: &tauri::Window) -> Option<i64> {
     None
+}
+
+/// `-[NSWindow orderBack:nil]`: behind every other window of its level.
+#[cfg(target_os = "macos")]
+fn order_back(w: &tauri::Window) {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    let Ok(ns) = w.ns_window() else { return };
+    if ns.is_null() {
+        return;
+    }
+    // SAFETY: `ns` is a live NSWindow owned by Tauri, on the main thread (setup); `orderBack:` takes one object
+    // argument (nil) and returns nothing.
+    unsafe {
+        let sel = sel_registerName(c"orderBack:".as_ptr());
+        let f: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        f(ns, sel, std::ptr::null_mut());
+    }
 }
 
 // ---------- the `browser` scenario ----------

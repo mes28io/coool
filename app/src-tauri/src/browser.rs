@@ -141,8 +141,12 @@ fn browser(app: &AppHandle, id: &str) -> Result<Webview, String> {
     app.get_webview(id).ok_or_else(|| "no such browser".into())
 }
 
-/// Gives the keyboard back to the app (a hidden webview can keep first responder).
+/// Gives the keyboard back to the app (a hidden webview can keep first responder). Only while coool's window is the
+/// focused one: an agent's tab switch must not pull the person away from another app.
 fn focus_app(app: &AppHandle) {
+    if !app.get_window("main").is_some_and(|w| w.is_focused().unwrap_or(false)) {
+        return;
+    }
     if let Some(m) = app.get_webview("main") {
         let _ = m.set_focus();
     }
