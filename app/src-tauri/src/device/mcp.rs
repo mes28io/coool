@@ -35,6 +35,8 @@ pub struct Mcp {
     last: Mutex<HashMap<usize, (Tree, String)>>,
     /// Per chat: its project folder (the pilot's muscle memory is per project).
     cwds: Mutex<HashMap<usize, String>>,
+    /// Per chat: its provider (`claude`, `codex`), for the panels' cursor labels.
+    providers: Mutex<HashMap<usize, &'static str>>,
 }
 
 fn random_token() -> String {
@@ -48,9 +50,10 @@ fn random_token() -> String {
 
 impl Mcp {
     /// The MCP server entry for a chat coool is starting (None until the socket is up).
-    pub fn server_for(&self, chat: usize, cwd: &str) -> Option<coool_core::chat::McpServer> {
+    pub fn server_for(&self, chat: usize, cwd: &str, provider: coool_core::model::Provider) -> Option<coool_core::chat::McpServer> {
         let socket = self.socket.get()?;
         self.cwds.lock().unwrap().insert(chat, cwd.to_string());
+        self.providers.lock().unwrap().insert(chat, provider.label());
         let exe = std::env::current_exe().ok()?;
         let token = random_token();
         self.tokens.lock().unwrap().insert(token.clone(), chat);
@@ -78,6 +81,11 @@ impl Mcp {
     /// The chat's project folder, if coool started it.
     pub fn cwd(&self, chat: usize) -> Option<String> {
         self.cwds.lock().unwrap().get(&chat).cloned()
+    }
+
+    /// The chat's provider (`claude`, `codex`), if coool started it.
+    pub fn provider(&self, chat: usize) -> Option<&'static str> {
+        self.providers.lock().unwrap().get(&chat).copied()
     }
 
     /// Records a screen the chat's agent (or its pilot) saw, so ids from it work for `tap` and friends.
@@ -146,6 +154,7 @@ fn serve(devices: Arc<Devices>, conn: UnixStream) {
         let _ = writeln!(out, "{}", json!({"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"coool-device: unknown token"}}));
         return;
     };
+    super::presence::begin_connection();
     let mut session = Session { devices, chat };
     for line in lines {
         let Ok(line) = line else { break };
@@ -330,7 +339,32 @@ impl Session {
             x2: to.map(|p| p.0),
             y2: to.map(|p| p.1),
             label,
+            ..Default::default()
         });
+    }
+
+    /// Typing: where (the field's centre, when known), into what, and the text (dots for a secret field).
+    fn typing(&self, udid: &str, at: Option<(f64, f64)>, field: Option<String>, text: &str) {
+        let text = super::presence::shown_text(text, field.as_deref());
+        self.devices.activity(Activity {
+            udid: udid.to_string(),
+            chat: Some(self.chat),
+            source: "agent",
+            kind: "type",
+            x: at.map(|p| p.0),
+            y: at.map(|p| p.1),
+            label: field,
+            text: Some(text),
+            ..Default::default()
+        });
+    }
+
+    /// The focused text field of the last screen the chat saw: (its centre, its name).
+    fn focused_field(&self) -> Option<((f64, f64), Option<String>)> {
+        let last = self.devices.mcp.last.lock().unwrap();
+        let (t, _) = last.get(&self.chat)?;
+        let n = t.nodes.iter().find(|n| n.flags.contains(&"focused") && matches!(n.role.as_str(), "textfield" | "textarea" | "searchfield" | "securefield"))?;
+        Some((n.center(), n.label.clone().or_else(|| n.placeholder.clone())))
     }
 
     fn helper(&self, udid: &str) -> Result<Arc<super::helper::Helper>, String> {
@@ -433,7 +467,11 @@ impl Session {
     }
 
     fn swipe(&self, udid: &str, from: (f64, f64), to: (f64, f64), ms: f64) -> Result<String, String> {
-        self.activity(udid, "swipe", Some(from), Some(to), None);
+        self.swipe_as(udid, "swipe", from, to, ms, None)
+    }
+
+    fn swipe_as(&self, udid: &str, kind: &'static str, from: (f64, f64), to: (f64, f64), ms: f64, label: Option<String>) -> Result<String, String> {
+        self.activity(udid, kind, Some(from), Some(to), label);
         self.helper(udid)?.call(
             json!({ "cmd": "swipe", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "ms": ms.clamp(50.0, 5000.0) }),
             Duration::from_secs(15),
@@ -458,24 +496,27 @@ impl Session {
             "left" => ((cx - dx, cy), (cx + dx, cy)),
             _ => return Err("scroll is up, down, left or right".into()),
         };
-        self.swipe(udid, from, to, 300.0)?;
+        self.swipe_as(udid, "scroll", from, to, 300.0, Some(dir.to_string()))?;
         Ok(format!("scrolled {dir}"))
     }
 
     fn type_into(&self, udid: &str, text: &str, into: Option<&str>, clear: bool, submit: bool) -> Result<String, String> {
         let mut note = String::new();
+        let mut field = None;
         if let Some(id) = into {
             let (p, label) = self.point(udid, &json!({ "target": id }), "target")?;
+            field = Some((p, label.clone()));
             note = self.tap(udid, p, None, label)? + ", ";
             // Let the keyboard focus land.
             let _ = self.helper(udid)?.call(json!({ "cmd": "idle", "quietMs": 80, "timeoutMs": 800 }), Duration::from_secs(3));
         }
+        let field = field.or_else(|| self.focused_field());
         let h = self.helper(udid)?;
         if clear {
             h.call(json!({ "cmd": "key", "name": "a", "modifiers": ["command"] }), Duration::from_secs(5))?;
             h.call(json!({ "cmd": "key", "name": "backspace" }), Duration::from_secs(5))?;
         }
-        self.activity(udid, "type", None, None, Some(text.chars().take(40).collect()));
+        self.typing(udid, field.as_ref().map(|f| f.0), field.and_then(|f| f.1), text);
         super::type_text(&self.devices, udid, text)?;
         if submit {
             h.call(json!({ "cmd": "key", "name": "return" }), Duration::from_secs(5))?;

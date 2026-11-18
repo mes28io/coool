@@ -16,6 +16,7 @@ pub mod helper;
 pub mod mcp;
 pub mod observe;
 pub mod pilot;
+pub mod presence;
 pub mod simctl;
 pub mod vm;
 pub mod web;
@@ -57,9 +58,13 @@ pub struct Devices {
     pub web: web::Web,
     /// The sandboxed Mac (one VM, shared by the chats that use it), for the Mac panel and the `mac_*` tools.
     pub vm: vm::Vm,
+    /// coool's "Reduce motion" (the frontend reports it): the page cursors in the Browser panel don't glide.
+    reduce_motion: std::sync::atomic::AtomicBool,
 }
 
-/// What the panel draws for an action (ripple, swipe trail, "Agent is driving").
+/// What the panel draws for an action: the actor's cursor gliding to `x`,`y` (a swipe on to `x2`,`y2`), its label, and
+/// the beam around the frame (APP_SPEC "Agent presence"). Sent just before the action starts, so the cursor travels
+/// while it lands. `actor`, `by`, `decider` and `provider` are filled in by [`Devices::activity`].
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct Activity {
     pub udid: String,
@@ -74,8 +79,22 @@ pub struct Activity {
     pub x2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y2: Option<f64>,
+    /// What it acts on (an element's name), or for `press` the key, for `app` the action.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// For `type`: the text (dots for a secret field).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// One cursor per actor (see [`presence::Actor::key`]).
+    pub actor: String,
+    /// `agent` or `pilot`.
+    pub by: &'static str,
+    /// For a pilot step: `memory` or `haiku`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decider: Option<&'static str>,
+    /// The chat's provider (`claude`, `codex`), when coool started it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<&'static str>,
 }
 
 impl Devices {
@@ -122,12 +141,21 @@ impl Devices {
         }
     }
 
-    pub fn activity(&self, a: Activity) {
+    pub fn activity(&self, mut a: Activity) {
+        let who = presence::current();
+        a.actor = who.key(a.chat);
+        a.by = who.by();
+        a.decider = who.decider;
+        a.provider = a.chat.and_then(|c| self.mcp.provider(c));
         self.emit("sim-activity", a);
     }
 
     fn state(&self, udid: &str, state: &str) {
         self.emit("sim-state", json!({ "udid": udid, "state": state }));
+    }
+
+    pub fn reduce_motion(&self) -> bool {
+        self.reduce_motion.load(Ordering::Relaxed)
     }
 
     pub fn name(&self, udid: &str) -> String {
@@ -367,4 +395,10 @@ pub fn type_text(devices: &Devices, udid: &str, text: &str) -> Res<()> {
 #[tauri::command(async)]
 pub fn sim_bind(devices: State<'_, Arc<Devices>>, chat: usize, udid: Option<String>) {
     devices.bind(chat, udid);
+}
+
+/// The frontend's "Reduce motion" (Settings, the system, the device), for what the backend draws itself.
+#[tauri::command]
+pub fn presence_motion(devices: State<'_, Arc<Devices>>, reduce: bool) {
+    devices.reduce_motion.store(reduce, Ordering::Relaxed);
 }

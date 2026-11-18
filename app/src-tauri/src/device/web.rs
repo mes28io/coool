@@ -63,6 +63,21 @@ pub struct Web {
     panels: Mutex<HashMap<usize, Panel>>,
     synced: Condvar,
     last: Mutex<HashMap<usize, Last>>,
+    /// Per chat: the actors on its panel lately (their order picks their tint), and when each last acted.
+    actors: Mutex<HashMap<usize, Vec<(String, Instant)>>>,
+    /// Per actor: where its cursor was last (viewport px), so it starts there on the next page.
+    cursors: Mutex<HashMap<String, [f64; 2]>>,
+}
+
+/// The cursor tints in a page, in order of arrival (coool's `--presence-*` tokens; a page can't read them).
+const TINTS: [&str; 3] = ["#0a84ff", "#5e5ce6", "#2a9fbc"];
+/// How long a click waits for the cursor that's on its way (APP_SPEC "Agent presence": a few tens of ms at most).
+const CLICK_DEFER_MS: u64 = 50;
+
+/// The frontend's turn ended for `chat`: its cursors in the Browser panel rest, then fade.
+#[tauri::command(async)]
+pub fn browser_presence_end(devices: State<'_, Arc<Devices>>, chat: usize) {
+    Browser::new(&devices, chat).presence_end(None);
 }
 
 /// The frontend's report of a chat's browser tabs (on every change).
@@ -290,7 +305,80 @@ impl<'a> Browser<'a> {
     }
 
     fn activity(&self, tab: Option<u32>, kind: &str, label: Option<String>) {
-        self.emit("browser-activity", json!({ "chat": self.chat, "tab": tab, "kind": kind, "label": label }));
+        self.activity_text(tab, kind, label, None);
+    }
+
+    fn activity_text(&self, tab: Option<u32>, kind: &str, label: Option<String>, text: Option<String>) {
+        let who = super::presence::current();
+        let actor = who.key(Some(self.chat));
+        let slot = self.slot(&actor);
+        self.emit(
+            "browser-activity",
+            json!({ "chat": self.chat, "tab": tab, "kind": kind, "label": label, "text": text, "actor": actor, "by": who.by(), "decider": who.decider, "provider": self.devices.mcp.provider(self.chat), "slot": slot }),
+        );
+    }
+
+    /// The actor's place among the chat's recent actors (its tint): a slot is freed after a minute without a word.
+    fn slot(&self, actor: &str) -> usize {
+        let mut all = self.web().actors.lock().unwrap();
+        let list = all.entry(self.chat).or_default();
+        let now = Instant::now();
+        list.retain(|(k, at)| k == actor || now.duration_since(*at) < Duration::from_secs(60));
+        let i = match list.iter().position(|(k, _)| k == actor) {
+            Some(i) => i,
+            None => {
+                list.push((actor.to_string(), now));
+                list.len() - 1
+            }
+        };
+        list[i].1 = now;
+        i
+    }
+
+    /// What the page needs to draw the acting agent: who (name, mark), its tint, who decided (a pilot step), where
+    /// its cursor was, and whether motion is reduced.
+    fn presence(&self) -> Value {
+        let who = super::presence::current();
+        let actor = who.key(Some(self.chat));
+        let slot = self.slot(&actor);
+        let provider = self.devices.mcp.provider(self.chat);
+        let (name, mark) = match (who.by(), provider) {
+            ("pilot", _) => ("Pilot", "pilot"),
+            (_, Some("codex")) => ("Codex", "codex"),
+            (_, Some(_)) => ("Claude", "claude"),
+            _ => ("Agent", ""),
+        };
+        let from = self.web().cursors.lock().unwrap().get(&actor).copied();
+        json!({
+            "actor": actor,
+            "name": name,
+            "mark": if mark.is_empty() { Value::Null } else { super::presence::mark(mark) },
+            "tint": TINTS[slot % TINTS.len()],
+            "decider": who.decider,
+            "from": from,
+            "reduce": self.devices.reduce_motion(),
+            "defer": CLICK_DEFER_MS,
+        })
+    }
+
+    /// Remembers where the actor's cursor is after an action (`at` in the page's answer).
+    fn cursor_at(&self, r: &Value) {
+        let at = r["at"].as_array().and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]));
+        if let Some(at) = at {
+            self.web().cursors.lock().unwrap().insert(super::presence::current().key(Some(self.chat)), at);
+        }
+    }
+
+    /// The cursors drawn on the active page now (`[{actor, who, say}]`), for the self-test.
+    pub fn presence_shown(&self) -> Result<Value, String> {
+        let p = self.current().ok_or(NO_PAGE)?;
+        Ok(self.eval(&p.label, &json!({ "op": "presence" }))?["shown"].clone())
+    }
+
+    /// The actor's run is over (`None`: every actor of the chat): its cursor on the active page rests, then fades.
+    pub fn presence_end(&self, actor: Option<String>) {
+        let Some(p) = self.current() else { return };
+        let _ = self.eval(&p.label, &json!({ "op": "presence", "end": true, "presence": { "actor": actor, "reduce": self.devices.reduce_motion() } }));
     }
 
     fn live(&self, label: &str) -> bool {
@@ -412,6 +500,7 @@ impl<'a> Browser<'a> {
             if !self.loading(label)
                 && let Ok(i) = self.eval(label, &json!({ "op": "idle" }))
                 && i["ready"].as_str() != Some("loading")
+                && i["pending"].is_null()
                 && i["quiet"].as_f64().unwrap_or(0.0) >= QUIET_MS
             {
                 break;
@@ -456,6 +545,8 @@ impl<'a> Browser<'a> {
             "max": a["max"].as_u64().unwrap_or(250).clamp(10, 2000),
             "text_max": a["text_max"].as_u64().unwrap_or(2500).min(50_000),
             "all": a["all"].as_bool() == Some(true),
+            "presence": a.get("presence"),
+            "say": a.get("say"),
         });
         let v = self.eval(&page.label, &cmd)?;
         let snap: Snap = serde_json::from_value(v).map_err(|e| format!("bad snapshot: {e}"))?;
@@ -510,10 +601,19 @@ impl<'a> Browser<'a> {
         self.navigate(agent_url(raw, origin.as_deref())?).map(|_| ())
     }
 
-    /// "Agent" marks on: the run is acting (`kind`), or off for good (`end`).
+    /// "Agent" marks on: the run is acting (`kind`: `pilot`, `think`), or off for good (`end`: its cursor rests,
+    /// then fades).
     pub(super) fn pilot_activity(&self, kind: &str) {
         let tab = self.current().map(|p| p.tab);
         self.activity(tab, kind, None);
+        if kind == "end" {
+            self.presence_end(Some(super::presence::current().key(Some(self.chat))));
+        } else if kind == "think"
+            && let Some(p) = self.current()
+        {
+            let say = if super::presence::current().decider == Some("haiku") { "Haiku is choosing" } else { "Choosing the next step" };
+            let _ = self.eval(&p.label, &json!({ "op": "presence", "say": say, "presence": self.presence() }));
+        }
     }
 
     /// The document token of the agent's last observe of this page (ids from another document are refused).
@@ -529,10 +629,13 @@ impl<'a> Browser<'a> {
         }
         cmd["op"] = json!(op);
         cmd["id"] = json!(id);
+        cmd["presence"] = self.presence();
         if let Some(d) = self.last_doc(page) {
             cmd["doc"] = json!(d);
         }
-        self.eval(&page.label, &cmd)
+        let r = self.eval(&page.label, &cmd)?;
+        self.cursor_at(&r);
+        Ok(r)
     }
 
     fn screenshot(&self, page: &Page, max: Option<f64>) -> Result<Value, String> {
@@ -577,6 +680,12 @@ impl<'a> Browser<'a> {
             "browser_observe" => {
                 let p = self.page()?;
                 self.activity(Some(p.tab), "observe", None);
+                let mut a = a.clone();
+                if a.is_object() {
+                    a["presence"] = self.presence();
+                    a["say"] = json!("Reading the page");
+                }
+                let a = &a;
                 let s = self.observe(&p, true, a)?;
                 if a["screenshot"].as_bool() == Some(true) {
                     out.push(self.screenshot(&p, a["max_size"].as_f64())?);
@@ -781,7 +890,8 @@ impl<'a> Browser<'a> {
                 }
                 let r = self.with_id(p, "type", a, "id")?;
                 let masked = r["masked"].as_bool() == Some(true);
-                self.activity(Some(p.tab), "type", Some(if masked { "••••".into() } else { a["text"].as_str().unwrap_or("").chars().take(40).collect() }));
+                let field = r["what"].as_str().map(String::from);
+                self.activity_text(Some(p.tab), "type", field, Some(if masked { "••••".into() } else { a["text"].as_str().unwrap_or("").chars().take(40).collect() }));
                 let what = r["what"].as_str().unwrap_or("field");
                 let mut s = if masked { format!("typed {} characters into {what} (hidden field)", r["len"]) } else { format!("typed {:?} into {what} (replacing what it held)", a["text"].as_str().unwrap_or("")) };
                 if let Some(n) = r["now"].as_str() {
@@ -805,6 +915,7 @@ impl<'a> Browser<'a> {
                 let mut cmd = json!({ "direction": a["direction"], "amount": a["amount"] });
                 let r = if a["id"].is_null() {
                     cmd["op"] = json!("scroll");
+                    cmd["presence"] = self.presence();
                     self.eval(&p.label, &cmd)?
                 } else {
                     self.with_id(p, "scroll", a, "id")?
@@ -814,7 +925,7 @@ impl<'a> Browser<'a> {
             }
             "browser_press" => {
                 let key = a["key"].as_str().ok_or("browser_press needs `key`, like \"Enter\"")?;
-                let mut cmd = json!({ "op": "press", "key": key, "modifiers": a["modifiers"] });
+                let mut cmd = json!({ "op": "press", "key": key, "modifiers": a["modifiers"], "presence": self.presence() });
                 let r = if a["id"].is_null() {
                     self.eval(&p.label, &cmd)?
                 } else {
@@ -1356,6 +1467,39 @@ email.labels = [document.body.childNodes[2]];
             at += i + o.len();
         }
         assert_eq!(js.run("String(remember.checked)"), "false");
+    }
+
+    #[test]
+    fn presence_draws_a_cursor_and_lets_the_click_land_after_it() {
+        let js = Js::new();
+        // Enough of the DOM for the cursor (no layout, no Web Animations), and timers the test runs by hand.
+        js.run(
+            "var timers = []; setTimeout = function (f, ms) { timers.push([f, ms || 0]); return timers.length; }; clearTimeout = function () {};
+             var mkEl = document.createElement; document.createElement = function (t) { var e = mkEl(t); e.style.setProperty = function (k, v) { this[k] = v; }; e.attachShadow = function () { return this; }; return e; };
+             document.createElementNS = function (ns, t) { return document.createElement(t); };
+             function runTimers(upTo) { var due = timers.filter(function (t) { return t[1] <= upTo; }); timers = timers.filter(function (t) { return t[1] > upTo; }); due.forEach(function (t) { t[0](); }); return due.length; }",
+        );
+        js.ok(json!({ "op": "observe" }));
+        js.run("log.length = 0");
+        let p = json!({ "actor": "0:c1", "name": "Claude", "tint": "#0a84ff", "defer": 50, "from": [300, 600], "mark": null });
+        let r = js.ok(json!({ "op": "click", "id": 4, "presence": p }));
+        assert_eq!(r["at"], json!([20, 190]), "{r}");
+        // The cursor is on its way: the click hasn't landed, and the page counts as busy until it does.
+        assert!(!js.run("log.join(',')").contains("click@remember"));
+        let idle = js.ok(json!({ "op": "idle" }));
+        assert_eq!((idle["pending"].as_u64(), idle["quiet"].as_u64()), (Some(1), Some(0)), "{idle}");
+        assert!(js.run("String(runTimers(50))") != "0");
+        assert!(js.run("log.join(',')").contains("click@remember"));
+        assert_eq!(js.run("String(remember.checked)"), "false");
+        assert!(js.ok(json!({ "op": "idle" }))["pending"].is_null());
+        // The label: who, then what.
+        assert!(js.run("JSON.stringify(document.documentElement.childNodes.map(function n(e) { return e.textContent; }))").contains("ClaudeClicking Remember me"));
+        // Ending the run rests the cursor, then fades it out.
+        assert_eq!(js.ok(json!({ "op": "presence", "end": true, "presence": { "actor": "0:c1" } }))["ended"], true);
+        // Without presence the click lands at once, as before.
+        js.run("log.length = 0");
+        js.ok(json!({ "op": "click", "id": 4 }));
+        assert!(js.run("log.join(',')").contains("click@remember"));
     }
 
     #[test]

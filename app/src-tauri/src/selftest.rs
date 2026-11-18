@@ -514,6 +514,13 @@ pub fn selftest_browser_eval(app: AppHandle, core: State<'_, Arc<Core>>, id: Str
     app.get_webview(&id).ok_or("no such webview")?.eval(&js).map_err(|e| e.to_string())
 }
 
+/// The agent cursors the page script draws on `chat`'s active Browser page now: `[{actor, who, say}]`.
+#[tauri::command(async)]
+pub fn selftest_page_cursors(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize) -> Result<serde_json::Value, String> {
+    active(&core)?;
+    crate::device::web::Browser::new(&devices, chat).presence_shown()
+}
+
 /// The same path as Cmd+Q (asks first when anything runs).
 #[tauri::command]
 pub fn selftest_request_quit(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<(), String> {

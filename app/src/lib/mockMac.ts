@@ -61,6 +61,11 @@ async function frame(cursor: { x: number; y: number }, typed: string): Promise<A
   return blob.arrayBuffer();
 }
 
+/** The presence demo (lib/mockPresence.ts): what TextEdit's window holds, pushed to the screen at once. */
+const typedHooks = { set: (_t: string) => {}, quiet: false };
+export const setMockMacText = (t: string) => typedHooks.set(t);
+export const quietMockMac = () => (typedHooks.quiet = true);
+
 export function mockMac(): Mac {
   const st: MacStatus = {
     available: true,
@@ -90,6 +95,10 @@ export function mockMac(): Mac {
     void frame(cursor, typed).then((b) => {
       if (b) for (const s of streams.values()) s.onFrame(b);
     });
+  typedHooks.set = (t) => {
+    typed = t;
+    push();
+  };
   return {
     async macStatus() {
       await wait(100);
@@ -133,6 +142,7 @@ export function mockMac(): Mac {
       const timers = [
         setInterval(push, 2000),
         setInterval(() => {
+          if (typedHooks.quiet) return;
           const x = 260 + Math.random() * 640;
           const y = 180 + Math.random() * 360;
           emitMockSimActivity({ udid: "mac", chat: null, source: "agent", kind: "tap", x, y, label: "Click" });

@@ -1431,12 +1431,15 @@ pub fn run() {
             device::vm::mac_input,
             device::vm::mac_bind,
             device::web::browser_agent_sync,
+            device::web::browser_presence_end,
+            device::presence_motion,
             selftest::selftest_probe_server,
             selftest::selftest_probe_result,
             selftest::selftest_resize,
             selftest::selftest_webview,
             selftest::selftest_popups,
             selftest::selftest_browser_eval,
+            selftest::selftest_page_cursors,
             selftest::selftest_previews,
             selftest::selftest_preview_eval,
             selftest::selftest_close_preview,
@@ -1467,7 +1470,7 @@ pub fn run() {
                 None => devices.init(&handle),
             }
             let d = devices.clone();
-            c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, cwd| d.mcp.server_for(id, cwd).into_iter().collect())));
+            c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, cwd, provider| d.mcp.server_for(id, cwd, provider).into_iter().collect())));
             spawn_refresher(handle.clone(), c.clone());
             motion::spawn_watch(handle.clone());
             spawn_pump(handle, c);

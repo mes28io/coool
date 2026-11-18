@@ -44,6 +44,10 @@
   --status-done-text: #28c840;
   --claude: #d97757; /* logo only */
   --codex: var(--text);
+  /* agent presence: each acting agent's cursor, label and beam (components/Presence.tsx); the first is the running blue */
+  --presence-0: var(--status-running);
+  --presence-1: #5e5ce6;
+  --presence-2: #2a9fbc;
   --shadow-card: none;
   --shadow-pop: 0 24px 64px -12px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.04);
   --backdrop: rgb(0 0 0 / 0.5);
@@ -81,6 +85,9 @@
   --status-done-text: #1a7f37;
   --claude: #d97757;
   --codex: var(--text);
+  --presence-0: var(--status-running);
+  --presence-1: #5856d6;
+  --presence-2: #2a9fbc;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
   --shadow-pop: 0 24px 60px -16px rgb(0 0 0 / 0.22), 0 2px 8px rgb(0 0 0 / 0.06);
   --backdrop: rgb(255 255 255 / 0.55);

@@ -10,7 +10,8 @@ import { demoPage, GlyphsDemo, LedgerDemo, PlanDemo } from "./components/Demos";
 import { initBackend } from "./lib/backend";
 import { startBrowserAgent } from "./lib/browserAgent";
 import { startPilot } from "./lib/pilot";
-import { setMotionHints } from "./lib/motion";
+import { startPresence } from "./lib/presence";
+import { onMotion, reducedMotion, setMotionHints } from "./lib/motion";
 import { useChats } from "./lib/chat";
 import { rememberModels } from "./lib/prefs";
 
@@ -20,6 +21,16 @@ void initBackend().then((b) => {
   startBrowserAgent();
   // The device pilot's live steps in the chat (lib/pilot.ts).
   startPilot();
+  // Agents' cursors and the beam in the device panels (lib/presence.ts); the page cursors follow Reduce motion too.
+  startPresence();
+  let reduce: boolean | null = null;
+  const sendMotion = () => {
+    if (reduce === reducedMotion()) return;
+    reduce = reducedMotion();
+    void b.presenceMotion(reduce).catch(() => {});
+  };
+  sendMotion();
+  onMotion(sendMotion);
   b.onMotionHints(setMotionHints);
   void b.motionHints().then(setMotionHints);
   // The models chats report, for Settings > General's default model before any chat of that provider runs.

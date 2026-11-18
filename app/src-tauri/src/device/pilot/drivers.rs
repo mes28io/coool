@@ -96,6 +96,7 @@ impl Iphone<'_> {
             x2: to.map(|p| p.0),
             y2: to.map(|p| p.1),
             label,
+            ..Default::default()
         });
     }
 
@@ -123,7 +124,11 @@ impl Iphone<'_> {
     }
 
     fn swipe(&self, from: (f64, f64), to: (f64, f64), ms: f64) -> Result<(), String> {
-        self.activity("swipe", Some(from), Some(to), None);
+        self.swipe_as("swipe", from, to, ms, None)
+    }
+
+    fn swipe_as(&self, kind: &'static str, from: (f64, f64), to: (f64, f64), ms: f64, label: Option<&str>) -> Result<(), String> {
+        self.activity(kind, Some(from), Some(to), label.map(String::from));
         self.helper()?.call(json!({ "cmd": "swipe", "x1": from.0, "y1": from.1, "x2": to.0, "y2": to.1, "ms": ms }), Duration::from_secs(15)).map(|_| ())
     }
 
@@ -254,7 +259,17 @@ impl Driver for Iphone<'_> {
                     self.key("a", json!(["command"]))?;
                     self.key("backspace", Value::Null)?;
                 }
-                self.activity("type", None, None, Some(text.chars().take(40).collect()));
+                self.devices.activity(Activity {
+                    udid: self.udid.clone(),
+                    chat: Some(self.chat),
+                    source: "agent",
+                    kind: "type",
+                    x: Some(p.0),
+                    y: Some(p.1),
+                    label: Some(e.label.clone()).filter(|l| !l.is_empty()),
+                    text: Some(crate::device::presence::shown_text(text, Some(&e.label))),
+                    ..Default::default()
+                });
                 crate::device::type_text(self.devices, &self.udid, text)?;
                 Ok(format!("set {:?} to <{key}>", e.label))
             }
@@ -268,7 +283,7 @@ impl Driver for Iphone<'_> {
                 let (top, bottom) = if s.keyboard { (s.h * 0.15, s.h * KEYBOARD_TOP - 30.0) } else { (s.h * 0.25, s.h * 0.75) };
                 let x = s.w / 2.0;
                 let (from, to) = if down { ((x, bottom), (x, top)) } else { ((x, top), (x, bottom)) };
-                self.swipe(from, to, 300.0)?;
+                self.swipe_as("scroll", from, to, 300.0, Some(if down { "down" } else { "up" }))?;
                 Ok(format!("scrolled {}", if down { "down" } else { "up" }))
             }
             Verb::Back => {
@@ -278,7 +293,7 @@ impl Driver for Iphone<'_> {
                     self.tap_at(p, &b.label)?;
                     return Ok(format!("tapped back ({:?})", b.label));
                 }
-                self.swipe((2.0, s.h / 2.0), (s.w * 0.8, s.h / 2.0), 200.0)?;
+                self.swipe_as("back", (2.0, s.h / 2.0), (s.w * 0.8, s.h / 2.0), 200.0, None)?;
                 Ok("swiped back from the left edge".into())
             }
             Verb::Done | Verb::Stuck => Ok(String::new()),
@@ -302,6 +317,10 @@ impl Driver for Iphone<'_> {
 
     fn finish(&mut self) {
         self.activity("end", None, None, None);
+    }
+
+    fn thinking(&mut self) {
+        self.activity("think", None, None, None);
     }
 }
 
@@ -417,6 +436,14 @@ impl Driver for Mac<'_> {
     fn settle_again(&mut self) -> u64 {
         self.idle(200, 400, 1500)
     }
+
+    fn finish(&mut self) {
+        self.t.end();
+    }
+
+    fn thinking(&mut self) {
+        self.t.thinking();
+    }
 }
 
 // ---------- Browser ----------
@@ -514,5 +541,9 @@ impl Driver for Web<'_> {
 
     fn finish(&mut self) {
         self.b.pilot_activity("end");
+    }
+
+    fn thinking(&mut self) {
+        self.b.pilot_activity("think");
     }
 }

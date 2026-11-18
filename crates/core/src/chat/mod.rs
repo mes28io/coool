@@ -53,7 +53,7 @@ pub struct McpServer {
 }
 
 /// Builds the MCP servers for a chat from its id.
-pub type McpFor = Box<dyn Fn(usize, &str) -> Vec<McpServer> + Send>;
+pub type McpFor = Box<dyn Fn(usize, &str, crate::model::Provider) -> Vec<McpServer> + Send>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

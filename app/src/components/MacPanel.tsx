@@ -1,19 +1,20 @@
 // The Mac panel: the right panel's fifth kind (next to Jobs, Models, the browser and the iPhone). One sandboxed macOS
 // virtual machine for the app (not per chat), streamed live (`macAttach` JPEG frames drawn to a canvas) while the panel
 // shows it running. The person drives it with the pointer, wheel and keyboard (physical keys, `lib/macKeys.ts`, only
-// while the screen has focus); the chat's agent drives it through the backend's MCP tools, its clicks drawn over the
-// screen as they land (`sim-activity` with `udid: "mac"`).
+// while the screen has focus); the chats' agents drive it through the backend's MCP tools (`sim-activity` with
+// `udid: "mac"`): each acting agent's cursor glides to where it acts, with a label, and a beam runs around the screen
+// while one drives (components/Presence.tsx). The Mac is shared, so two chats can show two cursors at once.
 
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { api, type MacInput, type MacStatus, type SimActivity } from "../lib/backend";
-import { useChats } from "../lib/chat";
+import { api, type MacInput, type MacStatus } from "../lib/backend";
 import { macKeyCode } from "../lib/macKeys";
+import { simTarget, usePresenceOf } from "../lib/presence";
 import { Spinner, useBox } from "./DevicePanel";
 import { IClose, IFolder, IInfo, IMac } from "./icons";
+import { PanelBeam, PresenceLayer } from "./Presence";
 import { Button, cx, IconButton, Popover } from "./primitives";
 import { reducedMotion } from "./StepRail";
-import { ThinkingDots } from "./ThinkingWord";
 
 /** The agent's actions on the Mac arrive as `sim-activity` with this udid. */
 export const MAC_UDID = "mac";
@@ -133,34 +134,6 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
   const installing = st === "downloading" || st === "installing" || (busy === "install" && st === "absent");
   const shownErr = err ?? (status?.error ? { text: status.error, retry: st === "absent" ? () => setConfirm(true) : boot } : null);
 
-  // "Agent is driving": for ~3 s after the agent's latest action on the Mac, off at once when its run or turn is over.
-  const [driving, setDriving] = useState<{ on: boolean; label: string | null }>({ on: false, label: null });
-  useEffect(() => {
-    let t: ReturnType<typeof setTimeout> | undefined;
-    let who: number | null = null;
-    const stop = () => {
-      clearTimeout(t);
-      setDriving({ on: false, label: null });
-      who = null;
-    };
-    const off = api().onSimActivity((a) => {
-      if (a.udid !== MAC_UDID || a.source !== "agent") return;
-      if (a.kind === "end") return stop();
-      who = a.chat;
-      setDriving((d) => ({ on: true, label: a.kind === "type" || a.kind === "press" || a.kind === "app" ? (a.label ?? null) : a.kind === "tap" ? null : d.label }));
-      clearTimeout(t);
-      t = setTimeout(stop, 3000);
-    });
-    const offTurns = useChats.subscribe((s, prev) => {
-      if (who !== null && prev.chats[who]?.turnStart != null && s.chats[who]?.turnStart == null) stop();
-    });
-    return () => {
-      off();
-      offTurns();
-      stop();
-    };
-  }, []);
-
   const [body, setBody] = useState<HTMLDivElement | null>(null);
   const box = useBox(body);
   const shape = status && status.w > 0 && status.h > 0 ? { w: status.w, h: status.h } : DEFAULT_DIMS;
@@ -192,9 +165,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
     );
   } else if (running) {
     content = (
-      <MacScreen active={active} box={box} initial={shape}>
-        <DrivingPill on={driving.on} label={driving.label} />
-      </MacScreen>
+      <MacScreen active={active} box={box} initial={shape} />
     );
   } else {
     content = (
@@ -369,41 +340,54 @@ function InstallProgress({ status }: { status: MacStatus }) {
   );
 }
 
-/** The screen's box: the guest display's aspect, fitted to the panel body with padding, slightly rounded, a hairline edge. */
+/**
+ * The screen's box: the guest display's aspect, fitted to the panel body with padding, slightly rounded, a hairline
+ * edge. `around`: the beam around it while an agent drives.
+ */
 function Frame({
   box,
   d,
   focused,
+  around,
   children,
   ref,
   ...rest
-}: { box: { w: number; h: number }; d: { w: number; h: number }; focused?: boolean; children: ReactNode; ref?: React.Ref<HTMLDivElement> } & React.HTMLAttributes<HTMLDivElement>) {
+}: { box: { w: number; h: number }; d: { w: number; h: number }; focused?: boolean; around?: { on: boolean; slot: number }; children: ReactNode; ref?: React.Ref<HTMLDivElement> } & React.HTMLAttributes<HTMLDivElement>) {
   const s = Math.max(0, Math.min((box.w - PAD * 2) / d.w, (box.h - PAD * 2) / d.h));
+  const frame = (
+    <div
+      {...rest}
+      ref={ref}
+      className={cx(
+        "relative size-full overflow-hidden rounded-[8px] bg-black outline-none ring-1 ring-inset transition-shadow duration-150",
+        focused ? "ring-[1.5px] ring-[color-mix(in_oklab,var(--dim)_70%,transparent)]" : "ring-hairline",
+      )}
+    >
+      {children}
+    </div>
+  );
+  const size = { width: d.w * s, height: d.h * s, visibility: box.w ? ("visible" as const) : ("hidden" as const) };
   return (
     <div className="absolute inset-0 flex items-center justify-center">
-      <div
-        {...rest}
-        ref={ref}
-        className={cx(
-          "relative overflow-hidden rounded-[8px] bg-black outline-none ring-1 transition-shadow duration-150",
-          focused ? "ring-[color-mix(in_oklab,var(--dim)_70%,transparent)] shadow-[0_0_0_3px_color-mix(in_oklab,var(--dim)_18%,transparent)]" : "ring-hairline",
-        )}
-        style={{ width: d.w * s, height: d.h * s, visibility: box.w ? "visible" : "hidden" }}
-      >
-        {children}
-      </div>
+      {around ? (
+        <PanelBeam on={around.on} slot={around.slot} radius={8} style={size}>
+          {frame}
+        </PanelBeam>
+      ) : (
+        <div className="relative" style={size}>
+          {frame}
+        </div>
+      )}
     </div>
   );
 }
 
-type Mark = SimActivity & { id: number; x: number; y: number };
-let markIds = 0;
 /** Command keys: on macOS a key pressed while Command is held gets no keyup in WebKit, so they are released with it. */
 const META = new Set([54, 55]);
 const MODIFIERS = new Set([54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
 
 /** The live screen of the running Mac: attached while `active`, driven by pointer, wheel and keyboard. */
-function MacScreen({ active, box, initial, children }: { active: boolean; box: { w: number; h: number }; initial: { w: number; h: number }; children?: ReactNode }) {
+function MacScreen({ active, box, initial }: { active: boolean; box: { w: number; h: number }; initial: { w: number; h: number } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const frameEl = useRef<HTMLDivElement>(null);
   const [d, setD] = useState(initial);
@@ -467,19 +451,8 @@ function MacScreen({ active, box, initial, children }: { active: boolean; box: {
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [active, attempt]);
 
-  // The agent's clicks (a ripple) and drags (a fading line), drawn where they land, in guest pixels.
-  const [marks, setMarks] = useState<Mark[]>([]);
-  useEffect(
-    () =>
-      api().onSimActivity((a) => {
-        if (a.udid !== MAC_UDID || a.source !== "agent" || a.x == null || a.y == null) return;
-        if (a.kind !== "tap" && a.kind !== "swipe") return;
-        const id = ++markIds;
-        setMarks((m) => [...m.slice(-5), { ...a, id, x: a.x!, y: a.y! }]);
-        setTimeout(() => setMarks((m) => m.filter((x) => x.id !== id)), 900);
-      }),
-    [],
-  );
+  // The agents acting on it (in guest pixels): their cursors over the screen, the beam around it.
+  const presence = usePresenceOf(simTarget(MAC_UDID));
 
   // ---- input ----
   const send = (input: MacInput) => void api().macInput(input).catch(() => {});
@@ -590,12 +563,12 @@ function MacScreen({ active, box, initial, children }: { active: boolean; box: {
     if (META.has(code)) releaseKeys((c) => !MODIFIERS.has(c));
   };
 
-  const reduce = reducedMotion();
   return (
     <Frame
       box={box}
       d={d}
       focused={focused}
+      around={{ on: presence.driving, slot: presence.slot }}
       ref={frameEl}
       tabIndex={0}
       role="application"
@@ -666,33 +639,8 @@ function MacScreen({ active, box, initial, children }: { active: boolean; box: {
           </Button>
         </div>
       )}
-      <svg className="pointer-events-none absolute inset-0 size-full" viewBox={`0 0 ${d.w} ${d.h}`} aria-hidden>
-        <AnimatePresence>
-          {marks.map((m) =>
-            m.kind === "swipe" && m.x2 != null && m.y2 != null ? (
-              <motion.g key={m.id} initial={{ opacity: 0.85 }} animate={{ opacity: 0 }} transition={{ duration: reduce ? 0 : 0.9, delay: reduce ? 0.6 : 0, ease: "easeOut" }}>
-                <line x1={m.x} y1={m.y} x2={m.x2} y2={m.y2} stroke="white" strokeOpacity={0.7} strokeWidth={8} strokeLinecap="round" />
-                <circle cx={m.x2} cy={m.y2} r={10} fill="var(--status-running)" fillOpacity={0.6} stroke="white" strokeWidth={2} />
-              </motion.g>
-            ) : (
-              <motion.circle
-                key={m.id}
-                cx={m.x}
-                cy={m.y}
-                fill="var(--status-running)"
-                fillOpacity={0.35}
-                stroke="white"
-                strokeWidth={2.5}
-                initial={{ r: reduce ? 20 : 6, opacity: 0.95 }}
-                animate={{ r: reduce ? 20 : 32, opacity: 0 }}
-                transition={{ duration: reduce ? 0 : 0.7, delay: reduce ? 0.6 : 0, ease: "easeOut" }}
-              />
-            ),
-          )}
-        </AnimatePresence>
-      </svg>
+      <PresenceLayer target={simTarget(MAC_UDID)} d={d} />
       <KeyboardHint on={focused} onRelease={() => frameEl.current?.blur()} />
-      {children}
     </Frame>
   );
 }
@@ -728,30 +676,6 @@ function KeyboardHint({ on, onRelease }: { on: boolean; onRelease: () => void })
             >
               Release
             </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function DrivingPill({ on, label }: { on: boolean; label: string | null }) {
-  const reduce = reducedMotion();
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-[6%] flex justify-center px-4">
-      <AnimatePresence>
-        {on && (
-          <motion.div
-            initial={{ opacity: 0, y: reduce ? 0 : 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0 : 0.2 }}
-            className="flex h-[26px] max-w-full items-center gap-1.5 rounded-full bg-[rgb(0_0_0/0.6)] px-2.5 text-small font-medium text-white backdrop-blur-md"
-            data-sim-driving
-          >
-            <span className="breathe size-[6px] shrink-0 rounded-full bg-[var(--status-running)]" />
-            <span className="shrink-0">Agent is driving</span>
-            {label ? <span className="min-w-0 truncate font-normal text-white/70">· {label}</span> : <ThinkingDots color="rgb(255 255 255 / 0.8)" className="-ml-1" />}
           </motion.div>
         )}
       </AnimatePresence>

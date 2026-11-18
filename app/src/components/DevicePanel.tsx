@@ -1,17 +1,17 @@
 // The iPhone panel: the right panel's fourth kind (next to Jobs, Models and the browser). It shows one iOS Simulator
 // per session (store `device[key]`), streamed live (`simAttach` JPEG frames drawn to a canvas) while the panel shows a
 // booted device; the person drives it with the pointer and keyboard, and the chat's agent drives it through the
-// backend's MCP tools (its taps and swipes are drawn over the screen as they land). No device bezel art.
+// backend's MCP tools: each acting agent's cursor glides to where it acts, with a label, and a beam runs around the
+// screen while one drives (components/Presence.tsx). No device bezel art.
 
-import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, type SimActivity, type SimDevice, type SimInput, type SimList } from "../lib/backend";
-import { useChats } from "../lib/chat";
+import { api, type SimDevice, type SimInput, type SimList } from "../lib/backend";
+import { simTarget, usePresenceOf } from "../lib/presence";
 import { useStore } from "../store";
 import { ICaret, ICheck, IClose, IHome, ILock, IPhone } from "./icons";
+import { PanelBeam, PresenceLayer } from "./Presence";
 import { Button, cx, IconButton, Popover } from "./primitives";
 import { reducedMotion } from "./StepRail";
-import { ThinkingDots } from "./ThinkingWord";
 
 /** Each device's screen size in points, as its last `simAttach` reported it (placeholders keep the same shape). */
 const dims = new Map<string, { w: number; h: number }>();
@@ -113,36 +113,6 @@ export function DevicePanel({ panelKey, chat, active, onClose }: { panelKey: str
   const booting = busy === "boot" || busy === "setup" || st === "Booting";
   const stopping = busy === "shutdown" || st === "Shutting Down";
 
-  // "Agent is driving": for ~3 s after this device's latest agent action, and off at once when the agent's run (a
-  // pilot run: `end`) or its chat's turn is over.
-  const [driving, setDriving] = useState(false);
-  useEffect(() => {
-    if (!udid) return;
-    let t: ReturnType<typeof setTimeout> | undefined;
-    let chat: number | null = null;
-    const stop = () => {
-      clearTimeout(t);
-      setDriving(false);
-      chat = null;
-    };
-    const off = api().onSimActivity((a) => {
-      if (a.udid !== udid || a.source !== "agent") return;
-      if (a.kind === "end") return stop();
-      chat = a.chat;
-      setDriving(true);
-      clearTimeout(t);
-      t = setTimeout(stop, 3000);
-    });
-    const offTurns = useChats.subscribe((s, prev) => {
-      if (chat !== null && prev.chats[chat]?.turnStart != null && s.chats[chat]?.turnStart == null) stop();
-    });
-    return () => {
-      off();
-      offTurns();
-      stop();
-    };
-  }, [udid]);
-
   const [body, setBody] = useState<HTMLDivElement | null>(null);
   const box = useBox(body);
   const shape = (udid && dims.get(udid)) || DEFAULT_DIMS;
@@ -170,9 +140,7 @@ export function DevicePanel({ panelKey, chat, active, onClose }: { panelKey: str
     );
   } else if (booted) {
     content = (
-      <SimScreen key={device.udid} udid={device.udid} active={active} box={box}>
-        <DrivingPill on={driving} />
-      </SimScreen>
+      <SimScreen key={device.udid} udid={device.udid} active={active} box={box} />
     );
   } else {
     content = (
@@ -254,23 +222,46 @@ export function useBox(el: HTMLElement | null) {
   return box;
 }
 
-/** The screen's box: the device's aspect, fitted to the panel body with padding, rounded, a hairline edge. */
-function Frame({ box, d, focused, children, ...rest }: { box: { w: number; h: number }; d: { w: number; h: number }; focused?: boolean; children: ReactNode } & React.HTMLAttributes<HTMLDivElement>) {
+/**
+ * The screen's box: the device's aspect, fitted to the panel body with padding, rounded, a hairline edge. `around`:
+ * the beam around it while an agent drives.
+ */
+function Frame({
+  box,
+  d,
+  focused,
+  around,
+  children,
+  ...rest
+}: { box: { w: number; h: number }; d: { w: number; h: number }; focused?: boolean; around?: { on: boolean; slot: number }; children: ReactNode } & React.HTMLAttributes<HTMLDivElement>) {
   const s = Math.max(0, Math.min((box.w - PAD * 2) / d.w, (box.h - PAD * 2) / d.h));
   const w = d.w * s;
   const h = d.h * s;
+  const radius = w * 0.06;
+  const frame = (
+    <div
+      {...rest}
+      className={cx(
+        "relative size-full overflow-hidden bg-black outline-none ring-1 ring-inset transition-shadow duration-150",
+        focused ? "ring-[1.5px] ring-[color-mix(in_oklab,var(--dim)_70%,transparent)]" : "ring-hairline",
+      )}
+      style={{ borderRadius: radius }}
+    >
+      {children}
+    </div>
+  );
+  const size = { width: w, height: h, visibility: box.w ? ("visible" as const) : ("hidden" as const) };
   return (
     <div className="absolute inset-0 flex items-center justify-center">
-      <div
-        {...rest}
-        className={cx(
-          "relative overflow-hidden bg-black outline-none ring-1 transition-shadow duration-150",
-          focused ? "ring-[color-mix(in_oklab,var(--dim)_70%,transparent)] shadow-[0_0_0_3px_color-mix(in_oklab,var(--dim)_18%,transparent)]" : "ring-hairline",
-        )}
-        style={{ width: w, height: h, borderRadius: w * 0.06, visibility: box.w ? "visible" : "hidden" }}
-      >
-        {children}
-      </div>
+      {around ? (
+        <PanelBeam on={around.on} slot={around.slot} radius={radius} style={size}>
+          {frame}
+        </PanelBeam>
+      ) : (
+        <div className="relative" style={size}>
+          {frame}
+        </div>
+      )}
     </div>
   );
 }
@@ -286,11 +277,8 @@ const KEYS: Record<string, string> = {
   ArrowDown: "down",
 };
 
-type Mark = SimActivity & { id: number; x: number; y: number };
-let markIds = 0;
-
 /** The live screen of a booted device: attached while `active`, driven by pointer and keyboard. */
-function SimScreen({ udid, active, box, children }: { udid: string; active: boolean; box: { w: number; h: number }; children?: ReactNode }) {
+function SimScreen({ udid, active, box }: { udid: string; active: boolean; box: { w: number; h: number } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [d, setD] = useState(() => dims.get(udid) ?? DEFAULT_DIMS);
   const [attachErr, setAttachErr] = useState<string | null>(null);
@@ -354,19 +342,8 @@ function SimScreen({ udid, active, box, children }: { udid: string; active: bool
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
   }, [udid, active, attempt]);
 
-  // The agent's taps (a ripple) and swipes (a fading line), drawn where they land.
-  const [marks, setMarks] = useState<Mark[]>([]);
-  useEffect(
-    () =>
-      api().onSimActivity((a) => {
-        if (a.udid !== udid || a.source !== "agent" || a.x == null || a.y == null) return;
-        if (a.kind !== "tap" && a.kind !== "swipe") return;
-        const id = ++markIds;
-        setMarks((m) => [...m.slice(-5), { ...a, id, x: a.x!, y: a.y! }]);
-        setTimeout(() => setMarks((m) => m.filter((x) => x.id !== id)), 900);
-      }),
-    [udid],
-  );
+  // The agents acting on it: their cursors over the screen, the beam around it.
+  const presence = usePresenceOf(simTarget(udid));
 
   // Input, in device points.
   const send = (input: SimInput) => void api().simInput(udid, input).catch(() => {});
@@ -404,12 +381,12 @@ function SimScreen({ udid, active, box, children }: { udid: string; active: bool
     e.stopPropagation();
   };
 
-  const reduce = reducedMotion();
   return (
     <Frame
       box={box}
       d={d}
       focused={focused}
+      around={{ on: presence.driving, slot: presence.slot }}
       tabIndex={0}
       role="application"
       aria-label="iPhone screen"
@@ -476,57 +453,8 @@ function SimScreen({ udid, active, box, children }: { udid: string; active: bool
           </Button>
         </div>
       )}
-      <svg className="pointer-events-none absolute inset-0 size-full" viewBox={`0 0 ${d.w} ${d.h}`} aria-hidden>
-        <AnimatePresence>
-          {marks.map((m) =>
-            m.kind === "swipe" && m.x2 != null && m.y2 != null ? (
-              <motion.g key={m.id} initial={{ opacity: 0.85 }} animate={{ opacity: 0 }} transition={{ duration: reduce ? 0 : 0.9, delay: reduce ? 0.6 : 0, ease: "easeOut" }}>
-                <line x1={m.x} y1={m.y} x2={m.x2} y2={m.y2} stroke="white" strokeOpacity={0.7} strokeWidth={10} strokeLinecap="round" />
-                <circle cx={m.x2} cy={m.y2} r={12} fill="var(--status-running)" fillOpacity={0.6} stroke="white" strokeWidth={2} />
-              </motion.g>
-            ) : (
-              <motion.circle
-                key={m.id}
-                cx={m.x}
-                cy={m.y}
-                fill="var(--status-running)"
-                fillOpacity={0.35}
-                stroke="white"
-                strokeWidth={2.5}
-                initial={{ r: reduce ? 22 : 8, opacity: 0.95 }}
-                animate={{ r: reduce ? 22 : 36, opacity: 0 }}
-                transition={{ duration: reduce ? 0 : 0.7, delay: reduce ? 0.6 : 0, ease: "easeOut" }}
-              />
-            ),
-          )}
-        </AnimatePresence>
-      </svg>
-      {children}
+      <PresenceLayer target={simTarget(udid)} d={d} />
     </Frame>
-  );
-}
-
-function DrivingPill({ on }: { on: boolean }) {
-  const reduce = reducedMotion();
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-[7%] flex justify-center">
-      <AnimatePresence>
-        {on && (
-          <motion.div
-            initial={{ opacity: 0, y: reduce ? 0 : 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0 : 0.2 }}
-            className="flex h-[26px] items-center gap-1.5 rounded-full bg-[rgb(0_0_0/0.6)] px-2.5 text-small font-medium text-white backdrop-blur-md"
-            data-sim-driving
-          >
-            <span className="breathe size-[6px] rounded-full bg-[var(--status-running)]" />
-            Agent is driving
-            <ThinkingDots color="rgb(255 255 255 / 0.8)" className="-ml-1" />
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
   );
 }
 

@@ -133,6 +133,9 @@ function handle(r: BrowserAgentRequest) {
   sync();
 }
 
+/** Chats whose agent acted on their browser during the current turn. */
+const acted = new Set<number>();
+
 let started = false;
 /** Wires the sync, the requests and the activity (once, at startup). */
 export function startBrowserAgent() {
@@ -145,14 +148,20 @@ export function startBrowserAgent() {
   onNatives(sync);
   api().onBrowserAgent(handle);
   api().onBrowserActivity((a) => {
+    acted.add(a.chat);
     // `end`: the agent's run (a pilot run) is over, so the marks go off now rather than 3 s later.
     if (a.kind === "end") clearAgentMark(a.chat);
     else useBrowserAgent.setState((s) => ({ byChat: { ...s.byChat, [a.chat]: { ...a, at: Date.now() } } }));
   });
   // A turn that ended isn't acting any more: its marks go off with it (they used to linger up to 3 s after).
   useChats.subscribe((s, prev) => {
-    for (const id of Object.keys(useBrowserAgent.getState().byChat).map(Number)) {
-      if (prev.chats[id]?.turnStart != null && s.chats[id]?.turnStart == null) clearAgentMark(id);
+    for (const id of acted) {
+      if (prev.chats[id]?.turnStart != null && s.chats[id]?.turnStart == null) {
+        acted.delete(id);
+        clearAgentMark(id);
+        // Its cursors in the page rest, then fade (the page draws them, device/web_agent.js).
+        void api().browserPresenceEnd(id).catch(() => {});
+      }
     }
   });
   sync();

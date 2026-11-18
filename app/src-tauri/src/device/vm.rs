@@ -904,6 +904,30 @@ impl MacTools<'_> {
         });
     }
 
+    /// Typing: where (the field's centre, when known), into what, and the text (dots for a secret field).
+    fn typing(&self, at: Option<(f64, f64)>, field: Option<String>, text: &str) {
+        let text = super::presence::shown_text(text, field.as_deref());
+        self.d.activity(Activity { udid: UDID.into(), chat: Some(self.chat), source: "agent", kind: "type", x: at.map(|p| p.0), y: at.map(|p| p.1), label: field, text: Some(text), ..Default::default() });
+    }
+
+    /// The focused text field of the last screen this chat saw: (its centre, its name).
+    fn focused_field(&self) -> Option<((f64, f64), Option<String>)> {
+        let last = self.d.vm.last.lock().unwrap();
+        let (t, _) = last.get(&self.chat)?;
+        let n = t.nodes.iter().find(|n| n.flags.contains(&"focused") && matches!(n.role.as_str(), "textfield" | "textarea" | "searchfield" | "securefield" | "combobox"))?;
+        Some((n.center(), n.label.clone().or_else(|| n.placeholder.clone())))
+    }
+
+    /// The run on the Mac is over (the pilot's): the panel's cursor rests, then fades.
+    pub fn end(&self) {
+        self.activity("end", None, None);
+    }
+
+    /// The pilot is choosing its next step (`by`: who decides).
+    pub fn thinking(&self) {
+        self.activity("think", None, None);
+    }
+
     fn helper(&self, req: Value, timeout: Duration) -> Res<Value> {
         self.d.vm.call(self.d, req, timeout)
     }
@@ -1002,11 +1026,14 @@ impl MacTools<'_> {
 
     fn type_into(&self, text_: &str, into: Option<&str>, replace: Option<bool>, submit: bool) -> Res<String> {
         let mut note = String::new();
+        let mut field = None;
         if let Some(id) = into {
             let (p, label) = self.point(&json!({ "target": id }), "target")?;
+            field = Some((p, label.clone()));
             note = self.click(p, 1, false, label)? + ", ";
             std::thread::sleep(Duration::from_millis(120));
         }
+        let field = field.or_else(|| self.focused_field());
         let replace = replace.unwrap_or(into.is_some());
         if replace {
             self.helper(json!({ "cmd": "key", "name": "a", "modifiers": ["command"] }), Duration::from_secs(5))?;
@@ -1014,7 +1041,7 @@ impl MacTools<'_> {
                 self.helper(json!({ "cmd": "key", "name": "delete" }), Duration::from_secs(5))?;
             }
         }
-        self.activity("type", None, Some(text_.chars().take(40).collect()));
+        self.typing(field.as_ref().map(|f| f.0), field.and_then(|f| f.1), text_);
         type_text(self.d, text_)?;
         if submit {
             self.helper(json!({ "cmd": "key", "name": "return" }), Duration::from_secs(5))?;
@@ -1043,7 +1070,7 @@ impl MacTools<'_> {
             "left" => (amount, 0.0),
             _ => return Err("scroll direction is up, down, left or right".into()),
         };
-        self.activity("swipe", Some((cx, cy)), Some(format!("scroll {dir}")));
+        self.activity("scroll", Some((cx, cy)), Some(dir.to_string()));
         self.helper(json!({ "cmd": "scroll", "x": cx, "y": cy, "dx": dx, "dy": dy }), Duration::from_secs(10))?;
         Ok(format!("scrolled {dir}"))
     }

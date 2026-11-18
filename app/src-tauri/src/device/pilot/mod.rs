@@ -494,6 +494,8 @@ pub trait Driver {
     }
     /// The run ended (indicators off).
     fn finish(&mut self) {}
+    /// The decider is choosing the next step (the panel's cursor says so).
+    fn thinking(&mut self) {}
     /// Warm start: brings the goal's app (`app`, its name on screen) to the front as it is, without relaunching.
     /// `Ok(None)` when the driver can't (the run then starts fresh with [`Self::start`]).
     fn resume(&mut self, _goal: &Goal, _app: &str) -> Result<Option<String>, String> {
@@ -692,6 +694,13 @@ pub struct Traced {
 
 /// Progress after each step, for the chat's live view.
 pub type Progress<'a> = &'a mut dyn FnMut(&Outcome, bool);
+
+/// Asks the decider, while the panel's cursor says it is choosing.
+fn decide(d: &mut dyn Decider, driver: &mut dyn Driver, req: &DecideRequest) -> Result<Decision, String> {
+    crate::device::presence::decided(d.name());
+    driver.thinking();
+    d.decide(req)
+}
 
 /// Runs the goal: perceive → check → candidates → decide (memory, then the decider) → act → settle.
 pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut decider: Option<&mut dyn Decider>, haiku_note: &str, progress: Progress) -> Outcome {
@@ -905,7 +914,7 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
                     finish(&mut out, Status::Stuck, why, Some(&screen), cands, driver);
                     break;
                 }
-                Some(d) => match d.decide(&DecideRequest { goal, history: &history, screen: &screen, candidates: &cands }) {
+                Some(d) => match decide(d, driver, &DecideRequest { goal, history: &history, screen: &screen, candidates: &cands }) {
                     Ok(dec) => {
                         out.haiku_usd += dec.usd;
                         out.haiku_tokens += dec.input_tokens;
@@ -972,6 +981,7 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
             _ => {}
         }
         let t = Instant::now();
+        crate::device::presence::decided(by);
         match driver.act(&action, &screen, &goal.inputs) {
             Ok(note) => step.note = note,
             Err(e) => {
@@ -1041,6 +1051,8 @@ pub fn call(devices: &super::Devices, chat: usize, a: &Value) -> Result<String, 
         devices.emit("pilot-progress", json!({ "chat": chat, "run": run_id, "started": started, "end": end, "outcome": o }));
     };
     let decider: Option<&mut dyn Decider> = model.as_mut().map(|h| h as &mut dyn Decider);
+    // The run is an actor of its own on the panel ("Pilot", with who decided each step).
+    let _actor = super::presence::pilot(run_id);
     let out = match goal.target {
         Target::Iphone => {
             let udid = devices.device_for_chat(chat)?;

@@ -115,6 +115,8 @@ const subscribe = (f: () => void) => {
   subs.add(f);
   return () => subs.delete(f);
 };
+/** Calls `f` whenever the effective state may have changed (outside React). */
+export const onMotion = subscribe;
 export function useMotion(): MotionState {
   return useSyncExternalStore(subscribe, () => state);
 }
