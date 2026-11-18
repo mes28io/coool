@@ -1087,6 +1087,7 @@ pub fn run() {
             selftest::selftest_preview_eval,
             selftest::selftest_close_preview,
             selftest::selftest_click,
+            selftest::selftest_sim_delete,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
@@ -1099,7 +1100,14 @@ pub fn run() {
             }
             // The iPhone panel's devices and the `coool-device` MCP server each chat coool starts gets.
             let devices = app.state::<Arc<device::Devices>>().inner().clone();
-            devices.init(&handle);
+            match &c.selftest {
+                // A device and helper of the test's own: never the person's "coool iPhone" or their helper binary.
+                Some(t) => {
+                    device::simctl::set_only_device(selftest::SIM_NAME);
+                    devices.init_in(&handle, Some(t.dir().join(".coool-device")));
+                }
+                None => devices.init(&handle),
+            }
             let d = devices.clone();
             c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id| d.mcp.server_for(id).into_iter().collect())));
             spawn_refresher(handle.clone(), c.clone());

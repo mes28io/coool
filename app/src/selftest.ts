@@ -9,6 +9,10 @@
 // `artifact` (the preview window and its sandbox; no model calls), `browser` (artifact, then the in-app browser's
 // tabs and native webviews: layout tracking, hiding, IPC isolation, pop-ups vs tabs, eviction, restoring; needs the
 // network for example.com; no model calls).
+// Agents driving the panels through the `coool-device` MCP tools (not in `all`; real model calls, a few cents):
+// `agent-browser` (a Claude Haiku chat fills a local form in the Browser panel), `agent-browser-codex` (the same on
+// Codex's cheapest model), `agent-iphone` (a Haiku chat reads the iOS version in Settings on a simulator the test
+// creates for itself, "coool selftest iPhone", and deletes at the end).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { newChat } from "./lib/actions";
@@ -19,6 +23,7 @@ import { sessionKey } from "./lib/types";
 import { decideMotion, setMotionPref, type MotionHints, type MotionPref } from "./lib/motion";
 import { resolveTarget, useStore } from "./store";
 import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
+import { chatPanelKey } from "./lib/browserAgent";
 
 interface Config {
   scenario: string;
@@ -234,6 +239,137 @@ async function tracks(id: string): Promise<string | null> {
   const want = [r.left, r.top, r.width, r.height];
   const off = w.frame.map((v, i) => Math.abs(v - want[i]));
   return off.some((d) => d > 2) ? `frame ${w.frame.map(Math.round).join(",")} vs panel ${want.map(Math.round).join(",")}` : null;
+}
+
+// ---------- agents driving the panels (coool-device MCP tools) ----------
+
+type Tool = Extract<ChatItem, { kind: "tool" }>;
+/** The chat's calls of coool-device tools (Claude: `mcp__coool-device__tap`, Codex: `coool-device.tap`). */
+const deviceTools = (id: number, from = 0) => after(id, from).filter((i) => i.kind === "tool" && /coool-device(__|\.)/.test(i.name)) as Tool[];
+const toolName = (t: Tool) => t.name.replace(/^.*coool-device(__|\.)/, "");
+const toolLine = (t: Tool) => `${toolName(t)} ${t.ok ? "ok" : t.ok === false ? "FAILED" : "?"} ${t.endTs ? ((t.endTs - t.ts) / 1000).toFixed(1) + "s" : ""}`.trim();
+
+interface AgentRun {
+  tools: Tool[];
+  /** Every tool the turn called. */
+  all: string[];
+  reply: string;
+  turnMs: number;
+  tokens: number | null;
+  /** Per mark selector: ms after the prompt it first showed (absent: never). */
+  seen: Record<string, number>;
+}
+
+/**
+ * Sends `prompt` to chat `id` and waits for the turn to end, meanwhile watching for each mark (a selector, with a
+ * screenshot the first time it shows) and allowing any approval for a coool-device tool (other approvals: denied).
+ */
+async function agentTurn(id: number, o: { prompt: string; marks: [string, string][]; ms: number }): Promise<AgentRun> {
+  const turns = turnEnds(id).length;
+  const n = items(id).length;
+  const seen: Record<string, number> = {};
+  const t0 = Date.now();
+  let busy = false;
+  const watch = setInterval(() => {
+    if (busy) return;
+    for (const [sel, name] of o.marks) {
+      if (seen[sel] === undefined && $(sel)) {
+        seen[sel] = Date.now() - t0;
+        busy = true;
+        void log(`INFO mark ${sel} after ${seen[sel]} ms`);
+        void shot(name).finally(() => (busy = false));
+        return;
+      }
+    }
+    const card = $("[data-approval]");
+    if (card) {
+      const pending = after(id, n).find((i) => i.kind === "permission") as { tool?: string; name?: string } | undefined;
+      const what = JSON.stringify(pending ?? {}).slice(0, 160);
+      const mine = /coool-device/.test(card.textContent ?? "") || /coool-device/.test(what);
+      void log(`INFO approval (${mine ? "allowing" : "denying"}): ${what}`);
+      (button(mine ? "Allow once" : /Deny|Decline|Don't allow/, card) ?? button("Allow once", card))?.click();
+    }
+  }, 100);
+  try {
+    await say(o.prompt);
+    const end = await nextTurn(id, turns, o.ms);
+    await sleep(300);
+    const all = after(id, n).filter((i) => i.kind === "tool") as Tool[];
+    for (const t of deviceTools(id, n)) await log(`TOOL ${toolLine(t)} ${JSON.stringify(t.input).slice(0, 140)}${t.ok === false ? ` -> ${t.output.slice(0, 300)}` : ""}`);
+    return { tools: deviceTools(id, n), all: all.map((t) => t.name), reply: lastText(id)?.text ?? "", turnMs: end.durationMs || Date.now() - t0, tokens: end.tokens, seen };
+  } finally {
+    clearInterval(watch);
+  }
+}
+
+/** A chat of `provider` on `model` opens a local form in its Browser panel, fills it in, submits, quotes the result. */
+async function agentBrowser(ctx: Ctx, provider: "claude" | "codex", model: string) {
+  const NAME = "Ada Lovelace";
+  const CUPS = 3;
+  const REF = `CUP-${100 + 7 * CUPS + NAME.length}`;
+  let id = -1;
+  let key = "";
+  let url = "";
+  // What earlier scenarios' pages posted.
+  const earlier = (await probeResults()).length;
+  const label = provider === "codex" ? "agent-browser-codex" : "agent-browser";
+  await step(`${label}: a ${provider} chat on ${model} starts, its Browser panel closed`, async () => {
+    url = ((await invoke("selftest_probe_server")) as string).replace(/\/probe$/, "/form");
+    const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+    await newChat({ provider, cwd: ctx.cfg.dir, model });
+    id = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+    await waitFor("ready", () => chat(id)?.ready, 90_000);
+    await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+    await sleep(1500);
+    key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+    if (useStore.getState().browser[key]?.tabs.length) throw new Fail("the panel already has tabs");
+    return `chat ${id}, ${url}`;
+  });
+  if (id < 0) return;
+  const r = await agentTurn(id, {
+    prompt: `Use the browser_* tools (the Browser panel beside this chat), not the shell or curl. Open ${url} , type the name ${NAME} and the email ada@example.com, press the "Add cup" button until the cups counter shows ${CUPS}, then press "Submit order". Reply with the exact confirmation sentence the page shows, nothing else.`,
+    marks: [
+      ["[data-browser-agent-pill]", `${label}-acting`],
+      ["[data-browser-agent-tab]", `${label}-tab-mark`],
+    ],
+    ms: 240_000,
+  });
+  await step(`${label}: the agent's browser_* tool calls succeed`, async () => {
+    const browser = r.tools.filter((t) => toolName(t).startsWith("browser_"));
+    if (!browser.length) throw new Fail(`no browser_* calls; tools: ${r.all.join(", ") || "none"}`);
+    const worked = (n: string) => browser.some((t) => t.ok && (toolName(t) === n || (toolName(t) === "browser_batch" && n !== "browser_navigate")));
+    for (const n of ["browser_navigate", "browser_type", "browser_click"]) if (!worked(n)) throw new Fail(`no ${n} that worked: ${browser.map(toolLine).join("; ")}`);
+    const failed = browser.filter((t) => t.ok === false).length;
+    if (failed > 2) throw new Fail(`${failed} of ${browser.length} calls failed: ${browser.map(toolLine).join("; ")}`);
+    return browser.map(toolLine).join("; ");
+  });
+  await step(`${label}: the page really changed (its own report), the panel shows it, the reply quotes it`, async () => {
+    const forms = (await probeResults()).slice(earlier).filter((p) => p.step === "form");
+    const last = forms[forms.length - 1];
+    if (!last) throw new Fail("the page never reported a change");
+    if (!last.submitted || last.name !== NAME || last.cups !== CUPS || last.email !== "ada@example.com") throw new Fail(`page state ${JSON.stringify(last)}`);
+    if (!String(last.confirmation).includes(REF)) throw new Fail(`confirmation ${last.confirmation}`);
+    await sleep(800);
+    await shot(`${label}-done`);
+    // The chat linked to its session meanwhile: its panel moved from `chat:<id>` to the session's key.
+    const now = chatPanelKey(id);
+    const b = useStore.getState().browser[now];
+    const tab = b?.tabs.find((t) => t.id === b.active);
+    if (!tab || tab.page.kind !== "web" || !tab.page.url.includes("/form")) throw new Fail(`panel ${key} -> ${now}: tab ${JSON.stringify(tab)}; panels with tabs: ${Object.keys(useStore.getState().browser).join(", ")}`);
+    const wv = nativeId(tabKey(now, tab.id));
+    if (!wv) throw new Fail("the tab has no webview");
+    const bad = await tracks(wv);
+    if (bad) throw new Fail(`the page isn't on screen in the panel: ${bad}`);
+    if (!r.reply.includes(REF)) throw new Fail(`reply ${JSON.stringify(r.reply)} lacks ${REF}`);
+    key = now;
+    return `reply ${JSON.stringify(r.reply.trim().slice(0, 160))}; panel ${key}; turn ${r.turnMs} ms, ${r.tokens ?? "?"} tokens; ${forms.length} page reports`;
+  });
+  await step(`${label}: the tab's agent indicator showed while it acted`, async () => {
+    if (r.seen["[data-browser-agent-pill]"] === undefined) throw new Fail("no Agent pill on the panel");
+    if (r.seen["[data-browser-agent-tab]"] === undefined) throw new Fail("no agent mark on the tab");
+    return `pill after ${r.seen["[data-browser-agent-pill]"]} ms, tab mark after ${r.seen["[data-browser-agent-tab]"]} ms`;
+  });
+  if (key) useStore.getState().closeBrowser(key);
 }
 
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
@@ -1406,6 +1542,91 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       clearInterval(allow);
       setMotionPref(original);
       await log(`PERF restored pref=${original}`);
+    }
+  },
+
+  /** A Claude Haiku chat opens a local form in its Browser panel, fills it, submits and quotes the confirmation. */
+  async "agent-browser"(ctx) {
+    await agentBrowser(ctx, "claude", PERF_MODEL);
+  },
+
+  /** The same on Codex's cheapest model. */
+  async "agent-browser-codex"(ctx) {
+    await agentBrowser(ctx, "codex", CODEX_MODEL);
+  },
+
+  /**
+   * A Claude Haiku chat opens Settings on the iPhone in its panel and reports the iOS version. The test makes a
+   * simulator of its own (SIM_NAME in selftest.rs; the person's are never touched), boots it, and deletes it after.
+   */
+  async "agent-iphone"(ctx) {
+    const SIM = "coool selftest iPhone";
+    let id = -1;
+    let key = "";
+    let udid = "";
+    let runtime = "";
+    try {
+      await step("the test's own simulator is created and booted, shown in the chat's iPhone panel", async () => {
+        const list = await api().simDevices();
+        if (!list.available) throw new Fail(`no simulators: ${list.reason}`);
+        const others = list.devices.filter((d) => d.coool && d.name !== SIM);
+        if (others.length) throw new Fail(`other devices count as coool's in a test run: ${others.map((d) => d.name).join(", ")}`);
+        const t = Date.now();
+        udid = await api().simEnsureDevice();
+        const made = Date.now() - t;
+        await api().simBoot(udid);
+        const booted = Date.now() - t - made;
+        const dev = (await api().simDevices()).devices.find((d) => d.udid === udid);
+        if (dev?.name !== SIM) throw new Fail(`made ${dev?.name}`);
+        runtime = dev.runtime;
+        ctx.model = PERF_MODEL;
+        id = await startClaude(ctx);
+        ctx.model = undefined;
+        await waitFor("ready", () => chat(id)?.ready, 60_000);
+        await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+        await sleep(1500);
+        key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+        useStore.getState().setRightPanel(key, "device");
+        await waitFor("the panel showing the booted device", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 30_000);
+        await sleep(1500);
+        await shot("agent-iphone-before");
+        return `${dev.name} ${udid} (${dev.deviceType}, ${runtime}); create ${made} ms, boot ${booted} ms`;
+      });
+      if (id < 0) return;
+      const r = await agentTurn(id, {
+        prompt:
+          "Use the coool-device tools (observe, tap, app, ...) on the iPhone simulator shown in this chat's panel. Open the Settings app, go to General, then About, and read the iOS version shown there. Don't use the shell. Then reply with one line: iOS version: <the version>.",
+        marks: [["[data-sim-driving]", "agent-iphone-driving"]],
+        ms: 240_000,
+      });
+      await step("the agent drives the iPhone through coool-device tools that succeed", async () => {
+        if (!r.tools.length) throw new Fail(`no coool-device tool calls; tools: ${r.all.join(", ") || "none"}`);
+        const failed = r.tools.filter((t) => t.ok === false);
+        if (failed.length === r.tools.length) throw new Fail(`every call failed: ${r.tools.map(toolLine).join("; ")}`);
+        return r.tools.map(toolLine).join("; ");
+      });
+      await step("the simulator really shows Settings > About (the backend's own tree), and the reply has the version", async () => {
+        const seen = r.tools.some((t) => /About/.test(t.output) && /iOS Version|Software Version|\biOS\b/.test(t.output));
+        if (!seen) throw new Fail("no tool result showed the About screen");
+        const major = runtime.split(" ")[1]?.split(".")[0] ?? "?";
+        if (!new RegExp(`\\b${major}(\\.\\d+)*\\b`).test(r.reply)) throw new Fail(`reply ${JSON.stringify(r.reply)} lacks ${runtime}`);
+        if (r.seen["[data-sim-driving]"] === undefined) throw new Fail("the panel never showed \"Agent is driving\"");
+        // Opened before the first prompt (under `chat:<id>`), it stays open once the chat has its session.
+        const now = chatPanelKey(id);
+        if (useStore.getState().rightPanel[now] !== "device" || !$(`[data-sim-screen="${udid}"]`)) throw new Fail(`the iPhone panel closed (${key} -> ${now}: ${useStore.getState().rightPanel[now]})`);
+        key = now;
+        await shot("agent-iphone-after");
+        return `reply ${JSON.stringify(r.reply.trim().slice(0, 160))}; runtime ${runtime}; driving mark after ${r.seen["[data-sim-driving]"]} ms; turn ${r.turnMs} ms, ${r.tokens ?? "?"} tokens`;
+      });
+    } finally {
+      await step("the test's simulator is shut down and deleted", async () => {
+        if (id >= 0) useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+        await sleep(500);
+        const gone = (await invoke("selftest_sim_delete")) as string[];
+        const left = (await api().simDevices()).devices.filter((d) => d.name === SIM);
+        if (left.length) throw new Fail(`still there: ${left.map((d) => d.udid).join(", ")}`);
+        return `deleted ${gone.join(", ") || "nothing"}`;
+      });
     }
   },
 

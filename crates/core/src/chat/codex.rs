@@ -81,6 +81,11 @@ pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
             let env: Vec<String> = s.env.iter().map(|(k, v)| format!("{}={}", q(k), q(v))).collect();
             a.extend(["-c".into(), format!("{key}.env={{{}}}", env.join(","))]);
         }
+        // Without it Codex asks before every call of the server's tools, as an MCP elicitation coool can't answer
+        // (declined at once, so every call failed with "user rejected MCP tool call").
+        if s.allow_all {
+            a.extend(["-c".into(), format!("{key}.default_tools_approval_mode=\"approve\"")]);
+        }
     }
     a
 }
@@ -1184,6 +1189,8 @@ mod tests {
                 r#"mcp_servers.coool-device.args=["--coool-device-mcp"]"#,
                 "-c",
                 r#"mcp_servers.coool-device.env={"COOOL_DEVICE_TOKEN"="t\"1"}"#,
+                "-c",
+                r#"mcp_servers.coool-device.default_tools_approval_mode="approve""#,
             ]
         );
     }

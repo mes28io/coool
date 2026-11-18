@@ -223,7 +223,7 @@ pub fn selftest_probe_server(core: State<'_, Arc<Core>>) -> Result<String, Strin
                     let _ = r.read_exact(&mut body);
                     PROBE.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
                     let _ = out.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                } else if let Some(page) = [("GET /probe", BROWSER_PROBE), ("GET /opener", POPUP_OPENER), ("GET /popup", POPUP_PAGE), ("GET /tabpage", TAB_PAGE), ("GET /blanklink", BLANK_LINK)].iter().find(|(p, _)| first.starts_with(p)).map(|(_, b)| b.replace("/*IPC_PROBE*/", IPC_PROBE)) {
+                } else if let Some(page) = [("GET /probe", BROWSER_PROBE), ("GET /opener", POPUP_OPENER), ("GET /popup", POPUP_PAGE), ("GET /tabpage", TAB_PAGE), ("GET /blanklink", BLANK_LINK), ("GET /form", FORM_PAGE)].iter().find(|(p, _)| first.starts_with(p)).map(|(_, b)| b.replace("/*IPC_PROBE*/", IPC_PROBE)) {
                     let _ = write!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
                 } else {
                     let _ = out.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -394,6 +394,55 @@ const TAB_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><titl
 const BLANK_LINK: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Link page</title>
 <style>html,body{margin:0;height:100%}a{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font:20px -apple-system,sans-serif;background:#eef4ff;color:#124}</style></head>
 <body><a href="/tabpage?via=blank" target="_blank">A target=_blank link (click anywhere)</a></body></html>"#;
+
+/// For a chat's agent to fill in through the `browser_*` tools (the `agent-browser` scenario): a name, an email, a
+/// counter button and Submit. Every change posts the page's state to the probe server (`{"step":"form",…}`), so the
+/// test sees what really happened on the page, not only what the agent says. The confirmation's reference is
+/// `CUP-<100 + 7·cups + name length>`, so a reply can only quote it after really doing the steps.
+const FORM_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Coffee order</title>
+<style>body{font:16px -apple-system,sans-serif;padding:24px;background:#fff;color:#111;max-width:420px}label{display:block;margin:12px 0 4px}
+input{font:inherit;padding:6px 8px;width:100%;box-sizing:border-box}button{font:inherit;padding:8px 14px;margin-top:14px}
+#done{margin-top:18px;padding:12px;background:#e8f6ec;border-radius:8px}</style></head>
+<body><h1>Coffee order</h1>
+<form id="f"><label for="name">Name</label><input id="name" name="name" autocomplete="off">
+<label for="email">Email</label><input id="email" name="email" type="email" autocomplete="off">
+<p>Cups: <output id="count">0</output></p><button type="button" id="add">Add cup</button>
+<div><button type="submit" id="submit">Submit order</button></div></form>
+<p id="done" hidden></p>
+<script>
+const $ = (i) => document.getElementById(i);
+let cups = 0, submitted = false;
+const post = () => fetch("/result", { method: "POST", body: JSON.stringify({ step: "form", name: $("name").value, email: $("email").value, cups, submitted, confirmation: $("done").hidden ? "" : $("done").textContent }) }).catch(() => {});
+$("add").addEventListener("click", () => { cups++; $("count").textContent = String(cups); post(); });
+$("name").addEventListener("change", post);
+$("email").addEventListener("change", post);
+$("f").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const name = $("name").value.trim();
+  if (!name || !cups) { $("done").hidden = false; $("done").textContent = "Please enter a name and add at least one cup."; post(); return; }
+  submitted = true;
+  $("done").hidden = false;
+  $("done").textContent = "Order confirmed for " + name + ": " + cups + " cups, reference CUP-" + (100 + 7 * cups + name.length) + ".";
+  $("f").hidden = true;
+  document.title = "Order confirmed";
+  post();
+});
+</script></body></html>"#;
+
+/// The simulator the self-test creates, drives and deletes (never the person's "coool iPhone").
+pub const SIM_NAME: &str = "coool selftest iPhone";
+
+/// Shuts the self-test's simulator down and deletes it (the end of the `agent-iphone` scenario).
+#[tauri::command(async)]
+pub fn selftest_sim_delete(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>) -> Result<Vec<String>, String> {
+    active(&core)?;
+    let mine: Vec<_> = crate::device::simctl::devices()?.into_iter().filter(|d| d.name == SIM_NAME).collect();
+    for d in &mine {
+        let _ = devices.shutdown(&d.udid);
+        crate::device::simctl::delete(&d.udid)?;
+    }
+    Ok(mine.into_iter().map(|d| d.udid).collect())
+}
 
 #[derive(Serialize)]
 pub struct PopupProbe {

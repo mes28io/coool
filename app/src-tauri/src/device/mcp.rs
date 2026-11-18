@@ -311,8 +311,16 @@ impl Session {
     }
 
     fn tree(&self, udid: &str) -> Result<Tree, String> {
-        let d = self.helper(udid)?.call(json!({ "cmd": "describe", "max": 500 }), Duration::from_secs(10))?;
-        Ok(observe::parse(&d))
+        // Just after a boot the accessibility bridge answers nothing for a few seconds (the self-test's first observe
+        // on a fresh device failed with "no frontmost application"): wait it out instead of failing the agent's call.
+        let until = Instant::now() + Duration::from_secs(12);
+        loop {
+            match self.helper(udid)?.call(json!({ "cmd": "describe", "max": 500 }), Duration::from_secs(10)) {
+                Ok(d) => return Ok(observe::parse(&d)),
+                Err(e) if e.contains("no frontmost application") && Instant::now() < until => std::thread::sleep(Duration::from_millis(500)),
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// The screen as text; remembered for id lookup. `full: false` says "unchanged" when nothing changed.
@@ -358,7 +366,9 @@ impl Session {
 
     /// A point from `target` (an element id) or `x`/`y`.
     fn point(&self, udid: &str, a: &Value, key: &str) -> Result<((f64, f64), Option<String>), String> {
-        if let Some(id) = a[key].as_str() {
+        // `id` for `target`: agents write it so (the self-test's Haiku chat did, as the browser tools call it `id`).
+        let given = if key == "target" && a[key].is_null() { &a["id"] } else { &a[key] };
+        if let Some(id) = given.as_str() {
             let n = self.element(udid, id)?;
             let (w, h) = self.screen_size(udid);
             // The visible part's centre (an element can hang off screen).

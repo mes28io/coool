@@ -589,15 +589,35 @@ pub(crate) mod native {
         if wk.is_null() {
             return done(Err("no webview".into()));
         }
+        // The world is kept alive for the whole run: WebKit tears a named world down (with every global the page
+        // script keeps in it: its element ids, document token, mutation clock) once nothing holds it, so an
+        // autoreleased one per call meant each call started from scratch: every id was refused as "the page
+        // changed", and settling never saw a quiet DOM (each wait ran to its limit).
+        thread_local! {
+            static WORLD: std::cell::OnceCell<Option<objc2::rc::Retained<AnyObject>>> = const { std::cell::OnceCell::new() };
+        }
+        let world = WORLD.with(|w| {
+            w.get_or_init(|| {
+                let name = NSString::from_str("coool-agent");
+                // SAFETY: main thread; `worldWithName:` returns an autoreleased WKContentWorld, retained here.
+                unsafe {
+                    let p: *mut AnyObject = msg_send![world_cls, worldWithName: &*name];
+                    objc2::rc::Retained::retain(p)
+                }
+            })
+            .as_ref()
+            .map(|r| objc2::rc::Retained::as_ptr(r) as *mut AnyObject)
+        });
+        let Some(world) = world else {
+            return done(Err("no content world".into()));
+        };
         let script = NSString::from_str(js);
-        let name = NSString::from_str("coool-agent");
         let block = block2::RcBlock::new(move |result: *mut AnyObject, error: *mut AnyObject| {
             done(if error.is_null() { Ok(describe(result)) } else { Err(error_text(error)) });
         });
-        // SAFETY: main thread; `worldWithName:` returns an autoreleased WKContentWorld; the frame is nil (main frame);
+        // SAFETY: main thread; `world` is the live, retained WKContentWorld; the frame is nil (main frame);
         // WebKit copies the block and calls it once on the main thread.
         unsafe {
-            let world: *mut AnyObject = msg_send![world_cls, worldWithName: &*name];
             let frame: *mut AnyObject = std::ptr::null_mut();
             let _: () = msg_send![&*wk, evaluateJavaScript: &*script, inFrame: frame, inContentWorld: world, completionHandler: &*block];
         }
