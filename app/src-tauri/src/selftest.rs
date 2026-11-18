@@ -883,3 +883,27 @@ pub fn selftest_mac_screen(core: State<'_, Arc<Core>>, devices: State<'_, Arc<cr
     let tree = crate::device::vm::MacTools { d: &devices, chat: usize::MAX }.tree(true)?;
     Ok(crate::device::observe::render(&tree, "coool Mac"))
 }
+
+/// A `mac_*` tool called for `chat` as its agent calls it through the MCP server (the boot on first use and the gate
+/// included): the text of its result. The `mac-cycles` and `mac-idle` scenarios.
+#[tauri::command(async)]
+pub fn selftest_mac_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize, name: String, args: serde_json::Value) -> Result<String, String> {
+    active(&core)?;
+    let out = crate::device::vm::MacTools { d: &devices, chat }.call(&name, &args)?;
+    Ok(out.iter().filter_map(|v| v["text"].as_str()).collect::<Vec<_>>().join("\n"))
+}
+
+/// The sandbox Mac's host helper: `pid` (its process id, or null) or `restart` (closes it as a quit does: it shuts the
+/// guest down cleanly and exits; the next call starts a new one). The `mac-cycles` scenario.
+#[tauri::command(async)]
+pub fn selftest_vm_helper(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, action: String) -> Result<serde_json::Value, String> {
+    active(&core)?;
+    match action.as_str() {
+        "pid" => Ok(serde_json::json!(devices.vm.helper_pid())),
+        "restart" => {
+            devices.vm.quit();
+            Ok(serde_json::Value::Null)
+        }
+        a => Err(format!("unknown action {a}")),
+    }
+}

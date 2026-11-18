@@ -1554,6 +1554,8 @@ pub fn run() {
             selftest::selftest_mac_screen,
             selftest::selftest_pilot,
             selftest::selftest_vm,
+            selftest::selftest_mac_tool,
+            selftest::selftest_vm_helper,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;

@@ -81,18 +81,18 @@ static void sendJSON(NSDictionary *obj) {
   if (data) writeFrame('J', data);
 }
 
-static void (^gOnReply)(void);
+static void (^gOnReply)(id rid);  // called with each reply's id (--once exits on it; quit waits for its stop's)
 
 static void reply(id rid, NSDictionary *result) {
   NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:@{@"id": rid ?: [NSNull null], @"ok": @YES}];
   if (result) m[@"result"] = result;
   sendJSON(m);
-  if (gOnReply) gOnReply();
+  if (gOnReply) gOnReply(rid);
 }
 
 static void fail(id rid, NSString *message) {
   sendJSON(@{@"id": rid ?: [NSNull null], @"ok": @NO, @"error": message ?: @"error"});
-  if (gOnReply) gOnReply();
+  if (gOnReply) gOnReply(rid);
 }
 
 static void event(NSString *name, NSDictionary *fields) {
@@ -534,6 +534,11 @@ static NSDictionary *downloadRestore(NSDictionary *m, NSString **err) {
 
 static dispatch_queue_t gVMQ;
 static VZVirtualMachine *gVM;
+// Bumped whenever gVM starts or stops (main queue): a guest agent connection belongs to the VM it was opened on, and
+// one from an earlier boot is dropped instead of being written to.
+static atomic_uint gVMGen;
+// A stop coool asked for is under way: no more screenshots (the guest's process can end before the VM says so).
+static atomic_bool gStopping;
 static CGSize gDisplay = {1280, 800};
 // Frames: Virtualization.framework hands a guest display's frames only to a VZVirtualMachineView (its private
 // screenshot call traps the VM service when there is none). So the helper keeps one, in a borderless window that is
@@ -541,16 +546,41 @@ static CGSize gDisplay = {1280, 800};
 // `presenter:didUpdateFrame:`, which the helper hooks (calling through) to learn of every new frame.
 static NSWindow *gWin;
 static VZVirtualMachineView *gView;
-static id gSurface;               // the latest frame's IOSurface (main queue)
+// The latest frame, copied (main queue). The view's own surface can't be kept: it belongs to the VM's process, which
+// recycles or frees it (on a display change in early boot, or when the VM stops), and reading one that is gone
+// crashed the helper (IOSurfaceClientGetWidth), taking the running VM with it: "the Mac isn't running".
+static IOSurfaceRef gSurface;
+static CIContext *gCI;
 static atomic_ullong gFrames;     // frames seen
 static void onFrame(void);
+
+/// Copies a frame the view is presenting right now (so `src` is alive) into coool's own surface, on the GPU.
+static BOOL copyFrame(IOSurfaceRef src) {
+  size_t w = IOSurfaceGetWidth(src), h = IOSurfaceGetHeight(src);
+  if (!w || !h) return NO;
+  if (!gSurface || IOSurfaceGetWidth(gSurface) != w || IOSurfaceGetHeight(gSurface) != h) {
+    if (gSurface) CFRelease(gSurface);
+    gSurface = IOSurfaceCreate((__bridge CFDictionaryRef)@{(id)kIOSurfaceWidth: @(w), (id)kIOSurfaceHeight: @(h), (id)kIOSurfaceBytesPerElement: @4,
+                                                           (id)kIOSurfacePixelFormat: @((uint32_t)'BGRA')});
+    if (!gSurface) return NO;
+  }
+  CIRenderDestination *d = [[CIRenderDestination alloc] initWithIOSurface:(__bridge IOSurface *)gSurface];
+  CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  d.colorSpace = cs;
+  CGColorSpaceRelease(cs);
+  NSError *e = nil;
+  CIRenderTask *t = [gCI startTaskToRender:[CIImage imageWithIOSurface:src] toDestination:d error:&e];
+  return t && [t waitUntilCompletedAndReturnError:&e] != nil;
+}
 
 static IMP gOrigFrame;
 static void hookFrame(id self, SEL _cmd, id presenter, void *p0, void *p1) {
   ((void (*)(id, SEL, id, void *, void *))gOrigFrame)(self, _cmd, presenter, p0, p1);
+  // Only the running VM's own view: a frame an earlier boot's view still presents carries a surface that dies with
+  // that VM's process.
+  if (!gVM || gVM.state != VZVirtualMachineStateRunning || !gView || ![(NSView *)self isDescendantOf:gView]) return;
   id c = [(NSView *)self layer].contents;
-  if (c && CFGetTypeID((__bridge CFTypeRef)c) == IOSurfaceGetTypeID()) {
-    gSurface = c;
+  if (c && CFGetTypeID((__bridge CFTypeRef)c) == IOSurfaceGetTypeID() && copyFrame((__bridge IOSurfaceRef)c)) {
     atomic_fetch_add(&gFrames, 1);
     onFrame();
   }
@@ -570,12 +600,20 @@ static void attachView(void) {
     gWin.excludedFromWindowsMenu = YES;
     gWin.collectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorIgnoresCycle;
   }
-  gSurface = nil;
+  if (gSurface) CFRelease(gSurface);
+  gSurface = NULL;
   gView = [[VZVirtualMachineView alloc] initWithFrame:r];
   gView.capturesSystemKeys = NO;
   if (@available(macOS 14.0, *)) gView.automaticallyReconfiguresDisplay = NO;
   gView.virtualMachine = gVM;
   gWin.contentView = gView;
+}
+
+/// The VM stopped (main queue): forget its last frame (the surface goes with its process) and let the view drop it.
+static void dropScreen(void) {
+  if (gSurface) CFRelease(gSurface);
+  gSurface = NULL;
+  gView.virtualMachine = nil;
 }
 
 static NSString *gState = @"stopped";  // stopped, installing, starting, running, stopping, error
@@ -588,9 +626,22 @@ static void setState(NSString *s) {
 @interface CVDelegate : NSObject <VZVirtualMachineDelegate>
 @end
 @implementation CVDelegate
-- (void)guestDidStopVirtualMachine:(VZVirtualMachine *)vm { gVM = nil; setState(@"stopped"); }
-- (void)virtualMachine:(VZVirtualMachine *)vm didStopWithError:(NSError *)error {
+// Only about the current VM: a late callback about an earlier boot's VM (stopped and replaced since) must not drop the
+// one running now, which would leave it running with nothing to reach it ("the Mac isn't running").
+- (void)guestDidStopVirtualMachine:(VZVirtualMachine *)vm {
+  event(@"stopped", @{@"why": @"the guest shut itself down", @"current": @(vm == gVM)});
+  if (vm != gVM) return;
   gVM = nil;
+  atomic_fetch_add(&gVMGen, 1);
+  dropScreen();
+  setState(@"stopped");
+}
+- (void)virtualMachine:(VZVirtualMachine *)vm didStopWithError:(NSError *)error {
+  event(@"stopped", @{@"why": [NSString stringWithFormat:@"error: %@", error.localizedDescription ?: @"?"], @"current": @(vm == gVM)});
+  if (vm != gVM) return;
+  gVM = nil;
+  atomic_fetch_add(&gVMGen, 1);
+  dropScreen();
   event(@"error", @{@"error": error.localizedDescription ?: @"stopped"});
   setState(@"stopped");
 }
@@ -814,7 +865,17 @@ static void warmOCR(void) {
 
 static void startVM(NSDictionary *m, id rid) {
   NSString *err = nil;
-  if (gVM) { reply(rid, @{@"state": gState}); return; }
+  // A VM object that stopped without its stop callback reaching us is not running: start a new one.
+  __block BOOL live = NO;
+  dispatch_sync(gVMQ, ^{
+    if (gVM && (gVM.state == VZVirtualMachineStateStopped || gVM.state == VZVirtualMachineStateError)) {
+      gVM = nil;
+      atomic_fetch_add(&gVMGen, 1);
+      dropScreen();
+    }
+    live = gVM != nil;
+  });
+  if (live) { reply(rid, @{@"state": gState}); return; }
   if (!takeLock(&err)) { fail(rid, err); return; }
   NSMutableDictionary *cfg = loadConfig();
   if (![cfg[@"installed"] boolValue]) { fail(rid, @"This Mac isn't installed yet."); return; }
@@ -846,12 +907,17 @@ static void startVM(NSDictionary *m, id rid) {
   setState(@"starting");
   double t0 = nowMs();
   dispatch_async(gVMQ, ^{
-    gVM = [[VZVirtualMachine alloc] initWithConfiguration:c queue:gVMQ];
+    VZVirtualMachine *vm = [[VZVirtualMachine alloc] initWithConfiguration:c queue:gVMQ];
+    gVM = vm;
+    atomic_fetch_add(&gVMGen, 1);
     if (!gDelegate) gDelegate = [CVDelegate new];
-    gVM.delegate = gDelegate;
-    [gVM startWithOptions:opts completionHandler:^(NSError *e) {
+    vm.delegate = gDelegate;
+    [vm startWithOptions:opts completionHandler:^(NSError *e) {
       if (e) {
-        gVM = nil;
+        if (gVM == vm) {
+          gVM = nil;
+          dropScreen();
+        }
         setState(@"stopped");
         fail(rid, [NSString stringWithFormat:@"couldn't start the Mac: %@", e.localizedDescription]);
         return;
@@ -871,34 +937,46 @@ static NSDictionary *agentCall(NSDictionary *req, double timeoutSec, NSString **
 /// Shuts the guest down: through coool's agent when it runs (a clean `shutdown`; the power button alone only shows
 /// macOS's "Are you sure?" dialog), else the power button; forced off after `timeout` seconds.
 static void stopVM(NSDictionary *m, id rid) {
-  if (!gVM) { reply(rid, @{@"state": @"stopped"}); return; }
+  // The VM this stop is about: everything below acts on it alone, never on one started after it.
+  __block VZVirtualMachine *vm = nil;
+  dispatch_sync(gVMQ, ^{ vm = gVM; });
+  if (!vm) { reply(rid, @{@"state": @"stopped"}); return; }
   double timeout = num(m, @"timeout", 30);
+  atomic_store(&gStopping, true);
   setState(@"stopping");
+  // Over when `vm` is gone: stopped, or no longer the current VM (its stop callback cleared it).
+  BOOL (^gone)(void) = ^BOOL { return gVM != vm || vm.state == VZVirtualMachineStateStopped || vm.state == VZVirtualMachineStateError; };
+  void (^finish)(NSDictionary *) = ^(NSDictionary *r) {
+    if (gVM == vm) {
+      gVM = nil;
+      atomic_fetch_add(&gVMGen, 1);
+      dropScreen();
+    }
+    atomic_store(&gStopping, false);
+    setState(@"stopped");
+    reply(rid, r);
+  };
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     NSString *err = nil;
     BOOL viaAgent = !m[@"force"] && agentCall(@{@"cmd": @"run", @"sh": @"sudo -n /sbin/shutdown -h now", @"timeout": @5}, 4, &err) != nil;
     dispatch_async(gVMQ, ^{
     NSError *e = nil;
-    BOOL asked = !m[@"force"] && (viaAgent || (gVM.canRequestStop && [gVM requestStopWithError:&e]));
+    BOOL asked = !m[@"force"] && (viaAgent || (!gone() && vm.canRequestStop && [vm requestStopWithError:&e]));
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
       double t0 = nowMs();
       while (asked && nowMs() - t0 < timeout * 1000) {
-        __block BOOL gone = NO;
-        dispatch_sync(gVMQ, ^{ gone = !gVM || gVM.state == VZVirtualMachineStateStopped; });
-        if (gone) break;
+        __block BOOL done = NO;
+        dispatch_sync(gVMQ, ^{ done = gone(); });
+        if (done) break;
         [NSThread sleepForTimeInterval:0.2];
       }
       dispatch_async(gVMQ, ^{
-        if (gVM && gVM.state != VZVirtualMachineStateStopped) {
-          [gVM stopWithCompletionHandler:^(NSError *se) {
-            gVM = nil;
-            setState(@"stopped");
-            reply(rid, @{@"state": @"stopped", @"forced": @YES, @"ms": @(round(nowMs() - t0))});
+        if (!gone()) {
+          [vm stopWithCompletionHandler:^(NSError *se) {
+            finish(@{@"state": @"stopped", @"forced": @YES, @"ms": @(round(nowMs() - t0))});
           }];
         } else {
-          gVM = nil;
-          setState(@"stopped");
-          reply(rid, @{@"state": @"stopped", @"ms": @(round(nowMs() - t0)), @"viaAgent": @(viaAgent)});
+          finish(@{@"state": @"stopped", @"ms": @(round(nowMs() - t0)), @"viaAgent": @(viaAgent)});
         }
       });
     });
@@ -909,22 +987,27 @@ static void stopVM(NSDictionary *m, id rid) {
 // ---------------------------------------------------------------------------------------------------
 // Frames
 
-static CIContext *gCI;
 static dispatch_queue_t gFrameQ;
 static atomic_bool gStreaming;
 static double gMaxDim = 1100, gQuality = 0.7, gFPS = 15;
 
 /// The guest display's current picture.
 static CGImageRef screenshot(NSString **err) CF_RETURNS_RETAINED {
-  __block CIImage *ci = nil;
+  __block CGImageRef img = NULL;
   __block BOOL running = NO;
+  // On the main queue, where frames are copied in: the picture is read whole, never while the next one lands.
   dispatch_sync(gVMQ, ^{
-    running = gVM && gVM.state == VZVirtualMachineStateRunning;
-    if (gSurface) ci = [CIImage imageWithIOSurface:(__bridge IOSurfaceRef)gSurface];
+    running = gVM && gVM.state == VZVirtualMachineStateRunning && !atomic_load(&gStopping);
+    if (running && gSurface) {
+      CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+      CIImage *ci = [CIImage imageWithIOSurface:gSurface options:@{kCIImageColorSpace: (__bridge id)cs}];
+      CGColorSpaceRelease(cs);
+      img = [gCI createCGImage:ci fromRect:ci.extent];
+    }
   });
   if (!running) { *err = @"the Mac isn't running"; return NULL; }
-  if (!ci) { *err = @"the Mac's screen has no picture yet"; return NULL; }
-  return [gCI createCGImage:ci fromRect:ci.extent];
+  if (!img) { *err = @"the Mac's screen has no picture yet"; return NULL; }
+  return img;
 }
 
 static NSData *jpeg(CGImageRef img, double maxDim, double quality) {
@@ -1169,32 +1252,49 @@ static VZVirtioSocketConnection *gAgentConn;
 static NSLock *gAgentLock;
 static NSMutableData *gAgentBuf;
 
-static BOOL agentConnect(NSString **err) {
-  if (gAgentFd >= 0) return YES;
-  __block VZVirtioSocketConnection *conn = nil;
-  __block NSString *e2 = nil;
-  dispatch_semaphore_t done = dispatch_semaphore_create(0);
-  dispatch_async(gVMQ, ^{
-    VZVirtioSocketDevice *s = (VZVirtioSocketDevice *)gVM.socketDevices.firstObject;
-    if (!s) { e2 = @"the Mac isn't running"; dispatch_semaphore_signal(done); return; }
-    [s connectToPort:kAgentPort completionHandler:^(VZVirtioSocketConnection *c, NSError *e) {
-      conn = c;
-      if (!c) e2 = [NSString stringWithFormat:@"the guest agent isn't answering (%@)", e.localizedDescription];
-      dispatch_semaphore_signal(done);
-    }];
-  });
-  if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) != 0) { *err = @"the guest agent didn't connect in time"; return NO; }
-  if (!conn) { *err = e2; return NO; }
-  gAgentConn = conn;
-  gAgentFd = conn.fileDescriptor;
-  gAgentBuf = [NSMutableData data];
-  return YES;
-}
+static unsigned gAgentGen;  // the VM generation the connection was opened on
 
 static void agentDrop(void) {
   if (gAgentConn) [gAgentConn close];
   gAgentConn = nil;
   gAgentFd = -1;
+}
+
+/// A connection outlives neither its VM nor a reboot: one opened on an earlier boot is closed, not reused (its fd
+/// would still be open, so a write could succeed into nothing).
+static BOOL agentConnect(NSString **err) {
+  if (gAgentFd >= 0 && gAgentGen == atomic_load(&gVMGen)) return YES;
+  agentDrop();
+  // Shared with the connect callback, which can land after this gave up waiting: then it closes what it got.
+  NSMutableDictionary *box = [NSMutableDictionary dictionary];
+  dispatch_semaphore_t done = dispatch_semaphore_create(0);
+  dispatch_async(gVMQ, ^{
+    BOOL running = gVM && gVM.state == VZVirtualMachineStateRunning;
+    VZVirtioSocketDevice *s = running ? (VZVirtioSocketDevice *)gVM.socketDevices.firstObject : nil;
+    if (!s) { box[@"error"] = gVM ? [NSString stringWithFormat:@"the Mac isn't running (VM state %ld)", (long)gVM.state] : @"the Mac isn't running"; dispatch_semaphore_signal(done); return; }
+    unsigned gen = atomic_load(&gVMGen);
+    [s connectToPort:kAgentPort completionHandler:^(VZVirtioSocketConnection *c, NSError *e) {
+      @synchronized(box) {
+        if ([box[@"late"] boolValue]) { [c close]; return; }
+        if (c) { box[@"conn"] = c; box[@"gen"] = @(gen); }
+        else box[@"error"] = [NSString stringWithFormat:@"the guest agent isn't answering (%@)", e.localizedDescription];
+      }
+      dispatch_semaphore_signal(done);
+    }];
+  });
+  BOOL timedOut = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) != 0;
+  VZVirtioSocketConnection *conn;
+  @synchronized(box) {
+    if (timedOut) box[@"late"] = @YES;
+    conn = box[@"conn"];
+    if (timedOut && conn) { [conn close]; conn = nil; }
+  }
+  if (!conn) { *err = timedOut ? @"the guest agent didn't connect in time" : box[@"error"]; return NO; }
+  gAgentConn = conn;
+  gAgentFd = conn.fileDescriptor;
+  gAgentGen = [box[@"gen"] unsignedIntValue];
+  gAgentBuf = [NSMutableData data];
+  return YES;
 }
 
 /// One request to the guest agent; its reply.
@@ -1281,7 +1381,14 @@ static void handle(NSDictionary *m) {
   if ([cmd isEqualToString:@"status"]) {
     NSMutableDictionary *cfg = loadConfig();
     NSMutableDictionary *r = [NSMutableDictionary dictionary];
-    r[@"state"] = gState;
+    // What the VM itself says, over the last event: "running" only while it runs.
+    __block NSString *live = gState;
+    dispatch_sync(gVMQ, ^{
+      BOOL down = !gVM || gVM.state == VZVirtualMachineStateStopped || gVM.state == VZVirtualMachineStateError;
+      r[@"vm"] = gVM ? @(gVM.state) : @"none";
+      if ([live isEqualToString:@"running"] && down) live = @"stopped";
+    });
+    r[@"state"] = live;
     r[@"installed"] = cfg[@"installed"] ?: @NO;
     r[@"provisioned"] = cfg[@"provisioned"] ?: @NO;
     r[@"os"] = cfg[@"os"] ?: @"";
@@ -1503,7 +1610,7 @@ static void quit(void) {
   if (!running) exit(0);
   // Ask the guest to shut down (it saves its state); force it off after 20 s.
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
-  gOnReply = ^{ dispatch_semaphore_signal(done); };
+  gOnReply = ^(id r) { if ([r isEqual:@"quit"]) dispatch_semaphore_signal(done); };
   stopVM(@{@"timeout": @20}, @"quit");
   dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
   exit(0);
@@ -1539,7 +1646,7 @@ int main(int argc, const char **argv) {
       gPlain = YES;
       id m = [NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:argv[3] length:strlen(argv[3])] options:0 error:nil];
       if (![m isKindOfClass:NSDictionary.class]) { fprintf(stderr, "bad json\n"); return 2; }
-      gOnReply = ^{ exit(0); };
+      gOnReply = ^(id r) { exit(0); };
       dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ handle(m); });
       [NSApp run];
       return 0;

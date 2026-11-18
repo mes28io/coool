@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -34,7 +34,7 @@ static VM_AGENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/coool-vm-agen
 /// The Mac's id in `sim-activity` events (the panel tells it from simulators by this).
 pub const UDID: &str = "mac";
 /// The guest agent's build: setup reinstalls it (and re-grants Accessibility) when this changes.
-const AGENT_VERSION: &str = "5";
+const AGENT_VERSION: &str = "6";
 /// Bytes that must stay free after the restore image is downloaded: the install (~19 GB) plus a margin.
 const INSTALL_RESERVE: u64 = 25_000_000_000;
 /// What marks an alert about coool's agent (its executable's name, or its bundle's): the background-activity alerts
@@ -43,6 +43,11 @@ const AGENT_ALERT_MATCH: [&str; 2] = ["coool-vm-agent", "coool agent"];
 /// The guest's account (created by Apple's guest provisioning on first boot). Its password is random per VM.
 const GUEST_USER: &str = "coool";
 pub const SHARED_IN_GUEST: &str = "/Volumes/My Shared Files";
+/// In the guest only: macOS's "Click wallpaper to reveal desktop" (Desktop & Dock) set to "Only in Stage Manager",
+/// so a click on the empty desktop doesn't sweep every window aside (it confuses agents and the pilot). Idempotent:
+/// writes and restarts the window manager only when the setting isn't already off. Part of the first-run setup and
+/// run at every boot, so a guest set up before it gets it too.
+const CLICK_WALLPAPER_OFF: &str = "[ \"$(defaults read com.apple.WindowManager EnableStandardClickToShowDesktop 2>/dev/null)\" = 0 ] || { defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false; killall WindowManager >/dev/null 2>&1; echo changed; }";
 
 pub fn vm_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("COOOL_VM_DIR").filter(|d| !d.is_empty()) {
@@ -73,8 +78,10 @@ pub struct Vm {
     status: Arc<Mutex<Value>>,
     /// Serializes install / boot / shutdown.
     op: Mutex<()>,
-    /// The agent answered since the last boot.
-    ready: Mutex<bool>,
+    /// The agent answered since the last boot, and the VM hasn't stopped since: cleared by the helper's own word that
+    /// it stopped (shut down from the guest's menu or by a command in it, a crash, the helper gone), not only by
+    /// coool's Shut down, so a call never trusts a Mac that is no longer there.
+    ready: Arc<AtomicBool>,
     /// Chats whose panel shows the Mac or whose agent used it.
     chats: Mutex<HashSet<usize>>,
     /// Per chat: the last Mac screen it was shown (ids for `mac_click` and friends).
@@ -129,11 +136,25 @@ impl Vm {
         cmd.arg(&dir);
         let app = self.app(d);
         let status = self.status.clone();
+        let ready = self.ready.clone();
+        // A new helper has no VM running: whatever ran in the last one (if any) went with it.
+        ready.store(false, Ordering::SeqCst);
         let sink: helper::EventSink = Box::new(move |v: &Value| match v["event"].as_str() {
             Some("state") => {
                 let st = v["state"].as_str().unwrap_or("stopped");
-                // The guest stopped by itself (shut down from its menu): the agent is gone too.
+                // Anything but running (the guest shut down from its menu or by a command, a crash, a stop): the
+                // agent is gone too, and the next call boots again.
+                if st != "running" {
+                    ready.store(false, Ordering::SeqCst);
+                }
+                eprintln!("coool-vm: {st}");
                 emit_state(&app, &status, json!({ "state": st, "vmState": st }));
+            }
+            // Why the VM stopped when coool didn't stop it (the guest's own shutdown or restart, a crash).
+            Some("stopped") => eprintln!("coool-vm: the VM stopped: {} (current VM: {})", v["why"].as_str().unwrap_or("?"), v["current"]),
+            Some("exited") => {
+                ready.store(false, Ordering::SeqCst);
+                emit_state(&app, &status, json!({ "state": "stopped", "vmState": "stopped", "step": null }));
             }
             Some("progress") => emit_state(&app, &status, json!({ "progress": v })),
             Some("network") => emit_state(&app, &status, json!({ "networkNow": v["networkNow"] })),
@@ -205,11 +226,17 @@ impl Vm {
     pub fn boot(&self, d: &Devices) -> Res<String> {
         let _g = self.op.lock().unwrap();
         let t0 = Instant::now();
-        let (installed, provisioned, state) = self.installed(d)?;
+        let (mut installed, mut provisioned, mut state) = self.installed(d)?;
+        // Shutting down (from the guest's own menu, or the helper quitting): let that finish, then start afresh.
+        let settle = Instant::now() + Duration::from_secs(60);
+        while matches!(state.as_str(), "stopping" | "starting") && Instant::now() < settle {
+            std::thread::sleep(Duration::from_millis(300));
+            (installed, provisioned, state) = self.installed(d)?;
+        }
         if !installed {
             return Err("The sandbox Mac isn't installed yet: open the Mac panel (the Mac button in the chat header) and press Install (it downloads about 16 GB).".into());
         }
-        if state == "running" && *self.ready.lock().unwrap() {
+        if state == "running" && self.ready.load(Ordering::SeqCst) {
             return Ok("already running".into());
         }
         self.set(d, json!({ "error": null, "progress": null }));
@@ -237,16 +264,36 @@ impl Vm {
         }
         match r {
             Ok(()) => {
-                *self.ready.lock().unwrap() = true;
+                self.ready.store(true, Ordering::SeqCst);
+                self.guest_settings(d);
                 self.dismiss_agent_alerts(d);
                 self.set(d, json!({ "state": "running", "step": null }));
                 Ok(format!("booted in {:.1} s", t0.elapsed().as_secs_f64()))
             }
             Err(e) => {
-                self.set(d, json!({ "state": "running", "step": null, "error": e }));
+                // The state as it is (it may have stopped meanwhile), not "running" by default.
+                let st = self.call(d, json!({ "cmd": "status" }), Duration::from_secs(5)).unwrap_or_default();
+                eprintln!("coool-vm: boot failed: {e} (state {}, vm {})", st["state"], st["vm"]);
+                let now = st["state"].as_str().unwrap_or("stopped").to_string();
+                let e = if now == "running" { e } else { format!("The sandbox Mac stopped while it was starting ({e}). Boot it again.") };
+                self.set(d, json!({ "state": now, "step": null, "error": e }));
                 Err(e)
             }
         }
+    }
+
+    /// The truthful answer when a call to the Mac finds it gone: shut down (by coool, from inside it, or by a crash)
+    /// or its helper stopped. `None` when it is still running (the error was about something else).
+    fn stopped_note(&self, d: &Devices) -> Option<String> {
+        let state = self.installed(d).map(|s| s.2).unwrap_or_else(|_| "stopped".into());
+        if state == "running" {
+            return None;
+        }
+        self.ready.store(false, Ordering::SeqCst);
+        Some(format!(
+            "The sandbox Mac is {} (it was shut down, or stopped by itself). Call any mac_* tool again, or mac_device with action \"boot\", to boot it (about half a minute).",
+            if state == "stopping" { "shutting down" } else { "off" }
+        ))
     }
 
     fn agent_version_stale(&self) -> bool {
@@ -264,10 +311,15 @@ impl Vm {
 
     pub fn shutdown(&self, d: &Devices) -> Res<()> {
         let _g = self.op.lock().unwrap();
-        *self.ready.lock().unwrap() = false;
+        self.ready.store(false, Ordering::SeqCst);
         self.call(d, json!({ "cmd": "stop", "timeout": 40 }), Duration::from_secs(60))?;
         self.set(d, json!({ "state": "stopped", "step": null }));
         Ok(())
+    }
+
+    /// The running helper's process id (the self-test).
+    pub fn helper_pid(&self) -> Option<u32> {
+        self.helper.lock().unwrap().as_ref().filter(|h| h.alive()).map(|h| h.pid())
     }
 
     /// On quit: the helper shuts the guest down when its stdin closes.
@@ -288,6 +340,8 @@ impl Vm {
             match self.agent(d, json!({ "cmd": "ping" }), Duration::from_secs(3)) {
                 Ok(v) => return Ok(v),
                 Err(e) if Instant::now() >= until => return Err(format!("the Mac's agent didn't answer: {e}")),
+                // Stopped meanwhile: no point waiting out the timeout.
+                Err(e) if e.contains("isn't running") && self.installed(d).is_ok_and(|s| s.2 == "stopped") => return Err(format!("the Mac stopped: {e}")),
                 Err(_) => std::thread::sleep(Duration::from_millis(700)),
             }
         }
@@ -296,10 +350,30 @@ impl Vm {
     /// The Mac, booted and ready, for an agent tool.
     pub fn ensure(&self, d: &Devices, chat: usize) -> Res<()> {
         self.chats.lock().unwrap().insert(chat);
-        if *self.ready.lock().unwrap() && self.helper.lock().unwrap().as_ref().is_some_and(|h| h.alive()) {
+        if self.ready.load(Ordering::SeqCst) && self.helper.lock().unwrap().as_ref().is_some_and(|h| h.alive()) {
             return Ok(());
         }
         self.boot(d).map(|_| ())
+    }
+
+    /// `f` against the booted Mac, made truthful when the Mac went away under it: when it finds the Mac stopped,
+    /// it says so and how to boot it; when the Mac in fact runs (a stale connection, the agent restarted by launchd)
+    /// it is tried once more after the agent answers again.
+    pub fn with_mac<T>(&self, d: &Devices, chat: usize, f: impl Fn() -> Res<T>) -> Res<T> {
+        self.ensure(d, chat)?;
+        match f() {
+            Err(e) if unreachable_mac(&e) => {
+                if let Some(note) = self.stopped_note(d) {
+                    return Err(note);
+                }
+                if !undelivered(&e) {
+                    return Err(e);
+                }
+                self.wait_agent(d, Duration::from_secs(20))?;
+                f()
+            }
+            r => r,
+        }
     }
 
     // ---- first-run setup ----
@@ -351,6 +425,15 @@ impl Vm {
                 }
             }
         });
+    }
+
+    /// Guest settings coool keeps on every boot (for guests set up before they were part of the setup).
+    fn guest_settings(&self, d: &Devices) {
+        match self.agent(d, json!({ "cmd": "run", "sh": CLICK_WALLPAPER_OFF, "timeout": 5 }), Duration::from_secs(6)) {
+            Ok(v) if v["output"].as_str().is_some_and(|o| o.contains("changed")) => eprintln!("coool-vm: switched off click-wallpaper-to-reveal-desktop in the guest"),
+            Err(e) => eprintln!("coool-vm: guest settings: {e}"),
+            _ => {}
+        }
     }
 
     fn wait_ssh(&self, d: &Devices, timeout: Duration) -> Res<String> {
@@ -681,6 +764,7 @@ grep -qF '{public_key}' "$HOME/.ssh/authorized_keys" || echo '{public_key}' >> "
 chmod 700 "$HOME/.ssh"; chmod 600 "$HOME/.ssh/authorized_keys"
 for k in NSAutomaticSpellingCorrectionEnabled NSAutomaticCapitalizationEnabled NSAutomaticPeriodSubstitutionEnabled NSAutomaticQuoteSubstitutionEnabled NSAutomaticDashSubstitutionEnabled NSAutomaticTextCompletionEnabled NSAutomaticInlinePredictionEnabled WebAutomaticSpellingCorrectionEnabled; do defaults write -g $k -bool false; done
 defaults -currentHost write com.apple.screensaver idleTime -int 0
+{CLICK_WALLPAPER_OFF}
 set +e
 # coool shuts the guest down cleanly through its agent (the power button only shows "Are you sure?").
 printf '%s\n' '{password}' | sudo -S -p '' sh -c 'echo "{GUEST_USER} ALL=(root) NOPASSWD: /sbin/shutdown" > /etc/sudoers.d/coool && chmod 440 /etc/sudoers.d/coool' >/dev/null 2>&1
@@ -1005,7 +1089,10 @@ impl MacTools<'_> {
         if name == "mac_device" {
             return Ok(vec![text(self.device(a)?)]);
         }
-        self.d.vm.ensure(self.d, self.chat)?;
+        self.d.vm.with_mac(self.d, self.chat, || self.run(name, a, t0))
+    }
+
+    fn run(&self, name: &str, a: &Value, t0: Instant) -> Res<Vec<Value>> {
         let observe_after = a["observe"].as_bool().unwrap_or(true);
         let mut out = Vec::new();
         let body = match name {
@@ -1390,6 +1477,19 @@ impl MacTools<'_> {
     }
 }
 
+/// An error that means the Mac (or the way to it) wasn't there: the VM stopped, its helper stopped, the guest agent
+/// unreachable.
+fn unreachable_mac(e: &str) -> bool {
+    ["isn't running", "helper stopped", "guest agent closed the connection", "guest agent went away", "guest agent isn't answering", "guest agent didn't connect"]
+        .iter()
+        .any(|m| e.contains(m))
+}
+
+/// Of those, the ones where the request never reached the Mac (safe to send again).
+fn undelivered(e: &str) -> bool {
+    ["isn't running", "guest agent isn't answering", "guest agent didn't connect"].iter().any(|m| e.contains(m))
+}
+
 /// A JSON flag from the guest agent (`true`, or `1` from an Objective-C Boolean).
 fn truthy(v: &Value) -> bool {
     v == &Value::Bool(true) || v.as_i64() == Some(1)
@@ -1469,6 +1569,19 @@ mod tests {
         assert!(s.contains("printf '%s\\n' 'Pw7abc' | sudo -S"));
         assert!(s.contains("grep -qF 'ssh-ed25519 AAAA coool-vm'"));
         assert!(s.trim_end().ends_with("echo coool-setup-ok"));
+        // Click wallpaper to reveal desktop: off in the guest, as at every boot.
+        assert!(s.contains("defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false"));
+    }
+
+    #[test]
+    fn a_mac_that_went_away_is_told_apart_and_only_undelivered_requests_are_resent() {
+        for e in ["the Mac isn't running", "the sandbox Mac's helper stopped", "the guest agent closed the connection", "the guest agent didn't connect in time", "the guest agent isn't answering (reset)"] {
+            assert!(unreachable_mac(e), "{e}");
+        }
+        assert!(!unreachable_mac("no element k3f on the last screen"));
+        assert!(undelivered("the Mac isn't running") && undelivered("the guest agent didn't connect in time"));
+        // It may have run: never sent twice.
+        assert!(!undelivered("the guest agent closed the connection") && !undelivered("the sandbox Mac's helper stopped"));
     }
 
     #[test]

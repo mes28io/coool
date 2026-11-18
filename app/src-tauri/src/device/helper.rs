@@ -75,6 +75,8 @@ pub struct Helper {
     screen: (Mutex<Option<Result<Screen, String>>>, Condvar),
     alive: AtomicBool,
     events: Mutex<Option<EventSink>>,
+    /// What a call is told once it has stopped ("the sandbox Mac's helper stopped").
+    gone: &'static str,
 }
 
 impl Helper {
@@ -93,8 +95,9 @@ impl Helper {
         let mut child = cmd.spawn().map_err(|e| format!("couldn't start {label}: {e}"))?;
         let stdin = child.stdin.take().ok_or("helper stdin")?;
         let mut stdout = child.stdout.take().ok_or("helper stdout")?;
+        // What a call waiting on it is told when it stops: the sandbox Mac's helper isn't the simulator's.
+        let gone = if label.starts_with("coool-vm") { "the sandbox Mac's helper stopped" } else { "the simulator helper stopped" };
         let h = Arc::new(Self {
-
             stdin: Mutex::new(Some(BufWriter::new(stdin))),
             child: Mutex::new(child),
             next: AtomicU64::new(1),
@@ -103,10 +106,9 @@ impl Helper {
             screen: (Mutex::new(None), Condvar::new()),
             alive: AtomicBool::new(true),
             events: Mutex::new(events),
+            gone,
         });
         let weak = Arc::downgrade(&h);
-        // What a call waiting on it is told when it stops: the sandbox Mac's helper isn't the simulator's.
-        let gone = if label.starts_with("coool-vm") { "the sandbox Mac's helper stopped" } else { "the simulator helper stopped" };
         std::thread::Builder::new()
             .name(label.to_string())
             .spawn(move || {
@@ -136,6 +138,11 @@ impl Helper {
                     }
                 }
                 if let Some(h) = weak.upgrade() {
+                    // The events' owner learns the process is gone (whatever it ran went with it), before anything
+                    // can start a new one.
+                    if let Some(sink) = h.events.lock().unwrap().as_ref() {
+                        sink(&json!({ "event": "exited" }));
+                    }
                     h.died(gone);
                 }
             })
@@ -193,6 +200,11 @@ impl Helper {
         self.alive.load(Ordering::SeqCst)
     }
 
+    /// The helper's process id.
+    pub fn pid(&self) -> u32 {
+        self.child.lock().unwrap().id()
+    }
+
     /// Waits for the helper to attach to the device's screen.
     pub fn screen(&self, timeout: Duration) -> Result<Screen, String> {
         let g = self.screen.0.lock().unwrap();
@@ -203,7 +215,7 @@ impl Helper {
     /// Sends a command and waits for its reply.
     pub fn call(&self, mut req: Value, timeout: Duration) -> Result<Value, String> {
         if !self.alive() {
-            return Err("the simulator helper isn't running".into());
+            return Err(self.gone.into());
         }
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         req["id"] = json!(id);
@@ -218,7 +230,7 @@ impl Helper {
             };
             if writeln!(w, "{line}").and_then(|_| w.flush()).is_err() {
                 self.pending.lock().unwrap().remove(&id);
-                return Err("the simulator helper isn't running".into());
+                return Err(self.gone.into());
             }
         }
         match rx.recv_timeout(timeout) {

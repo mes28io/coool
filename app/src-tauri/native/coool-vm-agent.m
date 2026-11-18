@@ -14,7 +14,7 @@
 #import <sys/vsock.h>
 #import <mach/mach_time.h>
 
-#define AGENT_VERSION @"5"
+#define AGENT_VERSION @"6"
 static const unsigned kPort = 7333;
 
 static double nowMs(void) {
@@ -40,6 +40,27 @@ static id attr(AXUIElementRef el, CFStringRef name) {
   CFTypeRef v = NULL;
   if (AXUIElementCopyAttributeValue(el, name, &v) != kAXErrorSuccess || !v) return nil;
   return CFBridgingRelease(v);
+}
+
+/// The app in front as the screen shows it: the accessibility system's focused application, live. NSWorkspace's
+/// frontmost app is learned through this process's run loop and can lag: right after login it still named a
+/// windowless "Accessibility" process for seconds while Finder was in front, so a look found 0 elements.
+static NSRunningApplication *frontApp(void) {
+  if (AXIsProcessTrusted()) {
+    AXUIElementRef sys = AXUIElementCreateSystemWide();
+    AXUIElementSetMessagingTimeout(sys, 1.0);
+    id focused = attr(sys, kAXFocusedApplicationAttribute);
+    CFRelease(sys);
+    pid_t pid = 0;
+    if (focused && AXUIElementGetPid((__bridge AXUIElementRef)focused, &pid) == kAXErrorSuccess && pid > 0) {
+      NSRunningApplication *a = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+      // A focused process with no windows while another owns the menu bar: the menu bar's owner is what shows.
+      NSRunningApplication *bar = NSWorkspace.sharedWorkspace.menuBarOwningApplication;
+      if (a && bar && bar.processIdentifier != pid && [attr((__bridge AXUIElementRef)focused, kAXWindowsAttribute) count] == 0) return bar;
+      if (a) return a;
+    }
+  }
+  return NSWorkspace.sharedWorkspace.menuBarOwningApplication ?: NSWorkspace.sharedWorkspace.frontmostApplication;
 }
 
 static NSString *textOf(id v) {
@@ -98,7 +119,7 @@ static NSDictionary *tree(NSDictionary *m) {
   int maxNodes = (int)num(m, @"maxNodes", 700);
   int maxDepth = (int)num(m, @"maxDepth", 40);
   BOOL menus = m[@"menus"] ? [m[@"menus"] boolValue] : YES;
-  NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
+  NSRunningApplication *front = frontApp();
   NSString *bundle = str(m, @"bundleId");
   if (bundle) front = [NSRunningApplication runningApplicationsWithBundleIdentifier:bundle].firstObject ?: front;
   NSRect screen = NSScreen.mainScreen.frame;
@@ -326,7 +347,7 @@ static NSDictionary *launch(NSDictionary *m, NSString **err) {
   // Until it's frontmost with a window (or 8 s).
   double t0 = nowMs();
   while (nowMs() - t0 < 8000) {
-    if (NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == app.processIdentifier) {
+    if (frontApp().processIdentifier == app.processIdentifier) {
       if (!AXIsProcessTrusted()) break;
       AXUIElementRef ax = AXUIElementCreateApplication(app.processIdentifier);
       NSArray *wins = attr(ax, kAXWindowsAttribute);
@@ -376,7 +397,7 @@ static NSDictionary *handle(NSDictionary *m, NSString **err) {
   NSString *cmd = str(m, @"cmd") ?: @"";
   if ([cmd isEqual:@"ping"]) {
     NSOperatingSystemVersion v = NSProcessInfo.processInfo.operatingSystemVersion;
-    NSRunningApplication *f = NSWorkspace.sharedWorkspace.frontmostApplication;
+    NSRunningApplication *f = frontApp();
     return @{@"version": AGENT_VERSION, @"trusted": [NSNumber numberWithBool:AXIsProcessTrusted() != 0], @"user": NSUserName(),
              @"os": [NSString stringWithFormat:@"%ld.%ld.%ld", (long)v.majorVersion, (long)v.minorVersion, (long)v.patchVersion],
              @"frontmost": f.localizedName ?: @"", @"frontmostBundle": f.bundleIdentifier ?: @""};
