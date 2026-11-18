@@ -16,6 +16,8 @@
 //!   the sidebar only lists sessions under it (so no private titles show).
 //! - `COOOL_SELFTEST_SHOTS`: where `real-<name>.png` screenshots go (default: the folder).
 //! - `COOOL_SELFTEST_LOG`: the pass/fail log (default: `<folder>/selftest.log`).
+//! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
+//!   frosted glass shows what is behind it (the `glass` scenario).
 //!
 //! Settings (the insights and "runs by other tools" toggles) and the list of
 //! sessions coool started are kept in the folder too, never in the real ones;
@@ -141,8 +143,20 @@ pub fn selftest_shot(app: AppHandle, core: State<'_, Arc<Core>>, name: String, w
     let wid = window_number(&w).ok_or("no window id")?;
     let path = t.shots.join(format!("real-{name}.png"));
     let _ = std::fs::remove_file(&path);
+    // `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: the window's rectangle as it is on screen instead, which includes what
+    // shows through a translucent window (a `-l` capture renders the window alone, without its vibrancy backdrop).
+    // The test window is always on top, so only its own pixels (and, at its rounded corners, what is behind) show.
+    let onscreen = std::env::var("COOOL_SELFTEST_SHOTS_ONSCREEN").is_ok_and(|v| v == "1");
+    let arg = if onscreen {
+        let scale = w.scale_factor().map_err(|e| e.to_string())?;
+        let p = w.outer_position().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
+        let z = w.outer_size().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
+        format!("-R{},{},{},{}", p.x, p.y, z.width, z.height)
+    } else {
+        format!("-l{wid}")
+    };
     let ok = std::process::Command::new("/usr/sbin/screencapture")
-        .args(["-x", "-o", &format!("-l{wid}")])
+        .args(["-x", "-o", &arg])
         .arg(&path)
         .status()
         .map_err(|e| e.to_string())?
@@ -238,6 +252,21 @@ pub fn selftest_probe_server(core: State<'_, Arc<Core>>) -> Result<String, Strin
 pub fn selftest_probe_result(core: State<'_, Arc<Core>>) -> Result<Vec<String>, String> {
     active(&core)?;
     Ok(PROBE.lock().unwrap().clone())
+}
+
+/// Window states the page may not set itself (its capability has no such permission): `focus`, `fullscreen`,
+/// `windowed` (leaves full screen and goes back on top).
+#[tauri::command]
+pub fn selftest_window(app: AppHandle, core: State<'_, Arc<Core>>, action: String) -> Result<(), String> {
+    active(&core)?;
+    let w = app.get_window("main").ok_or("no window")?;
+    let r = match action.as_str() {
+        "focus" => w.set_focus(),
+        "fullscreen" => w.set_always_on_top(false).and_then(|_| w.set_fullscreen(true)),
+        "windowed" => w.set_fullscreen(false).and_then(|_| w.set_always_on_top(true)),
+        _ => return Err(format!("unknown action {action}")),
+    };
+    r.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
