@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useNow } from "../lib/clock";
 import { registerOverlay } from "../lib/overlays";
 import type { PlanUsages, Provider, UsageWindow } from "../lib/types";
@@ -112,6 +112,9 @@ function RichTip({ children, inline }: { children: ReactNode; inline?: boolean }
   );
 }
 
+/** How long the usage pill stays on one limit (styles.css `.usage-pill-fill` runs for the same time). */
+const USAGE_PILL_MS = 2800;
+
 /** One limit of one provider: what the usage pill shows at a time. */
 type UsageItem = { p: Provider; w: UsageWindow };
 
@@ -128,36 +131,52 @@ const leftOf = (w: UsageWindow) => Math.round(100 - Math.max(0, Math.min(100, w.
  */
 function UsagePill({ items, index }: { items: UsageItem[]; index: number }) {
   const now = useNow();
-  if (items.length === 0) return <div className="flex h-[32px] items-center whitespace-nowrap px-3 text-small text-dim">No usage data yet</div>;
-  const at = index % items.length;
-  const { p, w } = items[at];
-  const tone = usageTone(w);
-  const reset = resetText(w.resets_ms, now);
+  const at = items.length ? index % items.length : 0;
+  const cur = items[at];
+  const key = cur ? `${cur.p}:${cur.w.id}` : "";
+  const reset = cur ? resetText(cur.w.resets_ms, now) : null;
+  // The pill's width follows the line on show, so a longer limit name grows it smoothly instead of jumping. The first
+  // measure is applied as it is (the pill appears at its size); later ones ease to the new width.
+  const line = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<{ px: number; eased: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const px = line.current?.offsetWidth;
+    if (px) setWidth((w) => (w?.px === px ? w : { px, eased: w !== null }));
+  }, [key, reset]);
+  if (!cur) return <div className="flex h-[32px] items-center whitespace-nowrap px-3 text-small text-dim">No usage data yet</div>;
+  const tone = usageTone(cur.w);
   return (
-    <div className="flex h-[32px] min-w-[236px] items-center gap-3 overflow-hidden whitespace-nowrap pl-2.5 pr-3 text-small" data-usage-pill>
-      <AnimatePresence mode="popLayout" initial={false}>
-        <motion.div
-          key={`${p}:${w.id}`}
-          className="flex min-w-0 flex-1 items-center gap-1.5"
-          initial={{ y: 12, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: -12, opacity: 0 }}
-          transition={{ duration: 0.24, ease }}
-          data-usage-pill-item={`${p}:${w.id}`}
-        >
-          <ProviderMark provider={p} size={13} />
-          <span className="text-fg">{w.label}</span>
-          <span className="text-faint">·</span>
-          <span className="font-medium tnum" style={{ color: tone === "neutral" ? "var(--fg)" : toneColor[tone] }}>
-            {leftOf(w)}% left
-          </span>
-          {reset && <span className="truncate text-faint">{reset.replace(/^Resets /, "· ")}</span>}
-        </motion.div>
-      </AnimatePresence>
+    <div className="flex h-[32px] items-center gap-3 whitespace-nowrap pl-2.5 pr-3 text-small" data-usage-pill>
+      {/* The lines share one cell: the old one blurs out while the new one comes into focus over it. */}
+      <div className="relative h-full" style={{ width: width?.px, transition: width?.eased ? "width 360ms cubic-bezier(0.2, 0, 0, 1)" : undefined }}>
+        <AnimatePresence initial={false}>
+          <motion.div
+            key={key}
+            ref={line}
+            className="absolute left-0 top-0 flex h-full w-max items-center gap-1.5"
+            initial={{ opacity: 0, filter: "blur(5px)", scale: 0.97 }}
+            animate={{ opacity: 1, filter: "blur(0px)", scale: 1, transition: { duration: 0.34, ease, delay: 0.06 } }}
+            exit={{ opacity: 0, filter: "blur(5px)", scale: 0.97, transition: { duration: 0.2, ease } }}
+            style={{ transformOrigin: "left center" }}
+            data-usage-pill-item={key}
+          >
+            <ProviderMark provider={cur.p} size={13} />
+            <span className="text-fg">{cur.w.label}</span>
+            <span className="text-faint">·</span>
+            <span className="font-medium tnum" style={{ color: tone === "neutral" ? "var(--fg)" : toneColor[tone] }}>
+              {leftOf(cur.w)}% left
+            </span>
+            {reset && <span className="text-faint">{reset.replace(/^Resets /, "· ")}</span>}
+          </motion.div>
+        </AnimatePresence>
+      </div>
       {items.length > 1 && (
         <span className="flex shrink-0 items-center gap-[3px]" aria-hidden>
           {items.map((it, i) => (
-            <span key={`${it.p}:${it.w.id}`} className={cx("size-[4px] rounded-full transition-colors duration-200", i === at ? "bg-fg" : "bg-[color-mix(in_oklab,var(--dim)_35%,transparent)]")} />
+            <span key={`${it.p}:${it.w.id}`} className="relative h-[4px] rounded-full bg-[color-mix(in_oklab,var(--dim)_35%,transparent)] transition-[width] duration-300" style={{ width: i === at ? 12 : 4 }}>
+              {/* The dot of the limit on show stretches and fills while it is up: how long until the next one. */}
+              {i === at && <span key={index} className="usage-pill-fill absolute inset-y-0 left-0 rounded-full bg-fg" />}
+            </span>
           ))}
         </span>
       )}
@@ -207,7 +226,7 @@ function UsageButton() {
   const [index, setIndex] = useState(0);
   useEffect(() => {
     if (!hover || items.length < 2) return;
-    const t = setInterval(() => setIndex((i) => i + 1), 2400);
+    const t = setInterval(() => setIndex((i) => i + 1), USAGE_PILL_MS);
     return () => clearInterval(t);
   }, [hover, items.length]);
   // While the pill is up the rings are the provider it is talking about, and the ring of that limit stands out.

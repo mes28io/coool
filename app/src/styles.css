@@ -724,3 +724,11 @@ html.page-hidden *::after {
 .reduce-motion .animate-ping {
   animation: none;
 }
+
+/* The usage pill's position dot fills while its limit is on show (Rail.tsx USAGE_PILL_MS). */
+@keyframes usage-pill-fill {
+  from { width: 4px; }
+  to { width: 100%; }
+}
+.usage-pill-fill { animation: usage-pill-fill 2800ms linear both; }
+.reduce-motion .usage-pill-fill { animation: none; width: 100%; }
