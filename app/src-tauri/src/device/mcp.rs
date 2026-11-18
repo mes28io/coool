@@ -252,6 +252,8 @@ impl Session {
     }
 
     fn call(&mut self, name: &str, a: &Value) -> Result<Vec<Value>, String> {
+        // After a pilot run ended stuck / surprised, the agent's own next action is a decision for the training log.
+        super::pilot::dataset::caller_acted(self.chat, name, a);
         // The device pilot: a whole goal on the iPhone or the Browser panel.
         if name == "pilot_run" {
             let text = super::pilot::call(&self.devices, self.chat, a)?;

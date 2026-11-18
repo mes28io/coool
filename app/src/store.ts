@@ -46,7 +46,7 @@ export type RightPanelKind = "agents" | "models" | "browser" | "device";
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
 export type SidebarView = "projects" | "needs";
 /** The full-screen Settings page's categories, in order (components/SettingsPage.tsx). */
-export const SETTINGS_SECTIONS = ["appearance", "sessions", "insights", "usage", "about"] as const;
+export const SETTINGS_SECTIONS = ["appearance", "sessions", "insights", "pilot", "usage", "about"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /**

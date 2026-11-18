@@ -6,9 +6,10 @@ import { motion } from "motion/react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { api, isNotAvailable, isTauri } from "../lib/backend";
 import { setMotionPref, useMotion, type MotionPref } from "../lib/motion";
+import type { PilotLogStatus } from "../lib/backend";
 import type { InsightsStatus } from "../lib/types";
 import { SETTINGS_SECTIONS, useStore, type SettingsSection, type ThemePref } from "../store";
-import { IAlert, IBack, ICheck, IGauge, IInfo, IList, ISpark, ISun } from "./icons";
+import { IAlert, IBack, ICheck, IGauge, IInfo, IList, IPhone, ISpark, ISun } from "./icons";
 import { Button, cx, ease, Kbd, Segmented } from "./primitives";
 import { UsageBlock, useUsageProviders } from "./Usage";
 
@@ -16,6 +17,7 @@ const META: Record<SettingsSection, { label: string; icon: ReactNode; desc: stri
   appearance: { label: "Appearance", icon: <ISun size={16} />, desc: "How coool looks and moves." },
   sessions: { label: "Sessions", icon: <IList size={16} />, desc: "Which sessions coool lists." },
   insights: { label: "AI insights", icon: <ISpark size={16} />, desc: "Live headlines and “Needs you” reasons, written by a small model on your own API key." },
+  pilot: { label: "Device pilot", icon: <IPhone size={16} />, desc: "The fast pilot that drives the iPhone and Browser panels for agents (pilot_run)." },
   usage: { label: "Usage", icon: <IGauge size={16} />, desc: "How much of your Claude and Codex plan limits is used, and when each window resets." },
   about: { label: "About", icon: <IInfo size={16} />, desc: "This build of coool and the CLIs it found." },
 };
@@ -135,7 +137,7 @@ export function SettingsPage() {
           <h1 className="text-display font-semibold tracking-[-0.02em] text-fg">{META[section].label}</h1>
           <p className="mt-1 text-base text-dim">{META[section].desc}</p>
           <div className="mt-6">
-            {section === "appearance" ? <Appearance /> : section === "sessions" ? <Sessions /> : section === "insights" ? <Insights /> : section === "usage" ? <UsageSection /> : <About />}
+            {section === "appearance" ? <Appearance /> : section === "sessions" ? <Sessions /> : section === "insights" ? <Insights /> : section === "pilot" ? <Pilot /> : section === "usage" ? <UsageSection /> : <About />}
           </div>
         </div>
       </motion.div>
@@ -340,6 +342,102 @@ function Insights() {
               </Button>
             )}
           </form>
+        )}
+        {err && <div className="text-small text-err-text">{err}</div>}
+      </Row>
+    </Group>
+  );
+}
+
+// ---------- Device pilot ----------
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function Pilot() {
+  const [st, setSt] = useState<PilotLogStatus | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [avail, setAvail] = useState(true);
+  useEffect(() => {
+    api()
+      .pilotLogStatus()
+      .then(setSt)
+      .catch((e) => (isNotAvailable(e) ? setAvail(false) : setErr(String(e))));
+  }, []);
+  const run = async (f: () => Promise<PilotLogStatus | void>) => {
+    setErr(null);
+    try {
+      const next = await f();
+      if (next) setSt(next);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const empty = !st || st.files === 0;
+  return (
+    <Group>
+      <Row
+        attr="pilot-log"
+        label="Save pilot decisions for training"
+        desc="Each step the pilot decides (the screen as it saw it, the action it chose, and whether the run got there) goes into a log on this Mac, for training a faster local pilot later. Nothing is uploaded."
+        control={<Switch label="Save pilot decisions for training" on={!!st?.enabled} disabled={!st || !avail} onChange={(v) => void run(() => api().pilotLogSetEnabled(v))} />}
+      >
+        <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_8%,transparent)] px-3 py-2 text-small text-dim">
+          Never saved: what you or an agent typed (only the input’s name, like <span className="font-mono text-mono-small">email</span>), passwords and other hidden fields, screenshots, API keys.
+        </div>
+      </Row>
+      <Row
+        attr="pilot-log-file"
+        label="Decision log"
+        desc={
+          !avail ? (
+            "Not available in this build of coool."
+          ) : st?.dir ? (
+            <>
+              <span className="selectable break-all font-mono text-mono-small" data-pilot-log-dir>
+                {st.dir}
+              </span>
+              <span className="mt-1 block text-faint" data-pilot-log-size={st.bytes}>
+                {empty ? "Empty" : `${fmtBytes(st.bytes)} in ${st.files} ${st.files === 1 ? "file" : "files"}`} · at most about 40 MB per project
+              </span>
+            </>
+          ) : (
+            "…"
+          )
+        }
+      >
+        {avail && st?.dir && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" className="h-[32px]" onClick={() => void run(() => api().pilotLogReveal())} data-pilot-log-reveal>
+              Reveal in Finder
+            </Button>
+            {confirm ? (
+              <>
+                <Button
+                  variant="ghost"
+                  className="h-[32px] text-err-text"
+                  onClick={() => {
+                    setConfirm(false);
+                    void run(() => api().pilotLogDelete());
+                  }}
+                  data-pilot-log-delete-confirm
+                >
+                  Delete the log
+                </Button>
+                <Button variant="ghost" className="h-[32px]" onClick={() => setConfirm(false)}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" className="h-[32px] hover:text-err-text" disabled={empty} onClick={() => setConfirm(true)} data-pilot-log-delete>
+                Delete
+              </Button>
+            )}
+          </div>
         )}
         {err && <div className="text-small text-err-text">{err}</div>}
       </Row>

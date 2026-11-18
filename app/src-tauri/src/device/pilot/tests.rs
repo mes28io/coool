@@ -169,6 +169,35 @@ fn signature_ignores_typed_values_and_positions_but_not_state() {
     assert_ne!(signature(&a), signature(&sel));
 }
 
+#[test]
+fn signature_ignores_what_comes_and_goes_on_an_iphone_screen() {
+    // Settings > General, as read right after the push and a moment later.
+    let row = |l: &str, y: f64| Elem { frame: [16.0, y, 370.0, 52.0], ..elem("button", l, Kind::Tap) };
+    let settled = screen("Settings", vec![row("About", 408.0), row("Keyboard", 738.0)]);
+    let mut early = settled.clone();
+    // The back button joins the tree late.
+    early.elems.insert(0, Elem { frame: [16.0, 62.0, 44.0, 44.0], ..elem("button", "Settings", Kind::Tap) });
+    assert_eq!(signature(&early), signature(&settled));
+    // The row cut by the screen's bottom edge, and the floating search bar with its mic.
+    early.elems.push(row("Trackpad", 842.0));
+    early.elems.push(Elem { frame: [28.0, 808.0, 300.0, 36.0], ..elem("textfield", "Search", Kind::Input) });
+    early.elems.push(Elem { frame: [340.0, 808.0, 36.0, 36.0], ..elem("button", "Dictate", Kind::Tap) });
+    assert_eq!(signature(&early), signature(&settled));
+    // A search field in use, or a fully visible row, still counts.
+    let mut typing = early.clone();
+    typing.elems.iter_mut().find(|e| e.label == "Search").unwrap().value = Some("wifi".into());
+    assert_ne!(signature(&typing), signature(&settled));
+    let mut more = settled.clone();
+    more.elems.push(row("Fonts", 686.0));
+    assert_ne!(signature(&more), signature(&settled));
+    // A page's elements aren't filtered (the browser reports what's in view itself).
+    let mut page = early.clone();
+    page.url = Some("http://x/".into());
+    let mut page2 = settled.clone();
+    page2.url = page.url.clone();
+    assert_ne!(signature(&page), signature(&page2));
+}
+
 // ---------- the loop and its cascade ----------
 
 /// Screens by name; acting moves along `edges` ((screen, action key) → next screen).
@@ -178,6 +207,10 @@ struct Fake {
     at: String,
     acted: Vec<String>,
     ended: bool,
+    /// Fresh starts (launches).
+    starts: usize,
+    /// The app is already in front (a warm start is possible).
+    front: bool,
 }
 
 impl Fake {
@@ -194,14 +227,20 @@ impl Fake {
         edges.insert(("root".into(), "tap|button|General||".into()), "general".into());
         edges.insert(("general".into(), "tap|button|About||".into()), "about".into());
         edges.insert(("root".into(), "tap|button|Camera||".into()), "alert".into());
-        Fake { screens, edges, at: "root".into(), acted: Vec::new(), ended: false }
+        edges.insert(("about".into(), "back|||".into()), "general".into());
+        edges.insert(("general".into(), "back|||".into()), "root".into());
+        Fake { screens, edges, at: "root".into(), acted: Vec::new(), ended: false, starts: 0, front: false }
     }
 }
 
 impl Driver for Fake {
     fn start(&mut self, _g: &Goal) -> Result<String, String> {
         self.at = "root".into();
+        self.starts += 1;
         Ok(String::new())
+    }
+    fn resume(&mut self, _g: &Goal, app: &str) -> Result<Option<String>, String> {
+        Ok((self.front && self.screens[&self.at].app == app).then(|| "in front".to_string()))
     }
     fn perceive(&mut self) -> Result<(Screen, u64), String> {
         Ok((self.screens[&self.at].clone(), 1))
@@ -387,4 +426,331 @@ fn real_haiku_decision() {
     let d = h.decide(&DecideRequest { goal: &g, history: &[], screen: &s, candidates: &c }).unwrap();
     println!("chose {} in {} ms, ${:.6}, {} tokens ({} cached)", c[d.id].describe(), d.ms, d.usd, d.input_tokens, d.cached_tokens);
     assert!(c[d.id].describe().contains("General"));
+}
+
+// ---------- warm start ----------
+
+fn app_goal() -> Goal {
+    Goal { app: Some("com.apple.Preferences".into()), ..about_goal() }
+}
+
+fn route_of(d: &Fake) -> memory::Route {
+    let sig = |n: &str| signature(&d.screens[n]);
+    memory::Route {
+        app: "Settings".into(),
+        screens: vec![sig("root"), sig("general"), sig("about")],
+        actions: vec!["tap|button|General||".into(), "tap|button|About||".into()],
+    }
+}
+
+#[test]
+fn warm_plan_recognises_only_route_screens() {
+    let d = Fake::settings();
+    let r = route_of(&d);
+    let s = |n: &str| d.screens[n].clone();
+    assert_eq!(warm_plan(&r, &s("root"), false), Warm::At(0));
+    assert_eq!(warm_plan(&r, &s("general"), false), Warm::At(1));
+    // The end: one step back first (the step there was a tap), by signature or because the checks hold.
+    assert_eq!(warm_plan(&r, &s("about"), false), Warm::BackTo(1));
+    let mut live = s("about");
+    live.elems.push(elem("text", "Available, 48.87 GB", Kind::Tap));
+    assert_eq!(warm_plan(&r, &live, true), Warm::BackTo(1));
+    assert_eq!(warm_plan(&r, &live, false), Warm::Relaunch);
+    // Unknown screen, another app, an alert: relaunch.
+    let mut other = s("general");
+    other.elems.push(elem("button", "Keyboard", Kind::Tap));
+    assert_eq!(warm_plan(&r, &other, false), Warm::Relaunch);
+    let mut maps = s("root");
+    maps.app = "Maps".into();
+    assert_eq!(warm_plan(&r, &maps, false), Warm::Relaunch);
+    assert_eq!(warm_plan(&r, &s("alert"), true), Warm::Relaunch);
+    // A screen the route shows twice can't tell where it is.
+    let twice = memory::Route {
+        screens: vec![r.screens[0].clone(), r.screens[1].clone(), r.screens[0].clone(), r.screens[2].clone()],
+        actions: vec!["tap|button|General||".into(), "back|||".into(), "tap|button|Camera||".into()],
+        ..r.clone()
+    };
+    assert_eq!(warm_plan(&twice, &s("root"), false), Warm::Relaunch);
+    // Past a step that typed text: a field's contents aren't in the signature, so never continue there.
+    let typed = memory::Route { actions: vec!["set_text|textfield|Name|name|".into(), "tap|button|About||".into()], ..r.clone() };
+    assert_eq!(warm_plan(&typed, &s("root"), false), Warm::At(0));
+    assert_eq!(warm_plan(&typed, &s("general"), false), Warm::Relaunch);
+    assert_eq!(warm_plan(&typed, &s("about"), true), Warm::Relaunch);
+    // The end reached by something other than a tap (a scroll): no way back to trust.
+    let scrolled = memory::Route { actions: vec!["tap|button|General||".into(), "scroll||||down".into()], ..r };
+    assert_eq!(warm_plan(&scrolled, &s("about"), true), Warm::Relaunch);
+}
+
+#[test]
+fn warm_start_continues_on_the_route_and_relaunches_otherwise() {
+    let mut mem = Memory::in_memory();
+    let mut d = Fake::settings();
+    d.front = true;
+    // No route yet: a fresh start, which learns one.
+    let first = run(&app_goal(), &mut d, &mut mem, Some(&mut Script { prefer: vec!["General", "About"], calls: 0 }), "", &mut |_, _| {});
+    assert_eq!((first.status, d.starts), (Status::Done, 1));
+    assert_eq!(mem.route(&app_goal().memory_key()), Some(route_of(&d)));
+    // The app is still in front on About: one step back, then memory; no relaunch, no model.
+    d.acted.clear();
+    let mut model = Script { prefer: vec!["Camera"], calls: 0 };
+    let o = run(&app_goal(), &mut d, &mut mem, Some(&mut model), "", &mut |_, _| {});
+    assert_eq!((o.status, o.verified, d.starts, model.calls), (Status::Done, true, 1, 0));
+    assert_eq!(d.acted, ["back|||", "tap|button|About||"]);
+    assert!(o.start.starts_with("warm:"), "{}", o.start);
+    assert_eq!(o.deciders.get("memory"), Some(&1));
+    // The route survives a warm run (its first screens, then this run's path).
+    assert_eq!(mem.route(&app_goal().memory_key()), Some(route_of(&d)));
+    // Left on the root: continues from the first step.
+    d.at = "root".into();
+    d.acted.clear();
+    let o = run(&app_goal(), &mut d, &mut mem, Some(&mut model), "", &mut |_, _| {});
+    assert_eq!((o.status, d.starts), (Status::Done, 1));
+    assert_eq!(d.acted, ["tap|button|General||", "tap|button|About||"]);
+    // Left on a screen the route doesn't know: relaunch, then the normal replay from the root.
+    d.screens.insert("camera".into(), screen("Settings", vec![elem("button", "Formats", Kind::Tap)]));
+    d.at = "camera".into();
+    d.acted.clear();
+    let o = run(&app_goal(), &mut d, &mut mem, Some(&mut model), "", &mut |_, _| {});
+    assert_eq!((o.status, d.starts, model.calls), (Status::Done, 2, 0));
+    assert!(o.start.contains("relaunching"), "{}", o.start);
+    assert_eq!(d.acted, ["tap|button|General||", "tap|button|About||"]);
+    // Back from the end leads somewhere unexpected: relaunch (no replay from there).
+    d.edges.insert(("about".into(), "back|||".into()), "camera".into());
+    d.at = "about".into();
+    d.acted.clear();
+    let o = run(&app_goal(), &mut d, &mut mem, Some(&mut model), "", &mut |_, _| {});
+    assert_eq!((o.status, d.starts, model.calls), (Status::Done, 3, 0));
+    assert_eq!(d.acted, ["back|||", "tap|button|General||", "tap|button|About||"]);
+    // The app isn't in front (or the driver can't resume): a fresh start.
+    d.front = false;
+    d.at = "general".into();
+    let o = run(&app_goal(), &mut d, &mut mem, Some(&mut model), "", &mut |_, _| {});
+    assert_eq!((o.status, d.starts), (Status::Done, 4));
+}
+
+// ---------- the decision log ----------
+
+/// A sign-in form: email and password fields; the page echoes the email once it's filled.
+fn form() -> (Fake, Goal) {
+    let field = |label: &str, value: Option<&str>| Elem { value: value.map(String::from), ..elem("textbox", label, Kind::Input) };
+    let mut screens = HashMap::new();
+    screens.insert("empty".into(), screen("Sign in", vec![field("Email", None), field("Password", None), elem("button", "Sign in", Kind::Tap)]));
+    screens.insert("email".into(), screen("Sign in", vec![field("Email", Some("ada@example.com")), field("Password", None), elem("button", "Sign in", Kind::Tap)]));
+    let mut filled = screen("Sign in", vec![field("Email", Some("ada@example.com")), field("Password", Some("•••••••")), elem("button", "Sign in", Kind::Tap)]);
+    filled.texts = vec!["Signing in as ADA@example.com".into()];
+    screens.insert("filled".into(), filled);
+    let mut done = screen("Welcome", vec![elem("text", "Welcome back, ada@example.com", Kind::Text)]);
+    done.url = Some("http://x/home?u=ada@example.com".into());
+    screens.insert("done".into(), done);
+    let mut edges = HashMap::new();
+    edges.insert(("empty".into(), "set_text|textbox|Email|email|".into()), "email".into());
+    edges.insert(("email".into(), "set_text|textbox|Password|password|".into()), "filled".into());
+    edges.insert(("filled".into(), "tap|button|Sign in||".into()), "done".into());
+    let d = Fake { screens, edges, at: "empty".into(), acted: Vec::new(), ended: false, starts: 0, front: false };
+    let mut g = goal("Sign in with the email and password", vec![Check::TextVisible("Welcome back".into())]);
+    g.target = Target::Browser;
+    g.url = Some("http://x/signin".into());
+    g.inputs = inputs(&[("email", "ada@example.com"), ("password", "hunter2-secret")]);
+    (d, g)
+}
+
+/// The form's driver: starts on the empty form.
+struct FormFake(Fake);
+
+impl Driver for FormFake {
+    fn start(&mut self, _g: &Goal) -> Result<String, String> {
+        self.0.at = "empty".into();
+        Ok(String::new())
+    }
+    fn perceive(&mut self) -> Result<(Screen, u64), String> {
+        self.0.perceive()
+    }
+    fn act(&mut self, a: &Action, s: &Screen, i: &BTreeMap<String, String>) -> Result<String, String> {
+        self.0.act(a, s, i)
+    }
+    fn settle(&mut self, v: Verb) -> u64 {
+        self.0.settle(v)
+    }
+}
+
+/// Decides the `n`th call by the `n`th description (then `stuck`).
+struct Seq(Vec<&'static str>, usize);
+
+impl Decider for Seq {
+    fn name(&self) -> &'static str {
+        "haiku"
+    }
+    fn decide(&mut self, r: &DecideRequest) -> Result<Decision, String> {
+        let want = self.0.get(self.1).copied().unwrap_or("stuck:");
+        self.1 += 1;
+        let a = r.candidates.iter().find(|a| a.describe().contains(want)).or_else(|| r.candidates.iter().find(|a| a.verb == Verb::Stuck)).unwrap();
+        Ok(Decision { id: a.id, ms: 7, ..Default::default() })
+    }
+}
+
+fn form_run(prefer: Vec<&'static str>) -> (Goal, Outcome) {
+    let (d, g) = form();
+    let o = run(&g, &mut FormFake(d), &mut Memory::in_memory(), Some(&mut Seq(prefer, 0)), "", &mut |_, _| {});
+    (g, o)
+}
+
+const SIGN_IN: [&str; 3] = ["<email> into textbox \"Email\"", "<password> into textbox \"Password\"", "Sign in"];
+
+#[test]
+fn decision_records_have_the_shape_and_keep_no_values() {
+    let (g, o) = form_run(SIGN_IN.to_vec());
+    assert_eq!((o.status, o.verified), (Status::Done, true));
+    let recs = dataset::records("r1", &g, &o);
+    // Three model decisions, then the checks' `done`.
+    assert_eq!(recs.iter().map(|r| r.decider.as_str()).collect::<Vec<_>>(), ["haiku", "haiku", "haiku", "checks"]);
+    let r = &recs[0];
+    assert_eq!((r.v, r.run.as_str(), r.step, r.target.as_str(), r.prev.as_str()), (1, "r1", 1, "browser", "start"));
+    assert_eq!(r.input_keys, ["email", "password"]);
+    assert_eq!(r.checks, ["text \"Welcome back\" visible"]);
+    assert_eq!(r.screen.candidates[r.chosen].verb, "set_text");
+    assert_eq!(r.screen.candidates[r.chosen].input_key.as_deref(), Some("email"));
+    assert!(r.action.starts_with("set_text <email>"), "{}", r.action);
+    assert_eq!((r.outcome.as_str(), r.verified, r.on_success_path), ("done", true, Some(true)));
+    assert!(r.screen.summary.contains("textbox \"Email\""));
+    assert_eq!(recs[1].prev, "set_text|textbox|Email|email|");
+    assert_eq!(recs[3].screen.candidates[recs[3].chosen].verb, "done");
+    assert!(recs.iter().all(|r| r.on_success_path == Some(true)));
+    // The JSON lines: every field, and no value anywhere.
+    let line = serde_json::to_string(&recs).unwrap();
+    for k in [
+        "\"ts\":",
+        "\"goal\":",
+        "\"screen\":",
+        "\"summary\":",
+        "\"candidates\":",
+        "\"prev\":",
+        "\"decider\":",
+        "\"chosen\":",
+        "\"decision_ms\":",
+        "\"outcome\":",
+        "\"on_success_path\":",
+    ] {
+        assert!(line.contains(k), "{k}");
+    }
+    assert!(!line.to_lowercase().contains("ada@example.com"), "an input value was stored: {line}");
+    assert!(!line.contains("hunter2") && !line.contains('•'), "a password was stored");
+    // Echoes of a value become its key (labels, page text, the URL); fields show only that they're filled.
+    assert!(line.contains("Welcome back, <email>") && line.contains("Signing in as <email>") && line.contains("u=<email>"), "{line}");
+    assert!(line.contains("<filled>"));
+    // Reads back as written.
+    let back: Vec<dataset::Record> = serde_json::from_str(&line).unwrap();
+    assert_eq!(back, recs);
+    // The model never saw a field's contents either (candidates show only `<filled>`).
+    let c = candidates(&o.trace[2].screen, &g.inputs, g.target);
+    assert!(!render_for_model(&o.trace[2].screen, &c).contains("ada@example.com"));
+}
+
+#[test]
+fn decision_records_of_a_failed_run_are_off_the_path_and_drop_api_keys() {
+    let (d, mut g) = form();
+    g.goal = "Sign in (key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx)".into();
+    let o = run(&g, &mut FormFake(d), &mut Memory::in_memory(), Some(&mut Seq(vec![SIGN_IN[0], "stuck:"], 0)), "", &mut |_, _| {});
+    assert_eq!(o.status, Status::Stuck);
+    let recs = dataset::records("r2", &g, &o);
+    assert_eq!(recs.len(), 2);
+    assert!(recs.iter().all(|r| r.on_success_path == Some(false) && r.outcome == "stuck" && !r.verified));
+    let line = serde_json::to_string(&recs).unwrap();
+    assert!(!line.contains("sk-ant-api03") && line.contains("<redacted>"), "{line}");
+}
+
+#[test]
+fn the_log_rotates_and_stops_at_its_cap() {
+    let dir = std::env::temp_dir().join(format!("coool-pilot-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (g, o) = form_run(SIGN_IN.to_vec());
+    let recs = dataset::records("r", &g, &o);
+    let one = serde_json::to_vec(&recs[0]).unwrap().len() as u64 + 1;
+    let file = dataset::path(&dir, "/projects/a");
+    // Room for three records per file, ten in the folder.
+    let (max_file, max_total) = (one * 3 + 10, one * 10);
+    for _ in 0..3 {
+        assert_eq!(dataset::append(&file, &recs[..1], max_file, max_total).unwrap(), 1);
+    }
+    assert_eq!(dataset::files(&dir).len(), 1);
+    // The fourth rotates: the current file becomes `.1`.
+    dataset::append(&file, &recs[..1], max_file, max_total).unwrap();
+    assert_eq!(dataset::files(&dir).len(), 2);
+    assert!(file.with_extension("1.jsonl").exists());
+    assert_eq!(dataset::read(&file).len(), 1);
+    // One older file only, so the folder stays bounded; past the folder's cap nothing is written.
+    for _ in 0..20 {
+        let _ = dataset::append(&file, &recs[..1], max_file, max_total);
+    }
+    assert_eq!(dataset::files(&dir).len(), 2);
+    let (bytes, _) = dataset::size(&dir);
+    assert!(bytes <= max_total, "{bytes} > {max_total}");
+    assert_eq!(dataset::append(&file, &recs, max_file, one * 2).unwrap(), 0, "over the cap: nothing written");
+    // Delete removes the logs only.
+    std::fs::write(dir.join("x.json"), "{}").unwrap();
+    assert_eq!(dataset::delete(&dir), 2);
+    assert_eq!(dataset::size(&dir), (0, 0));
+    assert!(dir.join("x.json").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_log_reads_back_into_the_spikes_per_step_eval() {
+    let dir = std::env::temp_dir().join(format!("coool-pilot-eval-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dataset::path(&dir, "/p");
+    let (g, ok) = form_run(SIGN_IN.to_vec());
+    let (g2, failed) = form_run(vec![SIGN_IN[0], "stuck:"]);
+    dataset::append(&file, &dataset::records("a", &g, &ok), dataset::MAX_FILE, dataset::MAX_TOTAL).unwrap();
+    dataset::append(&file, &dataset::records("b", &g2, &failed), dataset::MAX_FILE, dataset::MAX_TOTAL).unwrap();
+    let recs = dataset::read(&file);
+    assert_eq!(recs.len(), 4 + 2);
+    // Labelled states: the successful run's 4 steps only (a failed run's choices are no gold).
+    assert_eq!(dataset::gold(&recs).len(), 4);
+    let perfect = dataset::eval(&recs, |r| Some(r.chosen));
+    assert_eq!((perfect.n, perfect.correct, perfect.accuracy), (4, 4, 1.0));
+    // A scorer that always picks candidate 0: right only where that was the gold (the email field, listed first).
+    let first = dataset::eval(&recs, |_| Some(0));
+    assert_eq!((first.n, first.correct), (4, 1));
+    assert!((first.accuracy - 0.25).abs() < 1e-9);
+    assert_eq!(first.by_decider.get("checks"), Some(&(1, 0)));
+    assert_eq!(dataset::decider_accuracy(&recs).get("haiku"), Some(&(3, 3)));
+    let report = dataset::report(&file);
+    assert!(report.contains("6 records") && report.contains("4 labelled"), "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_callers_choice_after_stuck_is_logged_and_the_toggle_stops_logging() {
+    let dir = std::env::temp_dir().join(format!("coool-pilot-caller-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dataset::path(&dir, "/p");
+    let chat = 90_001;
+    // No model: stuck on the first screen, with the candidates.
+    let o = run(&about_goal(), &mut Fake::settings(), &mut Memory::in_memory(), None, "no key", &mut |_, _| {});
+    assert_eq!(o.status, Status::Stuck);
+    dataset::log_run(&file, chat, "s1", &about_goal(), &o);
+    // The agent looks, then taps General by its element id: one `caller` record, choosing that candidate.
+    dataset::caller_acted(chat, "observe", &json!({}));
+    dataset::caller_acted(chat, "tap", &json!({ "target": "h-General" }));
+    let recs = dataset::read(&file);
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    let r = &recs[0];
+    assert_eq!((r.decider.as_str(), r.outcome.as_str(), r.on_success_path), ("caller", "stuck", None));
+    assert_eq!(r.screen.candidates[r.chosen].target.as_ref().unwrap().label, "General");
+    // Only the first action after the run counts.
+    dataset::caller_acted(chat, "tap", &json!({ "target": "h-Camera" }));
+    assert_eq!(dataset::read(&file).len(), 1);
+    // Toggle off: nothing is written.
+    dataset::set_enabled(false);
+    dataset::log_run(&file, chat, "s2", &about_goal(), &o);
+    dataset::caller_acted(chat, "tap", &json!({ "target": "h-General" }));
+    dataset::set_enabled(true);
+    assert_eq!(dataset::read(&file).len(), 1);
+    // Browser ids are numbers; scrolls and Enter map to their candidates; free typing doesn't.
+    let c = candidates(&screen("x", vec![Elem { handle: "7".into(), ..elem("button", "Go", Kind::Tap) }]), &BTreeMap::new(), Target::Browser);
+    assert_eq!(dataset::match_call(&c, "browser_click", &json!({ "id": 7 })), Some(0));
+    assert_eq!(dataset::match_call(&c, "browser_scroll", &json!({ "direction": "up" })).map(|i| c[i].dir), Some(Some("up")));
+    assert_eq!(dataset::match_call(&c, "browser_press", &json!({ "key": "Enter" })), None, "no submit without a focused field");
+    assert_eq!(dataset::match_call(&c, "browser_type", &json!({ "id": 7, "text": "hi" })), None);
+    let _ = std::fs::remove_dir_all(&dir);
 }

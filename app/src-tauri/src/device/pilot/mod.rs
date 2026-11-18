@@ -11,10 +11,14 @@
 //! 2. Claude Haiku ([`haiku`]): one forced-choice tool call that names a candidate id (skipped without an API key);
 //! 3. otherwise the run returns `stuck` (or `surprised`) with the candidates, so the calling agent decides.
 //!
+//! On the iPhone a run of a goal with a learned route starts warm when it can ([`warm_plan`]): the app as it is, on
+//! a screen of the route, instead of a relaunch. Every decision goes to the training log ([`dataset`]).
+//!
 //! The pilot never invents text: `set_text` types a value from the goal's `inputs`, by key, and replaces what the
 //! field held. Drivers ([`drivers`]) do the device work: the iPhone through the simulator helper (frame-stream
 //! settle, accessibility tree), the Browser panel through the `browser_*` machinery (DOM-quiet settle).
 
+pub mod dataset;
 pub mod drivers;
 pub mod haiku;
 pub mod memory;
@@ -248,7 +252,7 @@ pub fn signature(s: &Screen) -> String {
     let mut parts: Vec<String> = s
         .elems
         .iter()
-        .filter(|e| !e.offscreen)
+        .filter(|e| !e.offscreen && !transient(s, e))
         .map(|e| {
             let state = match e.kind {
                 Kind::Input => if e.value.as_deref().is_some_and(|v| !v.is_empty()) { "filled" } else { "empty" }.to_string(),
@@ -262,6 +266,25 @@ pub fn signature(s: &Screen) -> String {
     let text = s.texts.iter().take(40).cloned().collect::<Vec<_>>().join("\n");
     let all = format!("{}|{}|{}|{}|{text}", s.app, s.alert, s.keyboard, parts.join("\n"));
     format!("{:016x}", fnv(&all))
+}
+
+/// Left out of an iPhone screen's signature because it comes and goes on the same screen: a row cut by the screen's
+/// edge (in or out of the visible-only read by a point of scrolling), and an empty search field with its dictation
+/// button (iOS shows and hides search bars as a list scrolls or a push settles; Settings' floating one lingers on
+/// General for a while after the push). The navigation bar's back button too: it joins the tree a moment after a
+/// push has settled on screen, and the screen's content already tells it apart.
+fn transient(s: &Screen, e: &Elem) -> bool {
+    if s.url.is_some() || s.alert {
+        return false;
+    }
+    let [x, y, w, h] = e.frame;
+    let cut = x < -2.0 || y < -2.0 || x + w > s.w + 2.0 || y + h > s.h + 2.0;
+    if e.role == "button" && x < 40.0 && y < s.h * 0.15 && w <= 120.0 && e.kind == Kind::Tap {
+        return true;
+    }
+    let search = |e: &Elem| e.kind == Kind::Input && !e.focused && e.value.as_deref().is_none_or(str::is_empty) && e.label.eq_ignore_ascii_case("search");
+    let mic = e.role == "button" && e.label == "Dictate" && s.elems.iter().any(search);
+    cut || search(e) || mic
 }
 
 pub fn fnv(s: &str) -> u64 {
@@ -353,6 +376,9 @@ impl Action {
     }
 }
 
+/// What a filled text field's value reads as in candidates.
+pub const FILLED: &str = "<filled>";
+
 /// At most this many element actions per screen (the model reads them all each step).
 const MAX_ELEMENT_ACTIONS: usize = 40;
 
@@ -367,7 +393,10 @@ pub fn candidates(s: &Screen, inputs: &BTreeMap<String, String>, target: Target)
         if n >= MAX_ELEMENT_ACTIONS {
             break;
         }
-        let t = ActTarget { role: e.role.clone(), label: e.label.clone(), value: e.value.clone(), frame: e.frame, id: e.handle.clone() };
+        // A text field's contents are never shown (to the model, the log or the caller's candidates): only whether
+        // it holds something.
+        let value = if e.kind == Kind::Input { e.value.as_deref().filter(|v| !v.is_empty()).map(|_| FILLED.to_string()) } else { e.value.clone() };
+        let t = ActTarget { role: e.role.clone(), label: e.label.clone(), value, frame: e.frame, id: e.handle.clone() };
         match e.kind {
             Kind::Tap if !e.label.is_empty() => {
                 let mut a = Action::new(Verb::Tap);
@@ -463,6 +492,99 @@ pub trait Driver {
     }
     /// The run ended (indicators off).
     fn finish(&mut self) {}
+    /// Warm start: brings the goal's app (`app`, its name on screen) to the front as it is, without relaunching.
+    /// `Ok(None)` when the driver can't (the run then starts fresh with [`Self::start`]).
+    fn resume(&mut self, _goal: &Goal, _app: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+}
+
+/// Where a warm start picks the goal up, from the screen the app is on (see [`memory::Route`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Warm {
+    /// On the route's screen `i`: continue from there.
+    At(usize),
+    /// On the route's last screen, reached by a tap (a push): go back one screen, which must be the route's `i`.
+    BackTo(usize),
+    /// Not recognised (another app or screen, a screen the route shows twice, past typed text): relaunch.
+    Relaunch,
+}
+
+/// The warm start's plan for the screen in front. A screen is recognised only by its exact signature, only when the
+/// route shows it once, and never past a step that typed text (a field's contents aren't in the signature, so the
+/// screen can't tell whose text it holds). The route's end is also recognised by the goal's success checks holding
+/// (`done`: an end screen often shows live values, "Available, 48.87 GB"); from there the plan is one step back,
+/// which must land exactly on the route's screen before it.
+pub fn warm_plan(route: &memory::Route, s: &Screen, done: bool) -> Warm {
+    if s.alert || s.home || s.app != route.app || route.screens.len() != route.actions.len() + 1 {
+        return Warm::Relaunch;
+    }
+    let last = route.screens.len() - 1;
+    let typed = |n: usize| route.actions[..n].iter().any(|a| a.starts_with("set_text|"));
+    let back = || {
+        if last > 0 && route.actions[last - 1].starts_with("tap|") && !typed(last - 1) { Warm::BackTo(last - 1) } else { Warm::Relaunch }
+    };
+    let sig = signature(s);
+    let hits: Vec<usize> = route.screens.iter().enumerate().filter(|(_, x)| **x == sig).map(|(i, _)| i).collect();
+    match hits[..] {
+        [i] if i < last => {
+            if typed(i) {
+                Warm::Relaunch
+            } else {
+                Warm::At(i)
+            }
+        }
+        [i] if i == last => back(),
+        [] if done => back(),
+        _ => Warm::Relaunch,
+    }
+}
+
+/// `COOOL_PILOT_DEBUG=1`: each screen the pilot reads, with its signature, on stderr (signature mismatches are
+/// otherwise invisible).
+fn debug(what: &str, s: &Screen) {
+    if std::env::var_os("COOOL_PILOT_DEBUG").is_some() {
+        let els: Vec<String> = s
+            .elems
+            .iter()
+            .filter(|e| !e.offscreen)
+            .map(|e| format!("{:?} {} {:?}{}", e.kind, e.role, e.label, e.value.as_deref().map(|v| format!("={v:?}")).unwrap_or_default()))
+            .collect();
+        eprintln!("[pilot] {what}: {} {:?} alert={} home={} kb={} {}", signature(s), s.app, s.alert, s.home, s.keyboard, els.join(" | "));
+    }
+}
+
+/// Tries a warm start on `route`: `Some(i)` when the app is in front on the route's screen `i` (after one step back
+/// from the route's end, when that's where it was), with a note; `None` to relaunch.
+fn warm_start(route: &memory::Route, goal: &Goal, driver: &mut dyn Driver) -> Result<(Option<usize>, String), String> {
+    let t = Instant::now();
+    let Some(front) = driver.resume(goal, &route.app)? else { return Ok((None, String::new())) };
+    let (s, _) = driver.perceive()?;
+    debug(&format!("warm front, route {:?}", route.screens), &s);
+    let n = route.screens.len();
+    let done = !goal.success.is_empty() && goal.success.iter().all(|c| c.holds(&s));
+    match warm_plan(route, &s, done) {
+        Warm::At(i) => Ok((Some(i), format!("warm: {front}, on screen {} of {n} of the learned route ({} ms)", i + 1, t.elapsed().as_millis()))),
+        Warm::BackTo(i) => {
+            let Some(back) = candidates(&s, &goal.inputs, goal.target).into_iter().find(|a| a.verb == Verb::Back) else {
+                return Ok((None, format!("{front} on the route's last screen, no way back; ")));
+            };
+            driver.act(&back, &s, &goal.inputs)?;
+            driver.settle(Verb::Back);
+            let (mut s2, _) = driver.perceive()?;
+            // Slow to show (as in the loop): settle once more and look again.
+            if signature(&s2) == signature(&s) && driver.settle_again() > 0 {
+                s2 = driver.perceive()?.0;
+            }
+            debug(&format!("warm back, want {}", route.screens[i]), &s2);
+            if signature(&s2) == route.screens[i] {
+                Ok((Some(i), format!("warm: {front}, on the learned route's last screen; went back to screen {} of {n} ({} ms)", i + 1, t.elapsed().as_millis())))
+            } else {
+                Ok((None, format!("{front}; back from the route's last screen led elsewhere, relaunching; ")))
+            }
+        }
+        Warm::Relaunch => Ok((None, format!("{front}, but its screen isn't on the learned route: relaunching; "))),
+    }
 }
 
 /// Picks a candidate id for a screen (Haiku, or a scripted one in tests).
@@ -540,6 +662,30 @@ pub struct Outcome {
     /// When the caller must decide (stuck / surprised): what the screen offers, with element ids for the device tools.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Action>,
+    /// The run's decisions, for the training log (not in the tool's answer).
+    #[serde(skip)]
+    pub trace: Vec<Traced>,
+    /// The last screen read (for logging the caller's choice after `stuck`; not in the answer).
+    #[serde(skip)]
+    pub last: Option<Screen>,
+}
+
+/// One decision of a run as its decider saw it, for the training log ([`dataset`]).
+#[derive(Clone, Debug)]
+pub struct Traced {
+    pub step: usize,
+    pub screen: Screen,
+    pub candidates: Vec<Action>,
+    /// The action key before (`start` on the run's first screen).
+    pub prev: String,
+    /// The steps so far, as the model reads them.
+    pub history: Vec<String>,
+    /// `memory`, `haiku` or `checks` (the success checks held: `done`).
+    pub decider: &'static str,
+    pub chosen: usize,
+    pub ms: u64,
+    /// The run ended `done` and this step is on the path that got there.
+    pub on_path: bool,
 }
 
 /// Progress after each step, for the chat's live view.
@@ -568,10 +714,12 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
         checks: Vec::new(),
         final_screen: String::new(),
         candidates: Vec::new(),
+        trace: Vec::new(),
+        last: None,
     };
     let gkey = goal.memory_key();
-    // Steps of this run to learn if it ends verified: (memory key, action key, screen signature).
-    let mut pending: Vec<(String, String, String)> = Vec::new();
+    // Steps of this run to learn if it ends verified: (memory key, action key, screen signature, trace index).
+    let mut pending: Vec<(String, String, String, usize)> = Vec::new();
     // What was done on each signature this run, to never replay or repeat a no-op.
     let mut tried: HashMap<String, Vec<String>> = HashMap::new();
     let mut visits: HashMap<String, usize> = HashMap::new();
@@ -584,6 +732,7 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
         out.status = status;
         out.reason = reason;
         if let Some(s) = screen {
+            out.last = Some(s.clone());
             out.final_screen = s.summary(30);
             out.checks = goal.success.iter().map(|c| (c.describe(), c.holds(s))).collect();
         }
@@ -593,14 +742,61 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
         out.wall_ms = t0.elapsed().as_millis() as u64;
         driver.finish();
     };
+    // A run that ended done: learn its steps (and route), and mark the trace's steps on its path.
+    let succeed =
+        |out: &mut Outcome, mem: &mut memory::Memory, pending: &[(String, String, String, usize)], last_sig: &str, warm_at: Option<usize>, app: &Option<String>| {
+            for (_, _, _, i) in pending {
+                if let Some(t) = out.trace.get_mut(*i) {
+                    t.on_path = true;
+                }
+            }
+            // Routes only for a verified iPhone app run: what a warm start of the same goal recognises.
+            if let (Some(app), true) = (app, goal.target == Target::Iphone && goal.app.is_some() && !goal.success.is_empty()) {
+                let mut r = memory::Route { app: app.clone(), ..Default::default() };
+                // A warm run started on the route's screen `i`: the route up to there, then this run's path.
+                if let Some(i) = warm_at
+                    && let Some(old) = mem.route(&gkey)
+                {
+                    r.screens.extend_from_slice(&old.screens[..i]);
+                    r.actions.extend_from_slice(&old.actions[..i]);
+                }
+                for (_, a, sig, _) in pending {
+                    r.screens.push(sig.clone());
+                    r.actions.push(a.clone());
+                }
+                r.screens.push(last_sig.to_string());
+                mem.set_route(&gkey, r);
+            }
+            out.learned = mem.learn(&pending.iter().map(|(k, a, _, _)| (k.clone(), a.clone())).collect::<Vec<_>>());
+        };
 
-    match driver.start(goal) {
-        Ok(note) => out.start = note,
-        Err(e) => {
-            finish(&mut out, Status::Stuck, format!("couldn't start: {e}"), None, Vec::new(), driver);
-            progress(&out, true);
-            return out;
+    // Warm start (iPhone, an app with a learned route): the app as it is, when its screen is on the route.
+    let route = if goal.target == Target::Iphone && goal.app.is_some() && !goal.success.is_empty() { mem.route(&gkey) } else { None };
+    let mut warm_at: Option<usize> = None;
+    if let Some(r) = &route {
+        match warm_start(r, goal, driver) {
+            Ok((at, note)) => {
+                warm_at = at;
+                out.start = note;
+            }
+            Err(e) => out.start = format!("warm start failed ({e}), relaunching; "),
         }
+    }
+    if warm_at.is_none() {
+        match driver.start(goal) {
+            Ok(note) => out.start.push_str(&note),
+            Err(e) => {
+                finish(&mut out, Status::Stuck, format!("couldn't start: {e}"), None, Vec::new(), driver);
+                progress(&out, true);
+                return out;
+            }
+        }
+    }
+    if let (Some(i), Some(r)) = (warm_at, &route)
+        && i > 0
+    {
+        prev_key = r.actions[i - 1].clone();
+        start_app = Some(r.app.clone());
     }
     out.start_ms = t0.elapsed().as_millis() as u64;
     progress(&out, false);
@@ -632,6 +828,7 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
             perceive_ms += ms;
         }
         last_verb = None;
+        debug(&format!("step {n}"), &screen);
         // A step that changed nothing is not worth remembering.
         if sig == last_sig
             && let Some(p) = pending.last()
@@ -642,7 +839,24 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
         last_sig = sig.clone();
         if !goal.success.is_empty() && goal.success.iter().all(|c| c.holds(&screen)) {
             out.verified = true;
-            out.learned = mem.learn(&pending.iter().map(|(k, a, _)| (k.clone(), a.clone())).collect::<Vec<_>>());
+            // The checks decided: `done`, on the path by definition (the label a done-detector learns from).
+            let cands = candidates(&screen, &goal.inputs, goal.target);
+            if let Some(d) = cands.iter().find(|a| a.verb == Verb::Done) {
+                let chosen = d.id;
+                out.trace.push(Traced {
+                    step: n,
+                    screen: screen.clone(),
+                    candidates: cands,
+                    prev: prev_key.clone(),
+                    history: history.clone(),
+                    decider: "checks",
+                    chosen,
+                    ms: 0,
+                    on_path: true,
+                });
+            }
+            let app = start_app.clone().or_else(|| (!screen.home && !screen.alert).then(|| screen.app.clone()));
+            succeed(&mut out, mem, &pending, &sig, warm_at, &app);
             finish(&mut out, Status::Done, "every success check holds".into(), Some(&screen), Vec::new(), driver);
             break;
         }
@@ -712,6 +926,18 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
         let Some((action, by, decide_ms)) = decided else { break };
         out.decide_ms += decide_ms;
         *out.deciders.entry(by.to_string()).or_insert(0) += 1;
+        let ti = out.trace.len();
+        out.trace.push(Traced {
+            step: n,
+            screen: screen.clone(),
+            candidates: cands.clone(),
+            prev: prev_key.clone(),
+            history: history.clone(),
+            decider: by,
+            chosen: action.id,
+            ms: decide_ms,
+            on_path: false,
+        });
         let mut step = Step { n, decider: by, action: action.describe(), verb: action.verb, perceive_ms, decide_ms, act_ms: 0, settle_ms: 0, note: String::new() };
         match action.verb {
             Verb::Stuck => {
@@ -721,8 +947,8 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
             }
             Verb::Done if goal.success.is_empty() => {
                 out.steps.push(step);
-                pending.push((mkey, action.key(), sig.clone()));
-                out.learned = mem.learn(&pending.iter().map(|(k, a, _)| (k.clone(), a.clone())).collect::<Vec<_>>());
+                pending.push((mkey, action.key(), sig.clone(), ti));
+                succeed(&mut out, mem, &pending, &sig, warm_at, &start_app);
                 finish(&mut out, Status::Done, format!("{by} judged the goal done (no success checks were given, so this is unverified)"), Some(&screen), Vec::new(), driver);
                 break;
             }
@@ -759,7 +985,7 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
         last_verb = Some(action.verb);
         history.push(action.describe());
         tried.entry(sig.clone()).or_default().push(action.key());
-        pending.push((mkey, action.key(), sig.clone()));
+        pending.push((mkey, action.key(), sig.clone(), ti));
         prev_key = action.key();
         out.steps.push(step);
         out.wall_ms = t0.elapsed().as_millis() as u64;
@@ -795,8 +1021,9 @@ static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1)
 pub fn call(devices: &super::Devices, chat: usize, a: &Value) -> Result<String, String> {
     let goal = Goal::parse(a)?;
     let project = devices.mcp.cwd(chat).unwrap_or_default();
-    let mut mem = match devices.data_dir() {
-        Some(d) => memory::Memory::open(&d.join("pilot"), &project),
+    let dir = dir(devices);
+    let mut mem = match &dir {
+        Some(d) => memory::Memory::open(d, &project),
         None => memory::Memory::in_memory(),
     };
     // `COOOL_PILOT_HAIKU=off`: memory only (tests of the no-key path).
@@ -823,7 +1050,17 @@ pub fn call(devices: &super::Devices, chat: usize, a: &Value) -> Result<String, 
             run(&goal, &mut d, &mut mem, decider, &note, &mut emit)
         }
     };
+    // The training log (Settings: "Save pilot decisions for training").
+    if let Some(d) = &dir {
+        dataset::log_run(&dataset::path(d, &project), chat, &format!("{started:x}-{run_id}"), &goal, &out);
+    }
     Ok(result_text(&out))
+}
+
+/// Where the pilot keeps its muscle memory and decision logs: `<app local data>/pilot/` (the self-test's own folder
+/// in a test run).
+pub fn dir(devices: &super::Devices) -> Option<std::path::PathBuf> {
+    devices.data_dir().map(|d| d.join("pilot"))
 }
 
 pub const TOOL_DESCRIPTION: &str = "Hand a routine multi-step goal on the iPhone or the Browser panel to coool's fast device pilot \

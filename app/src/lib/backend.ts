@@ -85,6 +85,14 @@ export interface Backend {
   /** Settings: "Show runs started by other tools" (persisted; echoed in `Snapshot.show_automation`). */
   setShowAutomation(enabled: boolean): Promise<void>;
 
+  /** Settings: the device pilot's decision log, kept locally for training (APP_SPEC "Device pilot"). */
+  pilotLogStatus(): Promise<PilotLogStatus>;
+  pilotLogSetEnabled(enabled: boolean): Promise<PilotLogStatus>;
+  /** Shows the log's folder in Finder. */
+  pilotLogReveal(): Promise<void>;
+  /** Deletes the decision logs (the muscle memory stays). */
+  pilotLogDelete(): Promise<PilotLogStatus>;
+
   /** Device hints for "Reduce motion: Auto" (null when the build can't tell); pushed again when they change. */
   motionHints(): Promise<MotionHints | null>;
   onMotionHints(cb: (h: MotionHints) => void): Unlisten;
@@ -206,6 +214,14 @@ export interface PilotOutcome {
   haiku: string;
   haiku_usd: number;
   checks: [string, boolean][];
+}
+/** The device pilot's decision log (Settings: "Save pilot decisions for training"). */
+export interface PilotLogStatus {
+  enabled: boolean;
+  /** Its folder (muscle memory and decision logs); null without a data folder. */
+  dir: string | null;
+  bytes: number;
+  files: number;
 }
 export interface PilotProgress {
   chat: number;
@@ -374,6 +390,10 @@ async function tauriBackend(): Promise<Backend> {
     insightsClearKey: () => soft("insights_clear_key"),
     insightsSetEnabled: (enabled) => soft("insights_set_enabled", { enabled }),
     setShowAutomation: (enabled) => soft("set_show_automation", { enabled }),
+    pilotLogStatus: () => soft("pilot_log_status"),
+    pilotLogSetEnabled: (enabled) => soft("pilot_log_set_enabled", { enabled }),
+    pilotLogReveal: () => soft("pilot_log_reveal"),
+    pilotLogDelete: () => soft("pilot_log_delete"),
     listSessions: async () => merge.full(await invoke<FullWire>("list_sessions")) ?? merge.snapshot(),
     spawnSession: (req) => invoke("spawn_session", { req }),
     resumeSession: (req) => invoke("resume_session", { req }),

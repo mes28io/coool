@@ -209,6 +209,11 @@ pub fn launch(udid: &str, bundle: &str) -> Result<String, String> {
     run(&["launch", "--terminate-running-process", udid, bundle]).map(|s| s.trim().to_string())
 }
 
+/// Brings an app to the front as it is when it is running (launches it when it isn't).
+pub fn activate(udid: &str, bundle: &str) -> Result<String, String> {
+    run(&["launch", udid, bundle]).map(|s| s.trim().to_string())
+}
+
 pub fn terminate(udid: &str, bundle: &str) -> Result<(), String> {
     run(&["terminate", udid, bundle]).map(|_| ())
 }
