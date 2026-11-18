@@ -7,7 +7,7 @@ import { useStore } from "../store";
 import { IBell, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
 import { cx, ease, ProviderMark } from "./primitives";
 import { useNeedsYou } from "./LeftPanels";
-import { NAME, resetText, toneColor, usageHighest, usageTone, useUsageProviders } from "./Usage";
+import { resetText, toneColor, usageHighest, usageTone, useUsageProviders } from "./Usage";
 
 /**
  * One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. `tip` replaces the
@@ -23,6 +23,8 @@ function RailButton({
   children,
   hideTip,
   tip,
+  tipInline,
+  onRich,
 }: {
   label: string;
   shortcut?: string;
@@ -34,8 +36,16 @@ function RailButton({
   children: ReactNode;
   hideTip?: boolean;
   tip?: ReactNode;
+  /** The rich tip is one line: centred on the button and shown sooner. */
+  tipInline?: boolean;
+  /** The pointer (or keyboard focus) came onto / left the button. */
+  onRich?: (on: boolean) => void;
 }) {
-  const [rich, setRich] = useState(false);
+  const [rich, setRichState] = useState(false);
+  const setRich = (on: boolean) => {
+    setRichState(on);
+    onRich?.(on);
+  };
   return (
     <div
       className="group relative"
@@ -64,7 +74,7 @@ function RailButton({
         )}
       </button>
       {tip ? (
-        <AnimatePresence>{rich && <RichTip key="tip">{tip}</RichTip>}</AnimatePresence>
+        <AnimatePresence>{rich && <RichTip key="tip" inline={tipInline}>{tip}</RichTip>}</AnimatePresence>
       ) : (
         !hideTip && (
           <span
@@ -84,16 +94,17 @@ function RailButton({
  * The rich tooltip's card: bottom-aligned with its button (the buttons that use it sit low in the rail, so it grows
  * upward), after the same half-second delay as the label tooltips. A native browser page it would overlap hides meanwhile.
  */
-function RichTip({ children }: { children: ReactNode }) {
+function RichTip({ children, inline }: { children: ReactNode; inline?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => (ref.current ? registerOverlay(ref.current) : undefined), []);
   return (
     <motion.div
       ref={ref}
       role="tooltip"
-      className="pointer-events-none absolute bottom-0 left-full z-50 ml-2 rounded-[10px] border border-line bg-raised text-fg shadow-pop"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1, transition: { delay: 0.5, duration: 0.15, ease } }}
+      className={cx("pointer-events-none absolute left-full z-50 ml-2 border border-line bg-raised text-fg shadow-pop", inline ? "top-1/2 rounded-full" : "bottom-0 rounded-[10px]")}
+      style={inline ? { y: "-50%" } : undefined}
+      initial={{ opacity: 0, x: inline ? -4 : 0 }}
+      animate={{ opacity: 1, x: 0, transition: { delay: inline ? 0.12 : 0.5, duration: 0.15, ease } }}
       exit={{ opacity: 0, transition: { duration: 0.1 } }}
     >
       {children}
@@ -101,57 +112,55 @@ function RichTip({ children }: { children: ReactNode }) {
   );
 }
 
-/** Usage at a glance: each provider's windows with percent used, a thin bar and when it resets. */
-function UsageTip() {
-  const usage = useStore((s) => s.usage);
-  const providers = useUsageProviders();
-  return (
-    <div className="flex w-[260px] flex-col gap-3 px-3 pb-3 pt-2.5" data-usage-tip>
-      <div className="flex items-baseline justify-between">
-        <span className="text-small font-medium text-fg">Usage</span>
-        <span className="text-micro text-faint">Click for details</span>
-      </div>
-      {providers.map((p) => {
-        const u = usage[p];
-        return (
-          <div key={p} data-usage-tip-provider={p}>
-            <div className="flex h-[18px] items-center gap-1.5">
-              <ProviderMark provider={p} size={13} />
-              <span className="text-small font-medium text-fg">{NAME[p]}</span>
-              {u?.plan && <span className="min-w-0 truncate text-small text-faint">{u.plan}</span>}
-            </div>
-            {!u || u.windows.length === 0 ? (
-              <div className="mt-1 text-small text-dim">{u?.error ?? "No usage data yet"}</div>
-            ) : (
-              <div className="mt-1.5 flex flex-col gap-2">
-                {u.windows.map((w) => (
-                  <TipRow key={w.id} w={w} />
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {providers.length === 0 && <div className="text-small text-dim">No supported CLI found.</div>}
-    </div>
-  );
+/** One limit of one provider: what the usage pill shows at a time. */
+type UsageItem = { p: Provider; w: UsageWindow };
+
+/** Every limit with a reading, provider by provider. */
+function usageItems(usage: PlanUsages, providers: readonly Provider[]): UsageItem[] {
+  return providers.flatMap((p) => (usage[p]?.windows ?? []).filter((w) => w.used_percent !== null).map((w) => ({ p, w })));
 }
 
-function TipRow({ w }: { w: UsageWindow }) {
+const leftOf = (w: UsageWindow) => Math.round(100 - Math.max(0, Math.min(100, w.used_percent ?? 0)));
+
+/**
+ * Usage at a glance, one limit at a time: "5-hour · 82% left", rolling to the next limit every couple of seconds while
+ * the pointer stays (the rail's rings follow it). The dots say which of them it is; the page has the detail.
+ */
+function UsagePill({ items, index }: { items: UsageItem[]; index: number }) {
   const now = useNow();
-  const known = w.used_percent !== null;
-  const pct = known ? Math.max(0, Math.min(100, w.used_percent!)) : 0;
-  const note = known ? (resetText(w.resets_ms, now) ?? w.detail) : (w.detail ?? "No reading since the reset");
+  if (items.length === 0) return <div className="flex h-[32px] items-center whitespace-nowrap px-3 text-small text-dim">No usage data yet</div>;
+  const at = index % items.length;
+  const { p, w } = items[at];
+  const tone = usageTone(w);
+  const reset = resetText(w.resets_ms, now);
   return (
-    <div data-usage-tip-window={w.id}>
-      <div className="flex items-baseline gap-2 text-small">
-        <span className="min-w-0 flex-1 truncate text-fg/90">{w.label}</span>
-        <span className="shrink-0 text-fg tnum">{known ? `${Math.round(pct)}%` : "—"}</span>
-      </div>
-      <div className="mt-1 h-[2px] overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--dim)_20%,transparent)]">
-        {known && <div className="h-full rounded-full" style={{ width: `${Math.max(2, pct)}%`, background: toneColor[usageTone(w)] }} />}
-      </div>
-      {note && <div className="mt-1 truncate text-micro text-faint">{note}</div>}
+    <div className="flex h-[32px] min-w-[236px] items-center gap-3 overflow-hidden whitespace-nowrap pl-2.5 pr-3 text-small" data-usage-pill>
+      <AnimatePresence mode="popLayout" initial={false}>
+        <motion.div
+          key={`${p}:${w.id}`}
+          className="flex min-w-0 flex-1 items-center gap-1.5"
+          initial={{ y: 12, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: -12, opacity: 0 }}
+          transition={{ duration: 0.24, ease }}
+          data-usage-pill-item={`${p}:${w.id}`}
+        >
+          <ProviderMark provider={p} size={13} />
+          <span className="text-fg">{w.label}</span>
+          <span className="text-faint">·</span>
+          <span className="font-medium tnum" style={{ color: tone === "neutral" ? "var(--fg)" : toneColor[tone] }}>
+            {leftOf(w)}% left
+          </span>
+          {reset && <span className="truncate text-faint">{reset.replace(/^Resets /, "· ")}</span>}
+        </motion.div>
+      </AnimatePresence>
+      {items.length > 1 && (
+        <span className="flex shrink-0 items-center gap-[3px]" aria-hidden>
+          {items.map((it, i) => (
+            <span key={`${it.p}:${it.w.id}`} className={cx("size-[4px] rounded-full transition-colors duration-200", i === at ? "bg-fg" : "bg-[color-mix(in_oklab,var(--dim)_35%,transparent)]")} />
+          ))}
+        </span>
+      )}
     </div>
   );
 }
@@ -183,25 +192,43 @@ function NeedsYou() {
   );
 }
 
-/** Plan usage for Claude and Codex: the rail dot shows the worst window, the tooltip the glance, the page the detail. */
+/** Plan usage for Claude and Codex: the rail's rings show what is left, the pill one limit at a time, the page the detail. */
 function UsageButton() {
   const onUsage = useStore((s) => s.settings === "usage");
   const openSettings = useStore((s) => s.openSettings);
   const closeSettings = useStore((s) => s.closeSettings);
   const usage = useStore((s) => s.usage);
   const providers = useUsageProviders();
-  const hide = (["claude", "codex"] as const).filter((p) => !providers.includes(p));
+  const all = ["claude", "codex"] as const;
+  const hide = all.filter((p) => !providers.includes(p));
   const high = usageHighest(usage, [...hide]);
-  const rings = usageRings(usage, [...hide]);
+  const items = usageItems(usage, providers);
+  const [hover, setHover] = useState(false);
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    if (!hover || items.length < 2) return;
+    const t = setInterval(() => setIndex((i) => i + 1), 2400);
+    return () => clearInterval(t);
+  }, [hover, items.length]);
+  // While the pill is up the rings are the provider it is talking about, and the ring of that limit stands out.
+  const cur = hover && items.length > 0 ? items[index % items.length] : null;
+  const rings = usageRings(usage, cur ? all.filter((p) => p !== cur.p) : [...hide]);
+  const focus = !cur || !rings ? null : cur.w === rings.short ? "outer" : cur.w === rings.week ? "inner" : null;
   return (
     <RailButton
       label={high ? `Usage · ${high.label} ${high.percent}%` : "Usage"}
       onClick={() => (onUsage ? closeSettings() : openSettings("usage"))}
       active={onUsage}
       dot={high?.tone ?? null}
-      tip={<UsageTip />}
+      tip={<UsagePill items={items} index={index} />}
+      tipInline
+      onRich={(on) => {
+        setHover(on);
+        // Start on the limit closest to running out.
+        if (on) setIndex(items.reduce((best, it, i) => (it.w.used_percent! > items[best].w.used_percent! ? i : best), 0));
+      }}
     >
-      {rings ? <UsageRing size={20} outer={rings.short} inner={rings.week} /> : <IGauge size={20} />}
+      {rings ? <UsageRing size={20} outer={rings.short} inner={rings.week} focus={focus} /> : <IGauge size={20} />}
     </RailButton>
   );
 }
@@ -222,24 +249,25 @@ function usageRings(usage: PlanUsages, hide: Provider[]): { short: UsageWindow |
   return short || week ? { short, week } : null;
 }
 
-/** Two rings that empty as the limits are used: outer = the 5-hour window, inner = the weekly one (what is left of each). */
-function UsageRing({ size, outer, inner }: { size: number; outer: UsageWindow | null; inner: UsageWindow | null }) {
-  const arc = (w: UsageWindow | null, r: number) => {
-    const c = 2 * Math.PI * r;
-    const left = w ? Math.max(0, Math.min(100, 100 - w.used_percent!)) / 100 : 0;
+/**
+ * One ring in two halves that empty as the limits are used, each filling from the bottom up like a gauge:
+ * left = the 5-hour window, right = the weekly one (what is left of each).
+ */
+function UsageRing({ size, outer, inner, focus }: { size: number; outer: UsageWindow | null; inner: UsageWindow | null; focus?: "outer" | "inner" | null }) {
+  const half = (w: UsageWindow | null, d: string, dim: boolean) => {
+    const left = w ? Math.max(0, Math.min(100, 100 - w.used_percent!)) : 0;
     const tone = w ? usageTone(w) : "neutral";
     return (
       <>
-        <circle cx="8" cy="8" r={r} opacity={0.22} />
+        <path d={d} opacity={0.22} />
         {w && left > 0 && (
-          <circle
-            cx="8"
-            cy="8"
-            r={r}
-            transform="rotate(-90 8 8)"
-            strokeDasharray={`${Math.max(0.01, left * c)} ${c}`}
+          <path
+            d={d}
+            pathLength={100}
+            strokeDasharray={`${Math.max(0.5, left)} 100`}
             stroke={tone === "neutral" ? undefined : toneColor[tone]}
-            style={{ transition: "stroke-dasharray 600ms cubic-bezier(0.2, 0, 0, 1)" }}
+            opacity={dim ? 0.35 : 1}
+            style={{ transition: "stroke-dasharray 600ms cubic-bezier(0.2, 0, 0, 1), opacity 200ms" }}
           />
         )}
       </>
@@ -247,8 +275,8 @@ function UsageRing({ size, outer, inner }: { size: number; outer: UsageWindow | 
   };
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" aria-hidden data-usage-ring>
-      {arc(outer, 6.25)}
-      {arc(inner, 3.25)}
+      {half(outer, "M6.915 14.155A6.25 6.25 0 0 1 6.915 1.845", focus === "inner")}
+      {half(inner, "M9.085 14.155A6.25 6.25 0 0 0 9.085 1.845", focus === "outer")}
     </svg>
   );
 }
