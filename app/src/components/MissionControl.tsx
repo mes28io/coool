@@ -23,9 +23,9 @@ import { useStore, type Since } from "../store";
 import { ChangeLedger, type LedgerSource } from "./ChangeLedger";
 import { CommitTrail, type Committing } from "./CommitTrail";
 import { FanOut } from "./FanOut";
-import { IForward, IPlay, IPlus, ISpark, ITerminal, toolIcon } from "./icons";
+import { ICaret, IForward, IPlay, IPlus, ISpark, ITerminal, toolIcon } from "./icons";
 import { editPairs, InlineDiff } from "./InlineDiff";
-import { AutoTag, Button, ContextMeter, cx, ease, Elapsed, Kbd, LiveClock, NeedsBadge, PathText, ProviderMark, softSpring, StatusDot } from "./primitives";
+import { AutoTag, Button, ContextMeter, cx, ease, Elapsed, Kbd, LiveClock, NeedsBadge, PathText, Popover, ProviderMark, softSpring, StatusDot } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { RecentSkeleton, Skel } from "./Skeletons";
 import { Wordmark } from "./Wordmark";
@@ -88,6 +88,15 @@ export function MissionControl() {
   // Held still while the pointer is over the page, so a section never moves under it.
   const shown = useStableOrder(projects, (p) => p.path, hover);
 
+  // One project at a time. It starts on the latest active one and stays there (another project getting busy never
+  // swaps the page under the person) until they pick another from the header, or its last agent ends.
+  const [picked, setPicked] = useState<string | null>(null);
+  const current = useMemo(() => {
+    const at = (p: Project) => (p.starting.length ? Infinity : Math.max(0, ...p.sessions.map((x) => x.last_event ?? x.updated)));
+    return projects.find((p) => p.path === picked) ?? projects.reduce<Project | null>((best, p) => (!best || at(p) > at(best) ? p : best), null);
+  }, [projects, picked]);
+  if (current && current.path !== picked) setPicked(current.path);
+
   const needing = live.filter((s) => att.get(s)!.needs);
   const recent = useMemo(() => sessions.filter((s) => !s.nested && att.get(s)?.status === "ended").slice(0, 6), [sessions, att]);
   const nothing = projects.length === 0;
@@ -123,11 +132,7 @@ export function MissionControl() {
                   </div>
                 </section>
               )}
-              <div className="flex flex-col gap-9">
-                {shown.map((p, i) => (
-                  <ProjectSection key={p.path} p={p} att={att} i={i} stagger={stagger} />
-                ))}
-              </div>
+              {current && <ProjectSection key={current.path} p={current} att={att} i={0} stagger={stagger} others={shown} onPick={setPicked} />}
             </div>
           )}
 
@@ -231,7 +236,8 @@ function useProjectChanges(path: string, branch: string | null): { changes: Chan
   }, [feeding, items, path, branch]);
 }
 
-function ProjectSection({ p, att, i, stagger }: { p: Project; att: Map<Session, Attention>; i: number; stagger: boolean }) {
+function ProjectSection({ p, att, i, stagger, others, onPick }: { p: Project; att: Map<Session, Attention>; i: number; stagger: boolean; others: Project[]; onPick: (path: string) => void }) {
+  const [menu, setMenu] = useState(false);
   const open = useStore((st) => st.open);
   const focusAgent = useStore((st) => st.focusAgent);
   const setSheet = useStore((st) => st.setSheet);
@@ -262,8 +268,56 @@ function ProjectSection({ p, att, i, stagger }: { p: Project; att: Map<Session, 
       data-mc-project={folderName(p.path)}
     >
       <header className="mb-2.5 flex h-[28px] items-center gap-2.5 px-1">
-        <span className="shrink-0 text-title font-semibold tracking-[-0.01em] text-fg">{folderName(p.path)}</span>
-        <PathText path={p.path} className="hidden min-w-0 text-small text-faint @[720px]:flex" />
+        {/* The project on show, and the way to another one: the other projects with live agents are in its menu. */}
+        <div className="relative -ml-1.5 flex min-w-0 items-center">
+          <button
+            type="button"
+            data-pop-anchor
+            data-mc-switch
+            disabled={others.length < 2}
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            title={others.length < 2 ? undefined : "Switch project"}
+            onClick={() => setMenu((v) => !v)}
+            className={cx("flex h-[30px] min-w-0 items-center gap-2.5 rounded-[8px] px-1.5 text-left transition-colors duration-150", others.length > 1 && "hover:bg-hover", menu && "bg-hover")}
+          >
+            <span className="shrink-0 text-title font-semibold tracking-[-0.01em] text-fg">{folderName(p.path)}</span>
+            <PathText path={p.path} className="hidden min-w-0 text-small text-faint @[720px]:flex" />
+            {others.length > 1 && <ICaret size={12} className={cx("shrink-0 text-faint transition-transform duration-150", menu && "rotate-180")} />}
+          </button>
+          <Popover open={menu} onClose={() => setMenu(false)} width={320}>
+            <div className="max-h-[360px] overflow-y-auto p-1" role="menu">
+              {others.map((o) => (
+                <button
+                  key={o.path}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={o.path === p.path}
+                  data-mc-switch-to={folderName(o.path)}
+                  onClick={() => {
+                    setMenu(false);
+                    onPick(o.path);
+                  }}
+                  className={cx("flex w-full items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-left transition-colors duration-150 hover:bg-hover", o.path === p.path && "bg-hover")}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-base text-fg">{folderName(o.path)}</span>
+                    <PathText path={o.path} className="text-small text-faint" />
+                  </span>
+                  <span className="shrink-0 text-small tnum">
+                    {o.needs > 0 ? (
+                      <span className="text-needs-text">{o.needs} need{o.needs === 1 ? "s" : ""} you</span>
+                    ) : o.busy > 0 || o.starting.length > 0 ? (
+                      <span className="text-dim">{o.busy + o.starting.length} working</span>
+                    ) : (
+                      <span className="text-faint">{o.sessions.length} waiting</span>
+                    )}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Popover>
+        </div>
         <span className="ml-auto flex shrink-0 items-center gap-3 text-small text-faint tnum">
           {p.needs > 0 && <span className="text-needs-text">{p.needs} need{p.needs === 1 ? "s" : ""} you</span>}
           {p.busy > 0 && <span>{p.busy} working</span>}
