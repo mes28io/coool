@@ -101,15 +101,119 @@ function args(seg: string, skip: number): string[] {
   return out;
 }
 
+/**
+ * Pulls heredoc bodies out of a command: `<<'EOF' ... EOF` becomes `<<HEREDOC` in the command, and the body
+ * is returned. Works on the full multi-line command (chats) and on the timeline's one-line form, where the
+ * newlines are collapsed into spaces (`<<'EOF' Subject Body EOF )"`).
+ */
+export function heredocs(cmd: string): { cmd: string; docs: string[] } {
+  const docs: string[] = [];
+  let out = cmd;
+  const re = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1/g;
+  for (let guard = 0; guard < 8; guard++) {
+    const m = re.exec(out);
+    if (!m || m[2] === "HEREDOC") break;
+    const rest = out.slice(m.index + m[0].length);
+    const tag = m[2];
+    // Multi-line: the delimiter alone on a line. One-line: the delimiter as a word.
+    const end = new RegExp(`\\n[ \\t]*${tag}[ \\t]*(?=\\n|$|\\))|\\s${tag}(?=\\s|$|\\)|")`).exec(rest);
+    docs.push((end ? rest.slice(0, end.index) : rest).trim());
+    out = out.slice(0, m.index) + "<<HEREDOC" + (end ? rest.slice(end.index + end[0].length) : "");
+    re.lastIndex = m.index + 9;
+  }
+  return { cmd: out, docs };
+}
+
+/** A commit message's subject: its first line, without trailers a collapsed heredoc kept on that line. */
+function subjectOf(msg: string): string {
+  const first = msg.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  return first.replace(/\s+(Co-Authored-By|Signed-off-by|Claude-Session):.*$/i, "").trim();
+}
+
+/** The message of a `git commit` segment: `-m`, `--message`, `-am` / `-qam`, `-F -` with a heredoc, or `-m "$(cat <<EOF …)"`. */
+function commitMessage(seg: string, docs: string[]): string | null {
+  const doc = docs[0] ?? null;
+  if (doc !== null && /(?:^|\s)(-[a-zA-Z]*F\s*-|--file(?:=|\s+)-)(?=\s|$)/.test(seg)) return subjectOf(doc) || null;
+  if (doc !== null && /<<HEREDOC/.test(seg) && /(?:^|\s)(-[a-zA-Z]*m|--message)[\s=]/.test(seg)) return subjectOf(doc) || null;
+  const m = flag(seg, ["-m", "--message", "-[a-zA-Z]+m"]);
+  return m ? subjectOf(m) || null : null;
+}
+
+/** Folders whose contents are generated (at any depth: app/dist, crates/x/target) or private to tools (.git, .claude at the root): never a change to the project. */
+const NOISE_DIR = /^(\.git|\.claude)(\/|$)|(^|\/)(node_modules|target|dist|build|\.next|\.turbo|\.cache|coverage|__pycache__|\.venv|\.pytest_cache)(\/|$)/;
+/** Throwaway files an agent makes and removes while it works: screenshots, recordings, logs. */
+const SCRATCH_FILE = /\.(png|jpe?g|gif|webp|mp4|mov|webm|log|tmp|swp|pid)$/i;
+/** Temp locations (macOS resolves /tmp and /var through /private). */
+const TEMP = /^(\/private)?\/(tmp|var\/folders)\//;
+
+const normPath = (x: string) => x.replace(/^\/private(?=\/(tmp|var)\/)/, "").replace(/\/+$/, "");
+
+/**
+ * Where `p` sits in the project at `root`: its repository-relative path, or null when it is outside the
+ * project folder, in a temp folder, behind a shell variable, or in a generated or tool-private folder
+ * (node_modules, target, dist, .claude…). A path inside an agent's worktree
+ * (`.claude/worktrees/<name>/src/a.ts`) is the project's `src/a.ts`. Relative paths are relative to the
+ * project; `~` is matched against the root's home part.
+ */
+export function projectPath(p: string, root: string): string | null {
+  if (!p || p.includes("$")) return null;
+  let rel: string;
+  const a = normPath(p);
+  if (!a.startsWith("/") && !a.startsWith("~")) rel = a.replace(/^(\.\/)+/, "");
+  else {
+    if (TEMP.test(p) || TEMP.test(a)) return null;
+    const base = normPath(root);
+    const tail = base.replace(/^\/(Users|home)\/[^/]+/, "~");
+    if (base && a.startsWith(base + "/")) rel = a.slice(base.length + 1);
+    else if (tail.startsWith("~") && a.startsWith(tail + "/")) rel = a.slice(tail.length + 1);
+    else return null;
+  }
+  const wt = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(rel);
+  if (wt) rel = wt[1];
+  if (!rel || rel === "." || rel.startsWith("../") || NOISE_DIR.test(rel)) return null;
+  return rel;
+}
+
+/** `dir` joined with a relative `p` (`..` and `.` resolved); absolute and `~` paths come back as they are. */
+function resolve(dir: string, p: string): string {
+  if (p.startsWith("/") || p.startsWith("~")) return p;
+  const parts = dir.split("/");
+  for (const x of p.split("/")) {
+    if (x === "..") parts.pop();
+    else if (x && x !== ".") parts.push(x);
+  }
+  return parts.join("/");
+}
+
 type Effect = Pick<Change, "kind" | "action" | "object" | "before" | "after" | "detail">;
 
-/** What a shell command changed outside the session, or null for commands that only read or build. */
-export function sideEffect(cmd: string, branch: string | null = null): Effect | null {
+/**
+ * What a shell command changed, or null for commands that only read, build or tidy up. With the project
+ * `root`, deletes and moves count only inside the project: not in a temp folder, a `$VAR/…` scratch path, a
+ * path after `cd` to somewhere else, generated folders (dist, target, node_modules, .claude) or throwaway
+ * files (screenshots, recordings, logs). Worktree and branch housekeeping (`git worktree remove`,
+ * `git branch -d`) is never a change. A commit's message comes from `-m`, `-am`, or a heredoc.
+ */
+export function sideEffect(command: string, branch: string | null = null, root: string | null = null): Effect | null {
+  const { cmd, docs } = heredocs(command);
+  // Where relative paths point: the project, until a `cd` goes elsewhere (`away`).
+  let dir = root ? normPath(root) : "";
+  let away = false;
   for (let seg of cmd.split(/&&|\|\||;|\n|\|(?!\|)/)) {
-    seg = seg.trim().replace(/^(\w+=\S+\s+)+/, "").replace(/^sudo\s+/, "").replace(/^git\s+-C\s+\S+\s+/, "git ");
+    seg = seg.trim().replace(/^\(+/, "").replace(/^(\w+=\S+\s+)+/, "").replace(/^sudo\s+/, "").replace(/^git\s+-C\s+\S+\s+/, "git ");
     if (!seg) continue;
+    const cd = /^(?:cd|pushd)\s+(\S+)/.exec(seg);
+    if (cd && root) {
+      const to = cd[1].replace(/^["']|["']$/g, "");
+      if (to.includes("$")) away = true;
+      else {
+        dir = resolve(dir, to);
+        away = normPath(dir) !== normPath(root) && projectPath(`${dir}/x`, root) === null;
+      }
+      continue;
+    }
     if (/^git\s+commit\b/.test(seg)) {
-      const msg = flag(seg, ["-m", "--message"]);
+      const msg = commitMessage(seg, docs);
       return { kind: "commit", action: "Committed", object: msg ? clip(msg, 72) : "a commit", detail: /--amend\b/.test(seg) ? "Amended the last commit" : undefined };
     }
     if (/^git\s+push\b/.test(seg)) {
@@ -140,16 +244,28 @@ export function sideEffect(cmd: string, branch: string | null = null): Effect | 
       return { kind: "deploy", action: "Deployed", object: /--prod\b|production/.test(seg) ? "to production" : "a preview", detail: name };
     }
     if (/^((npm|pnpm|yarn)\s+(run\s+)?(db:)?migrate|(npx\s+)?prisma\s+migrate\s+deploy|alembic\s+upgrade|diesel\s+migration\s+run|supabase\s+db\s+push|rails\s+db:migrate|sqlx\s+migrate\s+run)\b/.test(seg)) return { kind: "migrate", action: "Migrated", object: "the database", detail: clip(seg, 56) };
-    if (/^rm\s/.test(seg)) {
-      const [first, ...rest] = args(seg, 1);
-      return first ? { kind: "delete", action: "Deleted", object: first, detail: rest.length ? `and ${rest.length} more` : undefined } : null;
+    if (/^(git\s+)?rm\s/.test(seg)) {
+      const git = /^git/.test(seg);
+      let targets = args(seg, git ? 2 : 1);
+      // Only what is in the project, and neither generated nor throwaway (`git rm` is always in the repository).
+      if (root) targets = away && !git ? [] : targets.map((t) => projectPath(resolve(dir, t), root)).filter((t): t is string => t !== null && !SCRATCH_FILE.test(t));
+      const [first, ...rest] = targets;
+      if (!first) continue;
+      return { kind: "delete", action: "Deleted", object: first, detail: rest.length ? `and ${rest.length} more` : undefined };
     }
     if (/^(git\s+)?mv\s/.test(seg)) {
-      const a = args(seg, /^git/.test(seg) ? 2 : 1);
-      return a.length >= 2 ? { kind: "move", action: "Moved", object: a[0], before: a[0], after: a[a.length - 1] } : null;
+      const git = /^git/.test(seg);
+      const a = args(seg, git ? 2 : 1);
+      if (a.length < 2) continue;
+      const from = root ? projectPath(resolve(dir, a[0]), root) : a[0];
+      const to = root ? projectPath(resolve(dir, a[a.length - 1]), root) : a[a.length - 1];
+      if (!from || !to || (away && !git) || SCRATCH_FILE.test(from)) continue;
+      return { kind: "move", action: "Moved", object: from, before: from, after: to };
     }
     if (/^curl\b.*(-X|--request)\s*=?\s*(POST|PUT|DELETE|PATCH)\b/i.test(seg)) {
       const url = /https?:\/\/[^\s'"]+/.exec(seg)?.[0];
+      // A request to this machine is an agent trying its own server, not a change somewhere else.
+      if (url && /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])([:/]|$)/.test(url)) continue;
       const method = /(POST|PUT|DELETE|PATCH)/i.exec(seg)![1].toUpperCase();
       return { kind: "request", action: `Sent ${method}`, object: url ? url.replace(/^https?:\/\//, "") : "a request" };
     }
@@ -306,8 +422,9 @@ export function changesFromActivity(session: string, activity: Activity[], root:
     if (a.artifact) e = publishRow(a.artifact);
     else if (FILE_TOOL.test(name) && detail) {
       const create = /^write$/i.test(name);
-      e = { kind: create ? "create" : "edit", action: create ? "Wrote" : "Edited", object: relPath(detail, root) };
-    } else if (SHELL_TOOL.test(name) && detail) e = sideEffect(detail, branch);
+      const object = projectPath(detail, root);
+      e = object === null ? null : { kind: create ? "create" : "edit", action: create ? "Wrote" : "Edited", object };
+    } else if (SHELL_TOOL.test(name) && detail) e = sideEffect(detail, branch, root);
     else if (isPilotTool(name)) e = { kind: "pilot", action: "Drove the device", object: clip(detail || "a pilot run", 64) };
     if (!e) continue;
     const row: Change = { id, session, ...e, times: 1, ts, step: `a:${i}` };
@@ -404,13 +521,16 @@ export function changesFromChat(session: string, items: ItemLike[], root: string
     if (t.artifact) push(t.id, publishRow(t.artifact));
     else if (FILE_TOOL.test(t.name)) {
       if (/patch/i.test(t.name)) {
-        for (const f of patchFiles(input))
-          push(`${t.id}:${f.path}`, { kind: f.kind, action: f.kind === "create" ? "Created" : f.kind === "delete" ? "Deleted" : "Edited", object: relPath(f.path, root), added: f.added, removed: f.removed });
+        for (const f of patchFiles(input)) {
+          const object = projectPath(f.path, root);
+          if (object !== null) push(`${t.id}:${f.path}`, { kind: f.kind, action: f.kind === "create" ? "Created" : f.kind === "delete" ? "Deleted" : "Edited", object, added: f.added, removed: f.removed });
+        }
         continue;
       }
       const path = String(input.file_path ?? input.notebook_path ?? input.path ?? "");
       if (!path) continue;
-      const object = relPath(path, root);
+      const object = projectPath(path, root);
+      if (object === null) continue;
       if (/^write$/i.test(t.name)) {
         const created = /creat|new file/i.test(t.output);
         const n = typeof input.content === "string" ? lines(input.content).length : undefined;
@@ -440,7 +560,7 @@ export function changesFromChat(session: string, items: ItemLike[], root: string
       push(t.id, row);
     } else if (SHELL_TOOL.test(t.name)) {
       const cmd = commandOf(input) ?? (t.summary || null);
-      const e = cmd ? sideEffect(cmd, branch) : null;
+      const e = cmd ? sideEffect(cmd, branch, root) : null;
       if (e) push(t.id, e);
     } else if (isPilotTool(t.name)) {
       const goal = typeof input.goal === "string" ? input.goal : t.summary;
@@ -475,16 +595,19 @@ export interface CellLike {
 export const cellState = (c: CellLike): CellState => (c.state === "failed" && c.stopped ? "stopped" : c.state);
 
 /**
- * The cards that make up the session's current fan-out: those started in its latest turn (at or
- * after `turnStart`; all of them when the turn start is unknown). Shown while any still runs, and
- * for `linger` ms after the last one finished.
+ * The cards that make up the session's fan-out: every one still running or waiting on the person (a
+ * background agent started turns ago is still parallel work), plus those started in its latest turn (at
+ * or after `turnStart`; all of them when the turn start is unknown) while they linger after finishing.
+ * `extra` counts other workers shown with them (background shells). A fan-out needs two workers; when
+ * none still runs, it stays for `linger` ms after the last one finished.
  */
-export function fanout<T extends CellLike>(cards: T[], turnStart: number | null, now = Date.now(), linger = 90_000): T[] {
-  const batch = turnStart === null ? cards : cards.filter((c) => (c.startedAt ?? c.lastAt) >= turnStart - 1000);
-  if (batch.length < 2) return [];
-  const live = batch.some((c) => c.state === "running" || c.state === "needs");
+export function fanout<T extends CellLike>(cards: T[], turnStart: number | null, now = Date.now(), linger = 90_000, extra = 0): T[] {
+  const live = (c: T) => c.state === "running" || c.state === "needs";
+  const batch = cards.filter((c) => live(c) || turnStart === null || (c.startedAt ?? c.lastAt) >= turnStart - 1000);
+  if (batch.length === 0 || batch.length + extra < 2) return [];
+  if (extra > 0 || batch.some(live)) return batch;
   const last = Math.max(...batch.map((c) => c.lastAt));
-  return live || now - last < linger ? batch : [];
+  return now - last < linger ? batch : [];
 }
 
 /** Count per state, in the legend's order. */
@@ -494,33 +617,49 @@ export function cellCounts(states: CellState[]): Record<CellState, number> {
   return out;
 }
 
+// ---------- the ledger's rows ----------
+
+/** A file's folder for a summary: its first two path parts (`app/src/a.ts` -> `app/src`), or "the root". */
+const folderOf = (p: string) => {
+  const parts = p.split("/");
+  return parts.length <= 1 ? "" : parts.slice(0, Math.min(2, parts.length - 1)).join("/");
+};
+
 /**
- * A fan-out's subagents edit many files at once: past `max` rows of one kind from one session's
- * subagents, they fold into one row ("Edited 18 files", "by 12 agents"), so the ledger stays readable.
- * `agentOf` names the subagent a row came from (null for the session's own rows, which never fold).
+ * A fan-out's subagents edit many files at once: past `max` file rows from one session's subagents, they
+ * fold into one row that says what a person can use: how many distinct files, by how many agents, and
+ * where ("Agents edited 18 files", "12 agents · app/src, crates/core and 2 more"). Writes and edits fold
+ * together; the same file touched by several agents counts once. `agentOf` names the subagent a row came
+ * from (null for the session's own rows, which never fold).
  */
 export function foldAgentRows(rows: Change[], agentOf: (c: Change) => string | null, max = 3): Change[] {
+  const fileRow = (r: Change) => r.kind === "edit" || r.kind === "create";
   const groups = new Map<string, Change[]>();
   for (const r of rows) {
-    if (!agentOf(r) || (r.kind !== "edit" && r.kind !== "create")) continue;
-    const k = `${r.session}|${r.kind}`;
-    groups.set(k, [...(groups.get(k) ?? []), r]);
+    if (!agentOf(r) || !fileRow(r)) continue;
+    groups.set(r.session, [...(groups.get(r.session) ?? []), r]);
   }
   const folded = new Map<string, Change>();
   for (const [k, g] of groups) {
-    if (g.length <= max) continue;
     const files = new Set(g.map((r) => r.object));
+    if (files.size <= max) continue;
     const agents = new Set(g.map(agentOf));
     const newest = g.reduce((a, b) => (b.ts > a.ts ? b : a));
     const sum = (f: (r: Change) => number | undefined) => (g.some((r) => f(r) !== undefined) ? g.reduce((n, r) => n + (f(r) ?? 0), 0) : undefined);
+    // Folders by how many of the files are in them.
+    const by = new Map<string, number>();
+    for (const f of files) by.set(folderOf(f), (by.get(folderOf(f)) ?? 0) + 1);
+    const top = [...by.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([d]) => d || "the root");
+    const where = top.length <= 2 ? top.join(", ") : `${top.slice(0, 2).join(", ")} and ${top.length - 2} more`;
     folded.set(k, {
       ...newest,
       id: `${k}|fold`,
-      action: g[0].kind === "create" ? "Wrote" : "Edited",
+      kind: g.every((r) => r.kind === "create") ? "create" : "edit",
+      action: g.every((r) => r.kind === "create") ? "Agents wrote" : "Agents edited",
       object: `${files.size} files`,
       before: undefined,
       after: undefined,
-      detail: `by ${agents.size} ${agents.size === 1 ? "agent" : "agents"}`,
+      detail: `${agents.size} ${agents.size === 1 ? "agent" : "agents"} · ${where}`,
       added: sum((r) => r.added),
       removed: sum((r) => r.removed),
       times: 1,
@@ -529,13 +668,81 @@ export function foldAgentRows(rows: Change[], agentOf: (c: Change) => string | n
   const out: Change[] = [];
   const placed = new Set<string>();
   for (const r of rows) {
-    const k = `${r.session}|${r.kind}`;
-    const f = agentOf(r) ? folded.get(k) : undefined;
+    const f = agentOf(r) && fileRow(r) ? folded.get(r.session) : undefined;
     if (!f) out.push(r);
-    else if (!placed.has(k)) {
-      placed.add(k);
+    else if (!placed.has(r.session)) {
+      placed.add(r.session);
       out.push(f);
     }
   }
   return out;
+}
+
+/** What the ledger needs of the commit trail: when each commit was made and the files it lists. */
+export interface TrailCommitLike {
+  time_ms: number;
+  files: string[];
+  merge?: { commits: { time_ms: number; files: string[] }[] } | null;
+}
+
+/** Git history: the commit trail shows these, so the ledger leaves them to it. ("Merged PR" happens on the host; it stays.) */
+const isHistory = (c: Change) => c.kind === "commit" || (c.kind === "merge" && c.action !== "Merged PR");
+const FILE_KINDS = new Set<ChangeKind>(["edit", "create", "delete", "move"]);
+
+/**
+ * The ledger's rows from every change in a project (newest first): what the commit trail can't show.
+ * - Edits that are committed leave: one whose author (the session, or the subagent) committed after it, or
+ *   that a commit on the trail made after it lists.
+ * - With a trail, commits, merges and rebases leave (the trail owns git history); without one they stay.
+ * - Then subagents' file rows fold (`foldAgentRows`), and the list is capped.
+ * Pushes, PRs, deploys, publishes, migrations, requests, device runs and deletes always stay.
+ */
+export function ledgerRows(rows: Change[], o: { agentOf: (c: Change) => string | null; trail: TrailCommitLike[] | null; cap?: number }): Change[] {
+  const author = (c: Change) => `${c.session}|${o.agentOf(c) ?? ""}`;
+  // Each author's latest commit.
+  const lastCommit = new Map<string, number>();
+  for (const c of rows) if (c.kind === "commit") lastCommit.set(author(c), Math.max(lastCommit.get(author(c)) ?? 0, c.ts));
+  const commits = (o.trail ?? []).flatMap((t) => [t, ...(t.merge?.commits ?? [])]);
+  const committed = (c: Change) => {
+    if (!FILE_KINDS.has(c.kind)) return false;
+    if ((lastCommit.get(author(c)) ?? -1) >= c.ts) return true;
+    return commits.some((t) => t.time_ms >= c.ts - 1000 && t.files.includes(c.object));
+  };
+  const kept = rows.filter((c) => !committed(c) && !(o.trail && isHistory(c)));
+  return sameFile(foldAgentRows(kept, o.agentOf)).slice(0, o.cap ?? 40);
+}
+
+/** One row per uncommitted file: the same file edited from several sessions or turns is one row, newest, "×N". */
+function sameFile(rows: Change[]): Change[] {
+  const out: Change[] = [];
+  const at = new Map<string, Change>();
+  for (const r of rows) {
+    if ((r.kind !== "edit" && r.kind !== "create") || r.id.endsWith("|fold")) {
+      out.push(r);
+      continue;
+    }
+    const prev = at.get(r.object);
+    if (!prev) {
+      const copy = { ...r };
+      at.set(r.object, copy);
+      out.push(copy);
+      continue;
+    }
+    prev.times += r.times;
+    if (prev.added !== undefined || r.added !== undefined) {
+      prev.added = (prev.added ?? 0) + (r.added ?? 0);
+      prev.removed = (prev.removed ?? 0) + (r.removed ?? 0);
+    }
+    prev.before = prev.after = undefined;
+  }
+  return out;
+}
+
+/** Mission control's one time format: "12s", "4m", "3h", "2d" (an age or an elapsed time alike). */
+export function compactSpan(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }

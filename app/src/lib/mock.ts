@@ -189,6 +189,17 @@ function session(p: Partial<Session> & Pick<Session, "provider" | "id" | "cwd">)
   };
 }
 
+/** Mission control's demo projects, in the order the `coool.mock.projects` knob keeps them. */
+const MC_PROJECTS = ["coool", "atlas-api", "project-3d", "pixelforge", "notes-ios", "relay", "relay-docs", "pocket-ledger"];
+function mockProjectCap(): number {
+  try {
+    const n = Number(localStorage.getItem("coool.mock.projects"));
+    return n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
 const MOCK_ARTIFACT_URL = "https://claude.ai/artifact/9xQmT4kVdR2wLpE7";
 
 export function mockBackend(): Backend {
@@ -266,6 +277,98 @@ export function mockBackend(): Backend {
     }),
     "coool",
   );
+  // The owner's real Mission control, reproduced (APP_SPEC "Mission control"): an orchestrator session whose
+  // agents work in worktrees inside the project and in a temp scratchpad, delete their scratch files, commit
+  // through a heredoc, and get merged with long subjects; two of its agents (started turns ago) and two
+  // background shells still run, so its row says "2 agents, 2 jobs working" and shows that fan-out.
+  {
+    const S = "/private/tmp/claude-501/-Users-you-code-coool/7d2e41/scratchpad";
+    const wt = (a: string) => `~/code/coool/.claude/worktrees/agent-${a}`;
+    const t0 = now - 70 * 60_000;
+    const mins = (m: number) => t0 + m * 60_000;
+    const orch = add(
+      session({
+        provider: "claude",
+        id: "f4570d",
+        cwd: coool,
+        title: "Claude Code fast mode credits",
+        status: "busy",
+        pid: 41180,
+        tokens: tok(91_000, 22_000, 148_000),
+        current: "Bash · until [ -s rec/done ]; do sleep 5; done",
+        activity: [
+          act("prompt", "Run the design pass on Mission control and the Mac panel in parallel", mins(0)),
+          act("agent", "Agent · Mac panel: sandbox macOS VM", mins(1)),
+          act("agent", "Agent · Settings page", mins(1)),
+          act("tool", `Bash · git merge --no-ff worktree-agent-a91c -m "Merge: Mac panel (sandbox macOS VM) and the mac_* tools in coool-device"`, mins(26)),
+          act("tool", "Bash · git worktree remove .claude/worktrees/agent-a91c --force && git branch -d worktree-agent-a91c", mins(26.5)),
+          act("tool", `Bash · git merge --no-ff worktree-agent-b07e -m "Merge: full Settings (general, notifications, appearance, shortcuts, models)"`, mins(31)),
+          act("tool", "Bash · git worktree remove .claude/worktrees/agent-b07e --force && git branch -d worktree-agent-b07e", mins(31.5)),
+          act("tool", `Write · ${S}/rec/bb-br.png`, mins(40)),
+          act("tool", `Bash · rm -rf "$S/bb-br" "$S/bb-br2" "$S/bb-br3"`, mins(55)),
+          act("tool", `Bash · cd ${S} && rm -rf br-dark br-light`, mins(60)),
+          act("tool", "Bash · rm -f ip-full.png", mins(62)),
+          act("prompt", "Mission control: one project at a time", mins(64)),
+          act("tool", "Edit · ~/code/coool/app/src/components/MissionControl.tsx", mins(66)),
+          act("tool", "Edit · ~/code/coool/docs/APP_SPEC.md", mins(67)),
+          act("tool", "Bash · git add -A && git commit -q -F - <<'EOF' Mission control: one project at a time; its header switches between the projects with live agents Co-Authored-By: Claude EOF", mins(68)),
+          act("tool", "Edit · ~/code/coool/app/src/components/Sidebar.tsx", mins(69)),
+          act("tool", "Bash · until [ -s rec/done ]; do sleep 5; done", mins(69.5)),
+        ],
+        updated: now - 3000,
+      }),
+      "coool",
+    );
+    const agent = (id: string, description: string, finished: boolean, rows: [string, number][], kind = "general-purpose"): Agent => ({
+      id,
+      kind,
+      description,
+      finished,
+      current: finished ? null : (rows[rows.length - 1]?.[0] ?? null),
+      tokens: tok(18_000, 3_000, 40_000),
+      activity: rows.map(([text, m]) => act("tool", text, mins(m))),
+    });
+    // Two agents that wrote and committed in their worktrees (then merged), and scratch everywhere.
+    const macFiles = ["app/src/components/MacPanel.tsx", "app/src-tauri/src/device/mac.rs", "app/src-tauri/src/device/vm.rs", "app/src-tauri/build.rs", "crates/device/src/mac.rs", "crates/device/src/lib.rs"];
+    orch.agents.push(
+      agent("a91c", "Mac panel: sandbox macOS VM", true, [
+        ...macFiles.map((f, i): [string, number] => [`Write · ${wt("a91c")}/${f}`, 2 + i]),
+        ...Array.from({ length: 14 }, (_, i): [string, number] => [`Write · ${S}/mac/shot-${i}.png`, 9 + i * 0.5]),
+        [`Bash · cd ${wt("a91c")} && git add -A && git commit -q -m "Sandbox Mac: a Virtualization.framework VM in the right panel"`, 24],
+      ]),
+      agent("b07e", "Settings page", true, [
+        ...["app/src/components/SettingsPage.tsx", "app/src/lib/prefs.ts", "app/src/lib/mockSettings.ts"].map((f, i): [string, number] => [`Edit · ${wt("b07e")}/${f}`, 3 + i]),
+        [`Write · ${S}/settings/check.mjs`, 10],
+        [`Bash · cd ${wt("b07e")} && git commit -qam "Settings: General, Notifications, shortcuts and models"`, 29],
+      ]),
+      // Many reviewers writing notes to the scratchpad only (never the project).
+      ...Array.from({ length: 6 }, (_, k) =>
+        agent(`rv${k}`, `Review pass ${k + 1}`, true, [
+          [`Write · ${S}/review/${k}/notes.md`, 33 + k],
+          [`Write · ${S}/review/${k}/shots.html`, 33.5 + k],
+          [`Bash · rm -rf ${S}/review/${k}/tmp`, 34 + k],
+        ], "Explore"),
+      ),
+      // Still running, started turns ago: uncommitted edits in their worktrees.
+      agent("c3d1", "Ledger: drop noise rows", false, [
+        [`Edit · ${wt("c3d1")}/app/src/lib/mission.ts`, 20],
+        [`Edit · ${wt("c3d1")}/app/src/lib/mission.test.ts`, 22],
+        [`Edit · ${wt("c3d1")}/app/src/components/ChangeLedger.tsx`, 50],
+        [`Edit · ${wt("c3d1")}/app/src/lib/mission.ts`, 66],
+        ["Bash · node --test src/lib/mission.test.ts", 69],
+      ]),
+      agent("c3d2", "Trail: one row rhythm", false, [
+        [`Edit · ${wt("c3d2")}/app/src/components/CommitTrail.tsx`, 21],
+        [`Edit · ${wt("c3d2")}/app/src/components/MissionCard.tsx`, 48],
+        [`Write · ${S}/mc/shot.mjs`, 60],
+        ["Bash · node shot.mjs after", 69],
+      ]),
+    );
+    orch.shells = [
+      { pid: 41190, command: "until [ -s rec/done ]; do sleep 5; done", description: "Wait for the recording", started: now - 4 * 60_000, cpu: 0, idle_loop: true, background: true },
+      { pid: 41191, command: "pnpm -C app exec vite --port 1490", description: "Mock server for screenshots", started: now - 9 * 60_000, cpu: 1.2, background: true },
+    ];
+  }
   // Artifacts (Claude Code's Artifact tool): one page published three times, and one whose local copy is gone.
   {
     const scratch = `/private/tmp/claude-501/-Users-you-code-coool/3f1c9e/scratchpad/guide`;
@@ -291,14 +394,14 @@ export function mockBackend(): Backend {
         activity: [
           act("prompt", "Make a one-page onboarding guide for running agents in coool, with a diagram, and publish it", t0),
           step("Artifact · quickstart", t0 + 9_000),
-          step("Write · scratchpad/guide/onboarding.html", t0 + 40_000),
-          step("Write · scratchpad/guide/diagram.svg", t0 + 52_000),
+          step(`Write · ${scratch}/onboarding.html`, t0 + 40_000),
+          step(`Write · ${scratch}/diagram.svg`, t0 + 52_000),
           step("Artifact · scratchpad/guide/onboarding.html", t0 + 70_000, guide(1)),
           act("text", "Published the guide. It has the three steps and the diagram of a session's lifecycle.", t0 + 75_000),
           act("prompt", "Make the steps numbered and add a dark theme", t0 + 6 * 60_000),
-          step("Edit · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 20_000),
+          step(`Edit · ${scratch}/onboarding.html`, t0 + 6 * 60_000 + 20_000),
           step("Artifact · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 30_000, guide(2)),
-          step("Edit · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 50_000),
+          step(`Edit · ${scratch}/onboarding.html`, t0 + 6 * 60_000 + 50_000),
           step("Artifact · scratchpad/guide/onboarding.html", t0 + 6 * 60_000 + 60_000, guide(3)),
           act("text", "Updated: numbered steps, and the page follows the system theme.", t0 + 6 * 60_000 + 64_000),
           act("prompt", "Also publish last week's release notes page", t0 + 9 * 60_000),
@@ -935,12 +1038,20 @@ export function mockBackend(): Backend {
 
   const snapshot = (): Snapshot => {
     if (!scan.started) return { sessions: [], pending: [], ptys: [], chats: [], loading: true };
-    const sessions = live
+    let sessions = live
       .map((l) => [l, scanned(l)] as const)
       .filter(([, st]) => st !== "hidden")
       .map(([l, st]) => (st === "cheap" ? cheap(structuredClone(l.s)) : { ...decorate(structuredClone(l.s), l), loaded: true }))
       // Like the backend: whatever coool runs is coool's.
       .map((s) => (s.chat != null || s.managed !== null ? { ...s, origin: "coool" as const } : s));
+    // Demo knob (Mission control's project tabs): `coool.mock.projects` = N keeps the live sessions of N projects;
+    // 8 adds an eighth project.
+    const cap = mockProjectCap();
+    if (cap) {
+      const keep = new Set(MC_PROJECTS.slice(0, cap));
+      sessions = sessions.filter((s) => s.status === "ended" || keep.has((s.project || s.cwd).split("/").pop() ?? ""));
+      if (cap >= 8) sessions.push(session({ provider: "codex", id: "pk8a01", cwd: `${HOME}/code/pocket-ledger`, title: "Import bank CSVs with column mapping", status: "idle", updated: Date.now() - 6 * 60_000, loaded: true }));
+    }
     // Like the backend: a parent counts its live child runs.
     for (const s of sessions) s.live_children = sessions.filter((c) => c.parent === s.id && c.status !== "ended").length;
     const order = { busy: 0, idle: 1, ended: 2 } as const;
@@ -950,7 +1061,7 @@ export function mockBackend(): Backend {
       sessions,
       pending: ptys.filter((p) => p.running && !linked.has(p.id)).map((p) => p.id),
       ptys: ptys.map(({ id, provider, cwd, running, started }) => ({ id, provider, cwd, running, started })),
-      chats: chats.map((c) => c.info()),
+      chats: chats.map((c) => c.info()).filter((c) => !cap || MC_PROJECTS.slice(0, cap).includes((c.project || c.cwd).split("/").pop() ?? "")),
       loading: scan.loading,
       usage,
       show_automation: showAutomation,

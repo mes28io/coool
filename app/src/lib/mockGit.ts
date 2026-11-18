@@ -28,7 +28,11 @@ const HISTORY: Record<string, { branch: string; uncommitted: number; seeds: Seed
     branch: "main",
     uncommitted: 3,
     seeds: [
-      { s: "Sidebar rows glide when a session's status changes", f: ["app/src/components/Sidebar.tsx"], m: 34 },
+      // The orchestrator in lib/mock.ts: a heredoc commit, and its agents' worktree branches merged with long subjects.
+      { s: "Mission control: one project at a time; its header switches between the projects with live agents", f: ["app/src/components/MissionControl.tsx", "docs/APP_SPEC.md"], m: 2 },
+      { s: "Merge: full Settings (general, notifications, appearance, shortcuts, models)", m: 39, from: "worktree-agent-b07e", side: [{ s: "Settings: General, Notifications, shortcuts and models", f: ["app/src/components/SettingsPage.tsx", "app/src/lib/prefs.ts", "app/src/lib/mockSettings.ts"] }] },
+      { s: "Merge: Mac panel (sandbox macOS VM) and the mac_* tools in coool-device", m: 44, from: "worktree-agent-a91c", side: [{ s: "Sandbox Mac: a Virtualization.framework VM in the right panel", f: ["app/src/components/MacPanel.tsx", "app/src-tauri/src/device/mac.rs", "app/src-tauri/src/device/vm.rs", "app/src-tauri/build.rs", "crates/device/src/mac.rs", "crates/device/src/lib.rs", "Cargo.lock"] }] },
+      { s: "Sidebar rows glide when a session's status changes", f: ["app/src/components/Sidebar.tsx"], m: 54 },
       { s: "Merge: the store treats every sessions event as authoritative", m: 52, from: "worktree-agent-3f1c9e", side: [{ s: "Drop the store's own diffing", f: ["app/src/store.ts"] }, { s: "Emit sessions only when the JSON differs", f: ["crates/core/src/hub.rs", "crates/core/src/wire.rs"] }, { s: "Test the refresh thread's dedupe", f: ["crates/core/src/hub.rs"] }] },
       { s: "Clamp the RawLog offset after a buffer drain", f: ["crates/core/src/pty.rs"], m: 95 },
       { s: "Merge branch 'palette-fuzzy'", m: 140, side: [{ s: "Fuzzy match folder names in the palette", f: ["app/src/lib/fuzzy.ts", "app/src/components/Palette.tsx"] }] },
