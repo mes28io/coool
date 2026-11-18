@@ -22,13 +22,18 @@ pub fn install(dir: &Path) -> Result<PathBuf, String> {
     if HELPER.is_empty() {
         return Err("This build of coool has no iOS Simulator helper (it needs Xcode's command line tools to build).".into());
     }
+    install_bytes(dir, "coool-sim", HELPER)
+}
+
+/// Writes `bytes` to `<dir>/<name>-<hash>` (executable) once, removing older builds' copies, and returns its path.
+pub fn install_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
     // FNV-1a: enough to tell builds apart.
-    let hash = HELPER.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3));
-    let path = dir.join(format!("coool-sim-{:012x}", hash & 0xffff_ffff_ffff));
+    let hash = bytes.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3));
+    let path = dir.join(format!("{name}-{:012x}", hash & 0xffff_ffff_ffff));
     if !path.exists() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        let tmp = dir.join(format!(".coool-sim-{}", std::process::id()));
-        std::fs::write(&tmp, HELPER).map_err(|e| e.to_string())?;
+        let tmp = dir.join(format!(".{name}-{}", std::process::id()));
+        std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -36,10 +41,11 @@ pub fn install(dir: &Path) -> Result<PathBuf, String> {
         }
         std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
         // Older builds' copies.
+        let prefix = format!("{name}-");
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().into_owned();
-                if n.starts_with("coool-sim-") && e.path() != path {
+                if n.strip_prefix(&prefix).is_some_and(|rest| rest.len() == 12 && rest.chars().all(|c| c.is_ascii_hexdigit())) && e.path() != path {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
@@ -57,40 +63,50 @@ pub struct Screen {
 }
 
 pub type FrameSink = Box<dyn Fn(Vec<u8>) + Send>;
+/// Called with the helper's events other than `ready` / `fatal` (the VM helper's `state` and `progress`).
+pub type EventSink = Box<dyn Fn(&Value) + Send>;
 
 pub struct Helper {
-    stdin: Mutex<BufWriter<ChildStdin>>,
+    stdin: Mutex<Option<BufWriter<ChildStdin>>>,
     child: Mutex<Child>,
     next: AtomicU64,
     pending: Mutex<HashMap<u64, mpsc::Sender<Result<Value, String>>>>,
     sinks: Mutex<Vec<(u64, FrameSink)>>,
     screen: (Mutex<Option<Result<Screen, String>>>, Condvar),
     alive: AtomicBool,
+    events: Mutex<Option<EventSink>>,
 }
 
 impl Helper {
     pub fn spawn(bin: &Path, udid: &str, developer_dir: Option<&str>) -> Result<Arc<Self>, String> {
         let mut cmd = Command::new(bin);
-        cmd.arg(udid).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        cmd.arg(udid);
         if let Some(d) = developer_dir {
             cmd.env("COOOL_DEVELOPER_DIR", d);
         }
-        let mut child = cmd.spawn().map_err(|e| format!("couldn't start the simulator helper: {e}"))?;
+        Self::spawn_cmd(cmd, &format!("coool-sim {udid}"), None)
+    }
+
+    /// Starts any helper speaking this protocol (the VM helper too), with an optional sink for its events.
+    pub fn spawn_cmd(mut cmd: Command, label: &str, events: Option<EventSink>) -> Result<Arc<Self>, String> {
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut child = cmd.spawn().map_err(|e| format!("couldn't start {label}: {e}"))?;
         let stdin = child.stdin.take().ok_or("helper stdin")?;
         let mut stdout = child.stdout.take().ok_or("helper stdout")?;
         let h = Arc::new(Self {
 
-            stdin: Mutex::new(BufWriter::new(stdin)),
+            stdin: Mutex::new(Some(BufWriter::new(stdin))),
             child: Mutex::new(child),
             next: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             sinks: Mutex::new(Vec::new()),
             screen: (Mutex::new(None), Condvar::new()),
             alive: AtomicBool::new(true),
+            events: Mutex::new(events),
         });
         let weak = Arc::downgrade(&h);
         std::thread::Builder::new()
-            .name(format!("coool-sim {udid}"))
+            .name(label.to_string())
             .spawn(move || {
                 let mut head = [0u8; 4];
                 let mut buf = Vec::new();
@@ -148,7 +164,12 @@ impl Helper {
                 self.screen.1.notify_all();
             }
             Some("fatal") => self.died(v["error"].as_str().unwrap_or("simulator helper failed")),
-            _ => {}
+            Some(_) => {
+                if let Some(sink) = self.events.lock().unwrap().as_ref() {
+                    sink(&v);
+                }
+            }
+            None => {}
         }
     }
 
@@ -187,8 +208,12 @@ impl Helper {
         let (tx, rx) = mpsc::channel();
         self.pending.lock().unwrap().insert(id, tx);
         {
-            let mut w = self.stdin.lock().unwrap();
+            let mut g = self.stdin.lock().unwrap();
             let line = serde_json::to_string(&req).unwrap_or_default();
+            let Some(w) = g.as_mut() else {
+                self.pending.lock().unwrap().remove(&id);
+                return Err("the helper is stopping".into());
+            };
             if writeln!(w, "{line}").and_then(|_| w.flush()).is_err() {
                 self.pending.lock().unwrap().remove(&id);
                 return Err("the simulator helper isn't running".into());
@@ -198,7 +223,7 @@ impl Helper {
             Ok(r) => r,
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
-                Err(format!("the simulator didn't answer `{}` in time", req["cmd"].as_str().unwrap_or("?")))
+                Err(format!("the device didn't answer `{}` in time", req["cmd"].as_str().unwrap_or("?")))
             }
         }
     }
@@ -219,6 +244,12 @@ impl Helper {
         Ok(())
     }
 
+    /// As [`Self::add_sink`], with the helper's own `stream` request (the VM helper's rate and size).
+    pub fn add_sink_with(&self, id: u64, sink: FrameSink, start: Value) -> Result<(), String> {
+        self.sinks.lock().unwrap().push((id, sink));
+        self.call(start, Duration::from_secs(5)).map(|_| ())
+    }
+
     pub fn remove_sink(&self, id: u64) {
         let empty = {
             let mut s = self.sinks.lock().unwrap();
@@ -228,6 +259,21 @@ impl Helper {
         if empty && self.alive() {
             let _ = self.call(json!({ "cmd": "stream", "on": false }), Duration::from_secs(2));
         }
+    }
+
+    /// Closes the helper's stdin (it winds down by itself: the VM helper shuts its guest down first) and waits up
+    /// to `timeout` for it to exit, then kills it.
+    pub fn close(&self, timeout: Duration) {
+        self.stdin.lock().unwrap().take();
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let done = self.child.lock().unwrap().try_wait().map(|s| s.is_some()).unwrap_or(true);
+            if done || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        self.kill();
     }
 
     pub fn kill(&self) {

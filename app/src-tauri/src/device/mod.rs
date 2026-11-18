@@ -6,7 +6,8 @@
 //! - [`observe`]: the tree as compact text with short stable element ids, for agents.
 //! - [`mcp`]: the `coool-device` MCP server every chat coool starts gets, bound to that chat's panel device.
 //! - [`web`]: that server's `browser_*` tools, which drive the chat's Browser panel.
-//! - [`pilot`]: that server's `pilot_run`, a fast loop that drives the iPhone or the Browser panel to a goal.
+//! - [`pilot`]: that server's `pilot_run`, a fast loop that drives the iPhone, the Browser panel or the Mac to a goal.
+//! - [`vm`]: the sandboxed Mac (a Virtualization.framework guest) behind the Mac panel and the `mac_*` tools.
 //!
 //! The panel and the chat's agent share one device: what the agent does is what the person sees (`sim-activity`
 //! events draw it on the panel).
@@ -16,6 +17,7 @@ pub mod mcp;
 pub mod observe;
 pub mod pilot;
 pub mod simctl;
+pub mod vm;
 pub mod web;
 
 use helper::{Helper, Screen};
@@ -53,6 +55,8 @@ pub struct Devices {
     pub mcp: mcp::Mcp,
     /// Each chat's browser panel tabs, for the `browser_*` tools.
     pub web: web::Web,
+    /// The sandboxed Mac (one VM, shared by the chats that use it), for the Mac panel and the `mac_*` tools.
+    pub vm: vm::Vm,
 }
 
 /// What the panel draws for an action (ripple, swipe trail, "Agent is driving").
@@ -239,13 +243,17 @@ impl Devices {
         for h in helpers {
             h.kill();
         }
-        let threads: Vec<_> = booted.into_iter().map(|u| std::thread::spawn(move || simctl::shutdown(&u))).collect();
-        let deadline = Instant::now() + Duration::from_secs(8);
-        for t in threads {
-            while !t.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(50));
+        std::thread::scope(|s| {
+            // The Mac shuts down gracefully meanwhile (its helper asks the guest, then forces it off after 20 s).
+            s.spawn(|| self.vm.quit());
+            let threads: Vec<_> = booted.into_iter().map(|u| std::thread::spawn(move || simctl::shutdown(&u))).collect();
+            let deadline = Instant::now() + Duration::from_secs(8);
+            for t in threads {
+                while !t.is_finished() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
-        }
+        });
     }
 }
 

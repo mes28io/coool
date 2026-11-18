@@ -41,7 +41,7 @@ export interface BrowserTabs {
   tabs: BrowserTab[];
   active: number;
 }
-export type RightPanelKind = "agents" | "models" | "browser" | "device";
+export type RightPanelKind = "agents" | "models" | "browser" | "device" | "mac";
 
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
 export type SidebarView = "projects" | "needs";
@@ -116,6 +116,10 @@ const DEVICE_DEFAULT = 400;
 export const DEVICE_MIN = 340;
 export const DEVICE_MAX = 720;
 const clampDevice = (w: number) => Math.round(Math.min(DEVICE_MAX, Math.max(DEVICE_MIN, w)));
+const MAC_DEFAULT = 640;
+/** The Mac panel's narrowest (the chat keeps `BROWSER_CHAT_MIN` beside it too). */
+export const MAC_MIN = 420;
+const clampMac = (w: number) => Math.round(Math.min(1600, Math.max(MAC_MIN, w)));
 
 function readSettingsLast(): SettingsSection {
   try {
@@ -249,6 +253,9 @@ interface State {
   /** Width of the iPhone panel (persisted). The pane may clamp it. */
   deviceWidth: number;
   setDeviceWidth(w: number): void;
+  /** Width of the Mac panel (persisted). The pane may clamp it. */
+  macWidth: number;
+  setMacWidth(w: number): void;
   toggleCollapsed(project: string): void;
   setRevealed(project: string, n: number): void;
 
@@ -589,6 +596,14 @@ export const useStore = create<State>((set, get) => ({
       localStorage.setItem("coool.deviceWidth", String(v));
     } catch {}
     set({ deviceWidth: v });
+  },
+  macWidth: clampMac(readNum("coool.macWidth", MAC_DEFAULT)),
+  setMacWidth(w) {
+    const v = clampMac(w);
+    try {
+      localStorage.setItem("coool.macWidth", String(v));
+    } catch {}
+    set({ macWidth: v });
   },
   toggleCollapsed(project) {
     const collapsed = { ...get().collapsed };

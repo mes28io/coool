@@ -151,7 +151,56 @@ export interface Backend extends SettingsBackend {
   simBind(chat: number, udid: string | null): Promise<void>;
   onSimActivity(cb: (a: SimActivity) => void): Unlisten;
   onSimState(cb: (s: { udid: string; state: string }) => void): Unlisten;
+
+  // ---- Mac: a sandboxed macOS VM in the right panel (components/MacPanel.tsx) ----
+  /** The VM's status; `available: false` with a reason when this Mac can't run it, `state: "absent"` before install. */
+  macStatus(): Promise<MacStatus>;
+  /** Downloads and installs macOS (~16 GB, 20+ min); progress arrives as `mac-state`. Resolves when done. */
+  macInstall(): Promise<void>;
+  /** Resolves once the Mac is up and ready (the first boot also runs setup; `mac-state.step` says what it is doing). */
+  macBoot(): Promise<void>;
+  macShutdown(): Promise<void>;
+  /** Streams the guest screen as JPEG frames to `onFrame` (on change, plus one every ~2 s) until `macDetach`; `w`/`h` in guest pixels. */
+  macAttach(onFrame: (jpeg: ArrayBuffer) => void): Promise<{ w: number; h: number; stream: number }>;
+  macDetach(stream: number): Promise<void>;
+  macInput(input: MacInput): Promise<void>;
+  /** The Mac panel shows for this chat (`on`), or was closed: the chat's agent tools act on the Mac while bound. */
+  macBind(chat: number, on: boolean): Promise<void>;
+  /** A partial status (state, progress, step, error) to merge into the last `macStatus`. */
+  onMacState(cb: (s: Partial<MacStatus>) => void): Unlisten;
 }
+
+export type MacState = "absent" | "downloading" | "installing" | "stopped" | "starting" | "setting-up" | "running" | "stopping";
+export interface MacStatus {
+  available: boolean;
+  reason?: string;
+  state: MacState;
+  installed: boolean;
+  provisioned: boolean;
+  /** e.g. "macOS 27.0" */
+  os?: string;
+  cpus?: number;
+  memoryMB?: number;
+  /** Guest display size in pixels (1x). */
+  w: number;
+  h: number;
+  /** Disk the VM uses on this Mac. */
+  diskBytes?: number;
+  /** Free space on the volume the VM lives on. */
+  free?: number;
+  /** Host folder shared into the guest (shows there as "/Volumes/My Shared Files"). */
+  sharedDir?: string;
+  progress?: { phase: string; fraction?: number; done?: number; total?: number };
+  step?: string;
+  error?: string;
+}
+/** Input to the guest, in guest display pixels (top-left origin). `code`: a macOS virtual key code (lib/macKeys.ts). */
+export type MacInput =
+  | { kind: "pointer"; x: number; y: number; buttons: number }
+  | { kind: "scroll"; x: number; y: number; dx: number; dy: number }
+  | { kind: "keyDown"; code: number }
+  | { kind: "keyUp"; code: number }
+  | { kind: "text"; text: string };
 
 export interface SimDevice {
   udid: string;
@@ -488,6 +537,25 @@ async function tauriBackend(): Promise<Backend> {
     simBind: (chat, udid) => soft("sim_bind", { chat, udid }),
     onSimActivity: (cb) => sub<SimActivity>("sim-activity", cb),
     onSimState: (cb) => sub<{ udid: string; state: string }>("sim-state", cb),
+    macStatus: async () => {
+      try {
+        return await soft<MacStatus>("mac_status");
+      } catch (e) {
+        if (isNotAvailable(e)) return { available: false, reason: "This build of coool can't run a Mac yet.", state: "absent", installed: false, provisioned: false, w: 1280, h: 800 };
+        throw e;
+      }
+    },
+    macInstall: () => soft("mac_install"),
+    macBoot: () => soft("mac_boot"),
+    macShutdown: () => soft("mac_shutdown"),
+    macAttach: (onFrame) => {
+      const frames = new Channel<ArrayBuffer | number[]>((m) => onFrame(m instanceof ArrayBuffer ? m : new Uint8Array(m).buffer));
+      return soft("mac_attach", { frames });
+    },
+    macDetach: (stream) => soft("mac_detach", { stream }),
+    macInput: (input) => soft("mac_input", { input }),
+    macBind: (chat, on) => soft("mac_bind", { chat, on }),
+    onMacState: (cb) => sub<Partial<MacStatus>>("mac-state", cb),
   };
 }
 

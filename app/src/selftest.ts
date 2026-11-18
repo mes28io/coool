@@ -13,7 +13,9 @@
 // `agent-browser` (a Claude Haiku chat fills a local form in the Browser panel), `agent-browser-codex` (the same on
 // Codex's cheapest model), `agent-iphone` (a Haiku chat reads the iOS version in Settings on a simulator the test
 // creates for itself, "coool selftest iPhone", and deletes at the end), `pilot-iphone` / `pilot-browser` (a Haiku chat hands
-// Settings > About / the coffee form to the device pilot, `pilot_run`, twice: learned, then from muscle memory).
+// Settings > About / the coffee form to the device pilot, `pilot_run`, twice: learned, then from muscle memory),
+// `agent-mac` (a Haiku chat opens TextEdit in coool's sandbox Mac, types a sentence and reads it back; the harness
+// reads the document from the Mac itself).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { ignoreChatDefaults } from "./lib/prefs";
@@ -1695,6 +1697,82 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         const left = (await api().simDevices()).devices.filter((d) => d.name === SIM);
         if (left.length) throw new Fail(`still there: ${left.map((d) => d.udid).join(", ")}`);
         return `deleted ${gone.join(", ") || "nothing"}`;
+      });
+    }
+  },
+
+  /**
+   * A Claude Haiku chat drives coool's sandbox Mac (the VM behind the Mac panel; it must be installed already, as the
+   * person's base Mac, which this test reuses): it opens TextEdit, types a given sentence into a new document and
+   * reads it back. The harness reads the document from the Mac's own accessibility tree to check it, apart from the
+   * reply, and cleans TextEdit up after.
+   */
+  async "agent-mac"(ctx) {
+    const SENTENCE = "Seven purple owls read 42 maps at dawn.";
+    let id = -1;
+    let key = "";
+    const mac = (request: Record<string, unknown>) => invoke("selftest_mac", { request }) as Promise<Record<string, unknown>>;
+    const resetTextEdit = async () => {
+      // A blank document on launch (no Open panel, no restored windows), and nothing left from an earlier run.
+      await mac({
+        cmd: "run",
+        sh: "killall TextEdit 2>/dev/null; sleep 0.5; defaults write com.apple.TextEdit NSShowAppCentricOpenPanelInsteadOfUntitledFile -bool false; defaults write com.apple.TextEdit ApplePersistenceIgnoreState -bool true; defaults write com.apple.TextEdit RichText -bool false; rm -rf \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Autosave Information\" \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Saved Application State\"; echo done",
+        timeout: 20,
+      });
+    };
+    try {
+      await step("the sandbox Mac boots (or is already up) and shows in a Haiku chat's Mac panel", async () => {
+        const st = await api().macStatus();
+        if (!st.available) throw new Fail(`no sandbox Mac: ${st.reason}`);
+        if (!st.installed) throw new Fail("the sandbox Mac isn't installed (install it from the Mac panel first)");
+        const t = Date.now();
+        await api().macBoot();
+        const boot = Date.now() - t;
+        await resetTextEdit();
+        ctx.model = PERF_MODEL;
+        id = await startClaude(ctx);
+        ctx.model = undefined;
+        await waitFor("ready", () => chat(id)?.ready, 60_000);
+        await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+        await sleep(1500);
+        key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+        useStore.getState().setRightPanel(key, "mac");
+        await waitFor("the Mac panel showing the running Mac", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 60_000);
+        await sleep(2000);
+        await shot("agent-mac-before");
+        const after = await api().macStatus();
+        return `${after.os} · ${after.cpus} CPUs · ${after.memoryMB} MB · disk ${((after.diskBytes ?? 0) / 1e9).toFixed(1)} GB used; boot ${boot} ms (state was ${st.state})`;
+      });
+      if (id < 0) return;
+      const r = await agentTurn(id, {
+        prompt:
+          `Use the coool-device mac_* tools (mac_app, mac_type, mac_observe, ...) on the sandbox Mac shown in this chat's panel. Launch TextEdit, type exactly this sentence into its new document: ${SENTENCE} Then read the document's text back from the screen with mac_observe. Don't use the shell or mac_shell. Reply with one line: Text: <the document's text>.`,
+        marks: [["[data-sim-driving]", "agent-mac-driving"]],
+        ms: 240_000,
+      });
+      await step("the agent drives the Mac through coool-device mac_* tools that succeed", async () => {
+        const mine = r.tools.filter((t) => toolName(t).startsWith("mac_"));
+        if (!mine.length) throw new Fail(`no mac_* tool calls; tools: ${r.all.join(", ") || "none"}`);
+        if (mine.some((t) => toolName(t) === "mac_shell")) throw new Fail("used mac_shell");
+        const failed = mine.filter((t) => t.ok === false);
+        if (failed.length === mine.length) throw new Fail(`every call failed: ${mine.map(toolLine).join("; ")}`);
+        return mine.map(toolLine).join("; ");
+      });
+      await step("TextEdit in the Mac really holds the sentence (the backend's own read), and the reply quotes it", async () => {
+        const screen = (await invoke("selftest_mac_screen")) as string;
+        const doc = screen.split("\n").find((l) => /\b(textarea|textfield)\b/.test(l) && l.includes(SENTENCE));
+        if (!/app "TextEdit"/.test(screen)) throw new Fail(`TextEdit isn't in front: ${screen.split("\n")[0]}`);
+        if (!doc) throw new Fail(`no text area holds the sentence:\n${screen.slice(0, 1500)}`);
+        if (!r.reply.includes(SENTENCE)) throw new Fail(`reply ${JSON.stringify(r.reply)} lacks the sentence`);
+        if (r.seen["[data-sim-driving]"] === undefined) throw new Fail('the panel never showed "Agent is driving"');
+        await shot("agent-mac-after");
+        return `document line: ${doc.trim().slice(0, 140)}; reply ${JSON.stringify(r.reply.trim().slice(0, 160))}; driving mark after ${r.seen["[data-sim-driving]"]} ms; turn ${r.turnMs} ms, ${r.tokens ?? "?"} tokens`;
+      });
+    } finally {
+      await step("TextEdit is closed without saving, the panel closed", async () => {
+        if (id >= 0) useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+        await resetTextEdit().catch(() => {});
+        return "ok";
       });
     }
   },

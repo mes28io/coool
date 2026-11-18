@@ -234,7 +234,7 @@ impl Session {
                 "protocolVersion": m["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
-                "instructions": format!("{INSTRUCTIONS}\n\n{}", super::web::INSTRUCTIONS),
+                "instructions": format!("{INSTRUCTIONS}\n\n{}\n\n{}", super::web::INSTRUCTIONS, super::vm::INSTRUCTIONS),
             })),
             "ping" => ok(json!({})),
             "tools/list" => ok(json!({ "tools": tools() })),
@@ -258,6 +258,10 @@ impl Session {
         if name == "pilot_run" {
             let text = super::pilot::call(&self.devices, self.chat, a)?;
             return Ok(vec![json!({ "type": "text", "text": text })]);
+        }
+        // The sandboxed Mac: its own VM, no simulator involved.
+        if name.starts_with("mac_") {
+            return super::vm::MacTools { d: &self.devices, chat: self.chat }.call(name, a);
         }
         // The chat's Browser panel: no simulator involved.
         if name.starts_with("browser_") {
@@ -694,6 +698,7 @@ fn tools() -> Value {
         all.extend(v);
     }
     all.extend(super::web::tools());
+    all.extend(super::vm::tools());
     Value::Array(all)
 }
 
@@ -790,8 +795,10 @@ mod tests {
         let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(&names[..10], ["pilot_run", "observe", "tap", "type", "swipe", "press", "batch", "wait_for", "app", "device"]);
         assert!(init["result"]["instructions"].as_str().unwrap().contains("pilot_run"));
+        assert!(names[24..].iter().all(|n| n.starts_with("mac_")) && names.len() == 36, "{names:?}");
+        assert!(init["result"]["instructions"].as_str().unwrap().contains("mac_observe"));
         assert_eq!(
-            &names[10..],
+            &names[10..24],
             [
                 "browser_observe", "browser_click", "browser_type", "browser_select", "browser_scroll", "browser_press", "browser_navigate",
                 "browser_back", "browser_forward", "browser_reload", "browser_tabs", "browser_wait_for", "browser_screenshot", "browser_batch"

@@ -6,6 +6,8 @@ import { useAgentBrowsing } from "../lib/browserAgent";
 import { GlobeGlyph } from "./MoodGlyph";
 import { BrowserPanel } from "./BrowserPanel";
 import { DevicePanel } from "./DevicePanel";
+import { MAC_UDID, MacPanel } from "./MacPanel";
+import { keysCaptured } from "../lib/macKeys";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
@@ -13,7 +15,7 @@ import { chatModels, chatTitle, pendingPermission, useChats } from "../lib/chat"
 import { displayTitle, folderName } from "../lib/format";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
-import { BROWSER_CHAT_MIN, BROWSER_MIN, DEVICE_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
+import { BROWSER_CHAT_MIN, BROWSER_MIN, DEVICE_MIN, MAC_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
 import { liveTime, Timeline, ThinkingRow } from "./Activity";
 import { AgentsButton } from "./AgentsButton";
 import { AgentsBody } from "./AgentsPanel";
@@ -82,6 +84,7 @@ export function SessionView({
   // The browser panel fits a narrower pane: it only needs room for itself and a readable chat beside it.
   const browserFits = paneW >= BROWSER_MIN + BROWSER_CHAT_MIN;
   const deviceFits = paneW >= DEVICE_MIN + BROWSER_CHAT_MIN;
+  const macFits = paneW >= MAC_MIN + BROWSER_CHAT_MIN;
   const cards = useAgentCards(r.session, chat);
   const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
   const panelState = useStore((st) => (panelKey ? st.rightPanel[panelKey] : undefined));
@@ -115,12 +118,16 @@ export function SessionView({
   }, [activeKind, chat, r.session]);
   const deviceWidth = useStore((st) => st.deviceWidth);
   const setDeviceWidth = useStore((st) => st.setDeviceWidth);
+  const macWidth = useStore((st) => st.macWidth);
+  const setMacWidth = useStore((st) => st.setMacWidth);
   const showing: RightKind | null =
     panelState === "browser" && tabs && browserFits
       ? "browser"
       : panelState === "device" && deviceFits
         ? "device"
-        : !wide
+        : panelState === "mac" && macFits
+          ? "mac"
+          : !wide
           ? null
           : panelState === "agents" && hasAgents
             ? "agents"
@@ -131,28 +138,47 @@ export function SessionView({
   const modelsOpen = showing === "models";
   const browserOpen = showing === "browser";
   const deviceOpen = showing === "device";
+  const macOpen = showing === "mac";
   // The chat's agent driving its iPhone: the panel shows that device, and opens if no panel is showing (not again in the
   // same stretch of activity once the person closed it); when another panel is showing, the iPhone button lights up.
   const [phoneBusy, setPhoneBusy] = useState(false);
-  const live = useRef({ showing, deviceFits, lastAgent: 0, closedInBurst: false });
+  // The same for the Mac (its actions arrive as `sim-activity` with `udid: "mac"`).
+  const [macBusy, setMacBusy] = useState(false);
+  const live = useRef({ showing, deviceFits, macFits, lastAgent: 0, closedInBurst: false, macLastAgent: 0, macClosedInBurst: false });
   useLayoutEffect(() => {
     live.current.showing = showing;
     live.current.deviceFits = deviceFits;
-  }, [showing, deviceFits]);
+    live.current.macFits = macFits;
+  }, [showing, deviceFits, macFits]);
   const chatId = r.chat;
   useEffect(() => {
     if (chatId === null || !panelKey) return;
     let t: ReturnType<typeof setTimeout> | undefined;
+    let tm: ReturnType<typeof setTimeout> | undefined;
     const off = api().onSimActivity((a) => {
       if (a.chat !== chatId || a.source !== "agent") return;
+      const st = useStore.getState();
+      const l = live.current;
+      const now = Date.now();
+      if (a.udid === MAC_UDID) {
+        if (a.kind === "end") {
+          clearTimeout(tm);
+          return setMacBusy(false);
+        }
+        if (now - l.macLastAgent > 30_000) l.macClosedInBurst = false;
+        l.macLastAgent = now;
+        if (l.showing === "mac") return;
+        if (l.showing === null && l.macFits && !l.macClosedInBurst) return st.setRightPanel(panelKey, "mac");
+        setMacBusy(true);
+        clearTimeout(tm);
+        tm = setTimeout(() => setMacBusy(false), 4000);
+        return;
+      }
       // The run is over: nothing to show, and the button stops lighting up.
       if (a.kind === "end") {
         clearTimeout(t);
         return setPhoneBusy(false);
       }
-      const st = useStore.getState();
-      const l = live.current;
-      const now = Date.now();
       if (now - l.lastAgent > 30_000) l.closedInBurst = false;
       l.lastAgent = now;
       st.setDevice(panelKey, a.udid);
@@ -165,6 +191,7 @@ export function SessionView({
     return () => {
       off();
       clearTimeout(t);
+      clearTimeout(tm);
     };
   }, [chatId, panelKey]);
   const setPanel = (v: RightKind | "closed") => {
@@ -172,6 +199,12 @@ export function SessionView({
     // Closing the iPhone while its agent is at work: don't pop it open again for this stretch.
     if (showing === "device" && v !== "device" && Date.now() - live.current.lastAgent < 30_000) live.current.closedInBurst = true;
     if (v === "device") setPhoneBusy(false);
+    if (showing === "mac" && v !== "mac") {
+      if (Date.now() - live.current.macLastAgent < 30_000) live.current.macClosedInBurst = true;
+      // The chat's agent tools stop acting on the Mac once its panel is closed.
+      if (r.chat !== null) void api().macBind(r.chat, false).catch(() => {});
+    }
+    if (v === "mac") setMacBusy(false);
     setRightPanel(panelKey, v);
   };
   // The globe spins while any page of this chat's browser is loading (like the Jobs glyph while jobs run).
@@ -184,9 +217,17 @@ export function SessionView({
       ? Math.max(BROWSER_MIN, Math.min(browserWidth, paneW - BROWSER_CHAT_MIN))
       : k === "device"
         ? Math.max(DEVICE_MIN, Math.min(deviceWidth, paneW - BROWSER_CHAT_MIN))
-        : agentsWidth;
+        : k === "mac"
+          ? Math.max(MAC_MIN, Math.min(macWidth, paneW - BROWSER_CHAT_MIN))
+          : agentsWidth;
   const onPanelWidth = (k: RightKind, w: number) =>
-    k === "browser" ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN)) : k === "device" ? setDeviceWidth(Math.min(w, paneW - BROWSER_CHAT_MIN)) : setAgentsWidth(w);
+    k === "browser"
+      ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
+      : k === "device"
+        ? setDeviceWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
+        : k === "mac"
+          ? setMacWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
+          : setAgentsWidth(w);
   // Artifact cards' Open and links in this view open in a tab of its browser panel.
   const openPage = useCallback(
     (p: OpenPage) => {
@@ -216,7 +257,7 @@ export function SessionView({
     if (browserOpen) return setPanel("closed");
     if (!browserFits) return useStore.getState().toast("Make this pane wider to open the browser beside the chat");
     if (tabs) return setPanel("browser");
-    if (showing === "device") setPanel("closed");
+    if (showing === "device" || showing === "mac") setPanel("closed");
     restoreBrowser(panelKey);
   };
   const onPhone = () => {
@@ -224,6 +265,12 @@ export function SessionView({
     if (deviceOpen) return setPanel("closed");
     if (!deviceFits) return useStore.getState().toast("Make this pane wider to show the iPhone beside the chat");
     setPanel("device");
+  };
+  const onMac = () => {
+    if (!panelKey) return;
+    if (macOpen) return setPanel("closed");
+    if (!macFits) return useStore.getState().toast("Make this pane wider to show the Mac beside the chat");
+    setPanel("mac");
   };
 
   const { session, pty, starting, startingChat } = r;
@@ -238,7 +285,7 @@ export function SessionView({
     const p = pendingPermission(chat);
     if (!p) return;
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
+      if (!(e.metaKey || e.ctrlKey) || keysCaptured(e)) return;
       const inText = (e.target as HTMLElement)?.tagName === "TEXTAREA" && !!(e.target as HTMLTextAreaElement).value;
       // ⇧⌘↵ only for a this-chat-only option, the one the card marks with it.
       const quick = p.remember[0]?.scope === "chat" ? p.remember[0] : null;
@@ -347,12 +394,17 @@ export function SessionView({
           </IconButton>
         )}
         {panelKey && (
-          // A disabled button shows no tooltip in WebKit: the wrapper carries it.
-          <span title="Coming soon: sandbox Mac" className="inline-flex">
-            <IconButton title="Coming soon: sandbox Mac" disabled className="pointer-events-none">
-              <IMac size={19} />
-            </IconButton>
-          </span>
+          <IconButton
+            title={macOpen ? "Hide the Mac" : macBusy ? "Show the Mac (the agent is using it)" : "Show the sandbox Mac"}
+            active={macOpen}
+            onClick={onMac}
+            className="relative"
+          >
+            <IMac size={19} />
+            {macBusy && !macOpen && (
+              <span className="breathe absolute right-[4px] top-[4px] size-[6px] rounded-full bg-[var(--status-running)] ring-2 ring-[var(--bg)]" data-mac-busy aria-hidden />
+            )}
+          </IconButton>
         )}
         {panelOn && panelKey && <AgentsButton cards={cards} shells={shells.length} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
         {/* Model and context sit at the right end, after the Jobs and browser buttons. */}
@@ -421,7 +473,7 @@ export function SessionView({
             <ExternalNotice session={session!} leaf={leaf} compact={compact} />
           ) : null}
         </div>
-        {(wide || browserFits || deviceFits) && panelKey && (
+        {(wide || browserFits || deviceFits || macFits) && panelKey && (
           <RightPanel which={showing} width={panelWidth} dragging={resizing} onWidth={onPanelWidth} onDragging={setResizing} onClose={() => setPanel("closed")}>
             {(k, active) =>
               k === "agents" ? (
@@ -430,6 +482,8 @@ export function SessionView({
                 tabs ? <BrowserPanel panelKey={panelKey} chat={r.chat} state={tabs} active={active} onClose={onCloseBrowser} recent={recent} /> : null
               ) : k === "device" ? (
                 <DevicePanel panelKey={panelKey} chat={r.chat} active={active} onClose={() => setPanel("closed")} />
+              ) : k === "mac" ? (
+                <MacPanel chat={r.chat} active={active} onClose={() => setPanel("closed")} />
               ) : (
                 <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} />
               )

@@ -305,6 +305,120 @@ impl Driver for Iphone<'_> {
     }
 }
 
+// ---------- Mac ----------
+
+/// The pilot's view of the sandbox Mac's accessibility tree (the frontmost app's windows and menu bar).
+pub fn mac_screen(t: &Tree) -> Screen {
+    let (w, h) = (if t.w > 0.0 { t.w } else { 1280.0 }, if t.h > 0.0 { t.h } else { 800.0 });
+    let mut elems = Vec::new();
+    for n in &t.nodes {
+        let [x, y, fw, fh] = n.frame;
+        let offscreen = x + fw <= 0.0 || x >= w || y + fh <= 0.0 || y >= h || n.flags.contains(&"offscreen");
+        let label = n.label.clone().or_else(|| n.placeholder.clone()).unwrap_or_default();
+        let kind = match n.role.as_str() {
+            "textfield" | "textarea" | "searchfield" | "securefield" | "combobox" => Kind::Input,
+            "button" | "link" | "checkbox" | "radio" | "popup" | "menubutton" | "menu" | "menuitem" | "cell" | "row" | "switch" | "toggle"
+            | "disclosure" | "closebutton" => Kind::Tap,
+            "text" | "heading" => Kind::Text,
+            _ => continue,
+        };
+        if label.is_empty() && kind != Kind::Input {
+            continue;
+        }
+        let value = n.value.clone().filter(|v| Some(v) != n.placeholder.as_ref());
+        elems.push(Elem {
+            handle: n.id.clone(),
+            role: n.role.clone(),
+            label,
+            value,
+            frame: n.frame,
+            kind,
+            disabled: n.flags.contains(&"disabled"),
+            selected: n.flags.contains(&"selected"),
+            focused: n.flags.contains(&"focused"),
+            offscreen,
+        });
+    }
+    let alert = t.nodes.iter().any(|n| n.role == "sheet" || n.role == "dialog");
+    Screen { app: t.app.trim().to_string(), url: None, keyboard: elems.iter().any(|e| e.kind == Kind::Input && e.focused), elems, texts: Vec::new(), alert, home: false, w, h }
+}
+
+pub struct Mac<'a> {
+    pub t: crate::device::vm::MacTools<'a>,
+}
+
+impl Mac<'_> {
+    fn idle(&self, quiet: u64, first: u64, timeout: u64) -> u64 {
+        let t = Instant::now();
+        let _ = self.t.d.vm.call(self.t.d, json!({ "cmd": "idle", "quietMs": quiet, "firstMs": first, "timeoutMs": timeout }), Duration::from_millis(timeout + 4000));
+        t.elapsed().as_millis() as u64
+    }
+
+    fn center(e: &Elem) -> (f64, f64) {
+        (e.frame[0] + e.frame[2] / 2.0, e.frame[1] + e.frame[3] / 2.0)
+    }
+}
+
+impl Driver for Mac<'_> {
+    fn start(&mut self, goal: &Goal) -> Result<String, String> {
+        let Some(app) = &goal.app else { return Ok(String::new()) };
+        let t = Instant::now();
+        self.t.call("mac_app", &json!({ "action": "launch", "app": app, "observe": false }))?;
+        self.idle(200, 300, 2500);
+        Ok(format!("launched {app} ({} ms)", t.elapsed().as_millis()))
+    }
+
+    fn perceive(&mut self) -> Result<(Screen, u64), String> {
+        let t = Instant::now();
+        let tree = self.t.tree(true)?;
+        let ms = t.elapsed().as_millis() as u64;
+        let s = mac_screen(&tree);
+        self.t.remember_tree(tree);
+        Ok((s, ms))
+    }
+
+    fn act(&mut self, a: &Action, s: &Screen, inputs: &BTreeMap<String, String>) -> Result<String, String> {
+        let elem = |a: &Action| a.target.as_ref().and_then(|t| s.elems.iter().find(|e| e.handle == t.id)).ok_or("the element is gone");
+        match a.verb {
+            Verb::Tap => {
+                let e = elem(a)?;
+                self.t.click_at(Self::center(e), Some(e.label.clone()))
+            }
+            Verb::SetText => {
+                let e = elem(a)?;
+                let key = a.input_key.as_deref().unwrap_or("");
+                let text = inputs.get(key).ok_or_else(|| format!("no input {key:?}"))?;
+                if !e.focused {
+                    self.t.click_at(Self::center(e), Some(e.label.clone()))?;
+                    self.idle(80, 0, 600);
+                }
+                self.t.replace_text(text)?;
+                Ok(format!("set {:?} to <{key}>", e.label))
+            }
+            Verb::Submit => self.t.call("mac_press", &json!({ "key": "return", "observe": false })).map(|_| "pressed return".into()),
+            Verb::Scroll => {
+                let dir = if a.dir == Some("up") { "up" } else { "down" };
+                self.t.call("mac_scroll", &json!({ "direction": dir, "observe": false })).map(|_| format!("scrolled {dir}"))
+            }
+            Verb::Back => self.t.call("mac_press", &json!({ "key": "[", "modifiers": ["command"], "observe": false })).map(|_| "pressed command+[".into()),
+            Verb::Done | Verb::Stuck => Ok(String::new()),
+        }
+    }
+
+    fn settle(&mut self, after: Verb) -> u64 {
+        let first = match after {
+            Verb::Tap | Verb::Back | Verb::Submit => 400,
+            Verb::Scroll => 200,
+            _ => 100,
+        };
+        self.idle(200, first, 2500)
+    }
+
+    fn settle_again(&mut self) -> u64 {
+        self.idle(200, 400, 1500)
+    }
+}
+
 // ---------- Browser ----------
 
 /// The pilot's view of a page snapshot.

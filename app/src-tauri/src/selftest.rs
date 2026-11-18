@@ -694,3 +694,19 @@ fn native_click(ns: *mut std::ffi::c_void, x: f64, y: f64) -> Result<(), String>
 fn native_click(_ns: *mut std::ffi::c_void, _x: f64, _y: f64) -> Result<(), String> {
     Err("macOS only".into())
 }
+
+/// A request to the sandbox Mac's guest agent, for a scenario's own setup and checks (apart from what the chat's
+/// agent does through the `mac_*` tools).
+#[tauri::command(async)]
+pub fn selftest_mac(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, request: serde_json::Value) -> Result<serde_json::Value, String> {
+    active(&core)?;
+    devices.vm.agent(&devices, request, std::time::Duration::from_secs(30))
+}
+
+/// The sandbox Mac's screen as the backend reads it (the accessibility tree, rendered as `mac_observe` does).
+#[tauri::command(async)]
+pub fn selftest_mac_screen(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>) -> Result<String, String> {
+    active(&core)?;
+    let tree = crate::device::vm::MacTools { d: &devices, chat: usize::MAX }.tree(true)?;
+    Ok(crate::device::observe::render(&tree, "coool Mac"))
+}

@@ -5,6 +5,7 @@ import { useNativeRects } from "./lib/browser";
 import { openAgentsDemo } from "./lib/agentsDemo";
 import { rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
+import { keysCaptured } from "./lib/macKeys";
 import { useMotion } from "./lib/motion";
 import { matchShortcut } from "./lib/shortcuts";
 import { syncWindow } from "./lib/boot";
@@ -62,6 +63,8 @@ function useShortcuts() {
   useEffect(() => {
     // The table and its matching live in lib/shortcuts.ts (also what Settings > Keyboard shortcuts lists).
     const onKey = (e: KeyboardEvent) => {
+      // A device panel that has the keyboard (the Mac) takes every key, shortcuts included.
+      if (keysCaptured(e)) return;
       const sc = matchShortcut(e);
       if (!sc) return;
       e.preventDefault();

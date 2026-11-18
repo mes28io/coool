@@ -12,6 +12,7 @@ import { mockSettings } from "./mockSettings";
 import { mockSim } from "./mockSim";
 import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
+import { mockMac } from "./mockMac";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -1522,6 +1523,8 @@ export function mockBackend(): Backend {
     },
     // The iPhone panel (lib/mockSim.ts).
     ...sim,
+    // The Mac panel (lib/mockMac.ts).
+    ...mockMac(),
     // The Settings page (lib/mockSettings.ts).
     ...mockSettings({ shutdown: (udid) => sim.simShutdown(udid) }),
 
