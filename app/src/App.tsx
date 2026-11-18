@@ -1,5 +1,5 @@
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { useEffect, useLayoutEffect } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { api } from "./lib/backend";
 import { useNativeRects } from "./lib/browser";
 import { openAgentsDemo } from "./lib/agentsDemo";
@@ -9,6 +9,7 @@ import { keysCaptured } from "./lib/macKeys";
 import { useMotion } from "./lib/motion";
 import { matchShortcut } from "./lib/shortcuts";
 import { syncWindow } from "./lib/boot";
+import { glassActive, useGlassHoles } from "./lib/glass";
 import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
 import { IAlert, IClose, ISidebar } from "./components/icons";
@@ -200,9 +201,17 @@ export default function App() {
   const reduceMotion = useMotion().reduce;
 
   useLayoutEffect(() => {
-    applyTheme(theme);
-    void syncWindow(theme);
+    // With the glass on, the native material changes appearance first, then the page's tint follows, so the
+    // title bar never shows a light tint over a dark frost (or the reverse) for more than a frame.
+    if (glassActive() && document.documentElement.dataset.theme !== theme) void syncWindow(theme).then(() => applyTheme(theme));
+    else {
+      applyTheme(theme);
+      void syncWindow(theme);
+    }
   }, [theme]);
+  // The sheet's background is its own layer, cut where the device panels' glass shows (lib/glass.ts).
+  const [sheetBg, setSheetBg] = useState<HTMLDivElement | null>(null);
+  useGlassHoles(sheetBg);
   useEffect(() => {
     setTerminalTheme(theme);
     const mq = matchMedia("(prefers-color-scheme: light)");
@@ -213,7 +222,8 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion={reduceMotion ? "always" : "never"}>
-      <div className="flex h-full w-full flex-col bg-panel">
+      {/* The window chrome (title bar and icon rail): frosted glass when Settings > Appearance > Translucent window is on. */}
+      <div className="flex h-full w-full flex-col bg-chrome">
         {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}
         <div data-tauri-drag-region className="flex h-[44px] shrink-0 items-center pl-[84px] pr-2">
           {/* The app's own controls step aside (kept mounted) while the Settings page is up. */}
@@ -234,8 +244,9 @@ export default function App() {
           <Rail />
           {/* One raised sheet lying on the window: sidebar panel + main area, or the full-screen Settings page over them
               (the app stays mounted underneath, hidden and inert, so going back finds every tab, pane and scroll as it was). */}
-          <div className="relative flex min-w-0 flex-1 overflow-hidden rounded-tl-[18px] border-l border-t border-hairline bg-bg">
-            <div className={cx("flex min-w-0 flex-1", settingsOpen && "invisible")} inert={settingsOpen} aria-hidden={settingsOpen || undefined}>
+          <div className="relative flex min-w-0 flex-1 overflow-hidden rounded-tl-[18px] border-l border-t border-hairline">
+            <div ref={setSheetBg} className="pointer-events-none absolute inset-0 bg-bg" aria-hidden data-sheet-bg />
+            <div className={cx("relative flex min-w-0 flex-1", settingsOpen && "invisible")} inert={settingsOpen} aria-hidden={settingsOpen || undefined}>
               <Sidebar />
               <Workspace />
             </div>

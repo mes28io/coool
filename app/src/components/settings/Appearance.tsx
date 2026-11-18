@@ -1,13 +1,14 @@
 // Settings > Appearance and Settings > Keyboard shortcuts.
 
 import { useState } from "react";
+import { setGlassPref, useGlass } from "../../lib/glass";
 import { motionHints, setMotionPref, systemReduceMotion, useMotion, type MotionPref } from "../../lib/motion";
 import { setTextSize, useTextSize, type TextSize } from "../../lib/prefs";
 import { searchShortcuts, type ShortcutGroup } from "../../lib/shortcuts";
 import { useStore, type ThemePref } from "../../store";
 import { ICheck, ISearch } from "../icons";
 import { cx, Kbd, Segmented } from "../primitives";
-import { Group, Row, useSearching } from "./ui";
+import { Group, Row, Switch, useSearching } from "./ui";
 
 /** What Auto looks at, each with whether it says "reduce" right now and the reading. */
 function autoReasons(): { label: string; on: boolean; now: string }[] {
@@ -34,6 +35,7 @@ export function Appearance() {
   const setThemePref = useStore((s) => s.setThemePref);
   const m = useMotion();
   const text = useTextSize();
+  const glass = useGlass();
   const searching = useSearching();
   const effect =
     m.pref === "on" ? "Reduced motion, because you chose On." : m.pref === "off" ? "Full motion, because you chose Off. Auto’s checks are ignored." : m.reduce ? `Reduced motion. Auto found: ${m.reason ?? "a device reason"}.` : "Full motion. Auto found no reason to reduce.";
@@ -47,6 +49,19 @@ export function Appearance() {
           desc="System follows macOS light and dark."
           k="dark light mode color"
           control={<Segmented<ThemePref> size="sm" value={themePref} onChange={setThemePref} options={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]} />}
+        />
+        <Row
+          attr="translucent-window"
+          label="Translucent window"
+          desc={
+            !glass.supported
+              ? "Frosted title bar, icon rail and device panels. Only in the macOS app."
+              : glass.reduceTransparency
+                ? "Off while macOS Reduce transparency is on (Accessibility > Display)."
+                : "Frosted title bar, icon rail and device panels, with the desktop blurred through."
+          }
+          k="glass frosted vibrancy blur transparency transparent"
+          control={<Switch label="Translucent window" on={glass.pref} disabled={!glass.supported} onChange={setGlassPref} />}
         />
         <Row
           attr="text-size"

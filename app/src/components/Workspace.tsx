@@ -19,7 +19,7 @@ export function Workspace() {
   const tab = tabs.find((t) => t.id === activeTab) ?? null;
 
   return (
-    <main data-main className="flex min-w-0 flex-1 flex-col bg-bg">
+    <main data-main className="flex min-w-0 flex-1 flex-col">
       <div className="relative min-h-0 flex-1">
         <AnimatePresence initial={false} mode="popLayout">
           <motion.div

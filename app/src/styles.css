@@ -66,6 +66,12 @@
   --ctx-base: var(--faint);
   --ctx-fill: 17%;
   --ctx-edge: 30%;
+  /* Frosted glass (lib/glass.ts): the window chrome (title bar, icon rail) and the device panels' background. Without
+     the glass (the setting off, macOS Reduce transparency, the browser mock) they are today's solid colours. */
+  --window: var(--panel);
+  --chrome: var(--panel);
+  --side-glass: var(--panel);
+  --glass-line: var(--hairline);
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -114,11 +120,33 @@
   --ctx-base: var(--faint);
   --ctx-fill: 12%;
   --ctx-edge: 26%;
+  --window: var(--panel);
+  --chrome: var(--panel);
+  --side-glass: var(--panel);
+  --glass-line: var(--hairline);
+}
+/* Glass on: the window paints nothing (the NSVisualEffectView behind shows) and the two glass regions take a tint of
+   their solid colour over it, enough to keep text and icons legible over any wallpaper, plus a firmer hairline at
+   their edges (a translucent hairline over glass would show the desktop through it). */
+:root[data-glass="on"][data-theme="dark"] {
+  --window: transparent;
+  --chrome: rgb(23 23 23 / 0.5);
+  --side-glass: rgb(23 23 23 / 0.56);
+  --glass-line: rgb(255 255 255 / 0.09);
+}
+:root[data-glass="on"][data-theme="light"] {
+  --window: transparent;
+  --chrome: rgb(249 249 249 / 0.36);
+  --side-glass: rgb(249 249 249 / 0.44);
+  --glass-line: rgb(0 0 0 / 0.08);
 }
 
 @theme inline {
   --color-bg: var(--bg);
   --color-panel: var(--panel);
+  --color-chrome: var(--chrome);
+  --color-side-glass: var(--side-glass);
+  --color-glass-line: var(--glass-line);
   --color-raised: var(--raised);
   --color-line: var(--border);
   --color-hairline: var(--hairline);
@@ -184,7 +212,7 @@ body,
 }
 body {
   margin: 0;
-  background: var(--panel);
+  background: var(--window);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: calc(15px * var(--text-scale, 1));

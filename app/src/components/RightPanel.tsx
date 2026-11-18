@@ -2,12 +2,16 @@
 // The frame animates its width open / closed; switching panels cross-fades inside it.
 
 import { AnimatePresence, motion } from "motion/react";
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { useGlass, useGlassHole } from "../lib/glass";
 import type { RightPanelKind } from "../store";
-import { spring } from "./primitives";
+import { cx, spring } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
 export type RightKind = RightPanelKind;
+
+/** The device panels: their background is frosted glass when the window's glass is on (lib/glass.ts). */
+const GLASS: ReadonlySet<RightKind> = new Set<RightKind>(["device", "mac", "browser"]);
 
 export function RightPanel({
   which,
@@ -36,8 +40,12 @@ export function RightPanel({
   const open = which !== null;
   const w = width(kind);
   const fade = { duration: reducedMotion() ? 0 : 0.2 };
+  const glass = useGlass().active && GLASS.has(kind);
+  const [aside, setAside] = useState<HTMLElement | null>(null);
+  useGlassHole(aside, glass);
   return (
     <motion.aside
+      ref={setAside}
       initial={false}
       animate={{ width: open ? w : 0 }}
       transition={dragging || reducedMotion() ? { duration: 0 } : spring}
@@ -52,7 +60,7 @@ export function RightPanel({
         }
       }}
     >
-      <div className="absolute inset-y-0 left-0 border-l border-hairline bg-panel" style={{ width: w }}>
+      <div className={cx("absolute inset-y-0 left-0 border-l", glass ? "border-glass-line bg-side-glass" : "border-hairline bg-panel")} style={{ width: w }} data-glass={glass || undefined}>
         <AnimatePresence initial={false}>
           <motion.div key={kind} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
             {children(kind, open && which === kind)}

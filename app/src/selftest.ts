@@ -8,7 +8,8 @@
 // model, slash, question, steer, markdown, resume, codex, insights, quit, and `perf` (CPU phases; not in `all`),
 // `artifact` (the preview window and its sandbox; no model calls), `browser` (artifact, then the in-app browser's
 // tabs and native webviews: layout tracking, hiding, IPC isolation, pop-ups vs tabs, eviction, restoring; needs the
-// network for example.com; no model calls).
+// network for example.com; no model calls), `glass` (the frosted window chrome and device panels in both themes, the
+// setting off, inactive, full screen, then frame pacing with it on and off; example.com; no model calls, nothing booted).
 // Agents driving the panels through the `coool-device` MCP tools (not in `all`; real model calls, a few cents):
 // `agent-browser` (a Claude Haiku chat fills a local form in the Browser panel), `agent-browser-codex` (the same on
 // Codex's cheapest model), `agent-iphone` (a Haiku chat reads the iOS version in Settings on a simulator the test
@@ -2162,6 +2163,192 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       return `${mine.length} browser records (${done} on a successful path), set_text by key ${typed.map((r) => r.screen.candidates[r.chosen].input_key).join(", ")}; no input values`;
     });
     useStore.getState().closeBrowser(chatPanelKey(id));
+  },
+
+  /**
+   * The frosted glass (lib/glass.ts, Settings > Appearance > Translucent window): screenshots of the chrome and the
+   * three device panels in both themes, Settings, the setting off, an inactive window and full screen; then frame
+   * pacing while a long chat scrolls and the window resizes, glass on and off (`glass-perf`). No model calls, nothing
+   * booted: the iPhone panel shows a shut-down simulator (or its set-up state), the Mac panel its stopped state.
+   * Restores the theme and the setting. `COOOL_REDUCE_TRANSPARENCY=1` (debug builds) runs it as with Reduce transparency.
+   */
+  async glass(ctx) {
+    const keep = { theme: localStorage.getItem("coool.theme"), glass: localStorage.getItem("coool.glass") };
+    const st = () => useStore.getState();
+    const g = () => document.documentElement.dataset.glass === "on";
+    const rt = (await import("./lib/glass")).glassState().reduceTransparency;
+    const tag = rt ? "rt-" : "";
+    const { setGlassPref } = await import("./lib/glass");
+    try {
+      const key = await browserHost(ctx);
+      const id = ctx.main!;
+      // A shut-down simulator for the iPhone panel's device frame (none is booted or made here).
+      const sims = await api().simDevices().catch(() => null);
+      const off = sims?.devices.find((d) => d.state === "Shutdown");
+      if (off) st().setDevice(key, off.udid);
+      const mac = await api().macStatus().catch(() => null);
+      const macIdle = !mac || !/run|boot|start/i.test(String(mac.state));
+      await step(`glass ${rt ? "stays off with Reduce transparency" : "is on by default"}`, async () => {
+        setGlassPref(true);
+        await sleep(600);
+        if (rt ? g() : !g()) throw new Fail(`data-glass=${document.documentElement.dataset.glass}`);
+        const chrome = getComputedStyle(document.querySelector("#root > div")!).backgroundColor;
+        return `data-glass ${g() ? "on" : "off"}, chrome ${chrome}, body ${getComputedStyle(document.body).backgroundColor}`;
+      });
+      const tour = async (t: "light" | "dark", pre: string) => {
+        st().setThemePref(t);
+        await sleep(900);
+        st().setRightPanel(key, "closed");
+        await shot(`${pre}${t}-chat`, undefined, 900);
+        st().setRightPanel(key, "device");
+        await waitFor("the iPhone panel", () => $("[data-device-panel]"), 10_000);
+        await shot(`${pre}${t}-iphone`, undefined, 1200);
+        if (macIdle) {
+          st().setRightPanel(key, "mac");
+          await shot(`${pre}${t}-mac`, undefined, 1500);
+        }
+        if (!st().browser[key]) st().openBrowser(key, { kind: "web", url: "https://example.com" });
+        else st().setRightPanel(key, "browser");
+        await waitFor("the page", () => nativeId(activeTabKey(key) ?? ""), 10_000).catch(() => null);
+        await shot(`${pre}${t}-browser`, undefined, 2500);
+        st().openSettings("appearance");
+        await shot(`${pre}${t}-settings`, undefined, 900);
+        st().closeSettings();
+      };
+      await step("light and dark: chrome, iPhone, Mac, Browser, Settings", async () => {
+        await tour("light", `glass-${tag}`);
+        await tour("dark", `glass-${tag}`);
+        const hole = ($("[data-sheet-bg]") as HTMLElement | null)?.style.maskImage ?? "";
+        if (!rt && !hole.includes("gradient")) throw new Fail("no hole in the sheet behind the browser panel");
+        return `mac ${macIdle ? "shown" : `skipped (${mac?.state})`}; sim ${off?.name ?? "none shut down"}; hole ${hole ? "cut" : "none"}`;
+      });
+      if (rt) return;
+      await step("inactive window (another app in front)", async () => {
+        st().setRightPanel(key, "device");
+        await log("GLASS inactive-now");
+        await sleep(1500);
+        await shot("glass-dark-inactive", undefined, 300);
+        st().setThemePref("light");
+        await sleep(900);
+        await shot("glass-light-inactive", undefined, 300);
+        await log("GLASS active-now");
+        await invoke("selftest_window", { action: "focus" });
+        await sleep(800);
+        return document.hasFocus() ? "focused again" : "not focused";
+      });
+      await step("the setting off: solid, as before", async () => {
+        setGlassPref(false);
+        await sleep(700);
+        if (g()) throw new Fail("still glass");
+        await shot("glass-off-light-iphone");
+        st().setThemePref("dark");
+        await sleep(900);
+        await shot("glass-off-dark-iphone");
+        setGlassPref(true);
+        await sleep(700);
+        if (!g()) throw new Fail("glass did not come back");
+      });
+      await step("full screen", async () => {
+        await invoke("selftest_window", { action: "fullscreen" });
+        await sleep(2500);
+        await shot("glass-dark-fullscreen", undefined, 200);
+        st().setThemePref("light");
+        await sleep(900);
+        await shot("glass-light-fullscreen", undefined, 200);
+        await invoke("selftest_window", { action: "windowed" });
+        await sleep(2000);
+        st().setThemePref("dark");
+        await sleep(600);
+        return `glass ${g() ? "on" : "off"}`;
+      });
+      // ---------- frame pacing ----------
+      await step("glass-perf: a long chat scrolls and the window resizes, glass on and off", async () => {
+        const evs: ChatEvent[] = [];
+        let seq = 1_000_000;
+        const para = "The panel keeps its place while the agent works through the list, and every row stays readable. ";
+        for (let i = 0; i < 120; i++) {
+          evs.push({ seq: seq++, ts: Date.now(), type: "user_message", id: `glass-u${i}`, text: `Question ${i}: what changed in step ${i}?` } as ChatEvent);
+          evs.push({ seq: seq++, ts: Date.now(), type: "assistant_message", id: `glass-a${i}`, text: `**Step ${i}.** ${para.repeat(3)}\n\n- one\n- two\n- three\n\n${para.repeat(2)}`, model: null, parent_tool_id: null } as ChatEvent);
+        }
+        useChats.getState().apply(id, evs);
+        st().setRightPanel(key, "device");
+        await sleep(1500);
+        const el = $(`[data-chat-timeline="${id}"]`);
+        if (!el || el.scrollHeight < el.clientHeight * 5) throw new Fail(`chat not long enough: ${el?.scrollHeight}/${el?.clientHeight}`);
+        const frames = (ms: number, each: (i: number) => void | Promise<void>) =>
+          new Promise<number[]>((done) => {
+            const out: number[] = [];
+            let last = 0;
+            let i = 0;
+            const t0 = performance.now();
+            const tick = (t: number) => {
+              if (last) out.push(t - last);
+              last = t;
+              void each(i++);
+              if (t - t0 < ms) requestAnimationFrame(tick);
+              else done(out);
+            };
+            requestAnimationFrame(tick);
+          });
+        const stats = (d: number[]) => {
+          const s = [...d].sort((a, b) => a - b);
+          const q = (p: number) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+          const med = q(0.5);
+          return `${d.length} frames, median ${med.toFixed(1)} ms, p95 ${q(0.95).toFixed(1)}, p99 ${q(0.99).toFixed(1)}, max ${s[s.length - 1].toFixed(1)}, over 1.5x median ${d.filter((x) => x > med * 1.5).length}`;
+        };
+        const out: string[] = [];
+        // A first pass lays the long chat out and warms the caches; not counted.
+        for (let i = 0; i < 40; i++) {
+          el.scrollTop = (el.scrollHeight * i) / 40;
+          await sleep(30);
+        }
+        for (const on of [true, false, true, false]) {
+          setGlassPref(on);
+          await sleep(1200);
+          const label = on ? "on" : "off";
+          el.scrollTop = 0;
+          await sleep(500);
+          await log(`PERF glass=${label} scroll-start`);
+          const sc = await frames(5000, () => {
+            el.scrollTop = el.scrollTop + 14 >= el.scrollHeight - el.clientHeight ? 0 : el.scrollTop + 14;
+          });
+          await log(`PERF glass=${label} scroll-end ${stats(sc)}`);
+          await sleep(800);
+          await log(`PERF glass=${label} resize-start`);
+          const rs = await frames(5000, (i) => {
+            if (i % 2) return;
+            const k = (i / 2) % 60;
+            const w = 1440 - (k < 30 ? k : 60 - k) * 8;
+            return invoke("selftest_resize", { width: w, height: 900 - (k < 30 ? k : 60 - k) * 4 }).then(() => {});
+          });
+          await invoke("selftest_resize", { width: 1440, height: 900 });
+          await log(`PERF glass=${label} resize-end ${stats(rs)}`);
+          await sleep(1500);
+          await log(`PERF glass=${label} idle-start`);
+          await sleep(5000);
+          await log(`PERF glass=${label} idle-end`);
+          out.push(`${label}: scroll ${stats(sc)} | resize ${stats(rs)}`);
+        }
+        return out.join(" || ");
+      });
+    } finally {
+      setGlassPref(keep.glass !== "off");
+      st().setThemePref(keep.theme === "light" || keep.theme === "dark" ? keep.theme : "system");
+      await log(`GLASS restored theme=${keep.theme} glass=${keep.glass}`);
+    }
+  },
+
+  /** `glass` in short: the iPhone panel over the glass in both themes (for trying materials). */
+  async "glass-peek"(ctx) {
+    const keep = localStorage.getItem("coool.theme");
+    const st = () => useStore.getState();
+    const key = await browserHost(ctx);
+    st().setRightPanel(key, "device");
+    for (const t of ["light", "dark"] as const) {
+      st().setThemePref(t);
+      await shot(`peek-${t}`, undefined, 1500);
+    }
+    st().setThemePref(keep === "light" || keep === "dark" ? keep : "system");
   },
 
   async quit(ctx) {

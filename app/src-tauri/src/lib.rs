@@ -14,6 +14,7 @@ mod artifact;
 mod browser;
 mod device;
 mod env;
+mod glass;
 mod login;
 mod motion;
 mod notify;
@@ -1456,9 +1457,11 @@ pub fn run() {
             selftest::selftest_config,
             selftest::selftest_log,
             selftest::selftest_shot,
+            selftest::selftest_window,
             selftest::selftest_request_quit,
             trace::trace_sessions,
             motion::motion_hints,
+            glass::glass_set,
             artifact::artifact_status,
             artifact::artifact_window,
             artifact::selftest_artifact,

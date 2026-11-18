@@ -2,8 +2,10 @@
 // as possible (index.html has already set the theme on <html>), and again on every theme
 // change. The window itself is visible from the start: a hidden window never paints a
 // frame, so anything that waits for one before calling show() leaves the app invisible.
-// No-op in the browser.
+// With the glass on (lib/glass.ts) the window is see-through over its effect view instead
+// of a solid colour. No-op in the browser.
 import { isTauri } from "./backend";
+import { syncGlass } from "./glass";
 
 /** The window colour is the `--panel` tone of each theme. */
 export const WINDOW_BG = { dark: "#171717", light: "#f9f9f9" } as const;
@@ -15,7 +17,7 @@ export async function syncWindow(theme: "dark" | "light", show = false) {
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const w = getCurrentWindow();
-    await w.setBackgroundColor(WINDOW_BG[theme]).catch(() => {});
+    if (!(await syncGlass(theme))) await w.setBackgroundColor(WINDOW_BG[theme]).catch(() => {});
     if (show && !shown) {
       shown = true;
       await w.show();
