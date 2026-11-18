@@ -322,7 +322,10 @@ fn parse_registry(p: &Path) -> Option<RegEntry> {
     let live = Live {
         pid,
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
-        name: v["name"].as_str().unwrap_or("").to_string(),
+        // `nameSource: "derived"` is Claude Code's placeholder ("proj-a3": the folder and a few hex digits) until the
+        // session has a real name; taken as a title it showed until the first prompt and then stayed in the
+        // session's earlier titles ("was: proj-a3").
+        name: if v["nameSource"].as_str() == Some("derived") { String::new() } else { v["name"].as_str().unwrap_or("").to_string() },
         busy: v["status"].as_str() == Some("busy"),
         // `shell`: the turn is over but background tasks still run (the
         // CLI's own UI shows that as working). `waiting`: blocked on the person.
@@ -777,6 +780,20 @@ fn result_text(c: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn registry_placeholder_names_are_not_titles() {
+        let d = std::env::temp_dir().join(format!("coool-registry-test-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("1.json");
+        std::fs::write(&f, r#"{"pid":1,"sessionId":"s","cwd":"/w/proj","name":"proj-a3","nameSource":"derived","status":"idle"}"#).unwrap();
+        assert_eq!(super::parse_registry(&f).unwrap().3.name, "");
+        std::fs::write(&f, r#"{"pid":1,"sessionId":"s","cwd":"/w/proj","name":"Fix the flaky test","nameSource":"user","status":"idle"}"#).unwrap();
+        assert_eq!(super::parse_registry(&f).unwrap().3.name, "Fix the flaky test");
+        std::fs::write(&f, r#"{"pid":1,"sessionId":"s","cwd":"/w/proj","name":"Older CLI","status":"idle"}"#).unwrap();
+        assert_eq!(super::parse_registry(&f).unwrap().3.name, "Older CLI");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     use super::*;
     use serde_json::json;
 

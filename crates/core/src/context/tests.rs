@@ -214,7 +214,8 @@ fn only_what_follows_the_boundary_counts() {
     assert!(part(&m, "Summary").tokens > 1_000);
     assert!(part(&m, "receipt.tsx").tokens > 1_900);
     let c = m.compaction.as_ref().expect("compaction");
-    assert_eq!((c.before, c.after, c.auto), (14_500, 6_100, true));
+    // `after` is the first request after the boundary (12_400), not Claude's `postTokens` (6_100).
+    assert_eq!((c.before, c.after, c.auto), (14_500, 12_400, true));
     // The map just before it.
     assert_eq!(c.before_parts.iter().map(|p| p.tokens).sum::<u64>(), 14_430);
     assert!(c.before_parts.iter().any(|p| p.label == "payment.ts"));

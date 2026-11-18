@@ -265,7 +265,8 @@ pub fn selftest_probe_result(core: State<'_, Arc<Core>>) -> Result<Vec<String>, 
 }
 
 /// Window states the page may not set itself (its capability has no such permission): `focus`, `fullscreen`,
-/// `windowed` (leaves full screen and goes back on top).
+/// `windowed` (leaves full screen and goes back on top), `hide` (ordered out: the page goes hidden and loses focus, as
+/// when the person is in another app) and `show` (back, in front and focused).
 #[tauri::command]
 pub fn selftest_window(app: AppHandle, core: State<'_, Arc<Core>>, action: String) -> Result<(), String> {
     active(&core)?;
@@ -274,6 +275,8 @@ pub fn selftest_window(app: AppHandle, core: State<'_, Arc<Core>>, action: Strin
         "focus" => w.set_focus(),
         "fullscreen" => w.set_always_on_top(false).and_then(|_| w.set_fullscreen(true)),
         "windowed" => w.set_fullscreen(false).and_then(|_| w.set_always_on_top(true)),
+        "hide" => w.hide(),
+        "show" => w.show().and_then(|_| w.set_always_on_top(true)).and_then(|_| w.set_focus()),
         _ => return Err(format!("unknown action {action}")),
     };
     r.map_err(|e| e.to_string())
@@ -729,6 +732,84 @@ pub fn selftest_click(app: AppHandle, core: State<'_, Arc<Core>>, id: String) ->
     })
     .map_err(|e| e.to_string())?;
     rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|e| e.to_string())?
+}
+
+/// Real (trusted) input at a point of the main window, as the person's own mouse and keyboard give it: a left click
+/// at `(x, y)` (window points from the top left, the page's client coordinates) when `click`, then each character of
+/// `text` as a key down and up (lowercase letters, digits, space and Return), all sent to the window as AppKit events
+/// (`-[NSWindow sendEvent:]`: nothing is posted to the system, the pointer doesn't move, and other apps get nothing).
+#[tauri::command(async)]
+pub fn selftest_native(app: AppHandle, core: State<'_, Arc<Core>>, x: f64, y: f64, click: bool, text: Option<String>) -> Result<(), String> {
+    active(&core)?;
+    let win = app.get_window("main").ok_or("no window")?;
+    let ns = win.ns_window().map_err(|e| e.to_string())? as usize;
+    let text = text.unwrap_or_default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let r = (if click { native_click(ns as *mut std::ffi::c_void, x, y) } else { Ok(()) }).and_then(|_| native_keys(ns as *mut std::ffi::c_void, x, y, &text));
+        let _ = tx.send(r);
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?
+}
+
+/// The macOS virtual key code of a character the self-test types (US layout).
+fn mac_key_code(c: char) -> Option<u16> {
+    const LETTERS: [u16; 26] = [0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6];
+    const DIGITS: [u16; 10] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25];
+    match c {
+        'a'..='z' => Some(LETTERS[c as usize - 'a' as usize]),
+        '0'..='9' => Some(DIGITS[c as usize - '0' as usize]),
+        ' ' => Some(49),
+        '\n' => Some(36),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_keys(ns: *mut std::ffi::c_void, x: f64, y: f64, text: &str) -> Result<(), String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::{NSPoint, NSRect, NSString};
+    if text.is_empty() {
+        return Ok(());
+    }
+    if ns.is_null() {
+        return Err("no window".into());
+    }
+    // SAFETY: as in `native_click`: the main thread, the live NSWindow, the documented constructor's argument types.
+    unsafe {
+        let win = &*(ns as *mut AnyObject);
+        let content: *mut AnyObject = msg_send![win, contentView];
+        if content.is_null() {
+            return Err("no content view".into());
+        }
+        let frame: NSRect = msg_send![&*content, frame];
+        let at = NSPoint::new(x, frame.size.height - y);
+        let number: isize = msg_send![win, windowNumber];
+        let cls = AnyClass::get(c"NSEvent").ok_or("no NSEvent")?;
+        let info: *mut AnyObject = msg_send![AnyClass::get(c"NSProcessInfo").ok_or("no NSProcessInfo")?, processInfo];
+        for c in text.chars() {
+            let code = mac_key_code(c).ok_or_else(|| format!("can't type {c:?}"))?;
+            let s = if c == '\n' { "\r".to_string() } else { c.to_string() };
+            let chars = NSString::from_str(&s);
+            // NSEventTypeKeyDown, NSEventTypeKeyUp.
+            for kind in [10usize, 11] {
+                let now: f64 = msg_send![&*info, systemUptime];
+                let e: *mut AnyObject = msg_send![cls, keyEventWithType: kind, location: at, modifierFlags: 0usize, timestamp: now, windowNumber: number, context: std::ptr::null_mut::<AnyObject>(), characters: &*chars, charactersIgnoringModifiers: &*chars, isARepeat: false, keyCode: code];
+                if e.is_null() {
+                    return Err("no event".into());
+                }
+                let _: () = msg_send![win, sendEvent: &*e];
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_keys(_ns: *mut std::ffi::c_void, _x: f64, _y: f64, _text: &str) -> Result<(), String> {
+    Err("macOS only".into())
 }
 
 #[cfg(target_os = "macos")]

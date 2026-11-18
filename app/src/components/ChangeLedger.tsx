@@ -84,7 +84,7 @@ export function ChangeLedger({
       <CardHeader icon={IList} title="Changes" meta={count > 0 && count} />
       {units.length === 0 ? (
         <div className="flex h-[36px] items-center text-small text-faint" style={{ paddingLeft: TEXT_X }} data-mc-ledger-empty>
-          Nothing uncommitted. Edits show here until they're committed, with pushes and deploys.
+          No agent changes yet. Their edits show here until they're committed, with pushes and deploys.
         </div>
       ) : (
         <FitList

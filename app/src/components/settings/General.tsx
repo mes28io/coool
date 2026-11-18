@@ -158,6 +158,8 @@ export function General() {
               ? "macOS is waiting for you to allow it in System Settings > General > Login Items."
               : login?.status === "unavailable"
                 ? (login.reason ?? "Not available in this build.")
+                : login?.status === "not_found"
+                  ? "macOS doesn't know this build as an app (a development build has no app bundle), so it can't open it at login."
                 : "Starts coool when you log in to this Mac. Listed in System Settings > General > Login Items."
           }
           k="startup launch login items"

@@ -27,14 +27,15 @@
 // the Reduce motion state and the beam (with Reduce motion as it is, then Off).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
-import { ignoreChatDefaults } from "./lib/prefs";
+import { ignoreChatDefaults, setTextSize } from "./lib/prefs";
 import { newChat } from "./lib/actions";
 import { api, isTauri } from "./lib/backend";
 import { chatNeeds, useChats, type Chat, type ChatItem } from "./lib/chat";
 import type { ArtifactInfo, ChatEvent } from "./lib/types";
 import { sessionKey } from "./lib/types";
+import { displayTitle } from "./lib/format";
 import { decideMotion, setMotionPref, type MotionHints, type MotionPref } from "./lib/motion";
-import { resolveTarget, useStore } from "./store";
+import { leaves, resolveTarget, useStore } from "./store";
 import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
 
@@ -159,6 +160,7 @@ async function step(name: string, f: () => Promise<string | void>) {
   } catch (e) {
     fail++;
     await log(`FAIL ${name}: ${e instanceof Error ? e.message : String(e)}`);
+    if (name.startsWith("sweep") || /^(mc|timeline|titles|settings|usage|motion|mac-input|pilot-mac|composer):/.test(name)) await shot(`fail-${name.slice(0, 40)}`, undefined, 0);
   }
 }
 
@@ -349,7 +351,7 @@ interface DeviceAskSeen {
   tool: string;
   text: string;
   needs: string | null;
-  answer: "chat" | "once" | "deny";
+  answer: "chat" | "project" | "once" | "deny";
   ms: number;
 }
 /** The default answers: "this chat" for using a device or a site, Allow once for the always-ask kinds. */
@@ -359,7 +361,7 @@ const allowAll = (a: Pick<DeviceAskSeen, "kind">): DeviceAskSeen["answer"] => (a
  * Sends `prompt` to chat `id` and waits for the turn to end, meanwhile watching for each mark (a selector, with a
  * screenshot the first time it shows) and allowing any approval for a coool-device tool (other approvals: denied).
  */
-async function agentTurn(id: number, o: { prompt: string; marks: [string, string][]; probes?: Probe[]; ms: number; answer?: (a: Omit<DeviceAskSeen, "answer" | "ms">) => DeviceAskSeen["answer"] }): Promise<AgentRun> {
+async function agentTurn(id: number, o: { prompt: string; marks: [string, string][]; probes?: Probe[]; ms: number; answer?: (a: Omit<DeviceAskSeen, "answer" | "ms">) => DeviceAskSeen["answer"]; allow?: RegExp }): Promise<AgentRun> {
   const turns = turnEnds(id).length;
   const n = items(id).length;
   const seen: Record<string, number> = {};
@@ -393,16 +395,17 @@ async function agentTurn(id: number, o: { prompt: string; marks: [string, string
       void (async () => {
         await log(`INFO device ask ${base.kind} (${answer}): ${base.text.slice(0, 200)} | needs: ${base.needs}`);
         if (asks.filter((a) => a.kind === base.kind).length === 1) await shot(`ask-${base.kind}-${id}`, undefined, 350);
-        const target = answer === "deny" ? button("Deny", dev) : answer === "chat" ? (dev.querySelector('[data-remember="chat"]') as HTMLElement | null) : button("Allow once", dev);
+        const target = answer === "deny" ? button("Deny", dev) : answer === "chat" || answer === "project" ? (dev.querySelector(`[data-remember="${answer}"]`) as HTMLElement | null) : button("Allow once", dev);
         (target ?? button("Allow once", dev))?.click();
       })().finally(() => (busy = false));
       return;
     }
     const card = $("[data-approval]");
     if (card && !card.hasAttribute("data-device-approval")) {
-      const pending = after(id, n).find((i) => i.kind === "permission") as { tool?: string; name?: string } | undefined;
+      // The card's own request (an earlier, answered one may come first).
+      const pending = (after(id, n).find((i) => i.kind === "permission" && i.requestId === card.dataset.approval) ?? after(id, n).find((i) => i.kind === "permission" && !i.answer)) as { tool?: string; name?: string } | undefined;
       const what = JSON.stringify(pending ?? {}).slice(0, 160);
-      const mine = /coool-device/.test(card.textContent ?? "") || /coool-device/.test(what);
+      const mine = /coool-device/.test(card.textContent ?? "") || /coool-device/.test(what) || !!o.allow?.test(what);
       void log(`INFO approval (${mine ? "allowing" : "denying"}): ${what}`);
       (button(mine ? "Allow once" : /Deny|Decline|Don't allow/, card) ?? button("Allow once", card))?.click();
     }
@@ -1668,12 +1671,13 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
     try {
       let id = 0;
       const N1 = "Keep the final reply to one word.";
-      await step("a note sent during a step is queued under 'Queued for the next step'", async () => {
+      await step("a note sent during a step is queued under 'Queued · goes in at the next step'", async () => {
         id = await startClaude(ctx, "Run these three shell commands one at a time, each as its own tool call, never in parallel: sleep 3; sleep 3; sleep 3. Then reply done.");
         await waitFor("the first step to run", () => running(id), 90_000);
         await say(N1);
         const strip = await waitFor("the queued strip", () => $("[data-steer-queued]"), 5_000);
-        if (!/Queued for the next step/.test(strip.textContent ?? "")) throw new Fail(`strip reads "${strip.textContent?.trim()}"`);
+        // The strip's wording since the queued-notes restyle: "Queued · goes in at the next step".
+        if (!/Queued\W*goes in at the next step/.test(strip.textContent ?? "")) throw new Fail(`strip reads "${strip.textContent?.trim()}"`);
         if (!strip.textContent?.includes(N1)) throw new Fail("the strip does not show the note");
         await shot("steer-queued");
         return `strip: "${strip.textContent?.trim().slice(0, 60)}"`;
@@ -2786,6 +2790,807 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
     });
   },
 };
+
+// ---------- the sweep: today's features against the real backend (a git repo in the test folder) ----------
+//
+// `sweep-mc` (Claude Haiku chats in the test folder, which must be a git repository with commits, a --no-ff merge and
+// an uncommitted edit): project tabs, the Sessions / Changes / trail cards, the inline edit review answered from
+// Mission control, the file-overlap row, the live Committing row, the fan-out with real sub-agents (and their cards in
+// the chat), "While you were away" (the window ordered out while two turns run; the absence then made 15 minutes long
+// by moving the person's last-seen marks back, since the rules want 10 minutes away). `sweep-timeline` (Haiku; the
+// folder's `.mcp.json` names a `weather` server): readable tool rows for coool-device and another MCP server, where the
+// turn went (bar and waterfall), the context map against the chat's context figure, then `/compact`. `sweep-titles`
+// (no model of its own: names the chats earlier scenarios made) and `sweep-titles-restart` (a second launch: the name
+// survived). `sweep-settings` (no model but one short Bash turn for the sleep assertion), `sweep-usage` (no model; never
+// presses "Use a reset" for real), `sweep-motion` (no model: the Browser tools driven directly under Reduce motion
+// Off / On / Auto), `sweep-mac-input` (no model: the person's own click and keys into the sandbox Mac),
+// `sweep-pilot-mac` (Haiku: `pilot_run` with target "mac"), `sweep-composer` (no model: the hint row in narrow panes),
+// `sweep-noconfirm` (last: Confirm before quitting off, ⌘Q with a chat running quits at once).
+
+const sweepState: { a: number; b: number; c: number; d: number } = { a: -1, b: -1, c: -1, d: -1 };
+const home = () => useStore.getState().activate(null);
+/** Mission control on project `name` (its tab clicked when another shows). */
+function onTab(name: string) {
+  const t = $all("[data-mc-tab]").find((x) => x.dataset.mcSwitchTo === name);
+  if (t && t.getAttribute("aria-selected") !== "true") t.click();
+}
+/**
+ * The person looking at the window again. While another app is in front (the person using this Mac during the
+ * test), macOS won't let the test window become key, so the page never gets its own focus event: this is the event
+ * the window would get.
+ */
+const lookBack = () => window.dispatchEvent(new Event("focus"));
+const textOf = (el: Element | null) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+const sessionOf = (id: number) => {
+  const sid = chat(id)?.sessionId;
+  return sid ? useStore.getState().sessions.find((s) => s.id === sid) : undefined;
+};
+async function startIn(cwd: string, mode: string | null, prompt?: string): Promise<number> {
+  const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+  await newChat({ provider: "claude", cwd, model: PERF_MODEL, permissionMode: mode, prompt });
+  const id = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+  await waitFor("ready", () => chat(id)?.ready, 90_000);
+  return id;
+}
+/** Sends `text` to chat `id` (shown first) and waits for the turn, allowing / denying nothing (the caller does). */
+async function turn(id: number, text: string, ms = 150_000) {
+  useStore.getState().open({ kind: "chat", id });
+  await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+  await sleep(300);
+  const n = turnEnds(id).length;
+  await say(text);
+  return nextTurn(id, n, ms);
+}
+/** Sends without waiting (the chat must be on screen). */
+async function send(id: number, text: string) {
+  useStore.getState().open({ kind: "chat", id });
+  await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+  await sleep(300);
+  await say(text);
+}
+/** A setting's row by its `attr`. */
+const settingRow = (attr: string) => document.querySelector(`[data-setting="${CSS.escape(attr)}"]`) as HTMLElement | null;
+const switchIn = (el: Element | null) => el?.querySelector('[role="switch"]') as HTMLElement | null;
+const dbl = (el: Element) => el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));
+function ctxMenu(el: Element) {
+  const r = el.getBoundingClientRect();
+  el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 5, button: 2 }));
+}
+function setInput(el: HTMLInputElement | HTMLTextAreaElement, v: string) {
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, v);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async "sweep-mc"(ctx) {
+    const dir = ctx.cfg.dir;
+    await step("mc: a real repo shows its trail (merge curve, branch, uncommitted) with a live session, two project tabs", async () => {
+      sweepState.a = await startIn(dir, "default");
+      sweepState.d = await startIn(`${dir}/sub`, "bypassPermissions");
+      home();
+      const trail = await waitFor("the commit trail", () => $("[data-mc-trail]"), 30_000);
+      await waitFor("the trail's commits", () => /Add b\.ts/.test(textOf(trail)), 30_000);
+      await sleep(1200);
+      const tabs = $all("[data-mc-tab]").map((t) => `${t.dataset.mcTab?.split("/").pop()}=${textOf(t)}`);
+      await shot("sweep-mc-start");
+      const t = textOf(trail);
+      const want = ["main", "Add b.ts", "colours", "Add a.ts"];
+      const miss = want.filter((w) => !t.includes(w));
+      if (miss.length) throw new Fail(`trail lacks ${miss.join(", ")}: ${t.slice(0, 400)}`);
+      if (!/uncommitted/.test(t)) throw new Fail(`no "uncommitted" in the trail header: ${t.slice(0, 200)}`);
+      if (tabs.length < 2) throw new Fail(`project tabs: ${tabs.join(" | ")}`);
+      // Switch to the other tab and back.
+      const other = $all("[data-mc-tab]").find((x) => x.getAttribute("aria-selected") !== "true");
+      other?.click();
+      await sleep(700);
+      await shot("sweep-mc-tab-sub");
+      const sel = $all("[data-mc-tab]").find((x) => x.getAttribute("aria-selected") === "true");
+      const back = $all("[data-mc-tab]").find((x) => x.dataset.mcTab === dir || x.dataset.mcTab?.endsWith("/proj"));
+      back?.click();
+      await sleep(700);
+      if (back?.getAttribute("aria-selected") !== "true") throw new Fail("the proj tab didn't take the click");
+      const sessions = textOf($("[data-mc-sessions]"));
+      return `tabs ${tabs.join(" | ")}; switched to ${sel?.dataset.mcTab?.split("/").pop()}; trail: ${t.slice(0, 260)}; sessions card: ${sessions.slice(0, 160)}`;
+    });
+    await step("mc: a real pending Edit shows inline in Needs you with its word diff, Allow edit there applies it", async () => {
+      const id = sweepState.a;
+      await send(id, "Use the Edit tool to change the word red to blue in notes.txt. Do not do anything else, then reply with: done");
+      await waitFor("the pending edit", () => chat(id)?.pendingPermission, 90_000);
+      home();
+      const card = await waitFor("the Needs-you edit card", () => $all("[data-mc-needs-card]").find((c) => /notes\.txt/.test(textOf(c))), 15_000);
+      await sleep(800);
+      await shot("sweep-mc-edit-review");
+      const txt = textOf(card);
+      const ins = [...card.querySelectorAll("ins, [data-add]")].map(textOf).join(",");
+      const del = [...card.querySelectorAll("del, s, [data-del]")].map(textOf).join(",");
+      const allow = card.querySelector("[data-mc-allow]") as HTMLElement | null;
+      if (!allow) throw new Fail(`no Allow edit: ${txt}`);
+      allow.click();
+      const end = await nextTurn(id, turnEnds(id).length, 90_000);
+      const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).find((t) => t.name === "Edit");
+      if (!tool || tool.ok === false) throw new Fail(`the Edit didn't succeed: ${tool?.output.slice(0, 200)}`);
+      return `card: ${txt.slice(0, 200)}; added [${ins}] removed [${del}]; turn ${end.ok ? "ok" : "not ok"}`;
+    });
+    await step("mc: two chats editing notes.txt make a pinned overlap row (same copy) and sidebar marks", async () => {
+      sweepState.b = await startIn(dir, "bypassPermissions");
+      await turn(sweepState.b, "Use the Edit tool to append a new last line 'Owls are wise.' to notes.txt. Do nothing else, then reply with: done");
+      home();
+      const row = await waitFor("the overlap row", () => (onTab("proj"), $("[data-mc-overlap]")), 30_000);
+      await sleep(600);
+      const t = textOf(row);
+      row.click();
+      await sleep(600);
+      await shot("sweep-mc-overlap");
+      const marks = $all("[data-overlap-mark]").length;
+      const edits = $all("[data-mc-overlap-edit]").map(textOf);
+      if (!/notes\.txt/.test(t)) throw new Fail(`overlap row: ${t}`);
+      return `"${t}"; ${edits.length} author rows: ${edits.join(" | ").slice(0, 300)}; sidebar marks ${marks}`;
+    });
+    await step("mc: the Committing row shows with its message while an agent's git commit runs, then settles into the trail", async () => {
+      const id = sweepState.b;
+      const n0 = turnEnds(id).length;
+      await send(id, "Run exactly this one Bash command and nothing else: sleep 8 && git add other.txt && git commit -m 'Add other notes' . Then reply with: done");
+      home();
+      const t0 = Date.now();
+      const row = await waitFor("the Committing row", () => (onTab("proj"), $("[data-mc-committing]")), 60_000);
+      const seen = Date.now() - t0;
+      const rt = textOf(row);
+      await shot("sweep-mc-committing", undefined, 150);
+      await nextTurn(id, n0, 90_000).catch(() => null);
+      await waitFor("the commit in the trail", () => (onTab("proj"), /Add other notes/.test(textOf($("[data-mc-trail]"))) && !$("[data-mc-committing]")), 40_000);
+      await sleep(500);
+      await shot("sweep-mc-committed");
+      return `Committing row after ${seen} ms: "${rt}"; settled into the trail`;
+    });
+    await step("mc: the fan-out shows two real sub-agents; their chat cards show the context bar and the lead's handoff", async () => {
+      sweepState.c = await startIn(dir, "bypassPermissions");
+      const id = sweepState.c;
+      await send(
+        id,
+        "In one message, launch two sub-agents in parallel with the Agent (Task) tool, both with model haiku and subagent_type general-purpose. Sub-agent one: 'Run the Bash command ping -c 25 127.0.0.1 > /dev/null in the foreground, then reply with the word alpha.' Sub-agent two: 'Run the Bash command ping -c 25 127.0.0.1 > /dev/null in the foreground, then reply with the word beta.' After both finish, reply with: done",
+      );
+      home();
+      const fan = await waitFor("the fan-out", () => (onTab("proj"), $("[data-mc-fanout]")), 90_000);
+      await sleep(1500);
+      await shot("sweep-mc-fanout");
+      const ft = textOf(fan);
+      useStore.getState().open({ kind: "chat", id });
+      const cards = await waitFor("two sub-agent cards with a fill", () => ($all("[data-agent-card]").length >= 2 && $("[data-agent-fill]") ? $all("[data-agent-card]") : null), 60_000);
+      await sleep(800);
+      await shot("sweep-chat-subagents-running");
+      const fills = $all("[data-agent-fill]").map(textOf);
+      const hand = $all("[data-agent-handoff]").map(textOf);
+      await nextTurn(id, 0, 180_000);
+      await sleep(1000);
+      await shot("sweep-chat-subagents-done");
+      const fillsDone = $all("[data-agent-fill]").map(textOf);
+      if (!hand.length) throw new Fail(`no handoff line; cards: ${cards.map(textOf).join(" | ").slice(0, 300)}`);
+      return `fan-out "${ft.slice(0, 200)}"; fills running [${fills.join(", ")}], done [${fillsDone.join(", ")}]; handoff ${hand.join(" | ").slice(0, 200)}`;
+    });
+    await step("mc: While you were away (window ordered out during two turns, the absence then 15 minutes) on Home and in the chat", async () => {
+      const id = sweepState.b;
+      useStore.getState().open({ kind: "chat", id });
+      await sleep(500);
+      lookBack(); // the person has the chat on screen before leaving
+      await sleep(300);
+      await invoke("selftest_window", { action: "hide" });
+      await sleep(1500);
+      const vis = document.visibilityState;
+      const bKey = useStore.getState().chatOwner[id];
+      await log(`INFO away: hidden, visibility ${vis}, focus ${document.hasFocus()}, B key ${bKey}, B seen.at ${useStore.getState().seen.at?.[bKey]} (now ${Date.now()})`);
+      const n = turnEnds(id).length;
+      await say("Run exactly this Bash command and nothing else: git add README.md && git commit -m 'Update README' . Then reply with: done");
+      await nextTurn(id, n, 90_000);
+      await say("Reply with the single word: two");
+      await nextTurn(id, n + 1, 60_000);
+      // Fifteen minutes away: the marks move back (the rules need 10 minutes; nothing else is changed).
+      useStore.setState((s) => ({ seen: { ...s.seen, at: Object.fromEntries(Object.entries(s.seen.at ?? {}).map(([k, t]) => [k, t - 15 * 60_000])) } }));
+      home();
+      await invoke("selftest_window", { action: "show" });
+      await sleep(400);
+      lookBack();
+      const strip = await waitFor("the away strip", () => $("[data-mc-away]"), 10_000);
+      await sleep(900);
+      await shot("sweep-mc-away");
+      const st = textOf(strip);
+      useStore.getState().open({ kind: "chat", id });
+      await sleep(300);
+      lookBack();
+      await sleep(1200);
+      {
+        const st = useStore.getState();
+        const tab = st.tabs.find((t) => t.id === st.activeTab);
+        await log(`INFO away: after open, focus ${document.hasFocus()} vis ${document.visibilityState}; leaves ${JSON.stringify(tab ? leaves(tab.root).map((l) => l.target) : null)}; B in sessions ${st.sessions.some((x) => sessionKey(x) === bKey)}, in allSessions ${st.allSessions.some((x) => sessionKey(x) === bKey)}`);
+      }
+      await log(`INFO away: after show, away keys ${JSON.stringify(Object.fromEntries(Object.entries(useStore.getState().away).map(([k, v]) => [k, Math.round((v.back - v.left) / 1000)])))}; B seen.at ${useStore.getState().seen.at?.[bKey]}`);
+      const card = await waitFor("the chat's away card", () => $("[data-away-card]"), 10_000).catch(() => null);
+      await sleep(700);
+      await shot("sweep-chat-away");
+      const ct = textOf(card);
+      (card?.querySelector("[data-away-dismiss]") as HTMLElement | null)?.click();
+      await sleep(500);
+      const div = textOf($("[data-away-divider]"));
+      if (!card) throw new Fail(`strip "${st}", but no card in the chat`);
+      return `hidden: visibility ${vis}; strip "${st}"; card "${ct.slice(0, 200)}"; after Got it "${div}"`;
+    });
+  },
+
+  async "sweep-timeline"(ctx) {
+    const dir = ctx.cfg.dir;
+    const url = ((await invoke("selftest_probe_server")) as string).replace(/\/probe$/, "/form");
+    let id = -1;
+    let r: AgentRun | null = null;
+    await step("timeline: a Haiku chat (Ask mode) drives the Browser and calls the folder's weather MCP server", async () => {
+      id = await startIn(dir, "default");
+      sweepState.d = id;
+      useStore.getState().open({ kind: "chat", id });
+      await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+      await sleep(1200);
+      r = await agentTurn(id, {
+        prompt: `Do these in order. 1) Open ${url} with the coool-device browser_navigate tool. 2) Click the "Add cup" button once with browser_click. 3) Call the get_forecast tool of the weather MCP server for the city Paris. Then reply with one line: the forecast text.`,
+        marks: [],
+        ms: 180_000,
+        answer: (a) => (a.kind === "use" || a.kind === "site" ? "project" : "once"),
+        allow: /weather/,
+      });
+      return `tools: ${r.all.join(", ")}; reply ${JSON.stringify(r.reply.slice(0, 120))}; asks ${r.asks.map((a) => a.kind).join(",")}`;
+    });
+    if (id < 0) return;
+    await step("timeline: tool rows read as phrases (Browser, weather) and chips count by group", async () => {
+      // Open every step list so every row is in the DOM.
+      for (const t of $all("[data-turn-toggle]")) void t;
+      const head = $all("[data-step-chip]").map((c) => c.dataset.stepChip);
+      // A finished turn's step list is folded: open it (only the "Ran N steps" headers, not the turn's footer).
+      if (!$all("[data-step-family]").length) for (const b of [...document.querySelectorAll("[data-chat-timeline] button")] as HTMLElement[]) if (/^Ran \d+ steps?/.test(textOf(b))) b.click();
+      await sleep(600);
+      const rows = $all("[data-step-family]").map((x) => `${x.dataset.stepFamily}: ${textOf(x)}`);
+      await shot("sweep-timeline-rows");
+      const all = rows.join(" | ");
+      if (/mcp__/.test(all)) throw new Fail(`a raw MCP name shows: ${all.slice(0, 500)}`);
+      if (!/Opened\s*127\.0\.0\.1/.test(all)) throw new Fail(`no "Opened 127.0.0.1…" row: ${all.slice(0, 500)}`);
+      if (!/weather/.test(all)) throw new Fail(`no weather row: ${all.slice(0, 500)}`);
+      return `chips [${head.join(", ")}]; rows ${all.slice(0, 600)}`;
+    });
+    await step("timeline: where the turn went: the bar under Worked for, its waterfall on click", async () => {
+      const bar = await waitFor("the turn bar", () => $all("[data-turn-bar]").pop(), 5_000);
+      const segs = bar.dataset.turnBar;
+      const toggle = $all("[data-turn-toggle]").pop();
+      if (toggle?.getAttribute("aria-expanded") !== "true") toggle?.click();
+      const wf = await waitFor("the waterfall", () => $all("[data-waterfall]").pop(), 5_000);
+      await sleep(700);
+      wf.scrollIntoView({ block: "center" });
+      // It must stay open (not reset by later events re-rendering the footer).
+      let closedAfter = -1;
+      for (let i = 0; i < 30 && closedAfter < 0; i++) {
+        await sleep(100);
+        if (!document.querySelector("[data-waterfall]")) closedAfter = i * 100;
+      }
+      await shot("sweep-timeline-waterfall");
+      const rows = [...document.querySelectorAll("[data-wf-row]")].map(textOf);
+      if (closedAfter >= 0) throw new Fail(`the waterfall closed by itself ${closedAfter} ms after opening (aria-expanded ${toggle?.getAttribute("aria-expanded")})`);
+      return `bar segments ${segs}; waterfall ${wf.dataset.waterfall} rows: ${rows.join(" | ").slice(0, 500)}; slowest ${textOf($("[data-slowest]"))}`;
+    });
+    await step("timeline: the context map in Models equals the chat's context figure; parts sum to the total", async () => {
+      const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+      useStore.getState().setRightPanel(key, "models");
+      const map = await waitFor("the context map", () => $("[data-context-map]"), 20_000);
+      await sleep(1500);
+      await shot("sweep-context-map");
+      const c = chat(id)!;
+      const m = await api().contextMap({ provider: "claude", sessionId: c.sessionId!, cwd: c.cwd });
+      const sum = m.parts.reduce((n, p) => n + p.tokens, 0);
+      const head = textOf(map).slice(0, 80);
+      if (m.total !== c.context) throw new Fail(`map total ${m.total} vs chat context ${c.context}`);
+      if (sum !== m.total) throw new Fail(`parts sum ${sum} vs total ${m.total}`);
+      return `total ${m.total} = chat context ${c.context} = parts sum; header "${head}"; composer chip ${fmtTokensLocal(c.context)}; ${m.parts.length} parts: ${m.parts.slice(0, 6).map((p) => `${p.label} ${p.tokens}`).join(", ")}`;
+    });
+    await step("timeline: /compact compacts for real; the map shows Compacted before → after with Show before", async () => {
+      const n = turnEnds(id).length;
+      let sawCompacting = false;
+      const w = setInterval(() => (sawCompacting ||= !!chat(id)?.compacting || !!$("[data-ctx-compacting]")), 100);
+      try {
+        type("/compact");
+        await sleep(300);
+        composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); // picks /compact in the command menu
+        await sleep(300);
+        if (composer().value.trim()) composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); // sends it
+        await nextTurn(id, n, 180_000);
+        await sleep(1500);
+        await shot("sweep-compact-done");
+        await turn(id, "Reply with the single word: ok", 90_000);
+      } finally {
+        clearInterval(w);
+      }
+      const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+      useStore.getState().setRightPanel(key, "models");
+      const map = await waitFor("the context map", () => $("[data-context-map]"), 20_000);
+      await waitFor("the Compacted line", () => /Compacted/.test(textOf(map)), 20_000).catch(() => null);
+      await sleep(1200);
+      await shot("sweep-compact-map");
+      const t = textOf(map);
+      const before = button("Show before", map);
+      before?.click();
+      await sleep(900);
+      await shot("sweep-compact-map-before");
+      const m = await api().contextMap({ provider: "claude", sessionId: chat(id)!.sessionId!, cwd: chat(id)!.cwd });
+      if (!m.compaction) throw new Fail(`no compaction in the map; text "${t.slice(0, 200)}"`);
+      return `compacting seen live: ${sawCompacting}; ${m.compaction.before} → ${m.compaction.after} (auto ${m.compaction.auto}); map text "${t.match(/Compacted[^·]*·[^S]*/)?.[0] ?? t.slice(0, 120)}"; Show before ${before ? "clicked" : "MISSING"}`;
+    });
+  },
+
+  async "sweep-titles"(ctx) {
+    let id = sweepState.a;
+    if (id < 0) id = await startIn(ctx.cfg.dir, "bypassPermissions", "Reply with the single word: hello");
+    const s0 = await waitFor("the chat's session", () => sessionOf(id), 30_000);
+    const key = sessionKey(s0);
+    const auto0 = displayTitle(s0);
+    await step("titles: rename in the sidebar (double-click, type, Enter) pins it; header, tab and palette agree", async () => {
+      const row = await waitFor("the sidebar row", () => document.querySelector(`[data-session-row="${CSS.escape(key)}"]`), 10_000);
+      dbl(row.parentElement ?? row);
+      const input = await waitFor("the name field", () => $("[data-title-input]") as HTMLInputElement | null, 3_000);
+      setInput(input, "Sweep sidebar name");
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      const s = await waitFor("the manual title", () => useStore.getState().sessions.find((x) => sessionKey(x) === key && x.name?.source === "manual" && displayTitle(x) === "Sweep sidebar name"), 10_000);
+      useStore.getState().open({ kind: "chat", id });
+      await sleep(800);
+      const header = textOf($("[data-session-title]"));
+      await shot("sweep-title-sidebar");
+      if (header !== "Sweep sidebar name") throw new Fail(`header shows "${header}"`);
+      return `was "${auto0}"; now "${displayTitle(s)}" (${s.name?.source}); previous ${JSON.stringify(s.name?.previous)}`;
+    });
+    await step("titles: rename in the header; ⌘K finds the session by a previous title (was: …)", async () => {
+      const h = await waitFor("the header title", () => $("[data-session-title]"), 5_000);
+      dbl(h);
+      const input = await waitFor("the name field", () => $("[data-title-input]") as HTMLInputElement | null, 3_000);
+      setInput(input, "Sweep header name");
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await waitFor("the header name", () => useStore.getState().sessions.find((x) => sessionKey(x) === key && displayTitle(x) === "Sweep header name"), 10_000);
+      useStore.getState().setPalette(true);
+      const pin = await waitFor("the palette input", () => $('input[placeholder^="Jump to a session"]') as HTMLInputElement | null, 3_000);
+      setInput(pin, "Sweep sidebar");
+      await sleep(700);
+      await shot("sweep-title-palette");
+      const hits = $all("[data-i]").map(textOf);
+      useStore.getState().setPalette(false);
+      const hit = hits.find((t) => /Sweep header name/.test(t) && /was/.test(t));
+      if (!hit) throw new Fail(`palette rows for "Sweep sidebar": ${hits.slice(0, 5).join(" | ")}`);
+      return `palette: "${hit}"`;
+    });
+    await step("titles: right-click > Use automatic title unpins it; renamed again for the restart check", async () => {
+      const h = await waitFor("the header title", () => $("[data-session-title]"), 5_000);
+      ctxMenu(h);
+      const menu = await waitFor("the title menu", () => $("[data-title-menu]"), 3_000);
+      await shot("sweep-title-menu", undefined, 300);
+      const useAuto = button("Use automatic title", menu);
+      if (!useAuto) throw new Fail(`menu: ${textOf(menu)}`);
+      useAuto.click();
+      const s = await waitFor("an automatic title", () => useStore.getState().sessions.find((x) => sessionKey(x) === key && x.name?.source !== "manual"), 10_000);
+      const autoNow = displayTitle(s);
+      await api().renameSession(s.provider, s.id, "Sweep survives restart");
+      await waitFor("the restart name", () => useStore.getState().sessions.find((x) => sessionKey(x) === key && displayTitle(x) === "Sweep survives restart"), 10_000);
+      await log(`TITLEKEY ${key}`);
+      return `automatic again: "${autoNow}" (${s.name?.source}); renamed "Sweep survives restart" for the next launch`;
+    });
+  },
+
+  async "sweep-titles-restart"() {
+    await step("titles: after a restart the pinned name is still there, in the sidebar too", async () => {
+      const s = await waitFor("the renamed session", () => useStore.getState().sessions.find((x) => displayTitle(x) === "Sweep survives restart"), 30_000);
+      const row = document.querySelector(`[data-session-row="${CSS.escape(sessionKey(s))}"]`);
+      await shot("sweep-title-restart");
+      return `source ${s.name?.source}; sidebar row ${row ? `"${textOf(row).slice(0, 60)}"` : "not shown"}`;
+    });
+  },
+
+  async "sweep-settings"(ctx) {
+    const st = useStore.getState();
+    const open = async (sec: Parameters<typeof st.openSettings>[0]) => {
+      useStore.getState().openSettings(sec);
+      await waitFor("the settings page", () => $("[data-settings-page]"), 5_000);
+      await sleep(900);
+    };
+    await step("settings: General rows (confirm quit, prevent sleep, login item state, open with editors)", async () => {
+      await open("general");
+      await shot("sweep-settings-general");
+      const rows = ["open-with", "confirm-quit", "prevent-sleep", "login"].map((a) => `${a}: ${textOf(settingRow(a)).slice(0, 160)}`);
+      const apps = (await invoke("apps_installed").catch((e) => `err ${e}`)) as unknown;
+      const login = await api().loginStatus().catch((e) => `err ${e}`);
+      return `login status ${JSON.stringify(login)}; ${rows.join(" || ")}; installed apps ${JSON.stringify(apps).slice(0, 300)}`;
+    });
+    await step("settings: Notifications in this dev binary: the permission row says why, Send a test", async () => {
+      await open("notifications");
+      await shot("sweep-settings-notifications");
+      const perm = await api().notifyPermission().catch((e) => `err ${e}`);
+      let test = "no test button";
+      const tb = button("Send a test");
+      if (tb) {
+        tb.click();
+        await sleep(1500);
+        test = `clicked; row now "${textOf(settingRow("notify-permission")).slice(0, 160)}"`;
+      }
+      const direct = await api().notifyTest().then(() => "ok", (e) => `error: ${e}`);
+      return `permission ${JSON.stringify(perm)}; row "${textOf(settingRow("notify-permission")).slice(0, 200)}"; ${test}; notify_test: ${direct}`;
+    });
+    await step("settings: Prevent sleep holds one assertion while a chat works and releases it after", async () => {
+      await open("general");
+      const before = await api().powerStatus();
+      const sw = switchIn(settingRow("prevent-sleep"));
+      if (!sw) throw new Fail("no switch");
+      if (sw.getAttribute("aria-checked") !== "true") sw.click();
+      await sleep(800);
+      const id = await startIn(ctx.cfg.dir, "bypassPermissions");
+      await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 20 127.0.0.1 > /dev/null . Then reply with: done");
+      await waitFor("the chat working", () => chat(id)?.state !== "idle" && chat(id)?.turnStart, 30_000);
+      await sleep(4000);
+      const during = await api().powerStatus();
+      await log("SLEEPCHECK during");
+      await sleep(4000);
+      await open("general");
+      const rowDuring = textOf(settingRow("prevent-sleep"));
+      await shot("sweep-settings-sleep-held");
+      useStore.getState().open({ kind: "chat", id });
+      await nextTurn(id, 0, 90_000);
+      await sleep(3000);
+      const after = await api().powerStatus();
+      await log("SLEEPCHECK after");
+      await sleep(4000);
+      await open("general");
+      const sw2 = switchIn(settingRow("prevent-sleep"));
+      if (sw2?.getAttribute("aria-checked") === "true") sw2.click();
+      await sleep(500);
+      return `before ${JSON.stringify(before)}; during ${JSON.stringify(during)} row "${rowDuring.slice(0, 160)}"; after ${JSON.stringify(after)}`;
+    });
+    await step("settings: Text size changes the type scale", async () => {
+      await open("appearance");
+      const px = () => getComputedStyle(document.documentElement).getPropertyValue("--text-scale").trim();
+      const out: string[] = [];
+      for (const sz of ["larger", "small", "default"] as const) {
+        setTextSize(sz);
+        await sleep(400);
+        out.push(`${sz}: --text-scale ${px()} body ${getComputedStyle(document.body).fontSize}`);
+        if (sz === "larger") await shot("sweep-settings-text-larger");
+      }
+      return out.join("; ");
+    });
+    await step("settings: Git & worktrees lists the merged agent worktree; Remove… removes it safely", async () => {
+      await open("git");
+      const row = await waitFor("the agent-sweep worktree row", () => settingRow("worktree-agent-sweep"), 15_000);
+      await sleep(500);
+      await shot("sweep-settings-git");
+      const t = textOf(row);
+      const ask = document.querySelector('[data-ask="wt-remove-agent-sweep"]') as HTMLElement | null;
+      if (!ask) throw new Fail(`no Remove… for a merged agent worktree: ${t}`);
+      ask.click();
+      const go = await waitFor("the confirm", () => document.querySelector('[data-confirm="wt-remove-agent-sweep"]') as HTMLElement | null, 3_000);
+      await shot("sweep-settings-git-confirm", undefined, 300);
+      go.click();
+      await waitFor("the row gone", () => !settingRow("worktree-agent-sweep"), 15_000);
+      await sleep(500);
+      await shot("sweep-settings-git-removed");
+      return `row "${t.slice(0, 200)}"; removed`;
+    });
+    await step("settings: Connections shows the folder's MCP server with its secret masked", async () => {
+      await open("connections");
+      const row = await waitFor("the weather server row", () => settingRow("mcp-claude-weather"), 15_000);
+      row.scrollIntoView({ block: "center" });
+      await sleep(600);
+      await shot("sweep-settings-connections");
+      const page = textOf($("[data-settings-page]"));
+      const t = textOf(row);
+      if (/sk-selftest|SECRET|fake-value/.test(page)) throw new Fail(`a secret shows: ${t}`);
+      if (!/••••/.test(t)) throw new Fail(`nothing masked: ${t}`);
+      return `"${t.slice(0, 260)}"`;
+    });
+    await step("settings: Storage lists sizes", async () => {
+      await open("storage");
+      await waitFor("sizes", () => $all("[data-storage-bytes]").length > 0, 20_000);
+      await sleep(500);
+      await shot("sweep-settings-storage");
+      return $all("[data-setting^='storage-']").map((r) => textOf(r).slice(0, 90)).join(" | ");
+    });
+    await step("settings: Devices: Mac network state, Agent permissions list and revoke (a grant made in sweep-timeline)", async () => {
+      await open("devices");
+      await sleep(800);
+      const net = textOf(settingRow("mac-network"));
+      const grants = $all("[data-setting^='grants-']").map((r) => textOf(r).slice(0, 160));
+      const perm = document.querySelector('[data-group="devices-permissions"]');
+      perm?.scrollIntoView({ block: "center" });
+      await sleep(400);
+      await shot("sweep-settings-devices");
+      let revoked = "nothing to revoke";
+      const ask = perm?.querySelector("[data-ask]") as HTMLElement | null;
+      if (ask) {
+        const which = ask.dataset.ask;
+        ask.click();
+        const go = await waitFor("the confirm", () => perm?.querySelector(`[data-confirm="${which}"]`) as HTMLElement | null, 3_000);
+        go.click();
+        await sleep(1200);
+        revoked = `revoked (${which}); now ${(await api().deviceGrants()).length ?? "?"} grants; rows: ${$all("[data-setting^='grants-']").map((r) => textOf(r).slice(0, 80)).join(" | ")}`;
+      }
+      return `network "${net.slice(0, 160)}"; grants [${grants.join(" | ")}]; ${revoked}`;
+    });
+    await step("settings: search finds rows across categories; Esc clears", async () => {
+      await open("general");
+      const box = (await waitFor("the search box", () => $("[data-settings-search]"), 3_000)) as HTMLInputElement;
+      const box2 = box.tagName === "INPUT" ? box : (box.querySelector("input") as HTMLInputElement);
+      setInput(box2, "sleep");
+      await sleep(700);
+      await shot("sweep-settings-search");
+      const hits = $all("[data-setting]").map((r) => r.dataset.setting);
+      setInput(box2, "zzzz nothing");
+      await sleep(400);
+      const none = textOf($("[data-settings-page]")).includes("Nothing matches");
+      setInput(box2, "");
+      if (!hits.includes("prevent-sleep")) throw new Fail(`"sleep" found ${hits.join(", ")}`);
+      return `"sleep" -> ${hits.join(", ")}; nonsense -> Nothing matches ${none}`;
+    });
+    await step("settings: Open files and folders in an installed editor (Xcode here): the palette's Open opens the folder there", async () => {
+      const apps = ((await invoke("apps_installed").catch(() => [])) as { id: string; name: string }[]) ?? [];
+      const ed = apps.find((a) => a.id === "xcode") ?? apps.find((a) => !/terminal|iterm|ghostty|warp/i.test(a.id));
+      if (!ed) return `no editor installed (found ${apps.map((a) => a.name).join(", ") || "none"})`;
+      const prev = await api().prefsGet();
+      await api().prefsSet({ ...prev, open_with: ed.id });
+      try {
+        await open("general");
+        const row = textOf(settingRow("open-with"));
+        await shot("sweep-settings-open-with", undefined, 300);
+        useStore.getState().closeSettings();
+        useStore.getState().setPalette(true);
+        const pin = await waitFor("the palette input", () => $('input[placeholder^="Jump to a session"]') as HTMLInputElement | null, 3_000);
+        setInput(pin, "open proj");
+        await sleep(600);
+        const hit = $all("[data-i]").find((r) => /Open proj in/.test(textOf(r)));
+        await shot("sweep-palette-open-in", undefined, 0);
+        if (!hit) {
+          const rows = $all("[data-i]").map(textOf).slice(0, 6).join(" | ");
+          useStore.getState().setPalette(false);
+          throw new Fail(`no "Open proj in ${ed.name}" in the palette: ${rows}`);
+        }
+        hit.click();
+        await log(`OPENED-IN ${ed.id}`);
+        await sleep(6000);
+        return `row "${row.slice(0, 120)}"; palette row "${textOf(hit)}" clicked (the shell side checks ${ed.name} has the folder open)`;
+      } finally {
+        useStore.getState().setPalette(false);
+        await api().prefsSet({ ...(await api().prefsGet()), open_with: prev.open_with });
+      }
+    });
+    useStore.getState().closeSettings();
+  },
+
+  async "sweep-usage"() {
+    await step("usage: the rail ring and the rolling pill show real limits", async () => {
+      await waitFor("a usage payload", () => (useStore.getState() as { usage?: { claude: unknown } }).usage?.claude, 30_000);
+      const ring = await waitFor("the ring", () => $("[data-usage-ring]"), 10_000);
+      const halves = [...ring.querySelectorAll("path[stroke-dasharray]")].map((p) => p.getAttribute("stroke-dasharray")?.split(" ")[0]);
+      await shot("sweep-usage-rail-ring", undefined, 300);
+      // Hover: React's pointer enter comes from pointerover.
+      const btn = ring.closest("button")!;
+      btn.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+      btn.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      await waitFor("the pill", () => $("[data-usage-pill]"), 5_000);
+      await sleep(900);
+      await shot("sweep-usage-pill", undefined, 0);
+      const pills: string[] = [];
+      const t = Date.now();
+      while (Date.now() - t < 14_000) {
+        const p = textOf($("[data-usage-pill]"));
+        if (p && pills[pills.length - 1] !== p) pills.push(p);
+        await sleep(250);
+      }
+      btn.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, pointerType: "mouse" }));
+      btn.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
+      if (pills.length < 2) throw new Fail(`the pill didn't roll: ${pills.join(" → ") || "never showed"}`);
+      return `ring halves (left of 100, 5-hour | weekly) ${halves.join(" | ")}; button "${btn.getAttribute("aria-label")}"; pill rolled through: ${pills.join(" → ")}`;
+    });
+    await step("usage: the Usage page, and Use a reset stops at its confirmation (never pressed for real)", async () => {
+      useStore.getState().openSettings("usage");
+      const page = await waitFor("the usage page", () => $("[data-settings-usage]") ?? $('[aria-label="Plan usage"]'), 5_000);
+      await sleep(1200);
+      await shot("sweep-usage-page");
+      const prov = $all("[data-usage-provider]").map((p) => `${p.dataset.usageProvider}: ${textOf(p).slice(0, 200)}`);
+      const open = $("[data-usage-reset-open]");
+      let confirm = "no reset button (no free resets reported)";
+      if (open) {
+        open.click();
+        const c = await waitFor("the confirmation", () => $("[data-usage-reset-confirm]"), 3_000);
+        await sleep(400);
+        await shot("sweep-usage-reset-confirm");
+        confirm = `confirmation: "${textOf(c).slice(0, 240)}"`;
+        const cancel = button(/Cancel|Keep|Not now/, c);
+        if (!cancel) throw new Fail(`no way out of the confirmation: ${textOf(c)}`);
+        cancel.click();
+        await sleep(400);
+        if ($("[data-usage-reset-confirm]")) throw new Fail("the confirmation stayed");
+      }
+      void page;
+      return `${prov.join(" || ")}; ${confirm}; Claude no-reset line: ${textOf($("[data-usage-claude-no-reset]")).slice(0, 100)}`;
+    });
+    useStore.getState().closeSettings();
+  },
+
+  async "sweep-motion"(ctx) {
+    let id = -1;
+    const keep = (localStorage.getItem("coool.motion") as MotionPref | null) ?? "auto";
+    await step("motion: a chat (bypass, no prompt) with the Browser panel", async () => {
+      ({ id } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions"));
+      return `chat ${id}`;
+    });
+    if (id < 0) return;
+    const url = ((await invoke("selftest_probe_server")) as string).replace(/\/probe$/, "/form");
+    try {
+      for (const pref of ["off", "on", "auto"] as MotionPref[]) {
+        await step(`motion: Reduce motion ${pref}: the beam and cursor while the Browser tools act`, async () => {
+          setMotionPref(pref);
+          await sleep(400);
+          const nav = await browserTool(id, "browser_navigate", { url: `${url}?m=${pref}` });
+          const add = idOf(nav.text, "button", "Add cup");
+          const p = browserTool(id, "browser_click", { id: add });
+          let seen = "";
+          const end = Date.now() + 4000;
+          while (Date.now() < end && !seen) {
+            const beam = document.querySelector("[data-browser-driving]");
+            if (beam) {
+              const anims = ((beam as HTMLElement).getAnimations?.({ subtree: true }) ?? []).map((a) => `${(a as CSSAnimation).animationName ?? "?"}:${a.playState}`).join(",");
+              seen = `beam ${beam.tagName.toLowerCase()} anims=${anims} static=${!!document.querySelector("[data-presence-static]")} reduce-class=${document.documentElement.classList.contains("reduce-motion")}`;
+              await shot(`sweep-motion-${pref}`, undefined, 0);
+            }
+            await sleep(30);
+          }
+          await p;
+          const cur = await pageCursors(id).catch(() => null);
+          return `${seen || "no beam seen"}; page cursor ${cur}`;
+        });
+      }
+    } finally {
+      setMotionPref(keep);
+      useStore.getState().closeBrowser(chatPanelKey(id));
+    }
+  },
+
+  async "sweep-mac-input"(ctx) {
+    const mac = (request: Record<string, unknown>) => invoke("selftest_mac", { request }) as Promise<Record<string, unknown>>;
+    let id = -1;
+    await step("mac-input: the Mac boots and shows in a chat's Mac panel with TextEdit open", async () => {
+      const st = await api().macStatus();
+      if (!st.installed) throw new Fail("no sandbox Mac installed");
+      await api().macBoot();
+      await mac({ cmd: "run", sh: "killall TextEdit 2>/dev/null; sleep 0.5; defaults write com.apple.TextEdit NSShowAppCentricOpenPanelInsteadOfUntitledFile -bool false; defaults write com.apple.TextEdit ApplePersistenceIgnoreState -bool true; defaults write com.apple.TextEdit RichText -bool false; rm -rf \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Autosave Information\" \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Saved Application State\"; open -a TextEdit; sleep 2; echo ok", timeout: 30 });
+      ({ id } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions"));
+      const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+      useStore.getState().setRightPanel(key, "mac");
+      await waitFor("the Mac panel running", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 90_000);
+      await sleep(2500);
+      await shot("sweep-mac-input-before");
+      return `${st.os ?? ""} state was ${st.state}`;
+    });
+    if (id < 0) return;
+    await step("mac-input: the person's own clicks and keys in the panel reach the Mac (typed text lands in TextEdit; a click moves the caret)", async () => {
+      // Where TextEdit's text area is, from the backend's own read of the Mac (points of a W x H pt screen).
+      const read = async () => (await invoke("selftest_mac_screen")) as string;
+      const screen0 = await read();
+      const size = /(\d+)x(\d+) pt/.exec(screen0);
+      const area = screen0.split("\n").find((l) => /\btextarea\b/.test(l));
+      const fr = area && /\((-?\d+),(-?\d+) (\d+)x(\d+)\)\s*$/.exec(area);
+      if (!size || !fr) throw new Fail(`no TextEdit text area on screen:\n${screen0.slice(0, 1200)}`);
+      const [W, H] = [Number(size[1]), Number(size[2])];
+      const [ax, ay, aw, ah] = fr.slice(1).map(Number);
+      const el = $("[data-mac-screen]")!;
+      const c = el.querySelector("canvas")!.getBoundingClientRect();
+      const at = (gx: number, gy: number) => ({ x: c.left + (gx / W) * c.width, y: c.top + (gy / H) * c.height });
+      // Click in the middle of the document, type; then click at the very start of its first line and type again.
+      const mid = at(ax + aw / 2, ay + ah / 2);
+      await invoke("selftest_native", { ...mid, click: true, text: null });
+      await sleep(700); // a person's first key comes a moment after the click
+      await invoke("selftest_native", { ...mid, click: false, text: "hello coool 42" });
+      await sleep(1200);
+      const focused = document.activeElement === el;
+      const doc1 = (await read()).split("\n").find((l) => /\btextarea\b/.test(l)) ?? "";
+      const start = at(ax + 8, ay + 9);
+      await invoke("selftest_native", { ...start, click: true, text: null });
+      await sleep(700);
+      await invoke("selftest_native", { ...start, click: false, text: "go " });
+      await sleep(1200);
+      await shot("sweep-mac-input-typed");
+      const doc2 = (await read()).split("\n").find((l) => /\btextarea\b/.test(l)) ?? "";
+      if (!/hello coool 42/.test(doc1)) throw new Fail(`typed text didn't land: ${doc1}; panel focused ${focused}`);
+      if (!/value="go hello coool 42"/.test(doc2)) throw new Fail(`the second click didn't put the caret at the start: ${doc2}`);
+      return `panel focused ${focused}; after typing: ${doc1.trim().slice(0, 100)}; after a click at the start and "go ": ${doc2.trim().slice(0, 100)}`;
+    });
+    await step("mac-input: TextEdit closed unsaved, panel closed", async () => {
+      await mac({ cmd: "run", sh: "killall TextEdit 2>/dev/null; echo ok", timeout: 15 }).catch(() => null);
+      useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+      return "ok";
+    });
+  },
+
+  async "sweep-pilot-mac"(ctx) {
+    const mac = (request: Record<string, unknown>) => invoke("selftest_mac", { request }) as Promise<Record<string, unknown>>;
+    let id = -1;
+    await step("pilot-mac: a Haiku chat with the Mac panel", async () => {
+      await api().macBoot();
+      await mac({ cmd: "run", sh: "killall TextEdit 2>/dev/null; killall Calculator 2>/dev/null; echo ok", timeout: 15 });
+      ({ id } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions"));
+      const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+      useStore.getState().setRightPanel(key, "mac");
+      await waitFor("the Mac panel running", () => $('[data-mac-panel="running"]'), 90_000);
+      await sleep(1500);
+      return `chat ${id}`;
+    });
+    if (id < 0) return;
+    const r = await agentTurn(id, {
+      prompt:
+        'Call the coool-device tool pilot_run exactly once with target "mac", goal "Open the Calculator app", and success [{"text_visible":"Calculator"}]. Don\'t call any other coool-device tool. Then reply with the run\'s status and how many steps it took, one line.',
+      marks: [["[data-sim-driving]", "sweep-pilot-mac-driving"]],
+      probes: [{ name: "cursor", test: htmlCursor, shot: "sweep-pilot-mac-cursor" }],
+      ms: 180_000,
+    });
+    await step("pilot-mac: pilot_run on the Mac ran, and what it returned", async () => {
+      const runs = pilotRuns(r);
+      await shot("sweep-pilot-mac-after");
+      const screen = ((await invoke("selftest_mac_screen").catch((e) => `err ${e}`)) as string).split("\n")[0];
+      if (!runs.length) throw new Fail(`no pilot_run; tools ${r.all.join(", ")}; reply ${r.reply}`);
+      const o = runs[0].out;
+      return `${o ? pilotLine(o) : runs[0].tool.output.slice(0, 300)}; screen: ${screen}; reply ${JSON.stringify(r.reply.slice(0, 160))}; cursor ${r.seen.cursor ?? "never"} ms, beam ${r.seen["[data-sim-driving]"] ?? "never"} ms`;
+    });
+    await mac({ cmd: "run", sh: "killall Calculator 2>/dev/null; echo ok", timeout: 15 }).catch(() => null);
+    useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+  },
+
+  async "sweep-composer"(ctx) {
+    await step("composer: the hint row never wraps or clips while a turn runs, at any pane width", async () => {
+      const id = await startIn(ctx.cfg.dir, "bypassPermissions");
+      await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 25 127.0.0.1 > /dev/null . Then reply with: done");
+      await waitFor("working", () => chat(id)?.turnStart, 30_000);
+      const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+      const out: string[] = [];
+      for (const [w, panel] of [[1440, "closed"], [1440, "browser"], [1100, "browser"], [960, "closed"]] as const) {
+        await invoke("selftest_resize", { width: w, height: 900 });
+        if (panel === "browser") useStore.getState().openBrowser(key, { kind: "start" });
+        else useStore.getState().setRightPanel(key, "closed");
+        await sleep(900);
+        const comp = composer().closest(".composer-dock") as HTMLElement | null;
+        const hint = ($("[data-steer-hint]") ?? $("[data-steer-hint-short]")) as HTMLElement | null;
+        const row = hint?.parentElement;
+        const bad = hint && (hint.getBoundingClientRect().height > 30 || hint.scrollWidth > hint.clientWidth + 1 || (row && hint.getBoundingClientRect().right > row.getBoundingClientRect().right + 1));
+        const name = `sweep-composer-${w}-${panel}`;
+        await shot(name, undefined, 200);
+        out.push(`${w}/${panel}: composer ${Math.round(comp?.getBoundingClientRect().width ?? 0)}px, hint ${hint ? `"${textOf(hint)}" h=${Math.round(hint.getBoundingClientRect().height)}` : "hidden"}${bad ? " BROKEN" : ""}`);
+      }
+      await invoke("selftest_resize", { width: 1440, height: 900 });
+      useStore.getState().setRightPanel(key, "closed");
+      await nextTurn(id, 0, 60_000).catch(() => null);
+      const broken = out.filter((o) => o.includes("BROKEN"));
+      if (broken.length) throw new Fail(out.join("; "));
+      return out.join("; ");
+    });
+  },
+
+  /** Reduce motion Off for the scenarios after it (the beam at full strength); `sweep-motion-auto` puts Auto back. */
+  async "sweep-motion-off"() {
+    setMotionPref("off");
+    await log(`INFO Reduce motion Off (reduce-motion class ${document.documentElement.classList.contains("reduce-motion")})`);
+  },
+  async "sweep-motion-auto"() {
+    setMotionPref("auto");
+    await log("INFO Reduce motion Auto");
+  },
+
+  async "sweep-noconfirm"() {
+    await step("Confirm before quitting off: ⌘Q with a chat working quits at once (no sheet)", async () => {
+      const p = await api().prefsGet();
+      await api().prefsSet({ ...p, confirm_quit: false });
+      const running = Object.values(useChats.getState().chats).filter((c) => c.running).length;
+      await log(`SUMMARY pass=${pass + 1} fail=${fail}`);
+      await log(`QUITTING-NOCONFIRM (${running} chats running)`);
+      await invoke("selftest_request_quit");
+      await sleep(4000);
+      throw new Fail(`still running; sheet ${!!$("[data-quit-sheet]")} ${textOf(document.querySelector('[role="dialog"]')).slice(0, 120)}`);
+    });
+  },
+};
+const fmtTokensLocal = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`);
+Object.assign(scenarios, sweep);
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

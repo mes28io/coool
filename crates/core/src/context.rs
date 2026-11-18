@@ -105,7 +105,8 @@ pub struct Part {
 pub struct Compaction {
     /// Context before (Claude: `preTokens`; Codex: the last request before it).
     pub before: u64,
-    /// Context after (Claude: `postTokens`; else the first request after it). 0 until known.
+    /// Context after: the first request after it (what the session's context figure shows), until then Claude's
+    /// `postTokens` (the summary and kept messages only, without the system prompt and tools). 0 until known.
     pub after: u64,
     /// Epoch ms.
     pub at: Option<u64>,
@@ -247,9 +248,10 @@ impl Builder {
         match self.cur.take() {
             None => {
                 self.base = ctx;
-                if let Some(c) = self.compaction.as_mut()
-                    && c.after == 0
-                {
+                // The first request after a compaction is what the context really holds now (the figure the
+                // session shows). Claude's `postTokens` leaves out the system prompt and tools: a small chat
+                // compacted "29k -> 7.9k" whose next request was 29k again.
+                if let Some(c) = self.compaction.as_mut() {
                     c.after = ctx;
                 }
             }

@@ -186,6 +186,10 @@ test("projectPath: inside the project, worktrees, and what is not the project", 
   assert.equal(projectPath("~/code/app/src/a.ts", root), "src/a.ts");
   assert.equal(projectPath("/Users/you/code/app/.claude/worktrees/agent-a1/src/a.ts", root), "src/a.ts", "a worktree's file is the project's file");
   assert.equal(projectPath("src/a.ts", root), "src/a.ts");
+  // A project that itself lives in a temp folder keeps its own files (as /tmp or /private/tmp); other temp paths don't count.
+  assert.equal(projectPath("/private/tmp/scratch/app/notes.txt", "/tmp/scratch/app"), "notes.txt");
+  assert.equal(projectPath("/tmp/scratch/app/src/a.ts", "/private/tmp/scratch/app"), "src/a.ts");
+  assert.equal(projectPath("/tmp/other/a.ts", "/tmp/scratch/app"), null);
   for (const out of ["/private/tmp/claude-501/scratch/shot.mjs", "/tmp/x.txt", "/var/folders/ab/T/x", "/Users/you/.claude/projects/m.md", "/Users/you/other/a.ts", "$S/bb-br", "${TMP}/x", "/Users/you/code/app/node_modules/x/i.js", "/Users/you/code/app/target/debug/a", "/Users/you/code/app/app/dist/index.js", "app/build/out.js", "/Users/you/code/app/.claude/settings.json", "../elsewhere/a"])
     assert.equal(projectPath(out, root), null, out);
 });
@@ -247,6 +251,17 @@ test("ledgerRows: the trail owns git history; committed edits leave; pushes and 
     ["deploy", "push", "merge", "wip", "commit", "agentCommit", "otherAgent", "onTrail", "prMerge"],
     "without a trail (not a repository) the git rows stay; only author-committed edits leave",
   );
+});
+
+test("ledgerRows: an author's commit that the trail shows without the file leaves that edit pending", () => {
+  const mk = (id: string, kind: "edit" | "commit", object: string, ts: number) => ({ id, session: "s", kind, action: "x", object, times: 1, ts, step: `a:${id}` });
+  const agentOf = () => null;
+  const rows = [mk("notes", "edit", "notes.txt", 10), mk("other", "edit", "other.txt", 12), mk("c", "commit", "Add other notes", 20)];
+  const trail = [{ time_ms: 21, files: ["other.txt"], files_more: 0, subject: "Add other notes", merge: null }];
+  assert.deepEqual(ledgerRows(rows, { agentOf, trail }).map((c) => c.id), ["notes"], "git add other.txt && git commit: notes.txt is still uncommitted");
+  const more = [{ ...trail[0], files_more: 3 }];
+  assert.deepEqual(ledgerRows(rows, { agentOf, trail: more }).map((c) => c.id), [], "a file list git cut short can't rule the file out");
+  assert.deepEqual(ledgerRows(rows, { agentOf, trail: [] }).map((c) => c.id), [], "before the trail has the commit, the author's commit counts");
 });
 
 test("fanout: background agents from earlier turns still count while they run", () => {

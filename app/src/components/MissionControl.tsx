@@ -81,14 +81,16 @@ export function MissionControl() {
       if (p) get(p.project || p.cwd).starting.push({ k: `pty:${p.id}`, p });
     }
     // Needs you, then working, then waiting; by name within each.
-    const rank = (p: Project) => (p.needs ? 0 : p.busy || p.starting.length ? 1 : 2);
+    const rank = (p: Project) => (p.needs ? 0 : p.busy || startingBusy(p) ? 1 : 2);
     return [...by.values()].sort((a, b) => rank(a) - rank(b) || folderName(a.path).localeCompare(folderName(b.path)));
   }, [live, att, pending, ptys, pendingChats, chatInfos]);
   // One project at a time. It starts on the latest active one and stays there (another project getting busy never
   // swaps the page under the person) until they pick another from the header, or its last agent ends.
   const [picked, setPicked] = useState<string | null>(null);
   const current = useMemo(() => {
-    const at = (p: Project) => (p.starting.length ? Infinity : Math.max(0, ...p.sessions.map((x) => x.last_event ?? x.updated)));
+    // A session starting right now wins; a new chat that is ready and waits for its first prompt doesn't (it would
+    // otherwise hold the page on its project over the ones where agents work, every time Home mounts).
+    const at = (p: Project) => (startingBusy(p) ? Infinity : Math.max(0, ...p.sessions.map((x) => x.last_event ?? x.updated)));
     return projects.find((p) => p.path === picked) ?? projects.reduce<Project | null>((best, p) => (!best || at(p) > at(best) ? p : best), null);
   }, [projects, picked]);
   if (current && current.path !== picked) setPicked(current.path);
@@ -210,7 +212,9 @@ function NeedsCard({ s, att, i }: { s: Session; att: Attention; i: number }) {
 
 // ---------- project tabs ----------
 
-const tabTone = (p: Project): "needs" | "busy" | "idle" => (p.needs ? "needs" : p.busy || p.starting.length ? "busy" : "idle");
+/** New sessions still starting (a new chat that is ready and waits for its first prompt is waiting, not working). */
+const startingBusy = (p: Project) => p.starting.filter((e) => !(e.chat && e.chat.state === "idle")).length;
+const tabTone = (p: Project): "needs" | "busy" | "idle" => (p.needs ? "needs" : p.busy || startingBusy(p) ? "busy" : "idle");
 
 /**
  * The projects with live agents as a row of tabs (by name, so they never reorder under the pointer), each
@@ -274,7 +278,7 @@ function ProjectTabs({ projects, current, onPick }: { projects: Project[]; curre
               tabIndex={on ? 0 : -1}
               data-mc-tab={p.path}
               data-mc-switch-to={folderName(p.path)}
-              title={`${homeShort(p.path)} · ${p.needs ? `${p.needs} need${p.needs === 1 ? "s" : ""} you` : p.busy || p.starting.length ? `${p.busy + p.starting.length} working` : "waiting"}`}
+              title={`${homeShort(p.path)} · ${p.needs ? `${p.needs} need${p.needs === 1 ? "s" : ""} you` : p.busy || startingBusy(p) ? `${p.busy + startingBusy(p)} working` : "waiting"}`}
               onClick={() => onPick(p.path)}
               className={cx(
                 "flex h-[32px] shrink-0 items-center gap-2 rounded-[9px] border px-2.5 text-base transition-colors duration-150",
@@ -343,8 +347,8 @@ function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Att
     open({ kind: "session", key: c.session });
     if (c.step.startsWith("g:")) focusAgent(c.step.slice(2));
   };
-  const working = p.busy + p.starting.length;
-  const waiting = p.sessions.length - p.busy - p.needs;
+  const working = p.busy + startingBusy(p);
+  const waiting = p.sessions.length - p.busy - p.needs + (p.starting.length - startingBusy(p));
   const meta = [p.needs > 0 && <span key="n" className="text-needs-text">{p.needs} need{p.needs === 1 ? "s" : ""} you</span>, working > 0 && <span key="w">{working} working</span>, waiting > 0 && <span key="i">{waiting} waiting</span>].filter(Boolean);
 
   return (

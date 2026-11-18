@@ -140,13 +140,59 @@
       var st = getComputedStyle(el);
       return !!st && !!st.backgroundImage && st.backgroundImage !== "none";
     }
+    /**
+     * Calls `fn(textNode, parent)` for each non-blank text node of the page, depth first, skipping scripts, styles,
+     * noscript and templates (their source isn't text anyone sees), until it returns true; at most 5000 nodes.
+     */
+    function eachText(fn) {
+      var b = document.body;
+      if (!b) return false;
+      var stack = [b];
+      for (var seen = 0; stack.length && seen < 5000; seen++) {
+        var n = stack.pop();
+        var kids = n.childNodes || [];
+        for (var i = kids.length - 1; i >= 0; i--) {
+          var k = kids[i];
+          if (k.nodeType === 3) {
+            if (norm(k.nodeValue) && fn(k, n)) return true;
+          } else if (k.nodeType === 1) {
+            var t = tagOf(k);
+            if (t !== "script" && t !== "style" && t !== "noscript" && t !== "template") stack.push(k);
+          }
+        }
+      }
+      return false;
+    }
+    /**
+     * Whether the page has any text of its own yet. `body.textContent` also holds inline scripts' and styles' source:
+     * a client-rendered page with an inline script looked as if it had text, so navigate stopped waiting after
+     * NAV_GRACE and returned before its content (measured: content drawn 550 / 800 ms after load came back empty).
+     */
+    function pageText() {
+      return eachText(function () {
+        return true;
+      });
+    }
     /** The middle of the viewport shows something (5×5 points over its central half). No way to tell: true. */
     function middleDrawn() {
       var vw = window.innerWidth || 0;
       var vh = window.innerHeight || 0;
       if (!document.elementFromPoint || !vw || !vh) return true;
       for (var i = 0; i < 5; i++) for (var j = 0; j < 5; j++) if (draws(document.elementFromPoint(vw * (0.25 + 0.125 * i), vh * (0.25 + 0.125 * j)))) return true;
-      return false;
+      // Sparse content (a short centred message, a small form) can sit between the 25 points: any text of the page
+      // laid out in the central half counts too (a page drawing "Route content ready" mid-screen waited the full
+      // NAV_BLANK_FOR, 2 s, before this).
+      var x0 = vw * 0.25, x1 = vw * 0.75, y0 = vh * 0.25, y1 = vh * 0.75;
+      var range = document.createRange ? document.createRange() : null;
+      return eachText(function (n, parent) {
+        if (!visibleEl(parent)) return false;
+        var rc;
+        if (range) {
+          range.selectNodeContents(n);
+          rc = range.getBoundingClientRect();
+        } else rc = parent.getBoundingClientRect();
+        return rc.width > 0 && rc.height > 0 && rc.right > x0 && rc.left < x1 && rc.bottom > y0 && rc.top < y1;
+      });
     }
     /**
      * The settle signal. `quiet`: ms since any change. With `mode`, also `settled` and, when not, `why`:
@@ -187,7 +233,7 @@
           // An empty middle is waited for on a page its scripts are drawing (it changed after load, or has no text
           // yet), and for NAV_GRACE ms after load on any page with scripts (they may not have started yet); a page
           // without scripts, or a short one that leaves the middle empty, is done.
-          var drawing = own > la || !norm(document.body && document.body.textContent);
+          var drawing = own > la || !pageText();
           var scripted = !!(document.scripts && document.scripts.length);
           if ((drawing || (since < NAV_GRACE && scripted)) && !middleDrawn()) {
             if (!drawing || since < NAV_BLANK_FOR) why = "blank";

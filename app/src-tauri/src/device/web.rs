@@ -1821,13 +1821,34 @@ email.labels = [document.body.childNodes[2]];
         js.run("T += 160;");
         assert_eq!(js.ok(nav.clone())["settled"], true);
         // A page that stays blank is waited for at most 2 s after load, then settles saying so.
-        js.run("filled = null; T += 2000;");
+        // (The card leaves the page too: any text laid out in the middle counts as drawn.)
+        js.run("filled = null; frame.childNodes = []; T += 2000;");
         let i = js.ok(nav.clone());
         assert_eq!((i["settled"].as_bool(), i["blank"].as_bool()), (Some(true), Some(true)), "{i}");
         // A page that ticks all the time still settles after a navigation (the tick isn't its content arriving).
         js.run("filled = card; var clock = h('span', {}, '0'); document.body.appendChild(clock); for (var k = 0; k < 30; k++) { T += 100; mut('characterData', clock.childNodes[0]); } T += 10;");
         let i = js.ok(nav);
         assert_eq!((i["settled"].as_bool(), i["bg"].as_u64()), (Some(true), Some(1)), "{i}");
+    }
+
+    #[test]
+    fn a_navigation_looks_past_inline_script_source_and_sees_sparse_centred_text() {
+        let js = Js::new();
+        // A client-rendered page: an empty root and an inline script (its source is in body.textContent), loaded at T.
+        js.run(
+            "globalThis.performance = { timeOrigin: T - 500, getEntriesByType: function () { return [{ loadEventEnd: 500 }]; } };
+             page(h('body', {}, h('div', { id: 'app', rect: [0, 0, 600, 0] }), h('script', {}, 'window.boot({ routes: 12 })')));
+             document.scripts = [{}]; document.elementFromPoint = function () { return document.body; };",
+        );
+        let nav = json!({ "op": "idle", "mode": "nav" });
+        // Past the 300 ms grace for scripts: the script's own source isn't the page's text, so it is still waited for.
+        js.run("T += 400;");
+        let i = js.ok(nav.clone());
+        assert_eq!((i["settled"].as_bool(), i["why"].as_str()), (Some(false), Some("blank")), "{i}");
+        // A short message drawn mid-screen, between the 25 points the middle check probes: drawn, so settled.
+        js.run("var msg = h('p', { rect: [250, 390, 100, 20] }, 'Route content ready'); document.body.childNodes[0].appendChild(msg); mut('childList', document.body.childNodes[0]); T += 400;");
+        let i = js.ok(nav);
+        assert_eq!(i["settled"], true, "{i}");
     }
 
     #[test]

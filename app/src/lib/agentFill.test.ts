@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentFill, fillText, fmtK, handoffLine, taskPrompt } from "./agentFill.ts";
+import { agentFill, fillModel, fillText, fmtK, handoffLine, taskPrompt } from "./agentFill.ts";
 
 test("fill: used over the model's window, estimated unless the CLI reported it", () => {
   const f = agentFill(32_000, "claude-sonnet-4-5")!;
@@ -51,4 +51,12 @@ test("taskPrompt: Claude Task / Agent and Codex spawn_agent inputs", () => {
   assert.equal(taskPrompt({ message: "Port the exporter" }), "Port the exporter");
   assert.equal(taskPrompt({ description: "only a description" }), null);
   assert.equal(taskPrompt(null), null);
+});
+
+test("fillModel: reported, else the model the lead asked for, else the lead's", () => {
+  assert.equal(fillModel("claude-haiku-5-5", { model: "opus" }, "claude-sonnet-5"), "claude-haiku-5-5");
+  assert.equal(fillModel(null, { model: "haiku", prompt: "x" }, "claude-opus-5-5"), "haiku");
+  assert.equal(fillModel(null, { model: "haiku" }, "claude-haiku-5-5"), "claude-haiku-5-5", "the lead's own family: its model");
+  assert.equal(fillModel(undefined, { prompt: "x" }, "claude-haiku-5-5"), "claude-haiku-5-5");
+  assert.equal(fillModel(null, null, null), null);
 });

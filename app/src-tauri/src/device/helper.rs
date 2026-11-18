@@ -105,6 +105,8 @@ impl Helper {
             events: Mutex::new(events),
         });
         let weak = Arc::downgrade(&h);
+        // What a call waiting on it is told when it stops: the sandbox Mac's helper isn't the simulator's.
+        let gone = if label.starts_with("coool-vm") { "the sandbox Mac's helper stopped" } else { "the simulator helper stopped" };
         std::thread::Builder::new()
             .name(label.to_string())
             .spawn(move || {
@@ -134,7 +136,7 @@ impl Helper {
                     }
                 }
                 if let Some(h) = weak.upgrade() {
-                    h.died("the simulator helper stopped");
+                    h.died(gone);
                 }
             })
             .map_err(|e| e.to_string())?;

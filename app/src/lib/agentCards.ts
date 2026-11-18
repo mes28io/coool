@@ -8,7 +8,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import type { Chat, ChatItem } from "./chat";
 import { displayTitle, homeShort, isThinking, shortDetail, stripToolName, thinkingWord, tsToMs } from "./format";
-import { agentFill, handoffLine, taskPrompt, type Fill } from "./agentFill";
+import { agentFill, fillModel, handoffLine, taskPrompt, type Fill } from "./agentFill";
 import { toolRow, toolRowFromText } from "./toolNames";
 import { attention, useChatDigest, type ChatDigest } from "./live";
 import { isStopReason } from "./stopped";
@@ -248,7 +248,7 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
     stopped,
     lastAt: end,
     stoppable: false,
-    fill: agentFill(chat.agents[tool.id]?.total, model),
+    fill: agentFill(chat.agents[tool.id]?.total, fillModel(model, tool.input, chat.model)),
     ...handoffOf(taskPrompt(tool.input), stripToolName(tool.name, tool.summary)),
   };
 }
