@@ -98,6 +98,12 @@ pub struct CandRec {
     pub input_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
+    /// `launch`: the app's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    /// `press`: the shortcut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -220,6 +226,8 @@ fn clean_candidates(cands: &[Action], clean: &Screen, sc: &Scrub) -> Vec<CandRec
             }),
             input_key: a.input_key.clone(),
             dir: a.dir.map(String::from),
+            app: a.app.clone(),
+            key: a.key.map(String::from),
         })
         .collect()
 }

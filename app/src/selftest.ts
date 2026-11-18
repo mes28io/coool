@@ -3592,6 +3592,338 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
 const fmtTokensLocal = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`);
 Object.assign(scenarios, sweep);
 
+// ---------- the sandbox Mac: a clean boot, the pilot driven directly, click-then-type ----------
+
+const macReq = (request: Record<string, unknown>) => invoke("selftest_mac", { request }) as Promise<Record<string, unknown>>;
+const macSh = async (sh: string, timeout = 30) => String(((await macReq({ cmd: "run", sh, timeout })) as { output?: string }).output ?? "");
+/** The guest's screen as the host helper reads it (OCR): its words, and a JPEG of it saved as `<shots>/mac-<name>.jpg`. */
+async function macScreen(ctx: Ctx, name?: string): Promise<string[]> {
+  if (name) await invoke("selftest_vm", { request: { cmd: "screenshot", path: `${ctx.cfg.shots}/mac-${name}.jpg`, quality: 0.85 } }).catch((e) => log(`WARN mac screenshot ${name}: ${e}`));
+  const r = (await invoke("selftest_vm", { request: { cmd: "ocr" } })) as { items?: { text: string }[] };
+  return (r.items ?? []).map((i) => i.text);
+}
+const BANNER = /can run in the|Background Activity|Background Items/i;
+/** A chat on screen (bypass, no prompt) with its Mac panel running. */
+async function macChat(ctx: Ctx): Promise<number> {
+  await api().macBoot();
+  const { id, key } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions");
+  useStore.getState().setRightPanel(key, "mac");
+  await waitFor("the Mac panel running", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 120_000);
+  await sleep(1500);
+  return id;
+}
+/** Answers coool's device gate for chat `id` while `p` runs ("this chat" for using a device, Allow once otherwise). */
+async function answeringGate<T>(p: Promise<T>): Promise<T> {
+  const done = new Set<string>();
+  const t = setInterval(() => {
+    const dev = $("[data-device-approval]");
+    const rid = dev?.dataset.approval ?? "";
+    if (!dev || done.has(rid)) return;
+    done.add(rid);
+    const kind = dev.dataset.deviceApproval ?? "";
+    void log(`INFO device ask ${kind}: ${textOf(dev).slice(0, 160)}`);
+    const b = kind === "use" || kind === "site" ? (dev.querySelector('[data-remember="chat"]') as HTMLElement | null) : button("Allow once", dev);
+    (b ?? button("Allow once", dev))?.click();
+  }, 100);
+  try {
+    return await p;
+  } finally {
+    clearInterval(t);
+  }
+}
+
+/** Screenshots while `run` drives a panel (its beam on): at a few moments of the beam's loop, as `<name>-<n>`. */
+async function beamShots(name: string, run: Promise<unknown>, sel = "[data-sim-driving]"): Promise<string> {
+  const st = { done: false };
+  void run.finally(() => (st.done = true));
+  const t = Date.now();
+  while (!st.done && !$(sel) && Date.now() - t < 30_000) await sleep(50);
+  if (!$(sel)) return "never drove";
+  const seen = Date.now() - t;
+  const shots: number[] = [];
+  // The package's loop is about 2 s: 0.3, 0.8, 1.3, 1.9 s after the beam came on.
+  for (const at of [300, 800, 1300, 1900]) {
+    const wait = t + seen + at - Date.now();
+    if (wait > 0) await sleep(wait);
+    if (!$(sel)) break;
+    await shot(`${name}-${shots.length + 1}`, undefined, 0);
+    shots.push(at);
+    if (shots.length === 1) {
+      const b = document.querySelector(`${sel} [data-presence-beam]`) as HTMLElement | null;
+      if (b) {
+        const a = getComputedStyle(b, "::after");
+        const r = b.getBoundingClientRect();
+        await log(`INFO beam ${Math.round(r.width)}x${Math.round(r.height)} active=${b.hasAttribute("data-active")} after: opacity ${a.opacity} padding ${a.padding} filter ${a.filter.slice(0, 80)} bg ${a.backgroundImage.slice(0, 300)}`);
+      } else await log("INFO beam: no [data-presence-beam] inside the driving frame");
+    }
+  }
+  await run.catch(() => null);
+  return `beam after ${seen} ms; ${shots.length} shots`;
+}
+const themeButton = () => ([...document.querySelectorAll("button[aria-label]")] as HTMLElement[]).find((x) => / theme$/.test(x.getAttribute("aria-label") ?? "")) ?? null;
+
+const fix2: Record<string, (ctx: Ctx) => Promise<void>> = {
+  /** The beam around the iPhone and the Mac while the pilot drives them, Reduce motion Off, in both themes. */
+  async "beam-shots"(ctx) {
+    const keep = (localStorage.getItem("coool.motion") as MotionPref | null) ?? "auto";
+    setMotionPref("off");
+    let udid = "";
+    try {
+      for (const theme of ["first", "second"]) {
+        if (theme === "second") {
+          themeButton()?.click();
+          await sleep(800);
+        }
+        const dark = document.documentElement.dataset.theme !== "light";
+        const tag = dark ? "dark" : "light";
+        await step(`beam-shots: the iPhone, ${tag}`, async () => {
+          if (!udid) {
+            udid = await api().simEnsureDevice();
+            await api().simBoot(udid);
+          }
+          const { id, key } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions");
+          useStore.getState().setRightPanel(key, "device");
+          await waitFor("the booted device", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 90_000);
+          await sleep(3000);
+          const run = answeringGate(invoke("selftest_pilot", { chat: id, args: { target: "iphone", app: "com.apple.Preferences", goal: "Open General, then About", success: [{ text_visible: "iOS Version" }] } }) as Promise<string>);
+          const r = await beamShots(`beam-iphone-${tag}`, run);
+          useStore.getState().setRightPanel(key, "closed");
+          return r;
+        });
+        await step(`beam-shots: the Mac, ${tag}`, async () => {
+          await macSh("killall Calculator 2>/dev/null; echo ok").catch(() => "");
+          const id = await macChat(ctx);
+          const run = answeringGate(invoke("selftest_pilot", { chat: id, args: { target: "mac", goal: "Open the Calculator app, then type 12+34= on its keypad", success: [{ text_visible: "46" }], max_steps: 12 } }) as Promise<string>);
+          const r = await beamShots(`beam-mac-${tag}`, run);
+          useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+          return r;
+        });
+      }
+      themeButton()?.click();
+    } finally {
+      setMotionPref(keep);
+      await macSh("killall Calculator 2>/dev/null; echo ok").catch(() => "");
+      if (udid) await invoke("selftest_sim_delete").catch(() => null);
+    }
+  },
+  /** Two real Haiku chats edit notes.txt (the folder: a git repo with it): the overlap row, clicked, lists both authors. */
+  async "mc-overlap"(ctx) {
+    await step("mc-overlap: a click anywhere on the overlap row expands its author rows; again collapses; its text (a button) does too", async () => {
+      const dir = ctx.cfg.dir;
+      const a = await startIn(dir, "bypassPermissions");
+      await turn(a, "Use the Edit tool to append a new last line 'Cats are calm.' to notes.txt. Do nothing else, then reply with: done");
+      const b = await startIn(dir, "bypassPermissions");
+      await turn(b, "Use the Edit tool to append a new last line 'Owls are wise.' to notes.txt. Do nothing else, then reply with: done");
+      home();
+      const row = await waitFor("the overlap row", () => (onTab("proj"), $("[data-mc-overlap]")), 30_000);
+      await sleep(800);
+      const n = () => $all("[data-mc-overlap-edit]").length;
+      const out: string[] = [`row "${textOf(row)}"`];
+      // The row itself (its padding, where the time is), as the sweep clicked it.
+      row.click();
+      await sleep(700);
+      out.push(`row click: ${n()} author rows`);
+      await shot("mc-overlap-open");
+      const opened = n();
+      row.click();
+      await sleep(700);
+      const closed = n();
+      out.push(`again: ${closed}`);
+      (row.querySelector("[data-mc-overlap-toggle]") as HTMLElement).click();
+      await sleep(700);
+      const viaText = n();
+      out.push(`its text: ${viaText}`);
+      out.push(`rows: ${$all("[data-mc-overlap-edit]").map(textOf).join(" | ").slice(0, 200)}`);
+      if (opened < 2 || closed !== 0 || viaText < 2) throw new Fail(out.join("; "));
+      return out.join("; ");
+    });
+  },
+  /** The Mac's status, a boot, and the status after (for a Mac that won't come up). */
+  async "mac-status"(ctx) {
+    await step("mac-status: status, boot, status", async () => {
+      const s0 = JSON.stringify(await api().macStatus());
+      await log(`INFO before: ${s0}`);
+      const t = Date.now();
+      const r = await invoke("mac_boot").then((v) => `ok ${JSON.stringify(v)}`, (e) => `ERR ${e}`);
+      await log(`INFO boot after ${Date.now() - t} ms: ${r}`);
+      await macScreen(ctx, "status").catch(() => []);
+      const ping = await macReq({ cmd: "ping" }).then((v) => JSON.stringify(v), (e) => `ERR ${e}`);
+      return `boot: ${r}; ping ${ping}; after: ${JSON.stringify(await api().macStatus())}`;
+    });
+  },
+  /** A cold boot of the sandbox Mac: no "can run in the background" banners on its screen. */
+  async "mac-clean-boot"(ctx) {
+    await step("mac-clean-boot: from shut down, a boot shows no background-item banners", async () => {
+      const st = await api().macStatus();
+      if (!st.installed) throw new Fail("no sandbox Mac installed");
+      if (st.state === "running") {
+        await api().macShutdown();
+        for (let i = 0; i < 90 && (await api().macStatus()).state !== "stopped"; i++) await sleep(1000);
+      }
+      const t = Date.now();
+      await api().macBoot();
+      const bootMs = Date.now() - t;
+      const out: string[] = [];
+      // Banners post a few seconds after login: look at once, then for 20 s.
+      for (const at of [0, 5_000, 12_000, 20_000]) {
+        const wait = t + bootMs + at - Date.now();
+        if (wait > 0) await sleep(wait);
+        const words = await macScreen(ctx, `boot-${at / 1000}s`);
+        const hits = words.filter((w) => BANNER.test(w));
+        out.push(`+${at / 1000}s: ${hits.length ? hits.join(" | ") : "none"}`);
+        if (hits.length) throw new Fail(`banners on screen after boot (${bootMs} ms): ${out.join("; ")}`);
+      }
+      return `booted in ${bootMs} ms; banners ${out.join("; ")}`;
+    });
+  },
+
+  /**
+   * An agent update as macOS sees it: re-signs the installed agent, with or without the hardened-runtime flag,
+   * whichever it hasn't (a new cdhash; the same identifier and designated requirement, so its Accessibility grant
+   * stays), and restarts it. The next launch's `mac-clean-boot` shows whether the reboot brought a new "can run in the
+   * background" alert (coool's stderr says "closed N agent alert(s)" when it closed any).
+   */
+  async "mac-btm-resign"() {
+    await step("mac-btm-resign: the agent re-signed (a new cdhash) and restarted, still trusted, run by /bin/sh", async () => {
+      await api().macBoot();
+      const APP = "\"$HOME/Library/Application Support/coool/coool agent.app\"";
+      const before = await macSh(`codesign -dvvv ${APP} 2>&1 | grep -E 'CDHash=|^CodeDirectory'`);
+      const flag = /runtime/.test(before) ? "" : "-o runtime";
+      await macSh(`codesign -s - -f ${flag} -i sh.coool.vm-agent -r='designated => identifier "sh.coool.vm-agent"' ${APP} >/dev/null 2>&1; (sleep 1; launchctl kickstart -k gui/$(id -u)/sh.coool.vm-agent) >/dev/null 2>&1 &`);
+      // launchd restarts a job that ran under 10 s only after a pause.
+      for (let i = 0; i < 30; i++) {
+        await sleep(1000);
+        if (await macReq({ cmd: "ping" }).then(() => true, () => false)) break;
+      }
+      const after = await macSh(`codesign -dvvv ${APP} 2>&1 | grep -E 'CDHash=|^CodeDirectory'; launchctl print gui/$(id -u)/sh.coool.vm-agent 2>&1 | grep -E 'program =|state =' | head -2`);
+      const ping = await macReq({ cmd: "ping" });
+      const hash = (s: string) => /CDHash=(\w+)/.exec(s)?.[1];
+      if (hash(before) === hash(after)) throw new Fail(`the cdhash didn't change: ${after}`);
+      if (ping.trusted !== true) throw new Fail(`the agent lost Accessibility: ${JSON.stringify(ping)}`);
+      return `before ${before.replace(/\s+/g, " ")}; after ${after.replace(/\s+/g, " ")}; trusted ${ping.trusted}`;
+    });
+  },
+
+  /**
+   * The person's click into the Mac panel and their keys right after it (`selftest_native`: a trusted click and the
+   * keys in one go, microseconds apart), ten times: each word lands whole, in order, at the end of TextEdit's document.
+   */
+  async "mac-click-type"(ctx) {
+    let id = -1;
+    await step("mac-click-type: TextEdit with an empty document in a chat's Mac panel", async () => {
+      await api().macBoot();
+      await macSh("killall TextEdit 2>/dev/null; sleep 0.5; defaults write com.apple.TextEdit NSShowAppCentricOpenPanelInsteadOfUntitledFile -bool false; defaults write com.apple.TextEdit ApplePersistenceIgnoreState -bool true; defaults write com.apple.TextEdit RichText -bool false; rm -rf \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Autosave Information\" \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Saved Application State\"; open -a TextEdit; sleep 2; echo ok");
+      id = await macChat(ctx);
+      await sleep(1000);
+      return `chat ${id}`;
+    });
+    if (id < 0) return;
+    const read = async () => (await invoke("selftest_mac_screen")) as string;
+    const s0 = await read();
+    const size = /(\d+)x(\d+) pt/.exec(s0);
+    const area = s0.split("\n").find((l) => /\btextarea\b/.test(l));
+    const fr = area && /\((-?\d+),(-?\d+) (\d+)x(\d+)\)\s*$/.exec(area);
+    if (!size || !fr) {
+      await step("mac-click-type: the document is on screen", async () => {
+        throw new Fail(`no TextEdit text area:\n${s0.slice(0, 1000)}`);
+      });
+      return;
+    }
+    const [W, H] = [Number(size[1]), Number(size[2])];
+    const [ax, ay, aw, ah] = fr.slice(1).map(Number);
+    const c = $("[data-mac-screen]")!.querySelector("canvas")!.getBoundingClientRect();
+    const at = (gx: number, gy: number) => ({ x: c.left + (gx / W) * c.width, y: c.top + (gy / H) * c.height });
+    // Below the last line: the caret goes to the end of the text. Alternate sides, so every click moves the pointer.
+    const points = [at(ax + aw * 0.75, ay + ah - 12), at(ax + aw * 0.25, ay + ah - 30)];
+    const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet"];
+    // The last two words typed: the document (TextEdit can bring back an earlier untitled one, and a long value is
+    // shortened in the read) must end with them, whole and in order.
+    let want = "";
+    let ok = 0;
+    const out: string[] = [];
+    for (let n = 0; n < words.length; n++) {
+      const w = `${words[n]}${n} `;
+      const t = performance.now();
+      await invoke("selftest_native", { ...points[n % 2], click: true, text: w });
+      const ms = performance.now() - t;
+      want = `${want.split(" ").filter(Boolean).slice(-1).join(" ")} ${w}`.trimStart();
+      // The document as the Mac has it, once its keys have landed.
+      let doc = "";
+      const lands = () => doc.trimEnd().endsWith(want.trimEnd()) && (n === 0 || doc.trimEnd().length > want.trimEnd().length || doc.trimEnd() === want.trimEnd());
+      for (let i = 0; i < 20; i++) {
+        await sleep(150);
+        doc = /value="([^"]*)"/.exec((await read()).split("\n").find((l) => /\btextarea\b/.test(l)) ?? "")?.[1] ?? "";
+        if (lands()) break;
+      }
+      const good = lands();
+      if (good) ok++;
+      else want = doc.split(" ").filter(Boolean).slice(-1).join(" "); // go on from what the document holds
+      out.push(`${n + 1}:${good ? "ok" : `LOST (doc ends "${doc.slice(-24)}")`} ${ms.toFixed(1)}ms`);
+    }
+    await shot("mac-click-type", undefined, 300);
+    await step(`mac-click-type: click and type at once, ${ok} of ${words.length} words landed whole`, async () => {
+      if (ok < words.length) throw new Fail(out.join("; "));
+      return out.join("; ");
+    });
+    await macSh("killall TextEdit 2>/dev/null; echo ok").catch(() => "");
+    useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+  },
+
+  /** `pilot_run` on the Mac, called directly (no chat model): Calculator three times, then TextEdit with a sentence three times. */
+  async "pilot-mac-direct"(ctx) {
+    let id = -1;
+    await step("pilot-mac-direct: a chat with the Mac panel", async () => {
+      id = await macChat(ctx);
+      return `chat ${id}`;
+    });
+    if (id < 0) return;
+    const run = async (args: Record<string, unknown>) => {
+      const txt = (await answeringGate(invoke("selftest_pilot", { chat: id, args }) as Promise<string>)) as string;
+      const i = txt.indexOf("\n{");
+      return { head: txt.split("\n")[0], o: i >= 0 ? (JSON.parse(txt.slice(i + 1)) as PilotRunResult) : null };
+    };
+    for (let n = 1; n <= 3; n++) {
+      await step(`pilot-mac-direct: a Calculator goal, run ${n} (its own wording, so Haiku decides): done, verified`, async () => {
+        await macSh("killall Calculator 2>/dev/null; open -a Finder; sleep 1; echo ok");
+        const { head, o } = await run({ target: "mac", goal: ["Open the Calculator app", "Please open Calculator", "Start the Calculator application"][n - 1], success: [{ text_visible: "Calculator" }, { element: { label: "Calculator" } }] });
+        await shot(`pilot-mac-calc-${n}`, undefined, 300);
+        await macScreen(ctx, `calc-${n}`);
+        const front = String((await macReq({ cmd: "ping" })).frontmost ?? "");
+        if (!o || o.status !== "done" || !o.verified) throw new Fail(`${head}; ${o ? pilotLine(o) : ""}`);
+        if (!/Calculator/.test(front)) throw new Fail(`done, but ${front.trim()} is in front`);
+        return `${pilotLine(o)}; front ${front.trim()}`;
+      });
+    }
+    const SENTENCE = "the quick brown fox jumps over the lazy dog 42";
+    for (let n = 1; n <= 3; n++) {
+      await step(`pilot-mac-direct: a TextEdit goal (type a sentence), run ${n} (its own wording): done, verified, the document holds it`, async () => {
+        await macSh(
+          "killall TextEdit 2>/dev/null; sleep 0.5; rm -rf \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Autosave Information\" \"$HOME/Library/Containers/com.apple.TextEdit/Data/Library/Saved Application State\"; defaults write com.apple.TextEdit ApplePersistenceIgnoreState -bool true; defaults write com.apple.TextEdit RichText -bool false; " +
+            (n === 2 ? "defaults delete com.apple.TextEdit NSShowAppCentricOpenPanelInsteadOfUntitledFile 2>/dev/null; " : "defaults write com.apple.TextEdit NSShowAppCentricOpenPanelInsteadOfUntitledFile -bool false; ") +
+            "open -a Finder; sleep 1; echo ok",
+        );
+        const { head, o } = await run({
+          target: "mac",
+          goal: ["Open TextEdit, start a new document if none is open, and type the sentence <sentence> into the document", "In TextEdit, type <sentence> into a new document", "Launch TextEdit and write the sentence <sentence> in an empty document"][n - 1],
+          inputs: { sentence: SENTENCE },
+          success: [{ text_visible: SENTENCE }],
+          max_steps: 12,
+        });
+        await shot(`pilot-mac-textedit-${n}`, undefined, 300);
+        await macScreen(ctx, `textedit-${n}`);
+        const doc = ((await invoke("selftest_mac_screen")) as string).split("\n").find((l) => /\btextarea\b/.test(l)) ?? "";
+        await macSh("killall TextEdit 2>/dev/null; echo ok").catch(() => "");
+        if (!o || o.status !== "done" || !o.verified) throw new Fail(`${head}; ${o ? pilotLine(o) : ""}; doc ${doc}`);
+        if (!doc.includes(SENTENCE)) throw new Fail(`done, but the document: ${doc}`);
+        return `${n === 2 ? "(open panel at launch) " : ""}${pilotLine(o)}; doc ${doc.trim().slice(0, 120)}`;
+      });
+    }
+    await macSh("killall Calculator 2>/dev/null; killall TextEdit 2>/dev/null; echo ok").catch(() => "");
+    useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+  },
+};
+Object.assign(scenarios, fix2);
+
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.
 let started = false;

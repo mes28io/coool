@@ -71,6 +71,7 @@ pub fn iphone_screen(t: &Tree) -> Screen {
         home: springboard && !alert,
         w,
         h,
+        apps: Vec::new(),
     }
 }
 
@@ -296,6 +297,7 @@ impl Driver for Iphone<'_> {
                 self.swipe_as("back", (2.0, s.h / 2.0), (s.w * 0.8, s.h / 2.0), 200.0, None)?;
                 Ok("swiped back from the left edge".into())
             }
+            Verb::Launch | Verb::Press => Err("launch and press are Mac actions".into()),
             Verb::Done | Verb::Stuck => Ok(String::new()),
         }
     }
@@ -359,14 +361,43 @@ pub fn mac_screen(t: &Tree) -> Screen {
         });
     }
     let alert = t.nodes.iter().any(|n| n.role == "sheet" || n.role == "dialog");
-    Screen { app: t.app.trim().to_string(), url: None, keyboard: elems.iter().any(|e| e.kind == Kind::Input && e.focused), elems, texts: Vec::new(), alert, home: false, w, h }
+    Screen { app: t.app.trim().to_string(), url: None, keyboard: elems.iter().any(|e| e.kind == Kind::Input && e.focused), elems, texts: Vec::new(), alert, home: false, w, h, apps: Vec::new() }
 }
 
 pub struct Mac<'a> {
     pub t: crate::device::vm::MacTools<'a>,
+    /// The `launch` candidates of this run (see [`launchable`]), read once at the start.
+    pub apps: Vec<String>,
+}
+
+/// Most a Mac screen offers as `launch` candidates when the goal names no installed app.
+const MAX_LAUNCH: usize = 60;
+
+/// The apps a Mac goal may launch: the installed apps whose name the goal mentions (as words: "open the Calculator
+/// app", "TextEdit"), longest first; when it names none, every installed app (up to [`MAX_LAUNCH`]).
+pub fn launchable(goal: &str, installed: &[String]) -> Vec<String> {
+    let g = goal.to_lowercase();
+    let word = |name: &str| {
+        let n = name.to_lowercase();
+        g.match_indices(&n).any(|(i, _)| {
+            let before = g[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+            let after = g[i + n.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+            before && after
+        })
+    };
+    let mut named: Vec<String> = installed.iter().filter(|a| !a.is_empty() && word(a)).cloned().collect();
+    named.sort_by_key(|a| std::cmp::Reverse(a.len()));
+    if named.is_empty() { installed.iter().take(MAX_LAUNCH).cloned().collect() } else { named }
 }
 
 impl Mac<'_> {
+    /// The installed apps' names (the folders the guest agent's `launch` looks in).
+    fn installed(&self) -> Vec<String> {
+        let sh = "ls -1 /Applications /System/Applications /System/Applications/Utilities 2>/dev/null | sed -n 's/\\.app$//p' | sort -u";
+        let r = self.t.d.vm.agent(self.t.d, json!({ "cmd": "run", "sh": sh, "timeout": 10 }), Duration::from_secs(15));
+        r.ok().and_then(|v| v["output"].as_str().map(|o| o.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())).unwrap_or_default()
+    }
+
     fn idle(&self, quiet: u64, first: u64, timeout: u64) -> u64 {
         let t = Instant::now();
         let _ = self.t.d.vm.call(self.t.d, json!({ "cmd": "idle", "quietMs": quiet, "firstMs": first, "timeoutMs": timeout }), Duration::from_millis(timeout + 4000));
@@ -380,6 +411,7 @@ impl Mac<'_> {
 
 impl Driver for Mac<'_> {
     fn start(&mut self, goal: &Goal) -> Result<String, String> {
+        self.apps = launchable(&goal.goal, &self.installed());
         let Some(app) = &goal.app else { return Ok(String::new()) };
         let t = Instant::now();
         self.t.call("mac_app", &json!({ "action": "launch", "app": app, "observe": false }))?;
@@ -391,7 +423,8 @@ impl Driver for Mac<'_> {
         let t = Instant::now();
         let tree = self.t.tree(true)?;
         let ms = t.elapsed().as_millis() as u64;
-        let s = mac_screen(&tree);
+        let mut s = mac_screen(&tree);
+        s.apps = self.apps.clone();
         self.t.remember_tree(tree);
         Ok((s, ms))
     }
@@ -420,13 +453,26 @@ impl Driver for Mac<'_> {
                 self.t.call("mac_scroll", &json!({ "direction": dir, "observe": false })).map(|_| format!("scrolled {dir}"))
             }
             Verb::Back => self.t.call("mac_press", &json!({ "key": "[", "modifiers": ["command"], "observe": false })).map(|_| "pressed command+[".into()),
+            Verb::Launch => {
+                let app = a.app.as_deref().ok_or("launch names no app")?;
+                self.t.call("mac_app", &json!({ "action": "launch", "app": app, "observe": false }))?;
+                Ok(format!("launched {app}"))
+            }
+            Verb::Press => {
+                let combo = a.key.ok_or("press names no key")?;
+                let mut parts: Vec<&str> = combo.split('+').collect();
+                let key = parts.pop().unwrap_or(combo);
+                self.t.call("mac_press", &json!({ "key": key, "modifiers": parts, "observe": false }))?;
+                Ok(format!("pressed {combo}"))
+            }
             Verb::Done | Verb::Stuck => Ok(String::new()),
         }
     }
 
     fn settle(&mut self, after: Verb) -> u64 {
         let first = match after {
-            Verb::Tap | Verb::Back | Verb::Submit => 400,
+            Verb::Launch => 300,
+            Verb::Tap | Verb::Back | Verb::Submit | Verb::Press => 400,
             Verb::Scroll => 200,
             _ => 100,
         };
@@ -490,6 +536,7 @@ pub fn browser_screen(s: &Snap) -> Screen {
         home: false,
         w: s.vw,
         h: s.vh,
+        apps: Vec::new(),
     }
 }
 
@@ -530,6 +577,7 @@ impl Driver for Web<'_> {
             Verb::Submit => self.b.pilot_act("browser_press", &json!({ "key": "Enter" })),
             Verb::Scroll => self.b.pilot_act("browser_scroll", &json!({ "direction": a.dir.unwrap_or("down") })),
             Verb::Back => self.b.pilot_back().map(|ms| format!("went back ({ms} ms)")),
+            Verb::Launch | Verb::Press => Err("launch and press are Mac actions".into()),
             Verb::Done | Verb::Stuck => Ok(String::new()),
         }
     }

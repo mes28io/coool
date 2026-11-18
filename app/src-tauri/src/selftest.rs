@@ -594,6 +594,21 @@ pub fn selftest_browser_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<
     Ok(out)
 }
 
+/// `pilot_run` called directly for `chat`, as its agent would through the MCP server (the gate included), without
+/// the chat's own model: repeated pilot runs (`pilot-mac-direct`) cost only the pilot's Haiku decisions.
+#[tauri::command(async)]
+pub fn selftest_pilot(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize, args: serde_json::Value) -> Result<String, String> {
+    active(&core)?;
+    crate::device::pilot::call(&devices, chat, &args)
+}
+
+/// A request to the sandbox Mac's host helper (`ocr`, `screenshot`, …): what the screen shows, read outside the guest.
+#[tauri::command(async)]
+pub fn selftest_vm(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, request: serde_json::Value) -> Result<serde_json::Value, String> {
+    active(&core)?;
+    devices.vm.call(&devices, request, std::time::Duration::from_secs(30))
+}
+
 /// The same path as Cmd+Q (asks first when anything runs).
 #[tauri::command]
 pub fn selftest_request_quit(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<(), String> {

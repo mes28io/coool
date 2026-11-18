@@ -184,8 +184,10 @@ function OverlapRow({ o, sources, open, fresh, onToggle, onOpenBoth }: { o: Over
     ? `${names.join(" and ")} both have uncommitted edits to ${o.file} in the same copy: one can overwrite the other. Open both and let one finish first.`
     : `${names.join(" and ")} both changed ${o.file} in separate worktrees: their branches will need a merge.`;
   return (
-    <div className={cx("group flex h-[36px] w-full items-center gap-2.5 px-3.5 transition-colors duration-150 hover:bg-hover", fresh && "mc-fresh")} data-mc-overlap={o.kind}>
-      <button type="button" onClick={onToggle} title={tip} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+    // The whole row toggles (it highlights as one on hover), not only its text: its button's click (a pointer, or
+    // Enter / Space) bubbles up to here; Open both stops its own.
+    <div className={cx("group flex h-[36px] w-full cursor-default items-center gap-2.5 px-3.5 transition-colors duration-150 hover:bg-hover", fresh && "mc-fresh")} data-mc-overlap={o.kind} onClick={onToggle}>
+      <button type="button" title={tip} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2.5 text-left" data-mc-overlap-toggle>
         <Node className={same ? "text-needs-text" : "text-faint"}>
           <IOverlap size={14} />
         </Node>
@@ -206,7 +208,10 @@ function OverlapRow({ o, sources, open, fresh, onToggle, onOpenBoth }: { o: Over
       {onOpenBoth && (
         <button
           type="button"
-          onClick={onOpenBoth}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenBoth();
+          }}
           title={`Open ${names.slice(0, 2).map(shortTitle).join(" and ")} side by side`}
           className="hidden h-[24px] shrink-0 items-center gap-1 rounded-[7px] px-1.5 text-small text-dim transition-colors hover:bg-press hover:text-fg group-hover:flex focus-visible:flex"
           data-mc-open-both

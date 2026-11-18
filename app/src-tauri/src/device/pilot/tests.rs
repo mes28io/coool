@@ -824,3 +824,29 @@ fn a_pilot_run_stops_and_asks_on_a_risky_step() {
         }
     }
 }
+
+// ---------- the Mac ----------
+
+#[test]
+fn a_mac_goal_offers_launching_the_apps_it_names_and_the_mac_shortcuts() {
+    let installed: Vec<String> = ["Calculator", "Calendar", "TextEdit", "Text", "Safari", "Notes"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(super::drivers::launchable("Open the Calculator app", &installed), ["Calculator"]);
+    assert_eq!(super::drivers::launchable("open TextEdit and type a sentence", &installed), ["TextEdit"]);
+    // "calculators" names no app as a word; no app named: every installed app.
+    assert_eq!(super::drivers::launchable("Count the calculators", &installed).len(), installed.len());
+    let mut s = screen("Finder", vec![elem("menubutton", "File", Kind::Tap), elem("textarea", "", Kind::Input)]);
+    s.apps = vec!["Calculator".into()];
+    let c = candidates(&s, &BTreeMap::new(), Target::Mac);
+    let d: Vec<String> = c.iter().map(|a| a.describe()).collect();
+    assert!(d[0].starts_with("launch app \"Calculator\""), "{d:?}");
+    assert!(d.iter().any(|x| x.starts_with("press command+n")) && d.iter().any(|x| x.starts_with("press escape")), "{d:?}");
+    // Launch keys on the app, so memory tells two launches apart.
+    assert_ne!(c[0].key(), Action { app: Some("Notes".into()), ..c[0].clone() }.key());
+    // The iPhone and the browser get neither.
+    let i = candidates(&s, &BTreeMap::new(), Target::Iphone);
+    assert!(!i.iter().any(|a| matches!(a.verb, Verb::Launch | Verb::Press)));
+    // Not part of the signature.
+    let mut s2 = s.clone();
+    s2.apps.clear();
+    assert_eq!(signature(&s), signature(&s2));
+}
