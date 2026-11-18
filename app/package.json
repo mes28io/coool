@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "lint": "oxlint src",
-    "test": "node --test src/lib/shortcuts.test.ts src/lib/presenceWords.test.ts src/lib/titles.test.ts src/lib/treemap.test.ts",
+    "test": "node --test src/lib/shortcuts.test.ts src/lib/presenceWords.test.ts src/lib/titles.test.ts src/lib/treemap.test.ts src/lib/away.test.ts",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "fonts": "node scripts/fetch-fonts.mjs --force",

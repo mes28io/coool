@@ -202,6 +202,8 @@ function mockProjectCap(): number {
   }
 }
 
+/** The file-overlap demo sessions (see "File overlap between live agents" below): never stepped. */
+const OVERLAP_DEMO = new Set(["ov1a01", "ov1b02", "ov2a03", "ov2b04"]);
 const MOCK_ARTIFACT_URL = "https://claude.ai/artifact/9xQmT4kVdR2wLpE7";
 
 export function mockBackend(): Backend {
@@ -520,6 +522,41 @@ export function mockBackend(): Backend {
     }),
     "atlas",
   );
+  // File overlap between live agents (APP_SPEC "Mission control", lib/mission.ts `overlaps`): two sessions with
+  // uncommitted edits to the same file in atlas-api's own checkout (a clash), and two agents in separate
+  // worktrees of coool changing the same file (a merge to come). They sit still (OVERLAP_DEMO in `tick`).
+  {
+    const step = (text: string, m: number) => (text.startsWith("text:") ? act("text", text.slice(5), now - m * 60_000) : act(text.includes(" · ") ? "tool" : "prompt", text, now - m * 60_000));
+    const still = (p: Partial<Session> & Pick<Session, "provider" | "id" | "cwd">, rows: [string, number][]) =>
+      add(session({ status: "idle", pid: 40_500 + live.length, tokens: tok(26_000, 4_800, 41_000), ...p, activity: rows.map(([t, m]) => step(t, m)), updated: now - rows[rows.length - 1][1] * 60_000 }), "atlas");
+    still({ provider: "claude", id: "ov1a01", cwd: atlas, title: "Return 429 with a Retry-After header" }, [
+      ["Return 429 with a Retry-After header when a key is over budget", 16],
+      ["Read · ~/code/atlas-api/src/config.rs", 15.5],
+      ["Edit · ~/code/atlas-api/src/config.rs", 14],
+      ["Edit · ~/code/atlas-api/src/routes/search.rs", 13],
+      ["text:Over-budget keys now get a 429 with Retry-After; the window comes from `RateConfig`.", 12.5],
+    ]);
+    still({ provider: "codex", id: "ov1b02", cwd: atlas, title: "Read limiter budgets from env" }, [
+      ["Let the limiter budgets come from the environment, with the config file as fallback", 11],
+      ["Edit · ~/code/atlas-api/src/config.rs", 9],
+      ["Bash · cargo check", 8.5],
+      ["text:`ATLAS_RATE_*` variables override the config file now. `cargo check` is clean.", 8],
+    ]);
+    const wt = (a: string, f: string) => `~/code/coool/.claude/worktrees/agent-${a}/${f}`;
+    still({ provider: "claude", id: "ov2a03", cwd: `${coool}/.claude/worktrees/agent-7a1f`, project: coool, title: "Relative times in the sidebar" }, [
+      ["Show relative times in the sidebar rows", 30],
+      ["Edit · " + wt("7a1f", "app/src/lib/format.ts"), 27],
+      ["Edit · " + wt("7a1f", "app/src/components/Sidebar.tsx"), 26],
+      ['Bash · git add -A && git commit -m "Sidebar: relative times on hover"', 25],
+      ["text:Committed in the worktree's branch; ready to merge.", 24.5],
+    ]);
+    still({ provider: "codex", id: "ov2b04", cwd: `${coool}/.claude/worktrees/agent-9c2e`, project: coool, title: "Durations in the Jobs panel" }, [
+      ["Format job durations like the chat footer", 12],
+      ["Edit · " + wt("9c2e", "app/src/lib/format.ts"), 10],
+      ["Edit · " + wt("9c2e", "app/src/components/AgentsPanel.tsx"), 9],
+      ["text:Durations read `4m 12s` everywhere now.", 8],
+    ]);
+  }
   add(
     session({
       provider: "claude",
@@ -1247,6 +1284,25 @@ export function mockBackend(): Backend {
   // A chat whose edit waits for the person: Mission control shows it inline (Allow / Deny).
   const chAtlas = newChat("claude", atlas, {}, 0);
   setTimeout(() => chAtlas.send("Make limiter budgets follow config reloads (review edits)"), 2600);
+  // `?away=demo`: the person left 2h 14m ago (the store's seen marks say so), and a chat in pocket-ledger did
+  // four turns meanwhile: one failed, one committed and pushed. Mission control shows "While you were away"
+  // under Needs you; opening the chat shows the card where the person left (components/Away.tsx).
+  if (location.search.includes("away=demo")) {
+    const left = Date.now() - (2 * 60 + 14) * 60_000;
+    const ch = newChat("claude", `${HOME}/code/pocket-ledger`, {}, 0);
+    ch.always.add("Bash");
+    void ch
+      .seed(["Sketch the invoice data model"], left - 10 * 60_000)
+      .then(() => ch.seed(["Add the invoice PDF route", "Run the migration tests, show me the error", "Link the PDF from the receipt email, then commit and push", "Tidy the README's setup section"], Date.now() - 12 * 60_000))
+      .then(() => import("../store"))
+      .then(({ useStore, APP_SEEN }) => {
+        const st = useStore.getState();
+        const key = ch.session ? `${ch.session.provider}:${ch.session.id}` : null;
+        // Seen marks as if the person had the app, and this chat, on screen until they left.
+        useStore.setState({ seen: { ...st.seen, at: { ...st.seen.at, [APP_SEEN]: left, ...(key ? { [key]: left } : {}) } } });
+        st.touchSeen([APP_SEEN]);
+      });
+  }
   // `?needs=demo`: a second chat with a pending question (the notes chat above already asks to run something).
   if (location.search.includes("needs=demo")) {
     const cq = newChat("claude", `${HOME}/code/atlas`, {}, 0);
@@ -1325,7 +1381,7 @@ export function mockBackend(): Backend {
     for (const l of live) {
       const s = l.s;
       if (l.chat) continue; // chats drive their own session
-      if (s.background_tasks || s.id === AGENTS_DEMO || s.id === "f4a0e124") continue; // the demo parents wait for their jobs / agents
+      if (s.background_tasks || s.id === AGENTS_DEMO || s.id === "f4a0e124" || OVERLAP_DEMO.has(s.id)) continue; // the demo parents wait for their jobs / agents; the overlap demo sits still
       if (s.parent) {
         // Background jobs: keep working; the first one sometimes waits for an approval.
         if (s.id === "job0") {

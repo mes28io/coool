@@ -34,6 +34,8 @@ export interface Change {
   ts: number;
   /** The chat tool call or timeline row it came from (to open the session there). */
   step: string;
+  /** A file change made inside an agent's worktree in the project (`.claude/worktrees/<name>/…`): that worktree's name. */
+  tree?: string;
 }
 
 const clip = (s: string, n = 48) => {
@@ -168,10 +170,22 @@ export function projectPath(p: string, root: string): string | null {
     else if (tail.startsWith("~") && a.startsWith(tail + "/")) rel = a.slice(tail.length + 1);
     else return null;
   }
-  const wt = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(rel);
-  if (wt) rel = wt[1];
+  const wt = WORKTREE.exec(rel);
+  if (wt) rel = wt[2];
   if (!rel || rel === "." || rel.startsWith("../") || NOISE_DIR.test(rel)) return null;
   return rel;
+}
+
+/** An agent's worktree inside the project: `.claude/worktrees/<name>/…` (also `.codex/` and `.coool/`). */
+const WORKTREE = /^\.(?:claude|codex|coool)\/worktrees\/([^/]+)\/(.+)$/;
+
+/** The worktree inside the project that `p` is in (its name), or null for the project's own checkout. */
+export function worktreeOf(p: string, root: string): string | null {
+  const a = normPath(p);
+  const base = normPath(root);
+  const tail = base.replace(/^\/(Users|home)\/[^/]+/, "~");
+  const rel = !a.startsWith("/") && !a.startsWith("~") ? a.replace(/^(\.\/)+/, "") : base && a.startsWith(base + "/") ? a.slice(base.length + 1) : tail.startsWith("~") && a.startsWith(tail + "/") ? a.slice(tail.length + 1) : null;
+  return rel === null ? null : (/^\.(?:claude|codex|coool)\/worktrees\/([^/]+)(?:\/|$)/.exec(rel)?.[1] ?? null);
 }
 
 /** `dir` joined with a relative `p` (`..` and `.` resolved); absolute and `~` paths come back as they are. */
@@ -185,7 +199,13 @@ function resolve(dir: string, p: string): string {
   return parts.join("/");
 }
 
-type Effect = Pick<Change, "kind" | "action" | "object" | "before" | "after" | "detail">;
+type Effect = Pick<Change, "kind" | "action" | "object" | "before" | "after" | "detail" | "tree">;
+
+/** `{ tree }` for a path inside one of the project's agent worktrees, else nothing. */
+const inTree = (p: string, root: string): { tree?: string } => {
+  const t = worktreeOf(p, root);
+  return t ? { tree: t } : {};
+};
 
 /**
  * What a shell command changed, or null for commands that only read, build or tidy up. With the project
@@ -423,7 +443,7 @@ export function changesFromActivity(session: string, activity: Activity[], root:
     else if (FILE_TOOL.test(name) && detail) {
       const create = /^write$/i.test(name);
       const object = projectPath(detail, root);
-      e = object === null ? null : { kind: create ? "create" : "edit", action: create ? "Wrote" : "Edited", object };
+      e = object === null ? null : { kind: create ? "create" : "edit", action: create ? "Wrote" : "Edited", object, ...inTree(detail, root) };
     } else if (SHELL_TOOL.test(name) && detail) e = sideEffect(detail, branch, root);
     else if (isPilotTool(name)) e = { kind: "pilot", action: "Drove the device", object: clip(detail || "a pilot run", 64) };
     if (!e) continue;
@@ -523,7 +543,7 @@ export function changesFromChat(session: string, items: ItemLike[], root: string
       if (/patch/i.test(t.name)) {
         for (const f of patchFiles(input)) {
           const object = projectPath(f.path, root);
-          if (object !== null) push(`${t.id}:${f.path}`, { kind: f.kind, action: f.kind === "create" ? "Created" : f.kind === "delete" ? "Deleted" : "Edited", object, added: f.added, removed: f.removed });
+          if (object !== null) push(`${t.id}:${f.path}`, { kind: f.kind, action: f.kind === "create" ? "Created" : f.kind === "delete" ? "Deleted" : "Edited", object, added: f.added, removed: f.removed, ...inTree(f.path, root) });
         }
         continue;
       }
@@ -534,7 +554,7 @@ export function changesFromChat(session: string, items: ItemLike[], root: string
       if (/^write$/i.test(t.name)) {
         const created = /creat|new file/i.test(t.output);
         const n = typeof input.content === "string" ? lines(input.content).length : undefined;
-        push(t.id, { kind: created ? "create" : "edit", action: created ? "Created" : "Wrote", object, added: n, removed: created ? 0 : undefined });
+        push(t.id, { kind: created ? "create" : "edit", action: created ? "Created" : "Wrote", object, added: n, removed: created ? 0 : undefined, ...inTree(path, root) });
         continue;
       }
       // Edit: old_string/new_string; MultiEdit: edits[]
@@ -543,7 +563,7 @@ export function changesFromChat(session: string, items: ItemLike[], root: string
         : typeof input.old_string === "string" || typeof input.new_string === "string"
           ? [[String(input.old_string ?? ""), String(input.new_string ?? "")]]
           : [];
-      const row: Effect & { added?: number; removed?: number } = { kind: "edit", action: "Edited", object };
+      const row: Effect & { added?: number; removed?: number } = { kind: "edit", action: "Edited", object, ...inTree(path, root) };
       if (pairs.length) {
         let added = 0;
         let removed = 0;
@@ -698,18 +718,138 @@ const FILE_KINDS = new Set<ChangeKind>(["edit", "create", "delete", "move"]);
  * Pushes, PRs, deploys, publishes, migrations, requests, device runs and deletes always stay.
  */
 export function ledgerRows(rows: Change[], o: { agentOf: (c: Change) => string | null; trail: TrailCommitLike[] | null; cap?: number }): Change[] {
-  const author = (c: Change) => `${c.session}|${o.agentOf(c) ?? ""}`;
+  const committed = committedBy(rows, o.agentOf, o.trail);
+  const kept = rows.filter((c) => !(FILE_KINDS.has(c.kind) && committed(c)) && !(o.trail && isHistory(c)));
+  return sameFile(foldAgentRows(kept, o.agentOf)).slice(0, o.cap ?? 40);
+}
+
+/** Commits on the trail, with the commits its merges brought in. */
+const trailCommits = (trail: TrailCommitLike[] | null) => (trail ?? []).flatMap((t) => [t, ...(t.merge?.commits ?? [])]);
+/** A file on the trail in a commit made after `ts` (a second of slack for clocks). */
+const onTrail = (commits: TrailCommitLike[], file: string, ts: number) => commits.some((t) => t.time_ms >= ts - 1000 && t.files.includes(file));
+
+/** Whether a file change is committed: its author (the session, or that subagent) committed after it, or a commit on the trail made after it lists the file. */
+function committedBy(rows: Change[], agentOf: (c: Change) => string | null, trail: TrailCommitLike[] | null): (c: Change, file?: string) => boolean {
+  const author = (c: Change) => `${c.session}|${agentOf(c) ?? ""}`;
   // Each author's latest commit.
   const lastCommit = new Map<string, number>();
   for (const c of rows) if (c.kind === "commit") lastCommit.set(author(c), Math.max(lastCommit.get(author(c)) ?? 0, c.ts));
-  const commits = (o.trail ?? []).flatMap((t) => [t, ...(t.merge?.commits ?? [])]);
-  const committed = (c: Change) => {
-    if (!FILE_KINDS.has(c.kind)) return false;
-    if ((lastCommit.get(author(c)) ?? -1) >= c.ts) return true;
-    return commits.some((t) => t.time_ms >= c.ts - 1000 && t.files.includes(c.object));
-  };
-  const kept = rows.filter((c) => !committed(c) && !(o.trail && isHistory(c)));
-  return sameFile(foldAgentRows(kept, o.agentOf)).slice(0, o.cap ?? 40);
+  const commits = trailCommits(trail);
+  return (c, file = c.object) => (lastCommit.get(author(c)) ?? -1) >= c.ts || onTrail(commits, file, c.ts);
+}
+
+// ---------- file overlap between live sessions ----------
+
+/** What overlap detection needs of a session. */
+export interface OverlapSession {
+  /** Live: working, or idle with its process still there. */
+  live: boolean;
+  /** Its copy of the project: "" for the project's own checkout, else the worktree (`treeOf`). */
+  tree: string;
+}
+
+export interface OverlapEdit {
+  session: string;
+  /** The subagent that made it (its id), or null for the session's own edit. */
+  agent: string | null;
+  /** The copy the edit was made in ("" = the project's checkout). */
+  tree: string;
+  /** Its latest pending change to the file. */
+  ts: number;
+  added?: number;
+  removed?: number;
+  /** How many pending changes it made to the file. */
+  times: number;
+}
+
+export interface Overlap {
+  file: string;
+  /** "same": two sessions change the same copy of the file (a real clash); "merge": only in separate worktrees (their branches will need a merge). */
+  kind: "same" | "merge";
+  /** One per author (a session, or one of its subagents), newest first. */
+  by: OverlapEdit[];
+  /** Between the latest edits of the two authors that edited it most recently. */
+  gapMs: number;
+  /** The newest edit. */
+  ts: number;
+}
+
+/**
+ * A session's copy of the project from its folder: "" when it works in the project's checkout (or a folder
+ * inside it), the worktree's name for `.claude/worktrees/<name>` (`.codex/`, `.coool/`), else its own folder
+ * (a checkout elsewhere).
+ */
+export function treeOf(cwd: string, project: string): string {
+  const a = normPath(cwd);
+  const base = normPath(project);
+  if (!a || a === base) return "";
+  const wt = worktreeOf(a, base);
+  if (wt) return wt;
+  return a.startsWith(base + "/") ? "" : a;
+}
+
+/** Generated files every agent touches (lockfiles, snapshots): never an overlap. */
+const GENERATED = /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|Gemfile\.lock|poetry\.lock|go\.sum|[^/]+\.lock)$|(^|\/)__snapshots__\/|\.snap$/;
+
+/** Who made an edit: the session, or one of its subagents (an orchestrator's agents in worktrees are separate hands). */
+export const authorOf = (e: { session: string; agent: string | null }) => `${e.session}|${e.agent ?? ""}`;
+
+/**
+ * Files that two or more authors (sessions, or subagents of one: an orchestrator's agents each work in their
+ * own worktree) of a project changed and neither has landed, while at least one of their sessions is live. A change still counts while it is pending:
+ * - In the project's checkout: not committed yet (`committedBy`: the author committed after it, or a commit on
+ *   the trail made after it lists the file).
+ * - In a worktree: not merged yet. Its own commits stay in the worktree's branch, so only the trail (the
+ *   project's branch, merges included) can say it landed.
+ * A move counts for both its old and its new path. Lockfiles and snapshots are left out. Two authors in the
+ * same copy make it "same"; otherwise "merge". Same-copy clashes first, then newest.
+ */
+export function overlaps(rows: Change[], sessions: Record<string, OverlapSession>, o: { agentOf: (c: Change) => string | null; trail: TrailCommitLike[] | null }): Overlap[] {
+  const committed = committedBy(rows, o.agentOf, o.trail);
+  const commits = trailCommits(o.trail);
+  const by = new Map<string, Map<string, OverlapEdit>>();
+  for (const c of rows) {
+    if (!FILE_KINDS.has(c.kind) || c.id.endsWith("|fold")) continue;
+    const who = sessions[c.session];
+    if (!who) continue;
+    const tree = c.tree ?? who.tree;
+    for (const file of c.kind === "move" && c.after && c.after !== c.object ? [c.object, c.after] : [c.object]) {
+      if (GENERATED.test(file)) continue;
+      const pending = tree === "" ? !committed(c, file) : !onTrail(commits, file, c.ts);
+      if (!pending) continue;
+      const m = by.get(file) ?? new Map<string, OverlapEdit>();
+      by.set(file, m);
+      const agent = o.agentOf(c);
+      const k = `${c.session}|${agent ?? ""}|${tree}`;
+      const prev = m.get(k);
+      if (!prev) m.set(k, { session: c.session, agent, tree, ts: c.ts, added: c.added, removed: c.removed, times: c.times });
+      else {
+        prev.ts = Math.max(prev.ts, c.ts);
+        prev.times += c.times;
+        if (prev.added !== undefined || c.added !== undefined) {
+          prev.added = (prev.added ?? 0) + (c.added ?? 0);
+          prev.removed = (prev.removed ?? 0) + (c.removed ?? 0);
+        }
+      }
+    }
+  }
+  const out: Overlap[] = [];
+  for (const [file, m] of by) {
+    // One entry per author: its newest copy (an author rarely edits one file in two copies).
+    const per = new Map<string, OverlapEdit>();
+    for (const e of m.values()) {
+      const p = per.get(authorOf(e));
+      if (!p || e.ts > p.ts) per.set(authorOf(e), e);
+    }
+    const edits = [...per.values()].sort((a, b) => b.ts - a.ts || authorOf(a).localeCompare(authorOf(b)));
+    if (edits.length < 2 || !edits.some((e) => sessions[e.session]?.live)) continue;
+    // Same copy: two different authors edited it in one tree.
+    const all = [...m.values()];
+    const same = all.some((e) => all.some((f) => f.tree === e.tree && authorOf(f) !== authorOf(e)));
+    out.push({ file, kind: same ? "same" : "merge", by: edits, gapMs: edits[0].ts - edits[1].ts, ts: edits[0].ts });
+  }
+  // Clashes in the same copy first, then by the newest edit.
+  return out.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "same" ? -1 : 1) || b.ts - a.ts || a.file.localeCompare(b.file));
 }
 
 /** One row per uncommitted file: the same file edited from several sessions or turns is one row, newest, "×N". */

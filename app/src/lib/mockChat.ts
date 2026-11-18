@@ -862,6 +862,12 @@ export class MockChat {
       return;
     }
     await this.say(f.done, gen);
+    // "… then commit (and push)": the turn ends with git, so the ledger and "While you were away" have something shipped.
+    if (/\bcommit\b/.test(p)) {
+      const subject = prompt.split(/,? then /i)[0].replace(/^\w/, (c) => c.toUpperCase());
+      await this.tool(gen, "Bash", `git commit -m "${subject}"`, { command: `git add -A && git commit -m "${subject}"` }, 700, `[main 3f2a91c] ${subject}\n 2 files changed, 41 insertions(+), 6 deletions(-)`);
+      if (/\bpush\b/.test(p)) await this.tool(gen, "Bash", "git push origin main", { command: "git push origin main" }, 900, "To github.com:you/app.git\n   9b1e4d2..3f2a91c  main -> main");
+    }
   }
 
   /** A task list that progresses step by step, via TodoWrite (Claude) or update_plan (Codex). */

@@ -18,7 +18,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { cx } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
-import { leaves, seenAt, useStore } from "./store";
+import { APP_SEEN, leaves, seenAt, useStore } from "./store";
 import { sessionKey } from "./lib/types";
 
 function applyTheme(t: "dark" | "light") {
@@ -79,7 +79,11 @@ function useShortcuts() {
   }, []);
 }
 
-/** The sessions on screen count as seen: mark them while their tab is the active one and the window is in view. */
+/**
+ * The sessions on screen count as seen: mark them while their tab is the active one and the window is in view.
+ * The window and those sessions are also "touched" (when last on screen, wall clock), every 30 s while in view,
+ * so coming back after a while records the absence for "While you were away" (store `touchSeen`).
+ */
 function useMarkSeen() {
   useEffect(() => {
     let inView = document.visibilityState === "visible";
@@ -87,14 +91,19 @@ function useMarkSeen() {
       if (!inView) return;
       const st = useStore.getState();
       const tab = st.tabs.find((t) => t.id === st.activeTab);
-      if (!tab) return;
-      for (const l of leaves(tab.root)) {
+      const shown = [APP_SEEN];
+      for (const l of tab ? leaves(tab.root) : []) {
         if (l.target?.kind !== "session") continue;
         const key = l.target.key;
         const s = st.sessions.find((x) => sessionKey(x) === key);
-        if (s) st.markSeen(key, seenAt(s));
+        if (s) {
+          st.markSeen(key, seenAt(s));
+          shown.push(key);
+        }
       }
+      st.touchSeen(shown);
     };
+    const tick = setInterval(sync, 30_000);
     const view = () => {
       inView = document.visibilityState === "visible";
       sync();
@@ -113,6 +122,7 @@ function useMarkSeen() {
       document.removeEventListener("visibilitychange", view);
       window.removeEventListener("blur", blur);
       window.removeEventListener("focus", focus);
+      clearInterval(tick);
       unsub();
     };
   }, []);

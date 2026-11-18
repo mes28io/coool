@@ -249,3 +249,17 @@ export const IDisk = mk(
     {dot(11.25, 8)}
   </>,
 );
+/** One file, two agents: two frames offset on the diagonal, overlapping in the middle. */
+export const IOverlap = mk(
+  <>
+    <rect x="1.75" y="1.75" width="8.5" height="8.5" rx="1.25" />
+    <rect x="5.75" y="5.75" width="8.5" height="8.5" rx="1.25" />
+  </>,
+);
+/** Time away: a clock face with its hands at ten past. */
+export const IClock = mk(
+  <>
+    <circle cx="8" cy="8" r="6.25" />
+    <path d="M8 4.75V8l2.25 1.5" />
+  </>,
+);

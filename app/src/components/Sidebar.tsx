@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
-import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, homeShort, projectOf, titleWas } from "../lib/format";
 import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
@@ -9,7 +10,10 @@ import type { UiStatus } from "./primitives";
 import { sessionKey } from "../lib/types";
 import { useMoveKeys, useStableOrder } from "../lib/stable";
 import { seenAt, isUnseen, leaves, resolveTarget, useStore } from "../store";
-import { IChevron, ICompose, IFolder, IFolderOpen, IPlus } from "./icons";
+import { IChevron, ICompose, IFolder, IFolderOpen, IOverlap, IPlus } from "./icons";
+import { useGitTrail } from "../lib/gitTrail";
+import { authorOf, overlaps, type Change, type OverlapSession } from "../lib/mission";
+import { agentOf, LEDGER_WINDOW_MS, publishOverlaps, useProjectChanges, useSessionOverlaps } from "../lib/projectChanges";
 import { Wordmark } from "./Wordmark";
 import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { SidebarSkeleton } from "./Skeletons";
@@ -258,6 +262,7 @@ export function Sidebar() {
     >
       {/* Rows show activity static: it animates only in the open session (lib/motion.ts). */}
       <AnimateScope enabled={false}>
+      {open && <OverlapWatch />}
       <div className="absolute inset-y-0 left-0 overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
         <AnimatePresence initial={false}>
           <motion.div key={view} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
@@ -548,6 +553,7 @@ function Row({
   data,
   hover,
   nest,
+  mark,
 }: {
   selected: boolean;
   onClick: () => void;
@@ -570,6 +576,8 @@ function Row({
   nest?: { open: boolean; onToggle: () => void };
   /** `data-*` hooks (self-test). */
   data?: Record<string, string | undefined>;
+  /** A small mark before the status dot (a file overlap with another session). */
+  mark?: ReactNode;
 }) {
   const dot = status === "busy" || status === "starting" || status === "needs" || status === "idle";
   return (
@@ -610,9 +618,10 @@ function Row({
       {auto && <AutoTag className="ml-1.5" />}
       {/* At rest the title runs up to the status dot (or the edge). On hover, age and provider slide in over the
           title's end on the row's own background, faded in from the left, so the title is never cut early. */}
-      {dot && (
-        <span className="ml-2 flex shrink-0 items-center pr-1 group-hover:invisible">
-          <StatusDot status={status} size={8} />
+      {(dot || mark) && (
+        <span className="ml-2 flex shrink-0 items-center gap-1.5 pr-1 group-hover:invisible">
+          {mark}
+          {dot && <StatusDot status={status} size={8} />}
         </span>
       )}
       <span
@@ -664,6 +673,7 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
       nested={nested}
       nest={nest ? { open: nest === "open", onToggle: () => setKidsOpen(sessionKey(s), nest !== "open") } : undefined}
       tip={tip}
+      mark={<OverlapMark sessionKey={sessionKey(s)} />}
       data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined, "data-title-source": s.name?.source }}
     />
       {edit.editing && <TitleInput s={s} onDone={edit.stop} className={cx("absolute inset-y-[3px] right-2 text-base", nested ? "left-[50px]" : "left-[34px]")} />}
@@ -671,3 +681,91 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
     </div>
   );
 }, sameRow);
+
+/**
+ * A tiny overlap mark on a session row: another live session has pending edits to a file this one has too
+ * (lib/mission.ts `overlaps`). Yellow when they edit the same copy, grey when they are in separate worktrees.
+ */
+function OverlapMark({ sessionKey: key }: { sessionKey: string }) {
+  const list = useSessionOverlaps(key);
+  // Each other author's name: another session's title, or (an agent of this one) its description.
+  const titles = useStore(
+    useShallow((st) => {
+      const out: Record<string, string> = {};
+      for (const o of list)
+        for (const e of o.by) {
+          const s = st.sessions.find((x) => sessionKey(x) === e.session);
+          const agent = e.agent ? s?.agents.find((a) => a.id === e.agent)?.description || "an agent" : null;
+          out[authorOf(e)] = e.session === key ? (agent ?? "this session") : `${s ? displayTitle(s) : e.session}${agent ? ` · ${agent}` : ""}`;
+        }
+      return out;
+    }),
+  );
+  if (list.length === 0) return null;
+  // Per file, from this session's side: the others in its own copy (a clash), or in other copies (a merge later).
+  let same = false;
+  const lines = list.map((o) => {
+    // This session's newest edit is "mine"; everyone else (its other agents too) is "others".
+    const me = o.by.find((e) => e.session === key);
+    const mine = me?.tree ?? "";
+    const others = o.by.filter((e) => e !== me);
+    const clash = others.filter((e) => e.tree === mine);
+    same ||= clash.length > 0;
+    const file = o.file.split("/").pop();
+    return clash.length > 0
+      ? `${file}: also edited by ${clash.map((e) => titles[authorOf(e)]).join(", ")} in the same copy`
+      : `${file}: also changed by ${others.map((e) => titles[authorOf(e)]).join(", ")} in another worktree, will need a merge`;
+  });
+  const tip = lines.join("\n");
+  return (
+    <span className={cx("flex", same ? "text-needs-text" : "text-faint")} title={tip} aria-label={tip} data-overlap-mark={same ? "same" : "merge"}>
+      <IOverlap size={11} />
+    </span>
+  );
+}
+
+/**
+ * Keeps every project's file overlaps current for the session rows' marks: a project with two or more
+ * sessions (one of them live) is checked without git first; only when that finds a candidate does it read
+ * the project's git trail, so a commit by either side clears it.
+ */
+function OverlapWatch() {
+  const paths = useStore(useShallow((st) => {
+    const cut = Date.now() - LEDGER_WINDOW_MS;
+    const by = new Map<string, { n: number; live: boolean }>();
+    for (const s of st.sessions) {
+      if (s.status === "ended" && s.updated <= cut) continue;
+      const p = projectOf(s);
+      const e = by.get(p) ?? { n: 0, live: false };
+      e.n++;
+      e.live ||= s.status !== "ended";
+      by.set(p, e);
+    }
+    return [...by.entries()].filter(([, e]) => e.n >= 2 && e.live).map(([p]) => p).sort();
+  }));
+  return (
+    <>
+      {paths.map((p) => (
+        <ProjectWatch key={p} path={p} />
+      ))}
+    </>
+  );
+}
+
+function ProjectWatch({ path }: { path: string }) {
+  const { changes, people } = useProjectChanges(path, null);
+  const candidates = useMemo(() => overlaps(changes, people, { agentOf, trail: null }), [changes, people]);
+  useEffect(() => {
+    if (candidates.length === 0) publishOverlaps(path, []);
+  }, [path, candidates]);
+  return candidates.length > 0 ? <ProjectWatchGit path={path} changes={changes} people={people} /> : null;
+}
+
+function ProjectWatchGit({ path, changes, people }: { path: string; changes: Change[]; people: Record<string, OverlapSession> }) {
+  const git = changes.filter((c) => c.kind === "commit" || c.kind === "merge" || c.kind === "push").length;
+  const entry = useGitTrail(path, String(git));
+  useEffect(() => {
+    if (entry) publishOverlaps(path, overlaps(changes, people, { agentOf, trail: entry.trail?.commits ?? null }));
+  }, [path, entry, changes, people]);
+  return null;
+}
