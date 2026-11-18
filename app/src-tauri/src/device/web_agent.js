@@ -416,6 +416,297 @@
       } catch (e) {}
     }
 
+    // ---- presence: the acting agent's cursor, its label and the text it types, drawn over the page ----
+    // (APP_SPEC "Agent presence"). Rust passes `presence` with an action: {actor, name, mark, tint, decider, from,
+    // reduce, defer}. Everything lives in one fixed, click-through host with a closed shadow root (page CSS can't
+    // reach it, page scripts can't see inside), styled through the CSSOM and animated with the Web Animations API,
+    // so a strict CSP doesn't stop it. Snapshots and the idle signal leave it out (`ours`).
+    var SVGNS = "http://www.w3.org/2000/svg";
+    var GLIDE = "cubic-bezier(0.22, 0.75, 0.2, 1)";
+    var ARROW = "M2.6 1.7C2.1 1.3 1.5 1.6 1.5 2.2V15.6C1.5 16.2 2.2 16.5 2.7 16.1L6.1 12.8C6.3 12.6 6.6 12.5 6.9 12.5H11.9C12.5 12.5 12.8 11.8 12.4 11.3Z";
+    var P = null;
+    var pending = 0;
+    function css(el, o) {
+      for (var k in o) el.style.setProperty(k, o[k]);
+      return el;
+    }
+    function animate(el, frames, opts) {
+      try {
+        if (el.animate) return el.animate(frames, opts);
+      } catch (e) {}
+      return null;
+    }
+    function host() {
+      if (P && P.host.parentNode) return P;
+      if (!document.createElement || !document.createElementNS) return null;
+      try {
+        var h = document.createElement("div");
+        ours.add(h);
+        h.setAttribute("aria-hidden", "true");
+        css(h, { all: "initial", position: "fixed", inset: "0", "pointer-events": "none", "z-index": "2147483647", contain: "strict" });
+        var root = h.attachShadow ? h.attachShadow({ mode: "closed" }) : h;
+        (document.documentElement || document.body).appendChild(h);
+        P = { host: h, root: root, actors: {} };
+        return P;
+      } catch (e) {
+        return null;
+      }
+    }
+    function mk(tag, style, parent) {
+      var el = document.createElement(tag);
+      css(el, style);
+      if (parent) parent.appendChild(el);
+      return el;
+    }
+    function svg(view, paths, size, color) {
+      var s = document.createElementNS(SVGNS, "svg");
+      s.setAttribute("viewBox", view);
+      s.setAttribute("width", String(size));
+      s.setAttribute("height", String(size));
+      css(s, { display: "block", overflow: "visible", color: color || "currentColor" });
+      paths.forEach(function (p) {
+        var e = document.createElementNS(SVGNS, "path");
+        e.setAttribute("d", p[0]);
+        e.setAttribute("fill", p[1] || "currentColor");
+        if (p[2]) {
+          e.setAttribute("stroke", p[2]);
+          e.setAttribute("stroke-width", String(p[3] || 1.5));
+          e.setAttribute("stroke-linejoin", "round");
+          e.setAttribute("paint-order", "stroke");
+        }
+        s.appendChild(e);
+      });
+      return s;
+    }
+    /** The actor's cursor (made on first use): a tinted arrow and a two-line label (who, then what). */
+    function actor(p) {
+      var H = host();
+      if (!H) return null;
+      var a = H.actors[p.actor];
+      if (a && a.g.parentNode) return a;
+      var tint = p.tint || "#0a84ff";
+      var g = mk("div", { position: "absolute", left: "0", top: "0", "will-change": "transform", opacity: "0", font: "500 12px/1.3 -apple-system, BlinkMacSystemFont, 'Helvetica Neue', system-ui, sans-serif", "-webkit-font-smoothing": "antialiased", "letter-spacing": "0" }, H.root);
+      var arrow = svg("0 0 14 18", [[ARROW, tint, "#fff", 1.6]], 18);
+      css(arrow, { position: "absolute", left: "-1.5px", top: "-1.7px", width: "14px", height: "18px", filter: "drop-shadow(0 1px 1.5px rgba(0,0,0,.28)) drop-shadow(0 3px 8px rgba(0,0,0,.16))" });
+      g.appendChild(arrow);
+      var label = mk("div", { position: "absolute", left: "13px", top: "17px", display: "flex", "flex-direction": "column", gap: "1px", "max-width": "220px", padding: "5px 9px 6px 7px", "border-radius": "9px", background: tint, color: "#fff", "box-shadow": "0 0 0 0.5px rgba(255,255,255,.25) inset, 0 6px 16px -6px rgba(0,0,0,.4), 0 1px 3px rgba(0,0,0,.18)", "white-space": "nowrap" }, g);
+      var who = mk("div", { display: "flex", "align-items": "center", gap: "5px", "font-size": "10.5px", "line-height": "13px", opacity: "0.86" }, label);
+      var chip = mk("span", { display: "inline-flex", "align-items": "center", "justify-content": "center", width: "13px", height: "13px", "border-radius": "50%", background: "#fff", color: "#0d0d0d", "flex-shrink": "0" }, who);
+      if (p.mark && p.mark.viewBox && p.mark.paths) chip.appendChild(svg(p.mark.viewBox, p.mark.paths, 9, p.name === "Pilot" ? tint : "#0d0d0d"));
+      var name = mk("span", {}, who);
+      var say = mk("div", { "font-size": "12px", "line-height": "15px", "font-weight": "600", overflow: "hidden", "text-overflow": "ellipsis" }, label);
+      a = H.actors[p.actor] = { g: g, label: label, name: name, say: say, x: null, y: null, timer: 0, fade: null };
+      return a;
+    }
+    function setWho(a, p) {
+      var d = p.decider === "haiku" ? "Haiku" : p.decider === "memory" ? "memory" : "";
+      a.name.textContent = (p.name || "Agent") + (d ? " · " + d : "");
+    }
+    /** Keeps the label on screen: to the left of the arrow near the right edge, above it near the bottom. */
+    function placeLabel(a, x, y) {
+      var w = a.label.offsetWidth || 160;
+      var h = a.label.offsetHeight || 34;
+      var left = x + 13 + w > (window.innerWidth || 0) - 6;
+      var up = y + 17 + h > (window.innerHeight || 0) - 6;
+      a.label.style.left = left ? -w - 4 + "px" : "13px";
+      a.label.style.top = up ? -h - 4 + "px" : "17px";
+    }
+    /** Shows the actor (fading in where it was, or at `from`) and glides it to (x, y): the ms until it arrives. */
+    function glide(p, x, y, say) {
+      var a = actor(p);
+      if (!a) return 0;
+      setWho(a, p);
+      if (say != null) a.say.textContent = say;
+      if (a.fade) {
+        try {
+          a.fade.cancel();
+        } catch (e) {}
+        a.fade = null;
+      }
+      if (a.x == null) {
+        var f = p.from && p.from.length === 2 ? p.from : null;
+        a.x = f ? f[0] : x == null ? (window.innerWidth || 600) / 2 : x;
+        a.y = f ? f[1] : y == null ? (window.innerHeight || 600) / 2 : y;
+        a.g.style.transform = "translate(" + a.x + "px," + a.y + "px)";
+        animate(a.g, [{ opacity: 0 }, { opacity: 1 }], { duration: p.reduce ? 0 : 160 });
+      }
+      a.g.style.opacity = "1";
+      idleFade(a, p);
+      if (x == null || y == null) {
+        placeLabel(a, a.x, a.y);
+        return 0;
+      }
+      var dx = x - a.x;
+      var dy = y - a.y;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      var ms = p.reduce || dist < 2 ? 0 : Math.round(Math.min(320, Math.max(150, 120 + dist * 0.3)));
+      var to = "translate(" + x + "px," + y + "px)";
+      if (ms) animate(a.g, [{ transform: "translate(" + a.x + "px," + a.y + "px)" }, { transform: to }], { duration: ms, easing: GLIDE });
+      a.g.style.transform = to;
+      a.x = x;
+      a.y = y;
+      // The label changes side (near an edge) once the cursor is there, not while it travels.
+      clearTimeout(a.place);
+      if (ms)
+        a.place = setTimeout(function () {
+          placeLabel(a, x, y);
+        }, ms);
+      else placeLabel(a, x, y);
+      return ms;
+    }
+    /** On arrival: a press ring at the tip (`ring`) and a soft outline around the target. */
+    function land(p, r, delay, ring) {
+      var H = host();
+      if (!H) return;
+      var tint = p.tint || "#0a84ff";
+      var at = function () {
+        if (r) {
+          var o = mk("div", { position: "absolute", left: r.left - 3 + "px", top: r.top - 3 + "px", width: r.width + 6 + "px", height: r.height + 6 + "px", "box-sizing": "border-box", "border-radius": "7px", border: "1.5px solid " + tint, background: "color-mix(in srgb, " + tint + " 9%, transparent)", opacity: "0" }, H.root);
+          remove(o, animate(o, [{ opacity: 0 }, { opacity: 1, offset: 0.2 }, { opacity: 1, offset: 0.6 }, { opacity: 0 }], { duration: p.reduce ? 900 : 760, easing: "ease-out" }), 800);
+        }
+        var a = H.actors[p.actor];
+        if (ring && a && !p.reduce) {
+          var c = mk("div", { position: "absolute", left: a.x - 11 + "px", top: a.y - 11 + "px", width: "22px", height: "22px", "border-radius": "50%", border: "2px solid " + tint, "box-sizing": "border-box", opacity: "0" }, H.root);
+          remove(c, animate(c, [{ transform: "scale(.35)", opacity: 0.95 }, { transform: "scale(1.5)", opacity: 0 }], { duration: 440, easing: "cubic-bezier(.2,.7,.3,1)" }), 480);
+        }
+      };
+      if (delay > 0) setTimeout(at, delay);
+      else at();
+    }
+    function remove(el, an, ms) {
+      var go = function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      };
+      if (an && "onfinish" in an) an.onfinish = go;
+      else setTimeout(go, ms);
+    }
+    /** No word from the agent for a long while (it went away without saying it ended): fade. */
+    function idleFade(a, p) {
+      clearTimeout(a.timer);
+      a.timer = setTimeout(function () {
+        endActor(a, p.reduce, 0);
+      }, 20000);
+    }
+    /** The run ended: the cursor rests where it is for `rest` ms, then fades. */
+    function endActor(a, reduce, rest) {
+      clearTimeout(a.timer);
+      a.timer = setTimeout(function () {
+        a.fade = animate(a.g, [{ opacity: 1 }, { opacity: 0 }], { duration: reduce ? 120 : 380, easing: "ease-out", fill: "forwards" });
+        var gone = function () {
+          a.fade = null;
+          if (a.g.parentNode) a.g.parentNode.removeChild(a.g);
+          for (var k in (P && P.actors) || {}) if (P.actors[k] === a) delete P.actors[k];
+        };
+        if (a.fade && "onfinish" in a.fade) a.fade.onfinish = gone;
+        else gone();
+      }, rest);
+    }
+    /** Typed text arriving: the field's new text is covered at once, then shown a character at a time. */
+    function typeIn(p, el, text, hidden, delay) {
+      var H = host();
+      if (!H || !text || p.reduce) return;
+      var tag = tagOf(el);
+      if (tag !== "input" && tag !== "textarea") return;
+      try {
+        var st = getComputedStyle(el);
+        var bg = opaqueBg(el);
+        if (!bg) return;
+        var r = rectOf(el);
+        var bl = parseFloat(st.borderLeftWidth) || 0;
+        var bt = parseFloat(st.borderTopWidth) || 0;
+        var br = parseFloat(st.borderRightWidth) || 0;
+        var bb = parseFloat(st.borderBottomWidth) || 0;
+        var box = mk("div", { position: "absolute", left: r.left + bl + "px", top: r.top + bt + "px", width: Math.max(0, r.width - bl - br) + "px", height: Math.max(0, r.height - bt - bb) + "px", "box-sizing": "border-box", overflow: "hidden", background: bg, "border-radius": st.borderRadius, padding: st.paddingTop + " " + st.paddingRight + " " + st.paddingBottom + " " + st.paddingLeft, color: st.color, font: st.font, "letter-spacing": st.letterSpacing, "text-align": st.textAlign === "start" ? "left" : st.textAlign, display: "flex", "align-items": tag === "input" ? "center" : "flex-start", "white-space": tag === "input" ? "pre" : "pre-wrap", "word-break": "break-word" }, H.root);
+        var span = mk("span", {}, box);
+        var caret = mk("span", { display: "inline-block", width: "1.5px", height: "1.15em", "margin-left": "1px", background: p.tint || "#0a84ff", "border-radius": "1px", "flex-shrink": "0" }, box);
+        var shown = hidden ? text.replace(/./g, "•") : text;
+        var n = shown.length;
+        var step = Math.max(12, Math.min(38, 560 / n));
+        var i = 0;
+        var tick = function () {
+          i++;
+          span.textContent = shown.slice(0, i);
+          if (i < n) setTimeout(tick, step);
+          else
+            setTimeout(function () {
+              caret.style.opacity = "0";
+              remove(box, animate(box, [{ opacity: 1 }, { opacity: 0 }], { duration: 140, easing: "ease-out", fill: "forwards" }), 160);
+            }, 160);
+        };
+        setTimeout(tick, Math.max(0, delay));
+      } catch (e) {}
+    }
+    /** The colour behind a field's text when it is one solid colour (its own, or the nearest ancestor's), else null. */
+    function opaqueBg(el) {
+      for (var n = el, d = 0; n && n.nodeType === 1 && d < 12; n = n.parentElement, d++) {
+        var s = getComputedStyle(n);
+        if (s.backgroundImage && s.backgroundImage !== "none") return null;
+        var m = /rgba?\(([^)]+)\)/.exec(s.backgroundColor || "");
+        if (!m) continue;
+        var parts = m[1].split(/[\s,/]+/).filter(Boolean);
+        var alpha = parts.length > 3 ? parseFloat(parts[3]) : 1;
+        if (alpha >= 0.98) return s.backgroundColor;
+        if (alpha > 0.02) return null;
+      }
+      return "rgb(255, 255, 255)";
+    }
+    /** An element's name for a label ("General", "Email"). */
+    function plain(el) {
+      var tag = tagOf(el);
+      var role = roleOf(el, tag, { cursor: "" }, "", false) || tag;
+      var n = cut(nameOf(el, tag, role), 34);
+      if (!n && (tag === "input" || tag === "textarea")) n = cut(norm(attr(el, "placeholder")), 34);
+      return n;
+    }
+    /** As the app's labels (lib/presenceWords.ts `typingPhrase`): "Typing the email", "Typing in Notes", "Typing". */
+    var FIELD_NOUNS = /^(full |first |last |user ?|display |company |street |e-?mail |phone |zip |postal |search |verification )?(name|email|e-mail|password|passcode|pin|search|address|phone|number|message|username|url|code|title|subject|comment|note|city|country|zip|postcode|query|amount|description|reply|answer|website|company)$/i;
+    function typingPhrase(name) {
+      if (!name || name.split(" ").length > 3 || name.length > 24) return "Typing";
+      if (FIELD_NOUNS.test(name)) return "Typing the " + (name === name.toUpperCase() ? name : name.toLowerCase());
+      return "Typing in " + name;
+    }
+    /** The actor's cursor glides to the middle of `r` with `say` as its label: the ms until it arrives. */
+    function aim(c, r, say) {
+      var p = c.presence;
+      if (!p) return 0;
+      var pt = point(r);
+      return safeGlide(p, pt[0], pt[1], say);
+    }
+    /** Drawing never fails an action. */
+    function safeGlide(p, x, y, say) {
+      try {
+        return glide(p, x, y, say);
+      } catch (e) {
+        return 0;
+      }
+    }
+    /** Marks the target: on arrival with presence, else the plain outline (no agent cursor). */
+    function mark(c, r, arrive, ring) {
+      if (!c.presence) return flash(r);
+      try {
+        land(c.presence, r, arrive, ring);
+      } catch (e) {}
+    }
+    function presenceOp(c) {
+      var p = c.presence || {};
+      if (c.end) {
+        for (var k in (P && P.actors) || {}) if (!p.actor || k === p.actor) endActor(P.actors[k], p.reduce, p.reduce ? 600 : 900);
+        return { ended: true };
+      }
+      if (c.say != null && p.actor) safeGlide(p, null, null, c.say);
+      // `shown`: the cursors on the page now, with their labels (the self-test reads them).
+      var shown = [];
+      for (var key in (P && P.actors) || {}) {
+        var a = P.actors[key];
+        if (a.g.parentNode && !a.fade) shown.push({ actor: key, who: a.name.textContent, say: a.say.textContent });
+      }
+      return { at: cursorAt(c) || null, shown: shown };
+    }
+    function cursorAt(c) {
+      var a = c.presence && P && P.actors[c.presence.actor];
+      return a && a.x != null ? [Math.round(a.x), Math.round(a.y)] : undefined;
+    }
+
     function short(el) {
       var tag = tagOf(el);
       var role = roleOf(el, tag, { cursor: "" }, "", false) || tag;
@@ -453,19 +744,35 @@
         if (top && top !== el && !(el.contains && el.contains(top)) && !(top.contains && top.contains(el)) && !ours.has(top)) note = "at that point the page shows " + short(top) + " on top";
       }
       if (el.disabled === true) note = "it is disabled";
-      flash(r);
+      var arrive = aim(c, r, "Clicking " + (plain(el) || short(el)));
+      mark(c, r, arrive, true);
       var base = { bubbles: true, cancelable: true, composed: true, clientX: p[0], clientY: p[1], screenX: p[0], screenY: p[1], button: 0, view: window };
       var pd = Object.assign({ pointerId: 1, pointerType: "mouse", isPrimary: true, buttons: 1 }, base);
-      ev(el, "pointerover", "PointerEvent", pd);
-      ev(el, "mouseover", "MouseEvent", base);
-      ev(el, "pointerdown", "PointerEvent", pd);
-      var md = ev(el, "mousedown", "MouseEvent", Object.assign({ buttons: 1, detail: 1 }, base));
-      if (!md.defaultPrevented) focusEl(el);
-      ev(el, "pointerup", "PointerEvent", Object.assign({}, pd, { buttons: 0 }));
-      ev(el, "mouseup", "MouseEvent", Object.assign({ detail: 1 }, base));
-      if (typeof el.click === "function") el.click();
-      else ev(el, "click", "MouseEvent", Object.assign({ detail: 1 }, base));
-      return { what: short(el), x: Math.round(p[0]), y: Math.round(p[1]), note: note };
+      var fire = function () {
+        ev(el, "pointerover", "PointerEvent", pd);
+        ev(el, "mouseover", "MouseEvent", base);
+        ev(el, "pointerdown", "PointerEvent", pd);
+        var md = ev(el, "mousedown", "MouseEvent", Object.assign({ buttons: 1, detail: 1 }, base));
+        if (!md.defaultPrevented) focusEl(el);
+        ev(el, "pointerup", "PointerEvent", Object.assign({}, pd, { buttons: 0 }));
+        ev(el, "mouseup", "MouseEvent", Object.assign({ detail: 1 }, base));
+        if (typeof el.click === "function") el.click();
+        else ev(el, "click", "MouseEvent", Object.assign({ detail: 1 }, base));
+      };
+      // With a cursor on the way, the click lands a moment later (`defer`, a few tens of ms) so the person sees it
+      // arrive; `idle` reports it pending meanwhile, so the tools' settle waits for it.
+      var defer = c.presence && arrive > 0 ? Math.min(Number(c.presence.defer) || 0, 120) : 0;
+      if (defer > 0) {
+        pending++;
+        setTimeout(function () {
+          pending--;
+          try {
+            fire();
+          } catch (e) {}
+          lastMutation = now();
+        }, defer);
+      } else fire();
+      return { what: short(el), x: Math.round(p[0]), y: Math.round(p[1]), note: note, at: cursorAt(c) };
     }
 
     function setValue(el, v) {
@@ -507,7 +814,8 @@
       if (el.readOnly) throw new Error(short(el) + " is read-only");
       var text = String(c.text == null ? "" : c.text);
       var r = reveal(el);
-      flash(r);
+      var arrive = aim(c, r, typingPhrase(plain(el)));
+      mark(c, r, arrive, false);
       focusEl(el);
       var tag = tagOf(el);
       var hidden = secret(el);
@@ -534,7 +842,8 @@
           inputEvent(el, "input", text, "insertReplacementText");
         }
       }
-      var res = { what: short(el), len: text.length, masked: hidden || undefined };
+      if (c.presence) typeIn(c.presence, el, text, hidden, arrive);
+      var res = { what: short(el), len: text.length, masked: hidden || undefined, at: cursorAt(c) };
       if (!hidden && (tag === "input" || tag === "textarea") && String(el.value) !== text) res.now = cut(el.value, 120);
       if (c.submit) res.submit = enter(el);
       return res;
@@ -630,11 +939,13 @@
         })] = true;
       });
       var el = c.id != null ? get(c) : document.activeElement || document.body;
-      if (c.id != null) {
-        flash(reveal(el));
-        focusEl(el);
-      }
       var k = keyInfo(c.key);
+      var say = "Pressing " + (k[0] === " " ? "Space" : k[0]);
+      if (c.id != null) {
+        var pr = reveal(el);
+        mark(c, pr, aim(c, pr, say), true);
+        focusEl(el);
+      } else if (c.presence) safeGlide(c.presence, null, null, say);
       if (k[0] === "Enter" && !m.shift && !m.control && !m.option && !m.command) return { key: "Enter", on: short(el), did: enter(el) };
       var d = keyEv(el, "keydown", k, m);
       var did = "";
@@ -719,7 +1030,8 @@
           }).join(", "));
         });
       }
-      flash(reveal(el));
+      var sr = reveal(el);
+      mark(c, sr, aim(c, sr, "Choosing " + cut(norm(picked[0] ? picked[0].text : ""), 28)), false);
       focusEl(el);
       for (var i = 0; i < o.length; i++) if (el.multiple) o[i].selected = picked.indexOf(o[i]) >= 0;
       if (!el.multiple) setValue(el, picked[0].value);
@@ -756,6 +1068,14 @@
 
     function scroll(c) {
       var dir = c.direction || c.dir;
+      if (c.presence) {
+        var said = dir ? "Scrolling " + String(dir).toLowerCase() : "Scrolling";
+        if (c.id != null) {
+          var sr = rectOf(get(c));
+          if (inViewport(sr)) aim(c, sr, said);
+          else safeGlide(c.presence, null, null, said);
+        } else safeGlide(c.presence, null, null, said);
+      }
       if (c.id != null && !dir) {
         var t = get(c);
         try {
@@ -832,6 +1152,7 @@
       run: function (c) {
         switch (c.op) {
           case "observe":
+            if (c.presence && c.say) safeGlide(c.presence, null, null, c.say);
             return observe(c);
           case "click":
             return click(c);
@@ -846,10 +1167,12 @@
           case "find":
             return find(c);
           case "idle":
-            return { quiet: now() - lastMutation, mutations: mutations, ready: document.readyState, doc: DOC, url: String(location.href) };
+            return { quiet: pending ? 0 : now() - lastMutation, pending: pending || undefined, mutations: mutations, ready: document.readyState, doc: DOC, url: String(location.href) };
+          case "presence":
+            return presenceOp(c);
           case "flash": {
             var el = get(c);
-            flash(reveal(el));
+            mark(c, reveal(el), 0, false);
             return { what: short(el) };
           }
           default:

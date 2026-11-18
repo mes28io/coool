@@ -10,6 +10,13 @@ import { SessionsMerge } from "./sessionsMerge";
 import { mockHints } from "./motion";
 import { mockSettings } from "./mockSettings";
 import { mockSim } from "./mockSim";
+import { onMockBrowserActivity, presenceDemo, runPresenceDemo } from "./mockPresence";
+
+const PRESENCE_PROMPTS = {
+  iphone: "Open Settings > General > About on the iPhone and rename it to Ada's iPhone",
+  mac: "Write the owl sentence in TextEdit on the Mac",
+  browser: "Order three coffees for Ada Lovelace in the browser",
+} as const;
 import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
 import { mockMac } from "./mockMac";
@@ -1148,6 +1155,16 @@ export function mockBackend(): Backend {
   if (location.search.includes("agents=chat")) void import("./mockAgents").then((m) => m.runAgentsChat(newChat("claude", `${HOME}/code/blender-addon`, {}, 0))); // see mockAgents.ts
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 
+  // `?presence=iphone|mac|browser`: an agent drives that panel on a loop (lib/mockPresence.ts).
+  const presence = presenceDemo();
+  if (presence) {
+    void runPresenceDemo(presence, (provider, cwd) => {
+      const c = newChat(provider, cwd.replace(/^~/, HOME), {}, 0);
+      void c.seed([PRESENCE_PROMPTS[presence]], now - 20_000);
+      return c;
+    });
+  }
+
   const insights: InsightsStatus = readInsights();
   const sim = mockSim();
   const pilotLog = { enabled: true, dir: "~/Library/Application Support/sh.coool.app/pilot", bytes: 184_320, files: 1 };
@@ -1515,9 +1532,11 @@ export function mockBackend(): Backend {
     onBrowserAgent() {
       return () => {};
     },
-    onBrowserActivity() {
-      return () => {};
+    onBrowserActivity(cb) {
+      return onMockBrowserActivity(cb);
     },
+    async browserPresenceEnd() {},
+    async presenceMotion() {},
     onPilotProgress() {
       return () => {};
     },

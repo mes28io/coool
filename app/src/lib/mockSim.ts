@@ -12,11 +12,28 @@ const W = 402;
 const H = 874;
 const COLORS = ["#ff9f0a", "#30d158", "#0a84ff", "#ff375f", "#bf5af2", "#64d2ff", "#ffd60a", "#ff453a", "#5e5ce6", "#32ade6", "#ac8e68", "#66d4cf"];
 
+/** A scripted screen (lib/mockPresence.ts) drawn instead of the home screen; `repaintMockSim` pushes it at once. */
+let scene: ((g: OffscreenCanvasRenderingContext2D, w: number, h: number) => void) | null = null;
+const repaints = new Set<() => void>();
+export function setMockSimScene(f: typeof scene) {
+  scene = f;
+  repaintMockSim();
+}
+export const repaintMockSim = () => repaints.forEach((f) => f());
+/** The presence demo drives the device itself: no random agent taps meanwhile. */
+let quiet = false;
+export const quietMockSim = () => (quiet = true);
+
 async function frame(touch: { x: number; y: number } | null): Promise<ArrayBuffer | null> {
   if (typeof OffscreenCanvas === "undefined") return null;
   const c = new OffscreenCanvas(W, H);
   const g = c.getContext("2d");
   if (!g) return null;
+  if (scene) {
+    scene(g, W, H);
+    const blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+    return blob.arrayBuffer();
+  }
   const bg = g.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, "#1c2b4a");
   bg.addColorStop(1, "#4a2350");
@@ -66,7 +83,7 @@ export function mockSim(): Sim {
     { udid: "MOCK-USER-1", name: "iPhone 18 Pro", state: "Shutdown", runtime: "iOS 27.0", deviceType: "iPhone 18 Pro", coool: false },
   ];
   const state = new Set<(s: { udid: string; state: string }) => void>();
-  const streams = new Map<number, { udid: string; timers: ReturnType<typeof setInterval>[]; onFrame: (b: ArrayBuffer) => void }>();
+  const streams = new Map<number, { udid: string; timers: ReturnType<typeof setInterval>[]; onFrame: (b: ArrayBuffer) => void; repaint: () => void }>();
   const touches = new Map<string, { x: number; y: number } | null>();
   let ids = 0;
   const setState = (udid: string, s: string) => {
@@ -103,6 +120,7 @@ export function mockSim(): Sim {
       const timers = [
         setInterval(send, 1000),
         setInterval(() => {
+          if (quiet) return;
           const tap = n++ % 2 === 0;
           const a: SimActivity = tap
             ? { udid, chat: null, source: "agent", kind: "tap", x: 60 + Math.random() * (W - 120), y: 140 + Math.random() * 500, label: "Tap" }
@@ -110,12 +128,15 @@ export function mockSim(): Sim {
           for (const cb of activity) cb(a);
         }, 6000),
       ];
-      streams.set(stream, { udid, timers, onFrame });
+      streams.set(stream, { udid, timers, onFrame, repaint: send });
+      repaints.add(send);
       setTimeout(send, 60);
       return { w: W, h: H, scale: 3, stream };
     },
     async simDetach(_udid, stream) {
-      streams.get(stream)?.timers.forEach(clearInterval);
+      const s = streams.get(stream);
+      s?.timers.forEach(clearInterval);
+      if (s) repaints.delete(s.repaint);
       streams.delete(stream);
     },
     async simInput(udid, input) {

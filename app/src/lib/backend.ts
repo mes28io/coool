@@ -132,6 +132,10 @@ export interface Backend extends SettingsBackend {
   onBrowserAgent(cb: (r: BrowserAgentRequest) => void): Unlisten;
   /** A chat's agent acted on its browser panel (the panel shows it). */
   onBrowserActivity(cb: (a: BrowserActivity) => void): Unlisten;
+  /** The chat's turn ended: its cursors in the Browser panel's page rest, then fade (device/web.rs). */
+  browserPresenceEnd(chat: number): Promise<void>;
+  /** coool's Reduce motion, for what the backend draws itself (the page cursors). */
+  presenceMotion(reduce: boolean): Promise<void>;
   /** A `pilot_run` of a chat's agent, after each step and at its end (device/pilot). */
   onPilotProgress(cb: (p: PilotProgress) => void): Unlisten;
 
@@ -224,19 +228,33 @@ export type SimInput =
   | { kind: "button"; name: "home" | "lock" | "siri" | "volumeUp" | "volumeDown" }
   | { kind: "key"; name: string; modifiers?: ("shift" | "control" | "option" | "command")[] }
   | { kind: "text"; text: string };
-export interface SimActivity {
+/** Who acted on a device panel (APP_SPEC "Agent presence"; device/presence.rs). */
+export interface PresenceActor {
+  /** One cursor per actor: a chat's MCP connection, or one of its `pilot_run`s. */
+  actor?: string;
+  /** `pilot` for a `pilot_run` step, else `agent`. */
+  by?: "agent" | "pilot";
+  /** A pilot step's decider: `memory` or `haiku`. */
+  decider?: string | null;
+  /** The chat's provider, when coool started it. */
+  provider?: "claude" | "codex" | null;
+}
+export interface SimActivity extends PresenceActor {
   udid: string;
   /** The coool chat whose agent acted (null: none / the user). */
   chat: number | null;
   source: "agent" | "user";
-  /** `end`: the agent's run is over (the "Agent is driving" mark goes off now). */
-  kind: "tap" | "swipe" | "type" | "press" | "app" | "observe" | "device" | "end";
+  /** Sent just before the action starts. `think`: a pilot's decider is choosing; `end`: the actor's run is over. */
+  kind: "tap" | "swipe" | "scroll" | "back" | "type" | "press" | "app" | "observe" | "device" | "think" | "end";
   /** Points, like `simInput`'s touches; a swipe goes from (x, y) to (x2, y2). */
   x?: number;
   y?: number;
   x2?: number;
   y2?: number;
+  /** What it acts on (an element's name; `press`: the key; `scroll`: the direction; `app`: the action). */
   label?: string;
+  /** `type`: the text (dots for a secret field). */
+  text?: string;
 }
 
 /** One step of a device pilot run (device/pilot/mod.rs `Step`). */
@@ -312,12 +330,15 @@ export interface BrowserAgentTab {
 export type BrowserAgentRequest =
   | { chat: number; op: "open" | "new"; url: string }
   | { chat: number; op: "ensure" | "switch" | "close"; tab: number };
-export interface BrowserActivity {
+export interface BrowserActivity extends PresenceActor {
   chat: number;
   /** The tab it acted on (null: one it is opening). */
   tab: number | null;
   kind: string;
   label?: string | null;
+  text?: string | null;
+  /** The actor's place among the chat's recent actors: its tint (the page's cursor uses the same). */
+  slot?: number;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -513,6 +534,8 @@ async function tauriBackend(): Promise<Backend> {
     onBrowserClosed: (cb) => sub<string>("browser-closed", cb),
     onBrowserNewTab: (cb) => sub<{ id: string; url: string }>("browser-new-tab", cb),
     browserAgentSync: (chat, tabs, active) => invoke("browser_agent_sync", { chat, tabs, active }),
+    browserPresenceEnd: (chat) => soft("browser_presence_end", { chat }),
+    presenceMotion: (reduce) => soft("presence_motion", { reduce }),
     onBrowserAgent: (cb) => sub<BrowserAgentRequest>("browser-agent", cb),
     onBrowserActivity: (cb) => sub<BrowserActivity>("browser-activity", cb),
     onPilotProgress: (cb) => sub<PilotProgress>("pilot-progress", cb),
@@ -560,11 +583,15 @@ async function tauriBackend(): Promise<Backend> {
 }
 
 let backend: Backend;
+let starting: Promise<Backend> | null = null;
 
-export async function initBackend(): Promise<Backend> {
-  if (backend) return backend;
-  backend = isTauri ? await tauriBackend() : (await import("./mock")).mockBackend();
-  return backend;
+/** The backend, made once (callers that ask at the same time share the one being made). */
+export function initBackend(): Promise<Backend> {
+  starting ??= (async () => {
+    backend = isTauri ? await tauriBackend() : (await import("./mock")).mockBackend();
+    return backend;
+  })();
+  return starting;
 }
 
 export function api(): Backend {

@@ -49,9 +49,9 @@ let fail = 0;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const log = (line: string) => invoke("selftest_log", { line }).catch(() => {});
 
-/** A screenshot of the main window, or of `window` (an in-app browser pop-up's label). */
-async function shot(name: string, window?: string) {
-  await sleep(700); // let springs and fades settle
+/** A screenshot of the main window, or of `window` (an in-app browser pop-up's label). `settle`: ms to wait first. */
+async function shot(name: string, window?: string, settle = 700) {
+  await sleep(settle); // let springs and fades settle
   try {
     await invoke("selftest_shot", { name, window });
   } catch (e) {
@@ -253,6 +253,41 @@ const deviceTools = (id: number, from = 0) => after(id, from).filter((i) => i.ki
 const toolName = (t: Tool) => t.name.replace(/^.*coool-device(__|\.)/, "");
 const toolLine = (t: Tool) => `${toolName(t)} ${t.ok ? "ok" : t.ok === false ? "FAILED" : "?"} ${t.endTs ? ((t.endTs - t.ts) / 1000).toFixed(1) + "s" : ""}`.trim();
 
+/** A check polled while an agent's turn runs: what it saw (truthy) once it holds, with a screenshot then. */
+interface Probe {
+  name: string;
+  test: () => unknown;
+  shot?: string;
+}
+
+/** The cursors drawn on `chat`'s Browser page now (device/web_agent.js): "who: what" each, or null for none. */
+async function pageCursors(chat: number): Promise<string | null> {
+  const shown = ((await invoke("selftest_page_cursors", { chat })) ?? []) as { who: string; say: string }[];
+  return shown.length ? shown.map((c) => `${c.who}: ${c.say}`).join(" | ") : null;
+}
+/** An agent cursor over a panel's screen (components/Presence.tsx), as "who: what", or null. */
+function htmlCursor(): string | null {
+  const c = $("[data-presence-cursor]");
+  if (!c) return null;
+  return `${c.querySelector("[data-presence-who]")?.textContent}: ${c.querySelector("[data-presence-say]")?.textContent}`;
+}
+/** After a run: the cursors rest, then fade, and the beam goes (sel: the panel's beam mark). */
+async function presenceClears(beam: string, pageChat?: number): Promise<string> {
+  const t = Date.now();
+  await waitFor(`${beam} (the beam) to go`, () => !$(beam), 2_000);
+  const beamMs = Date.now() - t;
+  await waitFor("the cursors to fade", () => !$("[data-presence-cursor]"), 3_000);
+  let page = "";
+  if (pageChat !== undefined) {
+    const end = Date.now() + 3_000;
+    let left: string | null = "?";
+    while (Date.now() < end && (left = await pageCursors(pageChat).catch(() => null))) await sleep(150);
+    if (left) throw new Fail(`the page still shows ${left}`);
+    page = `, page cursors gone ${Date.now() - t} ms after`;
+  }
+  return `beam off ${beamMs} ms, cursors gone ${Date.now() - t} ms after the turn ended${page}`;
+}
+
 interface AgentRun {
   tools: Tool[];
   /** Every tool the turn called. */
@@ -268,22 +303,40 @@ interface AgentRun {
  * Sends `prompt` to chat `id` and waits for the turn to end, meanwhile watching for each mark (a selector, with a
  * screenshot the first time it shows) and allowing any approval for a coool-device tool (other approvals: denied).
  */
-async function agentTurn(id: number, o: { prompt: string; marks: [string, string][]; ms: number }): Promise<AgentRun> {
+async function agentTurn(id: number, o: { prompt: string; marks: [string, string][]; probes?: Probe[]; ms: number }): Promise<AgentRun> {
   const turns = turnEnds(id).length;
   const n = items(id).length;
   const seen: Record<string, number> = {};
   const t0 = Date.now();
   let busy = false;
   const watch = setInterval(() => {
-    if (busy) return;
+    // Marks are noted even while a screenshot is being taken (a short run can show and clear one meanwhile).
     for (const [sel, name] of o.marks) {
       if (seen[sel] === undefined && $(sel)) {
         seen[sel] = Date.now() - t0;
-        busy = true;
         void log(`INFO mark ${sel} after ${seen[sel]} ms`);
-        void shot(name).finally(() => (busy = false));
-        return;
+        if (!busy) {
+          busy = true;
+          void shot(name).finally(() => (busy = false));
+        }
       }
+    }
+    if (busy) return;
+    // Probes (async checks, e.g. the page's own cursor): one at a time, each until it first holds.
+    const p = (o.probes ?? []).find((x) => seen[x.name] === undefined);
+    if (p) {
+      busy = true;
+      void Promise.resolve(p.test())
+        .catch(() => null)
+        .then(async (what) => {
+          if (what) {
+            seen[p.name] = Date.now() - t0;
+            await log(`INFO probe ${p.name} after ${seen[p.name]} ms: ${what}`);
+            if (p.shot) await shot(p.shot, undefined, 0);
+          }
+        })
+        .finally(() => (busy = false));
+      return;
     }
     const card = $("[data-approval]");
     if (card) {
@@ -300,6 +353,11 @@ async function agentTurn(id: number, o: { prompt: string; marks: [string, string
     await sleep(300);
     const all = after(id, n).filter((i) => i.kind === "tool") as Tool[];
     for (const t of deviceTools(id, n)) await log(`TOOL ${toolLine(t)} ${JSON.stringify(t.input).slice(0, 140)}${t.ok === false ? ` -> ${t.output.slice(0, 300)}` : ""}`);
+    // The tools' own timings (what the presence work must not slow): act, settle, observe.
+    for (const t of deviceTools(id, n)) {
+      const m = /\(act (\d+) ms · settle (\d+) ms(?: · observe (\d+) ms)?\)|· (\d+) ms$/m.exec(t.output);
+      if (m) await log(`ACT ${toolName(t)} act=${m[1] ?? m[4]} settle=${m[2] ?? "-"} observe=${m[3] ?? "-"}`);
+    }
     return { tools: deviceTools(id, n), all: all.map((t) => t.name), reply: lastText(id)?.text ?? "", turnMs: end.durationMs || Date.now() - t0, tokens: end.tokens, seen };
   } finally {
     clearInterval(watch);
@@ -333,10 +391,16 @@ async function agentBrowser(ctx: Ctx, provider: "claude" | "codex", model: strin
   const r = await agentTurn(id, {
     prompt: `Use the browser_* tools (the Browser panel beside this chat), not the shell or curl. Open ${url} , type the name ${NAME} and the email ada@example.com, press the "Add cup" button until the cups counter shows ${CUPS}, then press "Submit order". Reply with the exact confirmation sentence the page shows, nothing else.`,
     marks: [
-      ["[data-browser-agent-pill]", `${label}-acting`],
+      ["[data-browser-driving]", `${label}-acting`],
       ["[data-browser-agent-tab]", `${label}-tab-mark`],
     ],
+    probes: [{ name: "page-cursor", test: () => pageCursors(id), shot: `${label}-cursor` }],
     ms: 240_000,
+  });
+  await step(`${label}: the agent's cursor showed on the page with its label, the beam ran, and both clear after the turn`, async () => {
+    if (r.seen["page-cursor"] === undefined) throw new Fail("no agent cursor on the page while it acted");
+    if (r.seen["[data-browser-driving]"] === undefined) throw new Fail("no beam around the page");
+    return `cursor after ${r.seen["page-cursor"]} ms, beam after ${r.seen["[data-browser-driving]"]} ms; ${await presenceClears("[data-browser-driving]", id)}`;
   });
   await step(`${label}: the agent's browser_* tool calls succeed`, async () => {
     const browser = r.tools.filter((t) => toolName(t).startsWith("browser_"));
@@ -369,9 +433,8 @@ async function agentBrowser(ctx: Ctx, provider: "claude" | "codex", model: strin
     return `reply ${JSON.stringify(r.reply.trim().slice(0, 160))}; panel ${key}; turn ${r.turnMs} ms, ${r.tokens ?? "?"} tokens; ${forms.length} page reports`;
   });
   await step(`${label}: the tab's agent indicator showed while it acted`, async () => {
-    if (r.seen["[data-browser-agent-pill]"] === undefined) throw new Fail("no Agent pill on the panel");
     if (r.seen["[data-browser-agent-tab]"] === undefined) throw new Fail("no agent mark on the tab");
-    return `pill after ${r.seen["[data-browser-agent-pill]"]} ms, tab mark after ${r.seen["[data-browser-agent-tab]"]} ms`;
+    return `tab mark after ${r.seen["[data-browser-agent-tab]"]} ms`;
   });
   if (key) useStore.getState().closeBrowser(key);
 }
@@ -435,12 +498,6 @@ interface PilotRecord {
 async function pilotLog(): Promise<{ raw: string; recs: PilotRecord[] }> {
   const lines = (await invoke("selftest_pilot_log")) as string[];
   return { raw: lines.join("\n"), recs: lines.map((l) => JSON.parse(l) as PilotRecord) };
-}
-/** After a turn: the panels' "Agent" marks must be off (they used to linger for 3 s after the agent's last action). */
-async function marksOff(sel: string): Promise<string> {
-  const t = Date.now();
-  await waitFor(`${sel} to go away`, () => !$(sel), 1_500);
-  return `${sel} off ${Date.now() - t} ms after the turn ended`;
 }
 
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
@@ -1668,7 +1725,13 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         prompt:
           "Use the coool-device tools (observe, tap, app, ...) on the iPhone simulator shown in this chat's panel. Open the Settings app, go to General, then About, and read the iOS version shown there. Don't use the shell. Then reply with one line: iOS version: <the version>.",
         marks: [["[data-sim-driving]", "agent-iphone-driving"]],
+        probes: [{ name: "cursor", test: htmlCursor, shot: "agent-iphone-cursor" }],
         ms: 240_000,
+      });
+      await step("agent-iphone: the agent's cursor and label showed over the screen, the beam ran, and both clear after the turn", async () => {
+        if (r.seen.cursor === undefined) throw new Fail("no agent cursor over the iPhone");
+        if (r.seen["[data-sim-driving]"] === undefined) throw new Fail("no beam around the iPhone");
+        return `cursor after ${r.seen.cursor} ms, beam after ${r.seen["[data-sim-driving]"]} ms; ${await presenceClears("[data-sim-driving]")}`;
       });
       await step("the agent drives the iPhone through coool-device tools that succeed", async () => {
         if (!r.tools.length) throw new Fail(`no coool-device tool calls; tools: ${r.all.join(", ") || "none"}`);
@@ -1748,7 +1811,13 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         prompt:
           `Use the coool-device mac_* tools (mac_app, mac_type, mac_observe, ...) on the sandbox Mac shown in this chat's panel. Launch TextEdit, type exactly this sentence into its new document: ${SENTENCE} Then read the document's text back from the screen with mac_observe. Don't use the shell or mac_shell. Reply with one line: Text: <the document's text>.`,
         marks: [["[data-sim-driving]", "agent-mac-driving"]],
+        probes: [{ name: "cursor", test: htmlCursor, shot: "agent-mac-cursor" }],
         ms: 240_000,
+      });
+      await step("agent-mac: the agent's cursor and label showed over the screen, the beam ran, and both clear after the turn", async () => {
+        if (r.seen.cursor === undefined) throw new Fail("no agent cursor over the Mac");
+        if (r.seen["[data-sim-driving]"] === undefined) throw new Fail("no beam around the Mac");
+        return `cursor after ${r.seen.cursor} ms, beam after ${r.seen["[data-sim-driving]"]} ms; ${await presenceClears("[data-sim-driving]")}`;
       });
       await step("the agent drives the Mac through coool-device mac_* tools that succeed", async () => {
         const mine = r.tools.filter((t) => toolName(t).startsWith("mac_"));
@@ -1819,6 +1888,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
             ["[data-pilot-substep]", `pilot-iphone-run${n}-live`],
             ["[data-sim-driving]", `pilot-iphone-run${n}-driving`],
           ],
+          probes: [{ name: "pilot-cursor", test: () => (/^Pilot · (memory|Haiku)/.test(htmlCursor() ?? "") ? htmlCursor() : null), shot: `pilot-iphone-run${n}-cursor` }],
           ms: 240_000,
         });
         await step(`pilot-iphone run ${n}: pilot_run ends done, its checks verified`, async () => {
@@ -1842,9 +1912,10 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
           await shot(`pilot-iphone-run${n}-after`);
           return `reply ${JSON.stringify(r.reply.trim().slice(0, 100))}; live steps after ${r.seen["[data-pilot-substep]"]} ms; turn ${r.turnMs} ms`;
         });
-        await step(`pilot-iphone run ${n}: "Agent is driving" showed, and is off once the turn ended`, async () => {
-          if (r.seen["[data-sim-driving]"] === undefined) throw new Fail('the panel never showed "Agent is driving"');
-          return marksOff("[data-sim-driving]");
+        await step(`pilot-iphone run ${n}: the beam and the Pilot's cursor (with who decided) showed, and both clear after the run`, async () => {
+          if (r.seen["[data-sim-driving]"] === undefined) throw new Fail("the panel never showed the beam");
+          if (r.seen["pilot-cursor"] === undefined) throw new Fail("no Pilot cursor saying memory or Haiku");
+          return `pilot cursor after ${r.seen["pilot-cursor"]} ms; ${await presenceClears("[data-sim-driving]")}`;
         });
       }
       await step("pilot-iphone: the second run is mostly muscle memory and faster", async () => {
@@ -1932,8 +2003,9 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         prompt: `Call the coool-device tool pilot_run exactly once with target "browser", url "${url}", goal "Fill in the name and the email, press Add cup until the cups counter shows ${CUPS}, then press Submit order", inputs {"name":"${NAME}","email":"ada@example.com"} and success [{"text_visible":"${CUPS} cups, reference"}]. Don't call any other tool. Then reply with the exact confirmation sentence from the final screen, nothing else.`,
         marks: [
           ["[data-pilot-substep]", `pilot-browser-run${n}-live`],
-          ["[data-browser-agent-pill]", `pilot-browser-run${n}-acting`],
+          ["[data-browser-driving]", `pilot-browser-run${n}-acting`],
         ],
+        probes: [{ name: "page-cursor", test: async () => ((await pageCursors(id))?.includes("Pilot · ") ? pageCursors(id) : null), shot: `pilot-browser-run${n}-cursor` }],
         ms: 240_000,
       });
       await step(`pilot-browser run ${n}: pilot_run ends done, its checks verified`, async () => {
@@ -1956,9 +2028,10 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         await shot(`pilot-browser-run${n}-after`);
         return `reply ${JSON.stringify(r.reply.trim().slice(0, 120))}; turn ${r.turnMs} ms`;
       });
-      await step(`pilot-browser run ${n}: the "Agent" pill showed, and is off once the turn ended`, async () => {
-        if (r.seen["[data-browser-agent-pill]"] === undefined) throw new Fail("no Agent pill on the panel");
-        return marksOff("[data-browser-agent-pill]");
+      await step(`pilot-browser run ${n}: the beam and the Pilot's cursor on the page showed, and both clear after the run`, async () => {
+        if (r.seen["[data-browser-driving]"] === undefined) throw new Fail("no beam around the page");
+        if (r.seen["page-cursor"] === undefined) throw new Fail("no Pilot cursor on the page");
+        return `page cursor after ${r.seen["page-cursor"]} ms; ${await presenceClears("[data-browser-driving]", id)}`;
       });
     }
     await step("pilot-browser: the second run leans on muscle memory", async () => {

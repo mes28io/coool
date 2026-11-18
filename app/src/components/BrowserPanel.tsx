@@ -2,14 +2,18 @@
 // its top); each shows a web page (a claude.ai artifact link, a link from the chat) in a native child webview laid
 // over the panel's body (lib/browser.ts, app/src-tauri/src/browser.rs), or, in a new tab, a start view: an address
 // field and the pages this chat mentions. Artifact previews open in a window of their own (ArtifactCard.tsx).
+// While the chat's agent drives a page, the page script draws its cursor (device/web_agent.js) and a beam runs around
+// the page area (components/Presence.tsx), in a thin gutter around the native view, which HTML can't draw over.
 
 import { createElement, useEffect, useRef, useState } from "react";
 import { api } from "../lib/backend";
 import { useAgentBrowsing } from "../lib/browserAgent";
+import { browserTarget, usePresenceOf } from "../lib/presence";
 import { addressUrl, closeNative, hide, nativeId, onOverlays, overlayCovers, place, previewArtifact, tabKey, useBrowserState, type RecentPage } from "../lib/browser";
 import { useStore, type BrowserPage, type BrowserTab, type BrowserTabs } from "../store";
 import { artifactIcon } from "./ArtifactCard";
 import { IBack, IClose, IExternal, IForward, IGlobe, IPlus, IRefresh } from "./icons";
+import { PanelBeam } from "./Presence";
 import { cx, IconButton } from "./primitives";
 
 const host = (url: string) => {
@@ -19,6 +23,9 @@ const host = (url: string) => {
     return url;
   }
 };
+/** Where a page sits in its beam box (2 px in from the panel's left edge): a 4 px gutter all round, where the beam shows
+ * (the panel's resize handle covers the first 6 px). */
+const PAGE_INSET = "inset-[4px]";
 const tabTitle = (t: BrowserTab) => (t.page.kind === "start" ? "New tab" : t.title?.trim() || host(t.url || t.page.url));
 
 export function BrowserPanel({
@@ -58,9 +65,12 @@ export function BrowserPanel({
     else if (!native) window.open(url, "_blank", "noopener");
   };
   const open = (u: string) => navigateBrowserTab(panelKey, tab.id, u);
-  // "Agent is browsing": for 3 s after the chat's agent acted on a tab of this panel.
+  // "Agent is browsing": for 3 s after the chat's agent acted on a tab of this panel (the tab's mark), and the beam
+  // around the page while it drives.
   const agent = useAgentBrowsing(chat);
   const agentTab = agent ? (agent.tab ?? state.active) : null;
+  const presence = usePresenceOf(chat == null ? null : browserTarget(chat));
+  const driving = presence.driving && !start;
   return (
     <div className="flex h-full flex-col" data-browser-panel={page.kind}>
       <TabStrip panelKey={panelKey} state={state} agentTab={agentTab} />
@@ -77,16 +87,6 @@ export function BrowserPanel({
         <div className="ml-1.5 min-w-0 flex-1" title={url}>
           {!start && <Address key={key} url={url} shown={url.replace(/^https?:\/\//, "")} onGo={open} />}
         </div>
-        {agentTab !== null && (
-          <span
-            className="ml-1 flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-[color-mix(in_oklab,var(--status-running)_14%,transparent)] px-2 text-micro font-medium text-fg"
-            title="The chat's agent is using this browser"
-            data-browser-agent-pill
-          >
-            <span className="breathe size-[6px] rounded-full bg-[var(--status-running)]" aria-hidden />
-            Agent
-          </span>
-        )}
         <IconButton title="Open in default browser" disabled={start} onClick={openExternal}>
           <IExternal size={15} />
         </IconButton>
@@ -97,10 +97,18 @@ export function BrowserPanel({
       <div className="relative min-h-0 flex-1">
         {page.kind === "start" ? (
           <StartView key={key} recent={recent} onOpen={(p) => (p.kind === "web" ? open(p.url) : previewArtifact(p.info.url, () => open(p.info.url)))} onGo={open} />
-        ) : native ? (
-          <NativeHost key={key} tabKey={key} page={page} active={active} loading={!st || st.loading} />
         ) : (
-          <iframe key={`${key}:${page.n}:${frameKey}`} title={tabTitle(tab)} src={page.url} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="absolute inset-0 size-full border-0 bg-white" />
+          // The page area: the beam runs around it, in a thin gutter the native view leaves clear (HTML can't draw
+          // over the native view).
+          <PanelBeam on={driving} slot={presence.slot} radius={7} mark="data-browser-driving" style={{ position: "absolute", top: 0, bottom: 0, left: 2, right: 0 }}>
+            {native ? (
+              <NativeHost key={key} tabKey={key} page={page} active={active} loading={!st || st.loading} />
+            ) : (
+              <div className={cx("absolute", PAGE_INSET)}>
+                <iframe key={`${key}:${page.n}:${frameKey}`} title={tabTitle(tab)} src={page.url} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="block size-full border-0 bg-white" />
+              </div>
+            )}
+          </PanelBeam>
         )}
       </div>
     </div>
@@ -366,8 +374,9 @@ function NativeHost({ tabKey: viewKey, page, active, loading }: { tabKey: string
     return () => clearInterval(t);
   }, [viewKey, active]);
   return (
-    // Clear of the panel's left edge, so its resize handle stays above the native view.
-    <div ref={ref} className="absolute inset-y-0 left-[5px] right-0 flex items-center justify-center bg-panel" data-browser-native={viewKey}>
+    // Clear of the panel's left edge, so its resize handle stays above the native view; a thin gutter all round for the
+    // beam (its box is the PanelBeam around it).
+    <div ref={ref} className={cx("absolute flex items-center justify-center bg-panel", PAGE_INSET)} data-browser-native={viewKey}>
       {loading && <span className="text-small text-faint">Loading {host(page.url)}…</span>}
     </div>
   );
