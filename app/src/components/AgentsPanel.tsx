@@ -13,6 +13,7 @@ import { useStableOrder } from "../lib/stable";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { IArrowUpRight, ICheck, IChevron, toolIcon } from "./icons";
 import { MoodGlyph } from "./MoodGlyph";
+import { FillBar, Handoff } from "./AgentFill";
 import { cx, ease, spring, StatusDot, TokenCount } from "./primitives";
 import { reducedMotion } from "./StepRail";
 import type { Shell } from "../lib/types";
@@ -172,6 +173,12 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
           <IChevron size={14} />
         </motion.span>
       </div>
+      {(card.fill || card.handoff) && (
+        <div className="flex flex-col gap-1 px-3 pt-1" data-agent-extra>
+          {card.fill && <FillBar fill={card.fill} running={isLive(card)} />}
+          {card.handoff && <Handoff text={card.handoff} full={card.handoffFull} />}
+        </div>
+      )}
       <div className="px-3 pb-1.5 pt-1.5">
         <Strip card={card} />
       </div>
@@ -242,7 +249,8 @@ function NowStrip({ card, className }: { card: AgentCardData; className: string 
   const mood = card.labelTool ? toolMood(card.labelTool) : "think";
   const seed = `${card.id}:${card.steps.length}:${mood}`;
   const [mounted] = useState(() => Date.now());
-  const detail = card.labelTool ? card.label.replace(new RegExp(`^${card.labelTool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i"), "") : "";
+  // "Read src/a.ts" -> "src/a.ts"; a phrase ("Opened affectui.com", lib/toolNames.ts) stays whole.
+  const detail = card.labelTool ? (card.label.startsWith(card.labelTool) ? card.label.slice(card.labelTool.length).trim() : card.label) : "";
   return (
     <div className={cx(className, "live-layer")} data-now-strip>
       {/* Subagents get words, not orbs: a small glyph of what it is doing keeps the slot. */}

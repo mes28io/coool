@@ -227,6 +227,11 @@ export class MockChat {
       case "notice":
         if (e.level === "error") push({ ts: hhmmss(t), kind: "error", text: e.text });
         break;
+      case "agent_total": {
+        const a = s.agents.find((g) => g.id === e.tool_id);
+        if (a) a.tokens.total = e.tokens;
+        break;
+      }
       case "usage": {
         const prevT = this.mirrorTotal;
         const dt = { input: e.tokens.input - prevT.input, cached: e.tokens.cached - prevT.cached, output: e.tokens.output - prevT.output };
@@ -441,6 +446,15 @@ export class MockChat {
     await this.stream("text_delta", id, text, parent, gen);
     this.emit({ type: "assistant_message", id, text, model, parent_tool_id: parent });
     this.usage(model, text.length, !!parent);
+    if (parent) this.agentGrew(parent);
+  }
+
+  /** Like the driver: a subagent's response reports its latest context plus output (`agent_total`). */
+  agentTotals = new Map<string, number>();
+  agentGrew(parent: string, by = 3_000 + Math.floor(Math.random() * 6_000)) {
+    const n = (this.agentTotals.get(parent) ?? 11_000) + by;
+    this.agentTotals.set(parent, n);
+    this.emit({ type: "agent_total", tool_id: parent, tokens: n });
   }
 
   /** Running totals, like the real driver: `usage.tokens` accumulates over the chat. */
@@ -496,6 +510,7 @@ export class MockChat {
     }
     this.emit({ type: "tool_end", id, ok: !opts.fail, output });
     if (!parent) this.runningTool = null;
+    else this.agentGrew(parent);
     return !opts.fail;
   }
 
@@ -783,7 +798,7 @@ export class MockChat {
           const agentId = `toolu_${rid()}`;
           this.agentModel.set(agentId, sub);
           await this.sleep(250 * k, gen);
-          this.emit({ type: "tool_start", id: agentId, name: "Task", summary: desc, input: { subagent_type: k % 2 ? "Explore" : "general-purpose", description: desc }, parent_tool_id: null });
+          this.emit({ type: "tool_start", id: agentId, name: "Task", summary: desc, input: { subagent_type: k % 2 ? "Explore" : "general-purpose", description: desc, prompt: `${desc}: read what is there, note anything that blocks adding retries to the drain loop, and keep it under ten lines.` }, parent_tool_id: null });
           try {
             for (const [name, sm, ms] of steps) await this.tool(gen, name, sm, name === "Bash" ? { command: sm } : {}, ms, "ok", { parent: agentId });
             await this.say(`${desc}: nothing blocking found.`, gen, { parent: agentId, model: sub });
@@ -797,6 +812,9 @@ export class MockChat {
       await this.say("All four agents are done: nothing blocks the change, and I know where the retry belongs.", gen);
       return;
     }
+    // "device demo": a turn that drives the Browser, the iPhone and the Mac through coool-device's tools (readable rows,
+    // where the turn went, a subagent near its context limit). `?tools=demo` seeds one and runs another live.
+    if (/\bdevice demo\b/.test(p)) return this.deviceDemo(gen);
     // Plan scenarios: "todo" (agent task list; "todo stop" ends with steps left), "codex plan" (update_plan), "plan mode" (ExitPlanMode approval).
     if (/\bcodex plan\b/.test(p)) return this.planDemo(gen, "update_plan");
     if (/\btodo\b/.test(p)) return this.planDemo(gen, "TodoWrite", /\bstop\b/.test(p));
@@ -815,7 +833,7 @@ export class MockChat {
       const desc = "Survey test coverage for the change";
       const sub = "claude-haiku-5-5";
       this.agentModel.set(agentId, sub);
-      this.emit({ type: "tool_start", id: agentId, name: "Task", summary: desc, input: { subagent_type: "Explore", description: desc }, parent_tool_id: null });
+      this.emit({ type: "tool_start", id: agentId, name: "Task", summary: desc, input: { subagent_type: "Explore", description: desc, prompt: `Find the tests that cover ${f.b} and say which failure paths have none.\nDon't edit anything; report file and test names.` }, parent_tool_id: null });
       try {
         await this.sleep(500, gen);
         await this.tool(gen, "Glob", `${f.tests}/**/*`, {}, 600, "9 files", { parent: agentId });
@@ -868,6 +886,91 @@ export class MockChat {
       await this.tool(gen, "Bash", `git commit -m "${subject}"`, { command: `git add -A && git commit -m "${subject}"` }, 700, `[main 3f2a91c] ${subject}\n 2 files changed, 41 insertions(+), 6 deletions(-)`);
       if (/\bpush\b/.test(p)) await this.tool(gen, "Bash", "git push origin main", { command: "git push origin main" }, 900, "To github.com:you/app.git\n   9b1e4d2..3f2a91c  main -> main");
     }
+  }
+
+  /** Calls the model issued in one message: they all start at once and the CLI runs them one after the other. */
+  private async together(gen: number, calls: { name: string; input: unknown; ms: number; output: string; ok?: boolean }[], parent: string | null = null) {
+    const ids = calls.map((c) => {
+      const id = `toolu_${rid()}`;
+      this.emit({ type: "tool_start", id, name: c.name, summary: c.name, input: c.input, parent_tool_id: parent });
+      return id;
+    });
+    for (const [k, c] of calls.entries()) {
+      await this.sleep(c.ms, gen);
+      this.emit({ type: "tool_end", id: ids[k], ok: c.ok ?? true, output: c.output });
+    }
+  }
+
+  private async deviceDemo(gen: number) {
+    const D = (t: string) => (this.provider === "codex" ? `coool-device.${t}` : `mcp__coool-device__${t}`);
+    const dev = (t: string, input: Record<string, unknown>, ms: number, output: string, opts: { parent?: string | null; fail?: boolean } = {}) => {
+      const first = Object.values(input).find((v) => typeof v === "string") as string | undefined;
+      return this.tool(gen, D(t), first ? `${D(t)} · ${first}` : D(t), input, ms, output, opts);
+    };
+    const page = (title: string, url: string) => `${title} — ${url}\nready · viewport 1280x800 · scrolled 0 of 2400 px · 48 elements`;
+    await this.say("I'll open the components index, decline the cookie banner, then walk the agent pages and check the sign-in form.", gen, {
+      think: "Start on the index; the cookie banner will cover the previews until it is dismissed.",
+    });
+    // Issued together: the screenshot waits behind the 5 s wait_for (the breakdown moves its start).
+    await this.together(gen, [
+      { name: D("browser_navigate"), input: { url: "https://www.affectui.com/components/" }, ms: 1100, output: `opened https://www.affectui.com/components/\n(load 1100 ms)\n\n${page("affectUI", "https://www.affectui.com/components/")}` },
+      { name: D("browser_wait_for"), input: { idle: true }, ms: 5019, ok: false, output: "timed out after 5019 ms waiting for the page to settle: it keeps changing (live content or an animation); the page as it is now" },
+      { name: D("browser_screenshot"), input: {}, ms: 180, output: "screenshot (180 ms)" },
+    ]);
+    await dev("browser_click", { id: 2 }, 900, 'clicked button "Decline" at (412,388)\n(act 120 ms · settle 640 ms)');
+    await dev("browser_navigate", { url: "https://www.affectui.com/components/agent-crew" }, 1400, `opened https://www.affectui.com/components/agent-crew\n(load 700 ms)\n\n${page("Agent Crew", "https://www.affectui.com/components/agent-crew")}`);
+    await dev("browser_observe", { all: true, text_max: 20000 }, 300, page("Agent Crew", "https://www.affectui.com/components/agent-crew"));
+    await dev("browser_scroll", { direction: "down" }, 600, "scrolled down 640 px");
+    await dev("browser_screenshot", {}, 200, "screenshot (200 ms)");
+    await this.say("The crew cards show a context bar per agent. Next, the sign-in form.", gen);
+    await dev("browser_navigate", { url: "https://www.affectui.com/login?next=%2Fcomponents" }, 1200, "opened https://www.affectui.com/login?next=%2Fcomponents\n(load 650 ms)");
+    await dev("browser_type", { id: 4, text: "demo@coool.sh" }, 500, 'typed "demo@coool.sh" into textbox "Email" (replacing what it held)');
+    await dev("browser_type", { id: 5, text: "correct horse battery" }, 500, 'typed 21 characters into textbox "Password" (hidden field)');
+    await dev("browser_batch", { actions: [{ click: 6 }, { wait_for: "Welcome back" }, { press: "Escape" }] }, 2100, '1. clicked button "Sign in" at (640,520)\n2. waited 900 ms for "Welcome back" to appear\n3. pressed Escape on the page');
+    // A command that waits for the person (the "Waiting for you" segment).
+    {
+      const id = `toolu_${rid()}`;
+      const input = { command: "pnpm test --filter crew-card", description: "Run the crew card tests" };
+      this.emit({ type: "tool_start", id, name: "Bash", summary: "Bash · pnpm test --filter crew-card", input, parent_tool_id: null });
+      this.emit({ type: "permission_request", request_id: `perm_${rid()}`, tool: "Bash", summary: "Bash · pnpm test --filter crew-card", input, remember: [] });
+      this.setState("waiting_permission");
+      await this.sleep(this.vt !== null ? 14_000 : 2_500, gen);
+      this.setState("working");
+      await this.sleep(this.vt !== null ? 21_000 : 3_000, gen);
+      this.emit({ type: "tool_end", id, ok: true, output: "✓ crew card renders 4 agents (12 ms)\n✓ context bar turns yellow past 80% (8 ms)\n\nTests  2 passed" });
+    }
+    await dev("tap", { target: "k3f" }, 700, 'tapped "Settings" at (201,412)');
+    await dev("type", { text: "246810", into: "p2" }, 900, 'tapped "Passcode" at (201,300), typed "246810"');
+    await dev("swipe", { scroll: "down" }, 600, "scrolled down");
+    await dev("press", { button: "home" }, 300, "pressed the home button");
+    await dev("mac_app", { action: "launch", app: "TextEdit" }, 1600, "launched TextEdit (com.apple.TextEdit)");
+    await dev("mac_click", { target: "b7" }, 500, 'clicked "Save" at (640,512)');
+    await dev("pilot_run", { goal: "Open Settings and read the iOS version", target: "iphone" }, 4200, "");
+    await this.tool(gen, "mcp__github__create_pull_request", "mcp__github__create_pull_request · Crew card: context bar", { title: "Crew card: context bar", head: "feat/crew-context", base: "main" }, 1300, "Created pull request #412");
+    // A subagent close to its context limit (Sonnet 4.5: a 200k window).
+    {
+      const agentId = `toolu_${rid()}`;
+      const sub = "claude-sonnet-4-5";
+      this.agentModel.set(agentId, sub);
+      const desc = "Catalogue the agent components";
+      this.emit({
+        type: "tool_start",
+        id: agentId,
+        name: "Task",
+        summary: desc,
+        input: { subagent_type: "general-purpose", description: desc, prompt: "Visit every page under /components/agent-*, and for each note the name, what it shows and how it moves.\nScreenshots only where the motion matters." },
+        parent_tool_id: null,
+      });
+      this.agentGrew(agentId, 20_000);
+      for (const slug of ["agent-crew", "agent-fleet", "agent-cursors", "agent-findings"]) {
+        await dev("browser_navigate", { url: `https://www.affectui.com/components/${slug}` }, 900, `opened https://www.affectui.com/components/${slug}`, { parent: agentId });
+        await dev("browser_screenshot", {}, 400, "screenshot", { parent: agentId });
+        this.agentGrew(agentId, 20_000);
+      }
+      await this.say("Four agent pages catalogued; the fleet view is the only one with a live timer.", gen, { parent: agentId, model: sub });
+      this.emit({ type: "tool_end", id: agentId, ok: true, output: "Four agent pages catalogued; the fleet view is the only one with a live timer." });
+    }
+    await this.say("Done: the crew card's context bar is the idea worth taking, and the tests for it pass. The cookie banner is declined and nothing was signed into for real.", gen);
   }
 
   /** A task list that progresses step by step, via TodoWrite (Claude) or update_plan (Codex). */

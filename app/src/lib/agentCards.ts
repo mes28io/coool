@@ -7,7 +7,9 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import type { Chat, ChatItem } from "./chat";
-import { displayTitle, homeShort, isThinking, shortDetail, splitTool, stripToolName, thinkingWord, tsToMs } from "./format";
+import { displayTitle, homeShort, isThinking, shortDetail, stripToolName, thinkingWord, tsToMs } from "./format";
+import { agentFill, handoffLine, taskPrompt, type Fill } from "./agentFill";
+import { toolRow, toolRowFromText } from "./toolNames";
 import { attention, useChatDigest, type ChatDigest } from "./live";
 import { isStopReason } from "./stopped";
 import type { Activity, Agent, Provider, Session } from "./types";
@@ -62,17 +64,34 @@ export interface AgentCardData {
   lastAt: number;
   /** A job coool itself runs: the Stop action applies. */
   stoppable: boolean;
+  /** How full its context is; null when not known (the bar is hidden). */
+  fill: Fill | null;
+  /** First line of what the lead handed it (the Task prompt, or a job's first prompt); null when unknown. */
+  handoff: string | null;
+  /** The whole handoff, for the tooltip. */
+  handoffFull: string | null;
 }
 
 const firstLine = (s: string | null | undefined) => (s ?? "").split("\n").find((l) => l.trim())?.trim() ?? "";
 /** "[Request interrupted by user for tool use]" -> "Request interrupted by user for tool use". */
 const unbracket = (s: string) => s.replace(/^\[(.*)\]$/, "$1");
 
-/** "Read · ~/a/b/c.rs" -> "Read b/c.rs". */
+/** "Read · ~/a/b/c.rs" -> "Read b/c.rs"; "mcp__coool-device__browser_navigate · https://x.com/a" -> "Opened x.com/a" (lib/toolNames.ts). */
 export function stepLabel(text: string): { name: string; label: string } {
-  const { name, detail } = splitTool(text);
-  return { name, label: detail ? `${name} ${shortDetail(homeShort(detail))}` : name };
+  const r = toolRowFromText(text);
+  const detail = r.family === "tool" ? shortDetail(homeShort(r.detail)) : r.detail;
+  return { name: r.raw, label: detail ? `${r.label} ${detail}` : r.label };
 }
+
+/** The first prompt of a timeline: what a subagent or a job was handed. */
+const firstPrompt = (list: Activity[]) => {
+  const p = list.find((a) => a.kind === "prompt");
+  return p ? (p.full ?? p.text) : null;
+};
+const handoffOf = (full: string | null, title: string) => {
+  const handoff = handoffLine(full, title);
+  return { handoff, handoffFull: handoff ? full : null };
+};
 
 /** Steps from a transcript timeline: tool rows are steps, a failed-step error marks the one before it; a step lasts until the next entry. */
 function stepsFromActivity(list: Activity[]): CardStep[] {
@@ -105,7 +124,7 @@ function lastOf<T>(a: T[], pred: (t: T) => boolean): T | undefined {
   return undefined;
 }
 
-function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provider" | "model" | "kind" | "description" | "tokens" | "stoppable">, list: Activity[], o: { current: string | null; live: boolean; needs?: string | null; canFail?: boolean }): AgentCardData {
+function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provider" | "model" | "kind" | "description" | "tokens" | "stoppable" | "fill" | "handoff" | "handoffFull">, list: Activity[], o: { current: string | null; live: boolean; needs?: string | null; canFail?: boolean }): AgentCardData {
   const last = list[list.length - 1];
   const failed = o.canFail !== false && !!last && last.kind === "error" && !last.step;
   const steps = stepsFromActivity(list);
@@ -139,7 +158,20 @@ function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provi
 export function cardFromAgent(s: Session, a: Agent): AgentCardData {
   const live = !a.finished && s.status !== "ended";
   return fromTimeline(
-    { id: `agent:${a.id}`, source: "agent", ref: a.id, provider: s.provider, model: a.model ?? a.models?.[0]?.model ?? null, kind: a.kind, description: a.description, tokens: a.tokens.total || a.tokens.output, stoppable: false },
+    {
+      id: `agent:${a.id}`,
+      source: "agent",
+      ref: a.id,
+      provider: s.provider,
+      model: a.model ?? a.models?.[0]?.model ?? null,
+      kind: a.kind,
+      description: a.description,
+      tokens: a.tokens.total || a.tokens.output,
+      stoppable: false,
+      // Claude Code's count for a subagent (latest context plus output); Codex subagents report none.
+      fill: agentFill(a.tokens.total, a.model || a.models?.[0]?.model),
+      ...handoffOf(firstPrompt(a.activity), a.description),
+    },
     a.activity,
     { current: a.current, live },
   );
@@ -149,7 +181,20 @@ export function cardFromAgent(s: Session, a: Agent): AgentCardData {
 export function cardFromJob(c: Session, digest: ChatDigest): AgentCardData {
   const att = attention(c, digest);
   const card = fromTimeline(
-    { id: `job:${sessionKey(c)}`, source: "job", ref: sessionKey(c), provider: c.provider, model: c.model || null, kind: "job", description: displayTitle(c), tokens: c.tokens.output, stoppable: c.status !== "ended" && (c.managed !== null || c.chat != null) },
+    {
+      id: `job:${sessionKey(c)}`,
+      source: "job",
+      ref: sessionKey(c),
+      provider: c.provider,
+      model: c.model || null,
+      kind: "job",
+      description: displayTitle(c),
+      tokens: c.tokens.output,
+      stoppable: c.status !== "ended" && (c.managed !== null || c.chat != null),
+      // A job is a session of its own: its context is known whenever that session reports one.
+      fill: agentFill(c.tokens.context, c.model),
+      ...handoffOf(firstPrompt(c.activity) ?? c.last_prompt, displayTitle(c)),
+    },
     c.activity,
     { current: c.current, live: att.status === "busy", needs: att.needs, canFail: att.status === "ended" },
   );
@@ -165,9 +210,9 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
   const failed = tool.endTs !== null && tool.ok === false;
   const stopped = failed && (!!tool.stopped || !tool.output.trim() || isStopReason(tool.output));
   const steps: CardStep[] = tools.map((t) => {
-    const { name } = splitTool(t.name);
-    const detail = shortDetail(homeShort(stripToolName(t.name, t.summary || "")));
-    return { key: t.key, name, label: detail ? `${name} ${detail}` : name, failed: t.ok === false && !t.stopped && !(stopped && (t.endTs === null || isStopReason(t.output))), ms: t.endTs !== null ? Math.max(0, t.endTs - t.ts) : null };
+    const r = toolRow({ name: t.name, input: t.input, output: t.output, summary: t.summary, ok: t.ok, running: t.endTs === null });
+    const detail = r.family === "tool" ? shortDetail(homeShort(r.detail)) : r.detail;
+    return { key: t.key, name: t.name, label: detail ? `${r.label} ${detail}` : r.label, failed: t.ok === false && !t.stopped && !(stopped && (t.endTs === null || isStopReason(t.output))), ms: t.endTs !== null ? Math.max(0, t.endTs - t.ts) : null };
   });
   let run = -1;
   tools.forEach((t, i) => {
@@ -203,6 +248,8 @@ export function cardFromChatTool(chat: Chat, tool: Extract<ChatItem, { kind: "to
     stopped,
     lastAt: end,
     stoppable: false,
+    fill: agentFill(chat.agents[tool.id]?.total, model),
+    ...handoffOf(taskPrompt(tool.input), stripToolName(tool.name, tool.summary)),
   };
 }
 

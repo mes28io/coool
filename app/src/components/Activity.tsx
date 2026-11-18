@@ -12,6 +12,9 @@ import { useClock } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
 import { liveJobs } from "../lib/live";
 import { IAlert, IChevron, ICheck, toolIcon } from "./icons";
+import { groupOf, toolRowFromText } from "../lib/toolNames";
+import { agentFill, handoffLine } from "../lib/agentFill";
+import { FillBar, Handoff } from "./AgentFill";
 import { Elapsed, JumpToBottom, LiveClock, TokenCount, cx, ease } from "./primitives";
 import { ThinkingDots, ThinkingWord } from "./ThinkingWord";
 import { Markdown } from "./Markdown";
@@ -548,7 +551,7 @@ function Roll({ text, still }: { text: string; still: boolean }) {
 function summarize(items: { a: Activity }[]): { name: string; n: number }[] {
   const m = new Map<string, number>();
   for (const { a } of items) {
-    const n = a.kind === "agent" ? "Agent" : splitTool(a.text).name;
+    const n = a.kind === "agent" ? "Agent" : groupOf(splitTool(a.text).name);
     m.set(n, (m.get(n) ?? 0) + 1);
   }
   return [...m.entries()].map(([name, n]) => ({ name, n })).slice(0, 4);
@@ -599,7 +602,7 @@ const StepGroup = memo(function StepGroup({
           {chips.map((c) => (
             <span key={c.name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">
               {c.name}
-              {c.n > 1 && <span className="tnum text-faint">{c.n}</span>}
+              {c.n > 1 && <span className="tnum text-faint">×{c.n}</span>}
             </span>
           ))}
         </span>
@@ -638,8 +641,8 @@ const StepGroup = memo(function StepGroup({
 });
 
 function StepRow({ a, active, dense, live, fresh }: { a: Activity; active: boolean; dense?: boolean; live: LiveTime; fresh?: boolean }) {
-  const { name, detail } = splitTool(a.text);
-  return <StepLine name={name} detail={detail} active={active} dense={dense} fresh={fresh} stamp={a.ts} since={live.at} approx={live.approx} />;
+  const r = toolRowFromText(a.text);
+  return <StepLine name={r.label} tool={r.raw} detail={r.detail} active={active} dense={dense} fresh={fresh} stamp={a.ts} since={live.at} approx={live.approx} />;
 }
 
 /** One step: icon (or spinner), tool name, mono detail, timer or timestamp. Shared by Activity and Chat. */
@@ -650,15 +653,22 @@ export function StepLine({
   stamp,
   since,
   approx,
-  failed,
+  failed: failedIn,
   stopped,
   waiting,
   fresh,
   onClick,
   open,
   dense,
+  tool,
+  soft,
 }: {
+  /** What the row says (lib/toolNames.ts): "Opened", "Bash". */
   name: string;
+  /** The tool's own name, for the icon, the glyph and the tooltip, when `name` is a phrase. */
+  tool?: string;
+  /** Failed, but nothing to act on (a wait that timed out): neutral grey, never red. */
+  soft?: boolean;
   detail: string;
   active: boolean;
   /** Inside a subagent card: the running step shows the subagent's live glyph. */
@@ -675,8 +685,9 @@ export function StepLine({
   onClick?: () => void;
   open?: boolean;
 }) {
-  const Icon = toolIcon(name);
-    return (
+  const Icon = toolIcon(tool ?? name);
+  const failed = failedIn && !soft;
+  return (
     <div
       onClick={onClick}
       className={cx(
@@ -699,13 +710,14 @@ export function StepLine({
         ) : failed && !stopped ? (
           <IAlert size={14} />
         ) : active && dense ? (
-          <MoodGlyph mood={toolMood(name)} size={13} />
+          <MoodGlyph mood={toolMood(tool ?? name)} size={13} />
         ) : (
           <Icon size={12} />
         )}
       </span>
       <span
-        className={cx("shrink-0 text-base font-medium", waiting ? "text-fg/85" : failed && !stopped ? "text-err-text/90" : stopped ? "text-dim" : !active && "text-fg/80")}
+        className={cx("max-w-[78%] shrink-0 truncate text-base font-medium", waiting ? "text-fg/85" : failed && !stopped ? "text-err-text/90" : stopped || soft ? "text-dim" : !active && "text-fg/80")}
+        title={tool && tool !== name ? tool : undefined}
       >
         <Reveal
           text={name}
@@ -836,6 +848,15 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asked]);
   const title = detail || agent?.description || "Subagent";
+  const fill = agent ? agentFill(agent.tokens.total, agent.model || agent.models?.[0]?.model) : null;
+  const handed = all.find((x) => x.kind === "prompt");
+  const handoff = handed ? handoffLine(handed.full ?? handed.text, title) : null;
+  const extra = (fill || handoff) && (
+    <div className="flex flex-col gap-1 px-3 pb-1.5" data-agent-extra>
+      {fill && <FillBar fill={fill} running={running} />}
+      {handoff && <Handoff text={handoff} full={handed?.full ?? handed?.text} />}
+    </div>
+  );
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
@@ -864,6 +885,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
         ) : (
           <FinishedAgentHead end={end} title={title} parts={parts} reason={reason} open={open} onToggle={toggle} />
         )}
+        {running && extra}
         <FoldBody open={open}>
           {!running && (
             <div className="flex items-center gap-2 px-3 pb-1">
@@ -872,6 +894,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
               {reason && <span className={cx("min-w-0 flex-1 truncate text-small", end === "failed" ? "text-err-text/90" : "text-dim")} title={reason}>{reason}</span>}
             </div>
           )}
+          {!running && extra}
           {steps.length > 0 && (
             <div className="pb-1.5 pl-[14px] pr-1">
               <RailList>

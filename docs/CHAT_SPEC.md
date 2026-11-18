@@ -198,6 +198,33 @@ Checking it: `cargo run --release -p coool-core --example context_print -- [--ki
 - Sessions running outside coool are unchanged: read-only Activity from the transcript, with Stop and (once ended) Resume here.
 - Read-only Activity text: each `session.activity[]` / `agent.activity[]` entry has `text` (one line, ~400 columns: lists, TUI, insights) and, for prompts, replies and errors whose one-line form loses anything, `full` (the whole text with line breaks, up to 24,000 characters). Render `full ?? text`. `shortened: true` means what is kept is not the whole message (cut at 24k, or an entry older than the newest 50 full texts of that timeline, which keeps only its one line): say so. Both fields are left out when empty/false. Messages typed mid-turn in Claude Code (`queued_command` attachments) appear as prompts.
 
+### Tool rows
+
+One function names every tool call on every surface (`app/src/lib/toolNames.ts`, `toolRow` / `toolRowFromText`): the chat's step rows and group chips, subagent and Jobs cards, Mission control's "doing now" line and fan-out hover, the Needs-you list and `chatNeeds` (the sidebar and tab "Approve …" line), the read-only Activity timeline and its live row.
+
+- **Built-ins** keep their name and detail ("Bash pnpm test", "Read src/a.ts").
+- **MCP names** are parsed from both spellings: Claude `mcp__<server>__<tool>`, Codex `<server>.<tool>` (the tool may hold dots).
+- **coool-device** tools read as verb phrases, from the input and, once the call ended, the first line of its result: "Opened affectui.com/components" (host and path, the path cut from the middle), `Clicked "Decline"` (the label from `clicked button "Decline" at …`; while running "Clicking #12"), `Typed into "Email" · "a@b.c"`, "Scrolled down", "Took a screenshot", "Read the page …", "Did 3 steps on the page click, type, wait", iPhone ("Tapped", "Pressed Home", "Read the screen") and Mac ("Clicked", "Opened TextEdit", "Ran on the Mac …") equivalents, "Pilot · iPhone <goal>". Failed calls say "Couldn't click #12" in the quiet red row; a wait that timed out is neutral grey ("Waited 5 s page kept changing") and is not counted as failed.
+- **Secrets:** typed text is shown only when the result says the field was not hidden and its name doesn't look like a password, passcode, PIN, token or key; otherwise only its length ("21 characters, hidden"). A running type call never shows its text, and a transcript line (whose summary is the typed text itself) never does. Generic tools never show an argument whose name looks secret, and a tool driven by `action` shows the action, not its `text`.
+- **Other servers** read "<server> · <Tool in words>" plus the most telling argument (url, query, path, command, name, title…): "github · Create pull request Fix the crash", "Claude Docs · Batch". The server name drops `claude_ai_`, a connector uuid reads "connector", it is clipped to 16 characters; a trailing `_mcp` on the tool is dropped. The raw name is the row's tooltip.
+- **Chips** count by group: "Browser ×13", "iPhone ×4", "Mac", "Pilot", the server, or the built-in name. Icons: globe, phone, laptop, bolt (pilot), plug (other servers).
+- **Permissions** read in the base form: "Approve Browser: open affectui.com/components".
+
+### Where the turn went
+
+Under a finished turn's "Worked for …" (`app/src/lib/turnBreakdown.ts`, `components/TurnBreakdown.tsx`), coool chats only (transcripts have no end times, nothing is guessed):
+
+- **The bar:** 4 px, one segment per kind, in order Thinking, Reading, Editing, Commands, Web and devices, Sub-agents, Other tools, Waiting for you, Writing. Every instant of the turn (`turn.ts - durationMs` → `turn.ts`) goes to one kind: waiting for the person (permission and question items, `ts` → `answeredTs`, and AskUserQuestion / ExitPlanMode spans) first, then a running subagent, then the main thread's tool by kind, then thinking; the rest is Writing. Neutral tints; waiting is `--status-needs` at 60%, sub-agents a faint running blue. Hovering a segment: "Commands · 2m 41s · 7 calls · slowest Bash pnpm test 1m 58s". Hidden for turns under 1 s or with only writing.
+- **The waterfall** (click the footer): one row per call on a shared axis, the label from "Tool rows", the call's own time (its span minus any wait for the person inside it), "slowest" on the slowest call (never a subagent's own span or a question); subagent rows fold their calls.
+- **Queueing:** calls issued in one message arrive together and the CLI runs them one after another, so a later call's `endTs - ts` includes its wait. Each call's start is moved to when the previous call of its thread (main, or the subagent that made it) ended; runs of read-only built-ins (Read, Grep, Glob, web fetch/search) and subagents run side by side and are not moved. The `tool_start` event carries no message id, so this works per thread rather than per message: a call that started after the previous one ended is unaffected either way.
+- **Live:** while a turn runs the same bar sits under the live row and grows each second; the newest segment breathes (static with reduced motion).
+
+### Sub-agent cards
+
+Jobs panel cards and the chat's (and Activity's) subagent cards show, under the title, a 2 px context bar with "32k / ~1M" (`components/AgentFill.tsx`, `lib/agentFill.ts`): the used number is Claude Code's count for the agent (`agent_total` for chats, `tokens.total` for transcript subagents, `tokens.context` for child jobs), the window `contextWindow(model)` with "~" when it is the family's estimate. Blue while running, grey when finished, `--status-needs-text` above 80%; the width springs (`softSpring`) and the number ticks. Hidden when nothing is known (Codex subagents, a subagent before its first response). Below it, "↳ from lead: <first line of the Task prompt>" (a transcript subagent's or a job's first prompt), one line, the whole prompt in the tooltip, left out when it only repeats the title.
+
+The browser mock shows all three with `?tools=demo` (one finished turn driving the Browser, iPhone and Mac, then a live one; `&live=0` for none).
+
 ## Tauri contract additions
 
 Commands: `start_chat({opts}) -> number`, `chat_send({id, text})`, `chat_interrupt({id})`, `chat_steer({id, text, now}) -> string`, `chat_steer_cancel({id, noteId})`, `chat_set_model({id, model})`, `chat_set_permission_mode({id, mode})`, `chat_respond_permission({id, requestId, allow, always, remember?})` (`remember`: a remember option id; allows and applies it), `chat_respond_question({id, requestId, answers: string[][]})`, `chat_stop({id})`, `chat_replay({id}) -> {events, seq}`, `open_in_terminal({id}) -> number` (PTY id).

@@ -2,6 +2,8 @@
 // shows the "now" indicator (timeline, chat, Home card line, Agents strip). Waiting on the person
 // is deliberately absent: that state has its own markers and no orb.
 
+import { parseMcp, rowText, toolRowFromText } from "./toolNames";
+
 export type Mood = "think" | "plan" | "search" | "read" | "write" | "run" | "delegate" | "start" | "compact" | "other";
 export type MoodOrb = "solving" | "shaping" | "searching" | "composing" | "working" | "weaving" | "connecting" | "breathing";
 
@@ -26,6 +28,9 @@ export const MOODS: Record<Mood, { orb: MoodOrb; words: string[] }> = {
 export function toolMood(name: string | null | undefined): Mood {
   const n = (name ?? "").toLowerCase();
   if (!n) return "think";
+  // coool-device (Claude `mcp__coool-device__x`, Codex `coool-device.x`): reading the screen reads, typing writes, the rest acts.
+  const dev = /^(?:mcp__coool-device__|coool-device\.)(.+)$/.exec(n)?.[1];
+  if (dev) return /observe|screenshot|navigate|wait_for/.test(dev) ? "read" : /type$/.test(dev) ? "write" : /shell/.test(dev) ? "run" : "other";
   if (/compact|summari[sz]e/.test(n)) return "compact";
   if (/plan|todo/.test(n)) return "plan";
   if (/^(agent|task)$|subagent/.test(n)) return "delegate";
@@ -41,5 +46,7 @@ export function moodOfCurrent(current: string | null | undefined, runningAgents 
   if (!current || /^thinking/i.test(current)) return { mood: runningAgents > 0 ? "delegate" : "think", name: null, detail: "" };
   const m = /^(.+?)\s·\s(.*)$/.exec(current);
   const name = m ? m[1] : current.split(/\s/)[0];
+  // MCP calls read as phrases ("Opened affectui.com"), never as the raw `mcp__server__tool` name.
+  if (parseMcp(name)) return { mood: toolMood(name), name, detail: rowText(toolRowFromText(current)) };
   return { mood: toolMood(name), name, detail: m ? m[2] : "" };
 }

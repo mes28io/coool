@@ -6,6 +6,7 @@ import { create } from "zustand";
 import type { Activity, ArtifactInfo, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
 import { shortTitle } from "./format";
 import { isStopReason } from "./stopped";
+import { permissionWhat } from "./toolNames";
 
 /** "always": allowed and one of the request's remember options applied (`remembered`). */
 export type PermissionAnswer = "allow" | "always" | "deny" | "answered";
@@ -657,8 +658,8 @@ export function chatNeeds(c: Chat | undefined | null): string | null {
   if (q) return `Answer: ${q.questions[0]?.question ?? "a question"}${q.questions.length > 1 ? ` (+${q.questions.length - 1})` : ""}`;
   const p = pendingPermission(c);
   if (!p) return null;
-  const what = p.summary.startsWith(p.tool + " · ") ? p.summary.slice(p.tool.length + 3) : p.summary;
-  return `Approve ${p.tool}${what ? `: ${what}` : ""}`;
+  const { name, detail } = permissionWhat(p.tool, p.input, p.summary);
+  return `Approve ${name}${detail ? `: ${detail}` : ""}`;
 }
 
 export function chatStatus(c: Chat): "busy" | "idle" | "ended" {

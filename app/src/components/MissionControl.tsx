@@ -9,7 +9,8 @@ import { answerPermission } from "../lib/actions";
 import { useAgentCards } from "../lib/agentCards";
 import { pendingPermission, pendingQuestion, useChats, type ChatItem } from "../lib/chat";
 import { useClock } from "../lib/clock";
-import { ago, displayTitle, folderName, fmtElapsed, fmtTokens, headlineIsTitle, homeShort, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
+import { ago, displayTitle, folderName, fmtElapsed, fmtTokens, headlineIsTitle, homeShort, isThinking, projectOf, shortDetail, tsToMs } from "../lib/format";
+import { stepParts } from "../lib/toolNames";
 import { useGitTrail } from "../lib/gitTrail";
 import { attention, liveJobs, sameAttention, useChatDigest, useUnseen, type Attention } from "../lib/live";
 import { committing, fanout, ledgerRows, overlaps, type Change, type OverlapEdit } from "../lib/mission";
@@ -436,7 +437,7 @@ const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
   const needs = att.needs;
   const busy = att.status === "busy" && !needs && !att.background;
   const thinking = busy && (!s.current || isThinking(s.current));
-  const cur = busy && !thinking && s.current ? splitTool(s.current) : null;
+  const cur = busy && !thinking && s.current ? stepParts(s.current) : null;
   const running = att.agents;
   const jobs = liveJobs(s);
   const crew = running.length ? `${running.length} ${running.length === 1 ? "agent" : "agents"}${jobs > 0 ? `, ${jobs} ${jobs === 1 ? "job" : "jobs"}` : ""} working` : null;
