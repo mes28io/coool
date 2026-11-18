@@ -118,9 +118,9 @@ const USAGE_PILL_MS = 2800;
 /** One limit of one provider: what the usage pill shows at a time. */
 type UsageItem = { p: Provider; w: UsageWindow };
 
-/** Every limit with a reading, provider by provider. */
+/** The 5-hour and weekly limits with a reading, provider by provider (per-model limits and credits are on the page). */
 function usageItems(usage: PlanUsages, providers: readonly Provider[]): UsageItem[] {
-  return providers.flatMap((p) => (usage[p]?.windows ?? []).filter((w) => w.used_percent !== null).map((w) => ({ p, w })));
+  return providers.flatMap((p) => (usage[p]?.windows ?? []).filter((w) => w.used_percent !== null && w.window_minutes !== null && !w.model).map((w) => ({ p, w })));
 }
 
 const leftOf = (w: UsageWindow) => Math.round(100 - Math.max(0, Math.min(100, w.used_percent ?? 0)));
