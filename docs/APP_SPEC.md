@@ -263,8 +263,8 @@ The same `coool-device` server (one per chat, one tool family) also drives that 
 | `browser_navigate` | `url` |
 | `browser_back` / `browser_forward` / `browser_reload` | — |
 | `browser_tabs` | `action` list / new (`url`) / switch (`tab`) / close (`tab`) |
-| `browser_wait_for` | `text` (in the page text), `selector` (CSS, a visible match), `url` (substring), `gone?`, or `idle`; `timeout_ms` (5000), polled every ~60 ms |
-| `browser_screenshot` | `max_size` (width px, 800) — `takeSnapshotWithConfiguration`, JPEG 0.5 |
+| `browser_wait_for` | `text` (in the page text), `selector` (CSS, a visible match), `url` (substring), `gone?`, or `idle`; `timeout_ms` (5000), polled every ~60 ms; `idle` on a page that never goes quiet (a ticking clock) times out and says the page keeps changing |
+| `browser_screenshot` | `max_size` (width px, 800) — `takeSnapshotWithConfiguration`, JPEG 0.5; the agents' cursors are hidden while it is taken (the agent shouldn't read its own label as the page's) |
 | `browser_batch` | `actions`: `{click}`, `{type,id,submit?}`, `{select,id}`, `{press,id?}`, `{scroll,id?}`, `{navigate}`, `{back}`, `{forward}`, `{reload}`, `{wait_for}`, `{wait_ms}`; each step settles before the next; stops at the first failure |
 
 The listing:

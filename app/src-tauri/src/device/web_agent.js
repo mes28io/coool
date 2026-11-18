@@ -93,7 +93,11 @@
     }
     function textOf(el) {
       var t = el.innerText;
-      return t == null ? el.textContent : t;
+      if (t == null) return el.textContent;
+      // `content-visibility: auto` skips rendering an off-screen subtree, and innerText then reads "" (affectui.com's
+      // component cards past the first screen were listed with no names): use the text it holds instead.
+      if (t === "" && el.checkVisibility && el.textContent && !el.checkVisibility({ contentVisibilityAuto: true })) return el.textContent;
+      return t;
     }
 
     function idOf(el) {
@@ -1170,6 +1174,10 @@
             return { quiet: pending ? 0 : now() - lastMutation, pending: pending || undefined, mutations: mutations, ready: document.readyState, doc: DOC, url: String(location.href) };
           case "presence":
             return presenceOp(c);
+          case "shot":
+            // Around a screenshot: the agent's own cursors and labels aren't the page, so they stay out of what it sees.
+            if (P && P.host) P.host.style.setProperty("visibility", c.hide ? "hidden" : "visible");
+            return {};
           case "flash": {
             var el = get(c);
             mark(c, reveal(el), 0, false);

@@ -500,6 +500,113 @@ async function pilotLog(): Promise<{ raw: string; recs: PilotRecord[] }> {
   return { raw: lines.join("\n"), recs: lines.map((l) => JSON.parse(l) as PilotRecord) };
 }
 
+// ---------- research: a Haiku chat walks a public website in its Browser panel ----------
+
+/**
+ * `inspo-<n>` (research only, never in `all`; real model calls and a public website): a fresh Claude Haiku chat
+ * visits one batch of affectui.com's component pages in its Browser panel with the `browser_*` tools and reports
+ * each page in a fixed format; the harness takes a window screenshot (twice, 1.2 s apart, to see motion) whenever
+ * the agent takes a `browser_screenshot`, and logs the reply and every tool's timing. Batch 0 is the index.
+ */
+const INSPO_SITE = "https://www.affectui.com/components/";
+const INSPO_BATCHES: string[][] = [
+  ["", "agent-checkpoints", "agent-crew", "agent-cursors", "agent-findings", "agent-fleet"],
+  ["agent-graph", "agent-handoff", "agent-inbox", "agent-lanes", "agent-ledger", "agent-monitor", "agent-plan", "agent-queue"],
+  ["agent-recap", "agent-sequence", "agent-steering", "agent-trail", "agent-tree", "ai-answer", "approval-card", "approval-gates"],
+  ["autonomy-dial", "away-summary", "change-summary", "chat-composer", "cited-answer", "code-block", "collaboration-stream", "command-menu"],
+  ["commit-trail", "compact-breakdown", "conflict-radar", "context-map", "context-window", "cost-waterfall", "decision-card", "decision-inbox"],
+  ["decision-tree", "delegate-board", "diff-timeline", "fallback-chain", "fan-out-grid", "inline-diff", "judge-bracket", "memory-graph"],
+  ["memory-panel", "message-actions", "model-picker", "model-usage", "notification-stack", "parallel-attempts", "permission-request", "plan-vs-actual"],
+  ["prompt-library", "rate-limit-planner", "reasoning-summary", "review-center", "root-cause-tree", "run-controls", "running-now", "scheduled-runs"],
+  ["smart-recommendation", "thinking-loader", "thinking-state", "tool-access-map", "tool-call-card", "trace-waterfall", "usage-meter", "toaster"],
+  ["segmented-control", "empty-state", "tree-view", "hover-card", "kbd", "badge", "stat-card", "trend-chart"],
+  ["breadcrumb", "combobox", "tag-input", "button", "icon-button", "project-card", "dropzone", "skeleton"],
+  // A re-check of the tools on two live previews (wait_for idle on a page that never goes quiet).
+  ["trace-waterfall", "plan-vs-actual"],
+];
+
+async function inspo(ctx: Ctx, name: string) {
+  const n = Number(name.slice("inspo-".length));
+  const slugs = INSPO_BATCHES[n];
+  if (!slugs) throw new Fail(`no batch ${name}`);
+  const urls = slugs.map((s) => INSPO_SITE + s);
+  let id = -1;
+  await step(`${name}: a Haiku chat starts`, async () => {
+    const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+    await newChat({ provider: "claude", cwd: ctx.cfg.dir, model: PERF_MODEL });
+    id = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+    await waitFor("ready", () => chat(id)?.ready, 90_000);
+    await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+    await sleep(1200);
+    // A wide panel for the previews; not persisted (no setBrowserWidth, which writes localStorage).
+    useStore.setState({ browserWidth: 900 });
+    return `chat ${id}`;
+  });
+  if (id < 0) return;
+  const index = slugs[0] === "";
+  const prompt = [
+    "You are cataloguing a public UI component website for design research. Use ONLY the browser_* tools (the Browser panel beside this chat): no shell, no curl, no web fetch, no other tools, no files.",
+    "Never click 'Get Pro', pricing, buy, sign-in or sign-up links, never type anything into the site, never open code tabs. Read only what the public page shows.",
+    index
+      ? `First open ${urls[0]} with browser_navigate. It lists about 130 components. Call browser_observe with all=true and text_max=20000 to read the whole list, then browser_screenshot once. Report the category headings or filters and how the list is organised (and say if the listing came back cut short).`
+      : "",
+    `Then visit each of these pages one at a time, in this order: ${urls.slice(index ? 1 : 0).join(" , ")}`,
+    "If a cookie banner shows, click its Decline button once (browser_click) and carry on.",
+    "For each page: call browser_navigate with its URL (the result lists the page), then call browser_screenshot once to see the live preview. If the preview area is still empty in that screenshot, call browser_wait_for with idle=true, then browser_screenshot again; if it is below the fold, call browser_scroll down once and browser_screenshot again. Nothing else per page.",
+    index ? "Start your reply with a block '### Index' that gives the tabs or category filters you saw, the number of components the page claims, how many component cards your observe listed, and whether the listing was cut short." : "",
+    "When all pages are done, reply with one block per page in exactly this format and nothing else:",
+    "### <component name>\n- url: <url>\n- category: <breadcrumb item after Components>\n- tagline: <the one-line description under the title, verbatim>\n- tier: <Pro if the page says 'Part of affectUI Pro' or 'Get Pro', else Free>\n- preview: <2-4 sentences: what the preview shows, its layout, the sample data, colours and states>\n- motion: <what looks animated or live in the preview, or 'static as far as visible'>\n- tool notes: <anything that went wrong with the browser tools on this page: errors, cut-off or empty listings, slow calls, missing elements; or 'none'>",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  // Window screenshots whenever the agent looks at the page.
+  let seen = items(id).length;
+  let shots = 0;
+  let busy = false;
+  const watcher = setInterval(() => {
+    if (busy) return;
+    const fresh = items(id).slice(seen);
+    const sc = fresh.find((i) => i.kind === "tool" && /browser_screenshot$/.test(i.name));
+    if (!sc) return;
+    seen = items(id).indexOf(sc) + 1;
+    busy = true;
+    const key = chatPanelKey(id);
+    const b = useStore.getState().browser[key];
+    const tab = b?.tabs.find((t) => t.id === b.active);
+    const live = b ? useBrowserState.getState().byKey[activeTabKey(key) ?? ""]?.url : undefined;
+    const url = live ?? (tab?.page.kind === "web" ? tab.page.url : "");
+    const slug = (url.split("/components")[1] ?? "").replace(/^\//, "").replace(/[^a-z0-9-]/gi, "-") || "index";
+    const host = $("[data-browser-native]")?.getBoundingClientRect();
+    shots++;
+    const nm = `inspo-${slug}-${shots}`;
+    void (async () => {
+      await shot(`${nm}-a`, undefined, 250);
+      await shot(`${nm}-b`, undefined, 900);
+      if (host) await log(`RECT ${nm} ${Math.round(host.left)},${Math.round(host.top)},${Math.round(host.width)},${Math.round(host.height)} dpr=${devicePixelRatio} url=${url}`);
+    })().finally(() => (busy = false));
+  }, 150);
+  try {
+    const r = await agentTurn(id, { prompt, marks: [["[data-browser-driving]", `${name}-beam`]], probes: [{ name: "page-cursor", test: () => pageCursors(id), shot: `${name}-cursor` }], ms: 1_200_000 });
+    await log(`REPLY ${name} ${JSON.stringify(r.reply)}`);
+    await step(`${name}: the agent visited the pages`, async () => {
+      const failed = r.tools.filter((t) => t.ok === false);
+      for (const t of failed) await log(`TOOLFAIL ${toolName(t)} ${JSON.stringify(t.input).slice(0, 200)} -> ${t.output.slice(0, 600).replace(/\n/g, " | ")}`);
+      // Every tool's timing, with what it reported about itself (load / act / settle / observe ms).
+      for (const t of r.tools) {
+        const own = [...t.output.matchAll(/\((?:load|act|observe|screenshot)[^)]*\)/g)].map((m) => m[0]).join(" ");
+        const head = t.output.split("\n").find((l) => /^ready|^loading|elements/.test(l)) ?? "";
+        await log(`TIMING ${toolName(t)} ${t.endTs ? t.endTs - t.ts : "?"}ms ${JSON.stringify(t.input).slice(0, 120)} ${own} ${head.slice(0, 120)}`);
+      }
+      return `turn ${r.turnMs} ms, ${r.tokens ?? "?"} out tokens, ${r.tools.length} device calls, ${failed.length} failed, ${shots} screenshots; other tools: ${r.all.filter((a) => !/coool-device/.test(a)).join(", ") || "none"}`;
+    });
+  } finally {
+    clearInterval(watcher);
+  }
+  await sleep(1500);
+  const key = chatPanelKey(id);
+  if (key) useStore.getState().closeBrowser(key);
+}
+
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
   /**
    * The browser panel: an artifact preview window, then https://example.com in a tab's native child webview, which
@@ -2094,7 +2201,7 @@ export async function maybeRunSelfTest() {
   await shot("start");
   const ctx: Ctx = { cfg, main: null, question: null };
   for (const n of names) {
-    const f = scenarios[n];
+    const f = scenarios[n] ?? (/^inspo-\d+$/.test(n) ? (c: Ctx) => inspo(c, n) : undefined);
     if (!f) {
       fail++;
       await log(`FAIL unknown scenario ${n}`);
