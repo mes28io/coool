@@ -222,12 +222,18 @@ export interface PlanUsage {
   plan: string | null;
   windows: UsageWindow[];
   credits: UsageCredits | null;
+  /** Codex: free full resets (5-hour + weekly) the account can redeem. */
   reset_credits: number | null;
+  /** Codex: when the soonest-expiring available reset credit expires (ms); null when unknown or none expire. */
+  reset_credits_expire_ms: number | null;
   fetched_ms: number;
   source: string;
   stale: boolean;
   error: string | null;
 }
+
+/** What redeeming a Codex reset credit did (`usage_reset_codex`). */
+export type ResetOutcome = "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed";
 
 export type PlanUsages = { claude: PlanUsage | null; codex: PlanUsage | null };
 

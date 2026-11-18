@@ -356,7 +356,7 @@ function UsageSection() {
     <div className="flex flex-col gap-3" data-settings-usage role="region" aria-label="Plan usage">
       {providers.map((p) => (
         <div key={p} className="rounded-[12px] border border-line bg-raised px-1.5 py-0.5">
-          <UsageBlock provider={p} usage={usage[p]} />
+          <UsageBlock provider={p} usage={usage[p]} full />
         </div>
       ))}
       {providers.length === 0 && <div className="rounded-[12px] border border-dashed border-line px-4 py-5 text-center text-base text-dim">No supported CLI found.</div>}
