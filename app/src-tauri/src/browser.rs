@@ -23,6 +23,9 @@
 //!   desktop Safari user agent. They close with their opener webview (and with the main window).
 //! - "Open in default browser" opens what the webview shows, re-validated, from Rust ([`browser_open_external`]);
 //!   the opener plugin's JS scope stays `https://claude.ai/*`.
+//! - The chat's agent drives these pages through the `browser_*` tools (device/web.rs): coool's own page script in a
+//!   content world of its own ([`native::eval_isolated`]) and snapshots ([`native::snapshot_jpeg`]); nothing a page
+//!   can call, and the agent can't run scripts of its own.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -66,7 +69,7 @@ impl Browsers {
         *self.app_origin.lock().unwrap() = url.filter(|u| matches!(u.scheme(), "http" | "https")).map(|u| u.origin().ascii_serialization());
     }
 
-    fn app_origin(&self) -> Option<String> {
+    pub(crate) fn app_origin(&self) -> Option<String> {
         self.app_origin.lock().unwrap().clone()
     }
 }
@@ -102,7 +105,7 @@ pub struct BrowserState {
     id: String,
     pub(crate) url: String,
     pub(crate) title: String,
-    loading: bool,
+    pub(crate) loading: bool,
     can_back: bool,
     can_forward: bool,
 }
@@ -552,6 +555,110 @@ pub(crate) mod native {
                 can_back: msg_send![w, canGoBack],
                 can_forward: msg_send![w, canGoForward],
             }
+        }
+    }
+
+    /// The NSString `description` of any object (or "").
+    fn describe(o: *mut AnyObject) -> String {
+        if o.is_null() {
+            return String::new();
+        }
+        // SAFETY: `o` is a live object; every NSObject answers `description` with an NSString.
+        string(unsafe { msg_send![&*o, description] })
+    }
+
+    fn error_text(e: *mut AnyObject) -> String {
+        if e.is_null() {
+            return "unknown error".into();
+        }
+        // SAFETY: `e` is an NSError.
+        let s = string(unsafe { msg_send![&*e, localizedDescription] });
+        if s.is_empty() { "unknown error".into() } else { s }
+    }
+
+    /// Runs `js` in the page's main frame, in coool's own content world ("coool-agent": the page's scripts can't see
+    /// its globals or patch what it uses), and calls `done` with the completion value's text. Main thread only.
+    /// The agent tools' page script (device/web_agent.js) is the only caller; nothing here is reachable from a page.
+    pub fn eval_isolated(wk: *mut c_void, js: &str, done: impl Fn(Result<String, String>) + 'static) {
+        use objc2::runtime::AnyClass;
+        use objc2_foundation::NSString;
+        let wk = wk as *mut AnyObject;
+        let Some(world_cls) = AnyClass::get(c"WKContentWorld") else {
+            return done(Err("WKContentWorld needs macOS 11".into()));
+        };
+        if wk.is_null() {
+            return done(Err("no webview".into()));
+        }
+        let script = NSString::from_str(js);
+        let name = NSString::from_str("coool-agent");
+        let block = block2::RcBlock::new(move |result: *mut AnyObject, error: *mut AnyObject| {
+            done(if error.is_null() { Ok(describe(result)) } else { Err(error_text(error)) });
+        });
+        // SAFETY: main thread; `worldWithName:` returns an autoreleased WKContentWorld; the frame is nil (main frame);
+        // WebKit copies the block and calls it once on the main thread.
+        unsafe {
+            let world: *mut AnyObject = msg_send![world_cls, worldWithName: &*name];
+            let frame: *mut AnyObject = std::ptr::null_mut();
+            let _: () = msg_send![&*wk, evaluateJavaScript: &*script, inFrame: frame, inContentWorld: world, completionHandler: &*block];
+        }
+    }
+
+    /// A JPEG of what the webview shows, `max_px` pixels wide at most. Main thread only.
+    pub fn snapshot_jpeg(wk: *mut c_void, max_px: f64, quality: f64, done: impl Fn(Result<Vec<u8>, String>) + 'static) {
+        use objc2::runtime::AnyClass;
+        use objc2_foundation::NSString;
+        let wk = wk as *mut AnyObject;
+        let (Some(cfg_cls), Some(num_cls), Some(rep_cls), Some(dict_cls)) =
+            (AnyClass::get(c"WKSnapshotConfiguration"), AnyClass::get(c"NSNumber"), AnyClass::get(c"NSBitmapImageRep"), AnyClass::get(c"NSDictionary"))
+        else {
+            return done(Err("snapshots need macOS 10.13".into()));
+        };
+        if wk.is_null() {
+            return done(Err("no webview".into()));
+        }
+        // SAFETY: main thread; plain getters and setters of WKWebView / NSWindow / WKSnapshotConfiguration.
+        let cfg: *mut AnyObject = unsafe {
+            let win: *mut AnyObject = msg_send![&*wk, window];
+            let scale: f64 = if win.is_null() { 2.0 } else { msg_send![&*win, backingScaleFactor] };
+            let frame: objc2_foundation::NSRect = msg_send![&*wk, bounds];
+            let width_pt = (max_px / scale.max(1.0)).min(frame.size.width.max(1.0));
+            let cfg: *mut AnyObject = msg_send![cfg_cls, new];
+            let n: *mut AnyObject = msg_send![num_cls, numberWithDouble: width_pt];
+            let _: () = msg_send![&*cfg, setSnapshotWidth: n];
+            cfg
+        };
+        let block = block2::RcBlock::new(move |image: *mut AnyObject, error: *mut AnyObject| {
+            if image.is_null() {
+                return done(Err(error_text(error)));
+            }
+            // SAFETY: `image` is an NSImage; TIFF -> bitmap rep -> JPEG data, all autoreleased (main thread, in the run loop).
+            let jpeg = unsafe {
+                let tiff: *mut AnyObject = msg_send![&*image, TIFFRepresentation];
+                if tiff.is_null() {
+                    return done(Err("no image data".into()));
+                }
+                let rep: *mut AnyObject = msg_send![rep_cls, imageRepWithData: tiff];
+                if rep.is_null() {
+                    return done(Err("no bitmap".into()));
+                }
+                let q: *mut AnyObject = msg_send![num_cls, numberWithDouble: quality];
+                let key = NSString::from_str("NSImageCompressionFactor");
+                let props: *mut AnyObject = msg_send![dict_cls, dictionaryWithObject: q, forKey: &*key];
+                // NSBitmapImageFileTypeJPEG = 3.
+                let data: *mut AnyObject = msg_send![&*rep, representationUsingType: 3usize, properties: props];
+                if data.is_null() {
+                    return done(Err("JPEG encoding failed".into()));
+                }
+                let len: usize = msg_send![&*data, length];
+                let bytes: *const u8 = msg_send![&*data, bytes];
+                if bytes.is_null() { Vec::new() } else { std::slice::from_raw_parts(bytes, len).to_vec() }
+            };
+            done(Ok(jpeg));
+        });
+        // SAFETY: main thread; WebKit copies the block and calls it once; `cfg` was +1 from `new` and is released after.
+        unsafe {
+            let _: () = msg_send![&*wk, takeSnapshotWithConfiguration: cfg, completionHandler: &*block];
+            let _: () = msg_send![&*cfg, release];
         }
     }
 

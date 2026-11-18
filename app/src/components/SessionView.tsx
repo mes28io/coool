@@ -2,6 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion } from "motion/react";
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BrowserContext, closeNative, recentPages, tabKey, useBrowserState, type OpenPage } from "../lib/browser";
+import { useAgentBrowsing } from "../lib/browserAgent";
 import { GlobeGlyph } from "./MoodGlyph";
 import { BrowserPanel } from "./BrowserPanel";
 import { DevicePanel } from "./DevicePanel";
@@ -170,6 +171,8 @@ export function SessionView({
   };
   // The globe spins while any page of this chat's browser is loading (like the Jobs glyph while jobs run).
   const browserLoading = useBrowserState((b) => !!panelKey && Object.entries(b.byKey).some(([k, v]) => k.startsWith(`${panelKey}#tab`) && v.loading));
+  // The chat's agent using its browser while another panel (or none) shows: a dot on the globe, as for the iPhone.
+  const browserBusy = !!useAgentBrowsing(chatId, 4000);
   const toggleRight = (k: RightKind) => setPanel(showing === k ? "closed" : k);
   const panelWidth = (k: RightKind) =>
     k === "browser"
@@ -313,8 +316,16 @@ export function SessionView({
           </Button>
         )}
         {panelKey && (
-          <IconButton title={browserOpen ? "Hide the browser" : `Show the browser${pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`} active={browserOpen} onClick={onGlobe}>
+          <IconButton
+            title={browserOpen ? "Hide the browser" : `Show the browser${browserBusy ? " (the agent is using it)" : pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`}
+            active={browserOpen}
+            onClick={onGlobe}
+            className="relative"
+          >
             <GlobeGlyph size={19} live={browserLoading} />
+            {browserBusy && !browserOpen && (
+              <span className="breathe absolute right-[4px] top-[4px] size-[6px] rounded-full bg-[var(--status-running)] ring-2 ring-[var(--bg)]" data-browser-busy aria-hidden />
+            )}
           </IconButton>
         )}
         {panelKey && (
@@ -411,7 +422,7 @@ export function SessionView({
               k === "agents" ? (
                 <AgentsBody cards={cards} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
               ) : k === "browser" ? (
-                tabs ? <BrowserPanel panelKey={panelKey} state={tabs} active={active} onClose={onCloseBrowser} recent={recent} /> : null
+                tabs ? <BrowserPanel panelKey={panelKey} chat={r.chat} state={tabs} active={active} onClose={onCloseBrowser} recent={recent} /> : null
               ) : k === "device" ? (
                 <DevicePanel panelKey={panelKey} chat={r.chat} active={active} onClose={() => setPanel("closed")} />
               ) : (

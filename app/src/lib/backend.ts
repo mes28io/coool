@@ -109,6 +109,12 @@ export interface Backend {
   onBrowserClosed(cb: (id: string) => void): Unlisten;
   /** A page asked for a new window that opens as a tab (`target=_blank`, `window.open` without a size); `id` is its panel webview. */
   onBrowserNewTab(cb: (t: { id: string; url: string }) => void): Unlisten;
+  /** A chat's browser tabs, for its agent's `browser_*` tools (device/web.rs): they act on the active tab. */
+  browserAgentSync(chat: number, tabs: BrowserAgentTab[], active: number | null): Promise<void>;
+  /** The agent's tools asking the panel to open / show / switch / close a tab (lib/browserAgent.ts answers). */
+  onBrowserAgent(cb: (r: BrowserAgentRequest) => void): Unlisten;
+  /** A chat's agent acted on its browser panel (the panel shows it). */
+  onBrowserActivity(cb: (a: BrowserActivity) => void): Unlisten;
 
   // ---- iPhone: the iOS Simulator in the right panel (components/DevicePanel.tsx) ----
   /** The simulators (coool's own first); `available: false` with a reason when there is no Xcode / not macOS. */
@@ -178,6 +184,25 @@ export interface BrowserState {
   loading: boolean;
   can_back: boolean;
   can_forward: boolean;
+}
+
+export interface BrowserAgentTab {
+  tab: number;
+  kind: "web" | "start";
+  /** Its webview, once there is one. */
+  id: string | null;
+  url: string;
+  title: string;
+}
+export type BrowserAgentRequest =
+  | { chat: number; op: "open" | "new"; url: string }
+  | { chat: number; op: "ensure" | "switch" | "close"; tab: number };
+export interface BrowserActivity {
+  chat: number;
+  /** The tab it acted on (null: one it is opening). */
+  tab: number | null;
+  kind: string;
+  label?: string | null;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -347,6 +372,9 @@ async function tauriBackend(): Promise<Backend> {
     onBrowserState: (cb) => sub<BrowserState>("browser-state", cb),
     onBrowserClosed: (cb) => sub<string>("browser-closed", cb),
     onBrowserNewTab: (cb) => sub<{ id: string; url: string }>("browser-new-tab", cb),
+    browserAgentSync: (chat, tabs, active) => invoke("browser_agent_sync", { chat, tabs, active }),
+    onBrowserAgent: (cb) => sub<BrowserAgentRequest>("browser-agent", cb),
+    onBrowserActivity: (cb) => sub<BrowserActivity>("browser-activity", cb),
     simDevices: async () => {
       try {
         return await soft<SimList>("sim_devices");

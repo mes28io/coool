@@ -37,4 +37,6 @@ tauri-plugin-opener = "2"
 # `NSGeometry`: the self-test's native clicks (selftest.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+# Completion handlers of WKWebView (the agent's browser tools: evaluateJavaScript, takeSnapshot). Already in Tauri's tree.
+block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSArray", "NSDictionary", "NSString", "NSValue", "NSGeometry"] }

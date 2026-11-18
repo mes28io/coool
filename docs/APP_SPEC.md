@@ -209,6 +209,53 @@ Measured end to end through the real proxy (scripted client, booted iPhone 18 Pr
 
 **Known limits.** Rotation isn't supported yet (the screen shape is fixed at attach; DTUHID orientation goes through the vendor-defined service). Typing uses a US layout (others paste). Two chats on one device share it (each can `device select` another). Private APIs can move with each Xcode: everything is looked up at runtime and fails as a clear message in the panel / tool result.
 
+### Agent browser tools (`browser_*`, `device/web.rs`, `device/web_agent.js`)
+
+The same `coool-device` server (one per chat, one tool family) also drives that chat's **Browser panel**, so an agent tests a web app in the panel beside the chat instead of opening Chrome or taking over the screen. The tools never open the system browser and never activate a window.
+
+- **Which page.** The frontend reports every chat's browser tabs to the backend on each change (`browser_agent_sync({ chat, tabs: [{ tab, kind: web|start, id, url, title }], active })`, from `lib/browserAgent.ts`); a tool acts on the chat's **active tab**, the one the person sees. Only `browser-*` webviews are accepted (never `main`), and a chat's token only reaches its own chat's tabs. Opening and changing tabs go back to the frontend, which owns the tab strip: `browser-agent` events `{ chat, op: open|new|switch|close|ensure, url?, tab? }`; the tool waits for the sync that follows. `open` (browser_navigate when the panel has no page, or only a new tab) works like a link from the chat: the page opens in the panel and the panel shows. When the chat's view isn't on screen (another pane tab in front, a pane too narrow) the page opens **hidden** at the panel's usual size and the tools still work (`ensureNative` in `lib/browser.ts`); the panel moves it into place when it shows. `ensure` brings back a tab whose webview the app closed (more than 4 alive).
+- **How.** One page script (`web_agent.js`) run with `evaluateJavaScript:inFrame:inContentWorld:completionHandler:` in a WKContentWorld of coool's own (`coool-agent`), so the page can't see its globals or patch what it uses; it returns JSON. No tool runs the agent's own JavaScript. It reads the DOM only: never cookies, localStorage, sessionStorage or IndexedDB (a unit test checks the script never names them). **Password fields** (and `autocomplete` current/new-password, one-time-code, cc-number, cc-csc) are masked: observe says only `(filled, hidden)` / `(empty)`, typing into one reports the character count, the activity label is `••••`; Rust's renderer drops a masked field's value even if one were sent.
+- **Settling.** After an action the tool waits until the webview isn't loading and the DOM has had no mutation for 90 ms (a MutationObserver in coool's world that ignores the click highlight), at most 1.5 s (10 s for navigations), then returns the page or "Page unchanged (N elements)". No fixed sleeps.
+- **Ids.** Numbers, per document: an element keeps its id while it stays on the page (a WeakMap), new elements get new numbers, numbers are never reused within a document. Each observe carries a document token; an id sent after the page navigated or reloaded is refused ("observe again"), so an old id can't hit an element of the next page.
+- **Navigation rules.** `browser_navigate` / `tabs new` take what the panel takes (`browser::loadable`: http(s) only, no credentials, not the app's own dev server or `*.localhost`); a bare host gets `https://` (`http://` for localhost and IPs). Pages' own navigations keep browser.rs's rules.
+
+| tool | arguments |
+|---|---|
+| `browser_observe` | `all?` (include elements scrolled out of view), `max?` (250), `text_max?` (2500 chars), `screenshot?`, `max_size?` |
+| `browser_click` | `id` — scrolled into view, pointer/mouse events then `click()`, focus; notes when another element covers that point or it is disabled |
+| `browser_type` | `id`, `text`, `submit?` — replaces the field's contents through the native value setter, then `beforeinput` / `input` / `change` (React-style trackers see it); contenteditable via `insertText`; `submit` = Enter: the form's submit button / `requestSubmit()` |
+| `browser_select` | `id` of a `<select>`, `value` (an option's value or text), `values` (multiple) or `index` |
+| `browser_scroll` | `direction` up/down/left/right (`amount` viewports, 0.8) or top/bottom; `id` scrolls the box holding it (only `id`: into view). The page, else the largest scrolling box (apps whose body doesn't scroll) |
+| `browser_press` | `key` (Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown, one character), `modifiers?`, `id?`; key events plus the default action (submit, activate, focus next, delete, scroll, select option) |
+| `browser_navigate` | `url` |
+| `browser_back` / `browser_forward` / `browser_reload` | — |
+| `browser_tabs` | `action` list / new (`url`) / switch (`tab`) / close (`tab`) |
+| `browser_wait_for` | `text` (in the page text), `selector` (CSS, a visible match), `url` (substring), `gone?`, or `idle`; `timeout_ms` (5000), polled every ~60 ms |
+| `browser_screenshot` | `max_size` (width px, 800) — `takeSnapshotWithConfiguration`, JPEG 0.5 |
+| `browser_batch` | `actions`: `{click}`, `{type,id,submit?}`, `{select,id}`, `{press,id?}`, `{scroll,id?}`, `{navigate}`, `{back}`, `{forward}`, `{reload}`, `{wait_for}`, `{wait_ms}`; each step settles before the next; stops at the first failure |
+
+The listing:
+
+```
+Bench form — http://127.0.0.1:18765/test.html
+ready · viewport 600x800 · scrolled 0 of 4670 px · 55 elements
+[1] link "Home" → / (16,16 37x17)
+[5] heading h1 "Sign in" (16,49 568x37)
+[6] textbox "Email" type=email placeholder="you@example.com" (61,135 156x21)
+[7] textbox "Password" type=password (filled, hidden) (280,135 156x21)
+[8] checkbox "Remember me" unchecked (16,160 13x13)
+[9] combobox "Color" value="Red" options: Red | Blue | Green (100,158 70x20)
+
+Text in view:
+Welcome back. Please sign in to continue.
+```
+
+**What the person sees.** While the agent acts (3 s after its latest action) the tab it drives shows a breathing blue dot instead of its globe and the panel's toolbar an "Agent" pill; a clicked / typed-into element gets a brief blue outline drawn in the page (a fixed, pointer-events-none overlay in coool's world, gone after ~0.8 s). When another panel (or none) shows, the header's globe gets the same blue dot as the iPhone button (`browser-activity` events `{ chat, tab, kind, label }`). The panel only opens by itself when the agent opens a page and none was open.
+
+**Measured** (Apple silicon, macOS 27; the page script through the same `evaluateJavaScript:inContentWorld:` path, in a WKWebView of a scratch harness whose app may never activate and whose window is never shown; a local form page with 200 / 2000 list rows): observe of what's in view 1.5 ms / 11 ms (55 elements), whole page (`all`) 2.3 ms / 19 ms; click 1.6–1.9 ms, type 2.7–3.0 ms (script only), click or type + settle ~110 ms (the 90 ms quiet window); one idle poll 0.35 ms; snapshot to JPEG 21 ms. The MCP socket hop and the main-thread dispatch come on top (well under a millisecond each). Not measured inside the running app: the frontend's sync and requests, and a webview hidden with `setHidden:` (snapshots of a hidden view may fail; then the tool says so).
+
+**Known limits.** Events are synthetic (`isTrusted: false`): pages that require trusted input (some pop-up blockers, a few anti-bot checks) may ignore them. Only the main frame is read (iframes are listed as `frame`, not entered). Elements only clickable through a JS listener with no role, tabindex, onclick or `cursor: pointer` aren't listed. File inputs aren't supported.
+
 ## Engineering constraints
 
 - The frontend must also run in a plain browser (`pnpm dev`) with a built-in mock data source when Tauri is absent: realistic sessions that change over time (statuses flipping, steps arriving, a fake terminal stream). This is how the UI gets developed and screenshot-tested without the shell, and it is the demo for coool.sh later.

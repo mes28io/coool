@@ -1076,6 +1076,7 @@ pub fn run() {
             device::sim_detach,
             device::sim_input,
             device::sim_bind,
+            device::web::browser_agent_sync,
             selftest::selftest_probe_server,
             selftest::selftest_probe_result,
             selftest::selftest_resize,
