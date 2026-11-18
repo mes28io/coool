@@ -95,6 +95,8 @@ struct Core {
     previews: artifact::Previews,
     /// The in-app browser's child webviews (see [`browser`]).
     browsers: browser::Browsers,
+    /// Context maps of the transcripts whose Models panel is open (see `context_map`).
+    contexts: Mutex<coool_core::context::ContextMaps>,
 }
 
 /// The last payload the UI got, per session, so the next refresh sends only
@@ -878,6 +880,15 @@ fn git_trail(path: String) -> Result<coool_core::gitlog::GitTrail, String> {
     coool_core::gitlog::trail(std::path::Path::new(&path)).map_err(|e| format!("{e:#}"))
 }
 
+/// What fills a session's (or a subagent's) context window, for the Models
+/// panel (CHAT_SPEC "Models used"). Only for the panel that asks: read
+/// incrementally from where the last call stopped (see `coool_core::context`).
+#[tauri::command(async)]
+fn context_map(core: State<'_, Arc<Core>>, provider: Provider, session_id: String, agent_id: Option<String>, cwd: Option<String>) -> Res<coool_core::context::ContextMap> {
+    let path = core.hub.lock().unwrap().transcript_path(provider, &session_id, agent_id.as_deref()).ok_or("this session's transcript isn't known yet")?;
+    Ok(core.contexts.lock().unwrap().map(&path, provider, cwd.as_deref().unwrap_or("")))
+}
+
 /// Which CLIs are installed, so the new-session sheet can say so up front.
 #[tauri::command(async)]
 fn environment() -> Environment {
@@ -1369,6 +1380,7 @@ pub fn run() {
         trace: trace::Trace::from_env(),
         previews: artifact::Previews::default(),
         browsers: browser::Browsers::default(),
+        contexts: Mutex::default(),
     });
 
     let devices = Arc::new(device::Devices::default());
@@ -1419,6 +1431,7 @@ pub fn run() {
             pick_folder,
             environment,
             git_trail,
+            context_map,
             running_count,
             quit_app,
             prefs_get,

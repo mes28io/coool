@@ -275,6 +275,11 @@ pub enum ChatEventKind {
         duration_ms: u64,
         ok: bool,
     },
+    /// The CLI started (`active`) or finished summarizing the conversation to
+    /// free context (Claude `status: compacting`, Codex `contextCompaction`).
+    Compacting {
+        active: bool,
+    },
     Notice {
         level: NoticeLevel,
         text: String,

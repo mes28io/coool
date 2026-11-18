@@ -508,6 +508,9 @@ impl Codex {
         let parent = self.parent_for(&p["threadId"]);
         let id = item["id"].as_str().unwrap_or("").to_string();
         let ty = item["type"].as_str().unwrap_or("");
+        if ty == "contextCompaction" && parent.is_none() {
+            o.ev(ChatEventKind::Compacting { active: started });
+        }
         if ty == "collabAgentToolCall" {
             for t in item["receiverThreadIds"].as_array().into_iter().flatten().filter_map(|t| t.as_str()) {
                 self.child_threads.insert(t.to_string(), id.clone());

@@ -187,6 +187,14 @@ impl CodexSource {
         self.entries.values().map(|e| e.slot.view()).find(|v| v.id == id)?.started
     }
 
+    /// The rollout of session (or subagent thread) `id`.
+    pub(crate) fn transcript(&self, id: &str) -> Option<PathBuf> {
+        self.entries.iter().find(|(p, e)| {
+            let v = e.slot.view();
+            v.id == id || (v.id.is_empty() && id_from_name(p).as_deref() == Some(id))
+        }).map(|(p, _)| p.clone())
+    }
+
     fn is_recent(&self, now: SystemTime, mtime: SystemTime) -> bool {
         now.duration_since(mtime).map(|d| d < self.recent_window).unwrap_or(true)
     }

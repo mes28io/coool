@@ -21,6 +21,7 @@ import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
 import { mockMac } from "./mockMac";
 import { mockName, mockRename } from "./mockTitles";
+import { CTX_DEMO_ID, ctxAgentMap, ctxCompacting, ctxDemoMap } from "./mockContext";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -240,6 +241,8 @@ export function mockBackend(): Backend {
       id: "a1f0c2",
       cwd: coool,
       title: "Wire Tauri events into the session store",
+      // A 200k-window model, so the context map demo (mockContext.ts) reaches the warning tone before it compacts.
+      model: "claude-sonnet-4-5-20250929",
       status: "busy",
       pid: 41022,
       tokens: tok(48_200, 9_800, 86_400),
@@ -1386,7 +1389,7 @@ export function mockBackend(): Backend {
             s.tokens.input += 800 + Math.floor(Math.random() * 3000);
             s.tokens.cached += 4000 + Math.floor(Math.random() * 9000);
             s.tokens.output += 120 + Math.floor(Math.random() * 900);
-            s.tokens.context = Math.min(s.provider === "codex" ? 262_000 : 420_000, s.tokens.context + 600 + Math.floor(Math.random() * 3400));
+            if (s.id !== CTX_DEMO_ID) s.tokens.context = Math.min(s.provider === "codex" ? 262_000 : 420_000, s.tokens.context + 600 + Math.floor(Math.random() * 3400));
             const m = s.models?.[0];
             if (m) {
               m.input = Math.round(s.tokens.input * 0.82);
@@ -1438,6 +1441,23 @@ export function mockBackend(): Backend {
     if (changed) emitSessions();
   }
   setInterval(tick, 1100);
+
+  // The context-map demo session (mockContext.ts): its context follows the scripted map, compaction included.
+  setInterval(() => {
+    const s = live.find((l) => l.s.id === CTX_DEMO_ID)?.s;
+    if (!s) return;
+    const total = ctxDemoMap().total;
+    const compacting = ctxCompacting();
+    const cur = compacting ? "Compacting conversation" : s.current === "Compacting conversation" ? "thinking…" : s.current;
+    if (s.tokens.context === total && cur === s.current) return;
+    s.tokens.context = total;
+    if (compacting) s.status = "busy";
+    s.current = cur;
+    const ag = s.agents.find((a) => a.id === "ag1");
+    if (ag) ag.tokens.context = ctxAgentMap().total;
+    s.updated = Date.now();
+    emitSessions();
+  }, 1000);
 
   // `?stress=sidebar`: a seeded storm of status flips (top-level rows and child jobs), so the sidebar's
   // reorder / cap / exit animations can be checked frame by frame (scripts drive it over CDP).
@@ -1557,6 +1577,14 @@ export function mockBackend(): Backend {
     async gitTrail(path) {
       await delay(80 + Math.random() * 120);
       return git.trail(path);
+    },
+    async contextMap({ sessionId, agentId }) {
+      await delay(30);
+      if (sessionId === CTX_DEMO_ID) return agentId ? ctxAgentMap() : ctxDemoMap();
+      // Others: the total only, as for a transcript that can't be itemised.
+      const s = live.find((l) => l.s.id === sessionId)?.s;
+      const a = agentId ? s?.agents.find((x) => x.id === agentId) : null;
+      return { total: (a ?? s)?.tokens.context ?? 0, parts: [], compaction: null, note: "The mock itemises only the first session's context.", chars_per_token: null };
     },
     async environment() {
       return { home: HOME, claude: "/usr/local/bin/claude", codex: "/opt/homebrew/bin/codex" };

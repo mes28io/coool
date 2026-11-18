@@ -135,6 +135,8 @@ export interface Chat {
   /** Subagent usage by launching tool id. */
   agents: Record<string, AgentUse>;
   usageHistory: UsagePoint[];
+  /** The CLI is summarizing the conversation to free context (a `compacting` event; cleared when it reports done or the turn ends). */
+  compacting: boolean;
   /** Prompts sent, oldest first (for up-arrow recall). */
   prompts: string[];
   pendingPermission: string | null;
@@ -181,6 +183,7 @@ export function emptyChat(id: number, info?: Partial<ChatInfo>): Chat {
     models: {},
     agents: {},
     usageHistory: [],
+    compacting: false,
     prompts: [],
     pendingPermission: null,
     pendingQuestion: null,
@@ -449,7 +452,10 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           its().push({ kind: "turn", key, ts: e.ts, durationMs: e.duration_ms, ok: e.ok, failed, tools, tokens: out > 0 ? out : null });
         }
         // Notes the agent never reached arrive as `steer` events with state "unused" (they wait for the person).
-        c = { ...c, turnStart: null, liveOut: 0, outShown: c.tokens.output };
+        c = { ...c, turnStart: null, liveOut: 0, outShown: c.tokens.output, compacting: false };
+        break;
+      case "compacting":
+        c = { ...c, compacting: e.active };
         break;
       case "notice":
         its().push({ kind: "notice", key, level: e.level, text: e.text, needsTerminal: e.needs_terminal, ts: e.ts });

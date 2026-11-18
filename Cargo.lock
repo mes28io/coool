@@ -663,6 +663,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "libc",
+ "memchr",
  "notify",
  "portable-pty",
  "serde",

@@ -304,6 +304,8 @@ pub(crate) struct Claude {
     artifact_calls: HashMap<String, Value>,
     /// Last error shown this turn, so the turn's `result` doesn't repeat it.
     last_error: Option<String>,
+    /// The CLI said `status: compacting` and hasn't moved on yet.
+    compacting: bool,
 }
 
 /// `--mcp-config=<json>` (the `=` form: the flag takes several values and would swallow what follows) and, for servers
@@ -372,6 +374,7 @@ impl Claude {
             task_calls: HashMap::new(),
             artifact_calls: HashMap::new(),
             last_error: None,
+            compacting: false,
         }
     }
 
@@ -1108,12 +1111,22 @@ impl Backend for Claude {
                     self.ready(o);
                 }
                 Some("status") => {
+                    let compacting = v["status"] == "compacting";
+                    if compacting != self.compacting {
+                        self.compacting = compacting;
+                        o.ev(ChatEventKind::Compacting { active: compacting });
+                    }
                     if let Some(m) = v["permissionMode"].as_str() {
                         self.permission_mode = m.to_string();
                         self.ready(o);
                     }
                 }
-                Some("compact_boundary") => o.ev(ChatEventKind::notice(NoticeLevel::Info, "Conversation compacted")),
+                Some("compact_boundary") => {
+                    if std::mem::take(&mut self.compacting) {
+                        o.ev(ChatEventKind::Compacting { active: false });
+                    }
+                    o.ev(ChatEventKind::notice(NoticeLevel::Info, "Conversation compacted"))
+                }
                 Some("api_retry") => {
                     let n = v["attempt"].as_u64().map(|n| format!(" (attempt {n})")).unwrap_or_default();
                     o.ev(ChatEventKind::notice(NoticeLevel::Warn, format!("API error, retrying{n}")));
@@ -1735,6 +1748,20 @@ mod tests {
 
     fn started(uuid: &str) -> String {
         line(json!({"type": "command_lifecycle", "command_uuid": uuid, "state": "started"}))
+    }
+
+    #[test]
+    fn compacting_status_starts_and_the_boundary_ends_it() {
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        let compacting = |o: &Out| o.events.iter().filter_map(|e| if let ChatEventKind::Compacting { active } = e { Some(*active) } else { None }).collect::<Vec<_>>();
+        c.on_line(&line(json!({"type": "system", "subtype": "status", "status": "requesting"})), &mut o);
+        c.on_line(&line(json!({"type": "system", "subtype": "status", "status": "compacting"})), &mut o);
+        c.on_line(&line(json!({"type": "system", "subtype": "status", "status": "compacting"})), &mut o);
+        assert_eq!(compacting(&o), [true]);
+        c.on_line(&line(json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": "manual", "pre_tokens": 1}})), &mut o);
+        c.on_line(&line(json!({"type": "system", "subtype": "status", "status": null})), &mut o);
+        assert_eq!(compacting(&o), [true, false]);
     }
 
     /// Turn ends with no further step: the held note is not sent and ends

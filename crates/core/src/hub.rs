@@ -339,6 +339,15 @@ impl Hub {
         self.loading
     }
 
+    /// The transcript file of a listed session, or of one of its subagents
+    /// (Claude: the subagent's own transcript; Codex: the subagent thread's rollout).
+    pub fn transcript_path(&self, provider: Provider, session: &str, agent: Option<&str>) -> Option<std::path::PathBuf> {
+        match provider {
+            Provider::Claude => self.claude.transcript(session, agent),
+            Provider::Codex => self.codex.transcript(agent.unwrap_or(session)),
+        }
+    }
+
     /// Launch a provider CLI in a new PTY. Returns its managed index.
     pub fn spawn(&mut self, provider: Provider, args: &[String], cwd: &str, rows: u16, cols: u16) -> Result<usize> {
         let m = Managed::spawn(provider, args, cwd, rows, cols)?;

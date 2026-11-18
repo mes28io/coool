@@ -57,6 +57,15 @@
   --accent-soft: color-mix(in oklab, var(--accent) 14%, transparent);
   --accent-ink: #0a2e12; /* text on green fills */
   --tab-active: var(--raised);
+  /* context map tints (Models panel): five hue families plus neutral, validated for colour-vision separation; tiles mix them faintly into the surface */
+  --ctx-summary: #3fa86f;
+  --ctx-file: #4a8ee6;
+  --ctx-tool: #d47a26;
+  --ctx-memory: #9a72e6;
+  --ctx-chat: #d65e92;
+  --ctx-base: var(--faint);
+  --ctx-fill: 17%;
+  --ctx-edge: 30%;
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -97,6 +106,14 @@
   --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
   --accent-ink: #0a2e12;
   --tab-active: #ffffff;
+  --ctx-summary: #2e9b62;
+  --ctx-file: #2f7fd8;
+  --ctx-tool: #d9761f;
+  --ctx-memory: #8a5cd6;
+  --ctx-chat: #c2477e;
+  --ctx-base: var(--faint);
+  --ctx-fill: 12%;
+  --ctx-edge: 26%;
 }
 
 @theme inline {
@@ -754,5 +771,34 @@ html.page-hidden *::after {
   }
 }
 .reduce-motion .mc-fresh {
+  animation: none;
+}
+
+/* Context map (Models panel): tiles tinted by kind (--k is one of the --ctx-* tints), the free room hatched. */
+.ctx-tile {
+  background: color-mix(in oklab, var(--k) var(--ctx-fill), var(--raised));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--k) var(--ctx-edge), transparent);
+}
+.ctx-tile:hover,
+.ctx-tile:focus-visible {
+  background: color-mix(in oklab, var(--k) calc(var(--ctx-fill) + 8%), var(--raised));
+  outline: none;
+}
+.ctx-ink {
+  color: color-mix(in oklab, var(--k) 62%, var(--text));
+}
+.ctx-free {
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--faint) 22%, transparent) 0 1px, transparent 1px 7px);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--faint) 30%, transparent);
+}
+.ctx-compacting {
+  animation: ctx-breathe 1.6s ease-in-out infinite;
+}
+@keyframes ctx-breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+.reduce-motion .ctx-compacting {
   animation: none;
 }

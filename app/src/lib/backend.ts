@@ -2,7 +2,7 @@
 // when running in a plain browser (`pnpm dev`). See docs/APP_SPEC.md.
 
 import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
-import type { ChatEvent, ChatOptions, Environment, GitTrail, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
+import type { ChatEvent, ChatOptions, ContextMap, Environment, GitTrail, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
 import type { MotionHints } from "./motion";
 import type { SettingsBackend } from "./settingsTypes";
 
@@ -50,6 +50,8 @@ export interface Backend extends SettingsBackend {
   environment(): Promise<Environment>;
   /** A project's recent git history for Mission control's commit trail (read-only; crates/core/src/gitlog.rs). Rejects when `path` is not in a repository. */
   gitTrail(path: string): Promise<GitTrail>;
+  /** What fills a session's (or one of its subagents') context window, for the open Models panel only (crates/core/src/context.rs). */
+  contextMap(a: { provider: Provider; sessionId: string; agentId?: string | null; cwd?: string }): Promise<ContextMap>;
   quit(): Promise<void>;
   onSessions(cb: (s: Snapshot) => void): Unlisten;
   onPtyOutput(cb: (c: PtyChunk) => void): Unlisten;
@@ -506,6 +508,7 @@ async function tauriBackend(): Promise<Backend> {
     pickFolder: () => invoke("pick_folder"),
     environment: () => invoke("environment"),
     gitTrail: (path) => invoke("git_trail", { path }),
+    contextMap: ({ provider, sessionId, agentId, cwd }) => soft("context_map", { provider, sessionId, agentId: agentId ?? null, cwd: cwd ?? null }),
     quit: () => invoke("quit_app"),
     usageRefresh: (provider) => invoke("usage_refresh", { provider }),
     usageResetCodex: (idempotencyKey) => invoke("usage_reset_codex", { idempotencyKey }),

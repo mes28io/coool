@@ -31,6 +31,41 @@ export interface ArtifactInfo {
   title: string;
 }
 
+/** What fills a context window (crates/core/src/context.rs; CHAT_SPEC "Models used"). */
+export type ContextKind = "system" | "tools" | "memory" | "skills" | "file" | "chat" | "thinking" | "tool" | "agent" | "image" | "summary" | "other";
+/** calibrated: from the per-step usage, split by length; estimated: from length alone; remainder: what the first request held beyond everything itemised. */
+export type ContextBasis = "calibrated" | "estimated" | "remainder";
+export interface ContextPart {
+  /** Stable across updates (tiles animate by it). */
+  id: string;
+  kind: ContextKind;
+  label: string;
+  tokens: number;
+  /** Calls / items merged into it; 0 when not counted. */
+  count: number;
+  /** Files: the path ("Other files": up to four, one per line). */
+  path?: string;
+  basis: ContextBasis;
+}
+export interface ContextCompaction {
+  before: number;
+  /** 0 until known. */
+  after: number;
+  at: number | null;
+  auto: boolean;
+  before_parts: ContextPart[];
+}
+export interface ContextMap {
+  /** Equals the session's `tokens.context`. */
+  total: number;
+  /** Sum to `total`, largest first. */
+  parts: ContextPart[];
+  compaction: ContextCompaction | null;
+  /** Set when the total can't be broken down: why, in plain words. */
+  note: string | null;
+  chars_per_token: number | null;
+}
+
 export interface Tokens {
   input: number;
   cached: number;
@@ -328,6 +363,7 @@ export type ChatEvent = Ev &
     | { type: "agent_total"; tool_id: string; tokens: number }
     | { type: "state"; state: ChatRunState }
     | { type: "turn_end"; duration_ms: number; ok: boolean }
+    | { type: "compacting"; active: boolean }
     | { type: "notice"; level: "info" | "warn" | "error"; text: string; needs_terminal: boolean }
     | { type: "exited"; code: number | null }
     | { type: "question"; request_id: string; questions: Question[] }

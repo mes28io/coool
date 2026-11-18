@@ -10,6 +10,8 @@ import type { ModelUse, Session } from "../lib/types";
 import type { Provider } from "../lib/types";
 import { fmtTokens } from "../lib/format";
 import { ContextRing, cx, ease, ProviderMark } from "./primitives";
+import { ContextMapCard } from "./ContextMap";
+import type { ComponentProps } from "react";
 
 export interface ModelsData {
   /** Main thread, plus rows aggregated from subagents (via_agent). */
@@ -210,8 +212,26 @@ export function ModelsChip({ data, current, open, onToggle }: { data: ModelsData
   );
 }
 
-/** The Models side panel: context fill, then the models used. */
-export function ModelsPanelBody({ data, current, cards, history, context, window: reported, className }: { data: ModelsData; current: string | null; cards?: AgentCardData[]; history?: { ts: number; model: string | null }[]; context: number; window?: number | null; className?: string }) {
+/** The Models side panel: context fill, the models used, then the context map (when the session's transcript is known). */
+export function ModelsPanelBody({
+  data,
+  current,
+  cards,
+  history,
+  context,
+  window: reported,
+  map,
+  className,
+}: {
+  data: ModelsData;
+  current: string | null;
+  cards?: AgentCardData[];
+  history?: { ts: number; model: string | null }[];
+  context: number;
+  window?: number | null;
+  map?: Omit<ComponentProps<typeof ContextMapCard>, "model" | "window" | "context"> | null;
+  className?: string;
+}) {
   const w = contextWindow(current, reported);
   const exact = w.source === "reported";
   return (
@@ -237,6 +257,7 @@ export function ModelsPanelBody({ data, current, cards, history, context, window
         <div className="rounded-[12px] border border-hairline bg-raised">
           <ModelsBreakdown data={data} current={current} cards={cards} history={history} />
         </div>
+        {map && <ContextMapCard {...map} model={current} window={reported} context={context} />}
       </div>
     </div>
   );
