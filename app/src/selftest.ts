@@ -20,6 +20,11 @@
 // a device or a site, "Allow once" for the rest). `gate-browser` / `gate-browser-codex` and `gate-mac` /
 // `gate-mac-codex` (a chat in an asking mode: a form submit in the Browser panel, a `mac_shell` command; each stops
 // and shows a request, Allow lets it run, Deny returns the denial to the agent and nothing happens).
+// `browser-settle` (no model calls; needs `COOOL_SELFTEST_SITE`, a local site with static.html, spa.html, live.html,
+// long.html and gone.html) drives the `browser_*` tools directly (`selftest_browser_tool`) and logs how long navigate,
+// click and observe take on each page and what they returned. `browser-real` (no model calls; public network) opens
+// four public affectui.com component pages the same way, saving the first screenshot after each navigation, and logs
+// the Reduce motion state and the beam (with Reduce motion as it is, then Off).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { ignoreChatDefaults } from "./lib/prefs";
@@ -37,6 +42,8 @@ interface Config {
   scenario: string;
   dir: string;
   shots: string;
+  /** `COOOL_SELFTEST_SITE`: the local test site of `browser-settle`. */
+  site?: string | null;
 }
 
 const PROMPT_BLUE = "Write three short sentences about the colour blue. Plain text, no lists, and keep every sentence under twelve words so the whole reply stays brief.";
@@ -153,6 +160,37 @@ async function step(name: string, f: () => Promise<string | void>) {
     fail++;
     await log(`FAIL ${name}: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+// ---------- the browser tools driven directly (no model) ----------
+
+interface ToolOut {
+  ms: number;
+  text: string;
+  images: string[];
+}
+/** One `browser_*` tool on chat `chat`'s Browser panel, as its agent would call it (gate included); images saved as `<save>.jpg`. */
+async function browserTool(chat: number, name: string, args: Record<string, unknown> = {}, save?: string): Promise<ToolOut> {
+  const t = Date.now();
+  const out = (await invoke("selftest_browser_tool", { chat, name, args, save })) as { type: string; text?: string; path?: string }[];
+  return { ms: Date.now() - t, text: out.find((o) => o.type === "text")?.text ?? "", images: out.filter((o) => o.path).map((o) => o.path!) };
+}
+/** "(load 812 ms)" / "settle 90 ms" from a tool's text. */
+const msOf = (text: string, what: string) => Number(new RegExp(`${what} (\\d+) ms`).exec(text)?.[1] ?? NaN);
+/** The id of the element listed as `role "name"` in a page listing. */
+function idOf(text: string, role: string, name: string): number {
+  const m = new RegExp(`\\[(\\d+)\\] ${role} "${name}"`).exec(text);
+  if (!m) throw new Fail(`no ${role} "${name}" in ${text.slice(0, 400)}`);
+  return Number(m[1]);
+}
+const median = (xs: number[]) => {
+  const v = xs.filter((x) => !Number.isNaN(x)).sort((a, b) => a - b);
+  return v.length ? v[Math.floor((v.length - 1) / 2)] : NaN;
+};
+/** The click outlines and press rings drawn on `chat`'s page now (device/web_agent.js), or -1 when the page can't say. */
+async function pageMarks(chat: number): Promise<number> {
+  const r = (await invoke("selftest_page_marks", { chat }).catch(() => null)) as number | null;
+  return typeof r === "number" ? r : -1;
 }
 
 // ---------- scenarios ----------
@@ -1936,6 +1974,146 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       setMotionPref(original);
       await log(`PERF restored pref=${original}`);
     }
+  },
+
+  /**
+   * The browser tools' settle rules against a local test site (no model): navigate to a client-rendered page that draws
+   * 300–800 ms after load (is the content in the result?), act on a page that never stops changing (a 100 ms timer, an
+   * animation, a carousel: how long does a click wait?), read a long `content-visibility: auto` page whole, and click
+   * an element that removes itself (does its outline stay?). Logs `TIMING` lines; a plain static page is the baseline.
+   */
+  async "browser-settle"(ctx) {
+    const site = (ctx.cfg.site ?? "").replace(/\/?$/, "/");
+    let id = -1;
+    await step("browser-settle: a chat (bypass mode, no prompt) for the panel", async () => {
+      if (site === "/") throw new Fail("COOOL_SELFTEST_SITE is not set");
+      ({ id } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions"));
+      return `chat ${id}, site ${site}`;
+    });
+    if (id < 0) return;
+    const T = (line: string) => log(`TIMING ${line}`);
+    const head = (t: string, from = 0, to = 3) => JSON.stringify(t.split("\n").slice(from, to).join(" / "));
+    await step("browser-settle: a static page", async () => {
+      const loads: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const r = await browserTool(id, "browser_navigate", { url: `${site}static.html?n=${i}` });
+        if (!r.text.includes("Static content ready")) throw new Fail(`no content: ${r.text.slice(0, 300)}`);
+        loads.push(msOf(r.text, "load"));
+        await T(`static navigate load=${msOf(r.text, "load")} wall=${r.ms}`);
+      }
+      const b = await browserTool(id, "browser_click", { id: idOf((await browserTool(id, "browser_observe")).text, "button", "A button") });
+      await T(`static click settle=${msOf(b.text, "settle")} wall=${b.ms}`);
+      return `navigate load median ${median(loads)} ms; click settle ${msOf(b.text, "settle")} ms`;
+    });
+    await step("browser-settle: a client-rendered page shows its content in the navigate result and the first screenshot", async () => {
+      const out: string[] = [];
+      const missing: number[] = [];
+      for (const d of [300, 550, 800, 300, 550, 800]) {
+        const r = await browserTool(id, "browser_navigate", { url: `${site}spa.html?d=${d}&t=${Date.now()}` });
+        const s = await browserTool(id, "browser_screenshot", {}, `settle-spa-${d}-${out.length}`);
+        const has = r.text.includes("Route content ready");
+        if (!has) missing.push(d);
+        out.push(`d=${d}: load ${msOf(r.text, "load")} ms ${has ? "content" : "EMPTY"}`);
+        await T(`spa d=${d} navigate load=${msOf(r.text, "load")} wall=${r.ms} content=${has} shot=${s.images[0] ?? ""} head=${head(r.text)}`);
+      }
+      if (missing.length) throw new Fail(`content missing after navigate for d=${missing.join(",")}: ${out.join("; ")}`);
+      return out.join("; ");
+    });
+    await step("browser-settle: a page that never stops changing: navigate, click, observe", async () => {
+      const r = await browserTool(id, "browser_navigate", { url: `${site}live.html` });
+      await T(`live navigate load=${msOf(r.text, "load")} wall=${r.ms} head=${head(r.text, 1)}`);
+      const add = idOf(r.text, "button", "Add item");
+      const settles: number[] = [];
+      let last = "";
+      for (let i = 1; i <= 4; i++) {
+        const c = await browserTool(id, "browser_click", { id: add });
+        settles.push(msOf(c.text, "settle"));
+        last = c.text;
+        const seen = c.text.includes(`Item ${i} added`);
+        await T(`live click#${i} settle=${msOf(c.text, "settle")} wall=${c.ms} item_seen=${seen} note=${head(c.text, 0, 2)}`);
+        if (!seen) throw new Fail(`click ${i}: the item it adds isn't in the result: ${c.text.slice(0, 500)}`);
+      }
+      const o = await browserTool(id, "browser_observe");
+      await T(`live observe wall=${o.ms}`);
+      const w = await browserTool(id, "browser_wait_for", { idle: true, timeout_ms: 3000 }).catch((e) => ({ ms: -1, text: String(e), images: [] }));
+      await T(`live wait_for-idle wall=${w.ms} head=${head(w.text, 0, 1)}`);
+      return `click settle ${settles.join(", ")} ms (median ${median(settles)}); observe ${o.ms} ms; says it keeps changing: ${/changing on its own/.test(last)}`;
+    });
+    await step("browser-settle: a long content-visibility page, read whole", async () => {
+      const n = await browserTool(id, "browser_navigate", { url: `${site}long.html` });
+      await T(`long navigate load=${msOf(n.text, "load")} wall=${n.ms}`);
+      const v = await browserTool(id, "browser_observe");
+      const a = await browserTool(id, "browser_observe", { all: true });
+      const words = (t: string) => new Set(t.match(/word-\d+-marker/g) ?? []).size;
+      const end = a.text.includes("END-OF-PAGE-MARKER");
+      await T(`long observe-view wall=${v.ms} chars=${v.text.length} sections=${words(v.text)}; observe-all wall=${a.ms} chars=${a.text.length} sections=${words(a.text)} end=${end} tail=${JSON.stringify(a.text.slice(-240))}`);
+      if (words(a.text) < 20) throw new Fail(`observe all=true read ${words(a.text)} of 150 sections`);
+      return `in view ${words(v.text)} sections (${v.ms} ms); all ${words(a.text)} sections, end marker ${end}, ${a.text.length} chars (${a.ms} ms)`;
+    });
+    await step("browser-settle: the click outline goes with an element that removes itself", async () => {
+      const n = await browserTool(id, "browser_navigate", { url: `${site}gone.html` });
+      const c = await browserTool(id, "browser_click", { id: idOf(n.text, "button", "Remove me") });
+      const m0 = await pageMarks(id);
+      await sleep(250);
+      const m1 = await pageMarks(id);
+      await T(`gone click settle=${msOf(c.text, "settle")} wall=${c.ms} marks_after=${m0} marks_250ms=${m1}`);
+      const d = await browserTool(id, "browser_click", { id: idOf(c.text, "button", "Decline") });
+      const m2 = await pageMarks(id);
+      await sleep(250);
+      const m3 = await pageMarks(id);
+      await T(`gone decline settle=${msOf(d.text, "settle")} wall=${d.ms} marks_after=${m2} marks_250ms=${m3}`);
+      if (m0 > 0 || m1 > 0 || m3 > 0) throw new Fail(`outlines left on the page: ${m0}, ${m1} (Remove me); ${m2}, ${m3} (Decline)`);
+      return `marks after the click ${m0} / ${m1}; after Decline ${m2} / ${m3}`;
+    });
+    useStore.getState().closeBrowser(chatPanelKey(id));
+  },
+
+  /**
+   * Four public affectui.com component pages, at a browsing pace (no sign-in, no model): the first screenshot after
+   * each navigation is saved (`real-site-<n>.jpg`), with the navigate timing and whether its listing had the page's
+   * title. Also logs Reduce motion and what the beam drew (as the person has it, then Off).
+   */
+  async "browser-real"(ctx) {
+    let id = -1;
+    await step("browser-real: a chat (bypass mode, no prompt) for the panel", async () => {
+      ({ id } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions"));
+      const h = (await invoke("motion_hints").catch(() => null)) as MotionHints | null;
+      const os = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      await log(`MOTION pref=${localStorage.getItem("coool.motion") ?? "auto"} os_reduce=${os} hints=${JSON.stringify(h)} decision=${JSON.stringify(decideMotion("auto", os, h))} html.reduce-motion=${document.documentElement.classList.contains("reduce-motion")}`);
+      return `chat ${id}`;
+    });
+    if (id < 0) return;
+    const beam = () => `driving=${!!document.querySelector("[data-browser-driving]")} static-ring=${!!document.querySelector("[data-presence-static]")} reduce=${document.documentElement.classList.contains("reduce-motion")}`;
+    const pages = [
+      ["components", "Components"],
+      ["components/agent-trail", "Agent Trail"],
+      ["components/autonomy-dial", "Autonomy Dial"],
+      ["components/agent-crew", "Agent Crew"],
+    ];
+    const keep = (localStorage.getItem("coool.motion") as MotionPref | null) ?? "auto";
+    try {
+      for (const [i, [path, title]] of pages.entries()) {
+        if (i === 2) {
+          setMotionPref("off");
+          await sleep(300);
+        }
+        await step(`browser-real: ${path} (Reduce motion ${i >= 2 ? "off" : keep})`, async () => {
+          const r = await browserTool(id, "browser_navigate", { url: `https://www.affectui.com/${path}` });
+          const s = await browserTool(id, "browser_screenshot", {}, `real-site-${i}`);
+          const b = beam();
+          await shot(`real-site-${i}-window`, undefined, 150);
+          const head = r.text.split("\n").slice(0, 3).join(" / ");
+          await log(`REAL ${path} load=${msOf(r.text, "load")} wall=${r.ms} title_in_listing=${r.text.includes(title)} beam: ${b} shot=${s.images[0] ?? ""} head=${JSON.stringify(head)}`);
+          const decline = /\[(\d+)\] button "Decline"/.exec(r.text);
+          if (decline) await browserTool(id, "browser_click", { id: Number(decline[1]) });
+          await sleep(4000);
+          return `load ${msOf(r.text, "load")} ms; ${head}; ${b}`;
+        });
+      }
+    } finally {
+      setMotionPref(keep);
+    }
+    useStore.getState().closeBrowser(chatPanelKey(id));
   },
 
   /** A Claude Haiku chat opens a local form in its Browser panel, fills it, submits and quotes the confirmation. */

@@ -1531,6 +1531,8 @@ pub fn run() {
             selftest::selftest_popups,
             selftest::selftest_browser_eval,
             selftest::selftest_page_cursors,
+            selftest::selftest_browser_tool,
+            selftest::selftest_page_marks,
             selftest::selftest_previews,
             selftest::selftest_preview_eval,
             selftest::selftest_close_preview,
