@@ -845,7 +845,8 @@ export class MockChat {
     );
     if (plan) return;
 
-    await this.tool(gen, "Edit", `${cwd}/${f.b}`, { file_path: `${this.cwd}/${f.b}` }, 900, "Updated 3 hunks");
+    // "review edits": the edit waits for the person (Mission control shows it inline to allow or deny).
+    await this.tool(gen, "Edit", `${cwd}/${f.b}`, { file_path: `${this.cwd}/${f.b}`, ...editText(this.cwd) }, 900, "Updated 3 hunks", { ask: /\breview edits\b/.test(p) });
 
     if (/\berror\b/.test(p)) {
       await this.tool(gen, "Bash", f.test, { command: f.test }, 1800, "error: 2 tests failed\n  drain_retries_after_backoff ... FAILED", { fail: true });
@@ -936,4 +937,23 @@ export function mockModels(provider: Provider, t: Tokens, withAgents: boolean, m
   const rows: ModelUse[] = [{ model: main ?? "claude-opus-5-5", input: Math.round(t.input * 0.82), cached: Math.round(t.cached * 0.85), output: Math.round(t.output * 0.8), messages: 36 }];
   if (withAgents) rows.push({ model: "claude-haiku-5-5", input: Math.round(t.input * 0.18), cached: Math.round(t.cached * 0.15), output: Math.round(t.output * 0.2), messages: 14, via_agent: true });
   return rows;
+}
+
+/** The text of the demo's one edit, per project (CHAT_SPEC permission requests carry the Edit's input). */
+function editText(cwd: string): { old_string: string; new_string: string } {
+  if (/notes/.test(cwd))
+    return {
+      old_string: "for m in queue {\n    try await send(m)\n    queue.removeFirst()\n}",
+      new_string: "for m in queue {\n    do {\n        try await send(m)\n        queue.removeFirst()\n    } catch {\n        try await Task.sleep(for: backoff(m.attempts))\n        break\n    }\n}",
+    };
+  if (/atlas/.test(cwd))
+    return {
+      old_string: "// Budgets are read once at startup; a config reload never reaches the limiter.\nlet budgets = Budgets::from(&config.limits);",
+      new_string: "// Budgets follow config reloads: the limiter reads them through an ArcSwap on every request.\nlet budgets = Arc::new(ArcSwap::from_pointee(Budgets::from(&config.limits)));",
+    };
+  if (/pixel/.test(cwd)) return { old_string: "pass.sample(&hdr_target);", new_string: "encoder.resolve(&hdr_target, &resolved);\npass.sample(&resolved);" };
+  return {
+    old_string: "<textarea value={text} onChange={(e) => setText(e.target.value)} />",
+    new_string: "<textarea value={text} onChange={(e) => setText(e.target.value)} onKeyDown={menu.onKeyDown} />\n{menu.open && <SlashMenu items={menu.items} active={menu.active} />}",
+  };
 }

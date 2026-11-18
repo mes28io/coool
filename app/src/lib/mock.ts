@@ -9,6 +9,8 @@ import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import { SessionsMerge } from "./sessionsMerge";
 import { mockHints } from "./motion";
 import { mockSim } from "./mockSim";
+import { MockGit } from "./mockGit";
+import { committing, relPath } from "./mission";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -33,6 +35,7 @@ const WORK: Record<string, string[]> = {
     "Bash · pnpm tsc --noEmit",
     "Edit · ~/code/coool/app/src/components/Sidebar.tsx",
     "Bash · cargo build -p coool-app",
+    'Bash · git add -A && git commit -m "Sidebar rows glide with layout animations"',
     "text:Build is clean. Sidebar rows now animate with `layout` so a session that flips to working glides up instead of jumping.",
   ],
   atlas: [
@@ -46,6 +49,8 @@ const WORK: Record<string, string[]> = {
     "error:test rate_limit::refills_after_window failed: left 9, right 10",
     "Edit · ~/code/atlas-api/src/middleware/rate_limit.rs",
     "Bash · cargo test -p atlas-api rate_limit",
+    'Bash · git commit -m "Refill the token bucket continuously"',
+    "Bash · git push origin rate-limit",
     "text:All 14 tests pass. The bucket refills continuously now instead of on window boundaries, which fixed the off-by-one.",
   ],
   pixel: [
@@ -57,6 +62,7 @@ const WORK: Record<string, string[]> = {
     "Bash · cargo check --features gpu",
     "Edit · ~/code/pixelforge/render/shadow.rs",
     "Bash · cargo check --features gpu",
+    'Bash · git commit -m "Shadow cascade on the wgpu 26 pipeline"',
     "text:`cargo check` is green. Next I'll run the golden-image tests to make sure the bloom pass still matches.",
     "Bash · cargo test --features gpu golden_",
   ],
@@ -68,9 +74,21 @@ const WORK: Record<string, string[]> = {
     "Edit · ~/code/notes-ios/Sync/SyncEngine.swift",
     "Bash · xcodebuild -scheme Notes -destination 'platform=iOS Simulator,name=iPhone 17' build",
     "Bash · xcodebuild test -scheme NotesTests",
+    "mcp__coool-device__pilot_run · Turn on airplane mode, add a note, and check the sync banner",
+    'Bash · git commit -m "Replay offline mutations in order"',
     "text:Build and tests pass. Mutations made offline now replay in order once the device reconnects.",
   ],
 };
+
+// project-3d: the lighting rig's probe bakes and the add-on milestone.
+WORK.p3d = [
+  "Read · ~/code/project-3d/rig/probes.py",
+  "Grep · bake_probe",
+  "Edit · ~/code/project-3d/rig/probes.py",
+  "Bash · blender -b rig.blend -P rig/bake.py -- --probe hall",
+  "Write · ~/code/project-3d/probes/hall.json",
+  "text:The hall probe is baked; writing its irradiance grid next to the scene.",
+];
 
 const PROMPTS: Record<string, string[]> = {
   coool: ["Wire the Tauri events into the session store", "Make sidebar rows glide when status changes", "Add Cmd+K jump to any session"],
@@ -87,6 +105,10 @@ interface Live {
   chat?: MockChat;
   /** Demo: cycles working -> waiting -> needs you on its own clock (the "relay" project). */
   cycle?: number;
+  /** Ticks left on a `git commit` step (the commit lands when it reaches 0). */
+  hold?: number;
+  /** Files edited since the last commit (its file chips). */
+  edited?: string[];
 }
 
 // What the AI-insights scheduler would say about each live session.
@@ -180,6 +202,7 @@ export function mockBackend(): Backend {
     }
   })();
   const live: Live[] = [];
+  const git = new MockGit(HOME);
   const add = (s: Session, script: string, step = 0) => {
     live.push({ s, script, step, idleFor: 0 });
     return s;
@@ -515,7 +538,7 @@ export function mockBackend(): Backend {
       status: "idle",
       pid: 40555,
       tokens: tok(64_000, 11_000, 92_000),
-      activity: history("pixel", ["Split the milestone across four agents and report back when they finish"], now - 3 * 60_000, 1, 4),
+      activity: history("p3d", ["Split the milestone across four agents and report back when they finish"], now - 3 * 60_000, 1, 4),
       updated: now - 20_000,
     }),
     "pixel",
@@ -616,6 +639,101 @@ export function mockBackend(): Backend {
     }, 500);
   }
 
+  // A fan-out (Mission control's grid): one job handed to 24 agents at once, one per endpoint. They
+  // finish over ~40 s (two fail), the session reports, rests, and hands out the next round.
+  const fan = add(
+    session({
+      provider: "claude",
+      id: "f4a0e124",
+      cwd: atlas,
+      title: "Migrate every endpoint to the v3 error format",
+      status: "busy",
+      pid: 39901,
+      tokens: tok(58_000, 9_400, 84_000),
+      activity: [],
+      updated: now,
+    }),
+    "atlas",
+  );
+  {
+    const EP = ["search", "suggest", "users", "users_me", "sessions", "tokens", "orgs", "org_members", "invites", "billing", "invoices", "plans", "webhooks", "events", "exports", "imports", "files", "uploads", "audit", "health", "metrics", "flags", "keys", "limits"];
+    const STEPS = (ep: string) => [`Read · ~/code/atlas-api/src/routes/${ep}.rs`, "Grep · ApiError::", `Edit · ~/code/atlas-api/src/routes/${ep}.rs`, `Edit · ~/code/atlas-api/tests/${ep}_errors.rs`, `Bash · cargo test -p atlas-api ${ep}::errors`];
+    const plan = new Map<string, { end: number; next: number; fail: boolean; k: number; ep: string }>();
+    let round = 0;
+    let rest = 0;
+    let t0 = 0;
+    const launch = () => {
+      const t = Date.now();
+      round++;
+      fan.status = "busy";
+      const prompt = round === 1 ? "Migrate every endpoint to the v3 error format, one agent per endpoint" : `Round ${round}: re-run the migration on the endpoints that changed since`;
+      fan.activity.push(act("prompt", prompt, t - 1500));
+      fan.last_prompt = prompt;
+      fan.agents = [];
+      plan.clear();
+      const failing = new Set([3 + (round % 5), 14 + (round % 7)]);
+      EP.forEach((ep, i) => {
+        const id = `fan${round}x${i}`;
+        const model = i % 3 === 0 ? "claude-haiku-5-5" : "claude-sonnet-5-5";
+        fan.agents.push({ id, kind: "general-purpose", description: `Migrate /v2/${ep.replace("_", "/")}`, finished: false, current: STEPS(ep)[0], tokens: tok(3_000, 200, 8_000), activity: [act("tool", STEPS(ep)[0], t)], model, models: [{ model, input: 3_000, cached: 9_000, output: 200, messages: 1 }] });
+        fan.activity.push(act("agent", `Agent · Migrate /v2/${ep}`, t));
+        plan.set(id, { end: t + 5_000 + ((i * 7919) % 36) * 1000 + Math.random() * 3000, next: t + 1500 + Math.random() * 2000, fail: failing.has(i), k: 1, ep });
+      });
+      fan.current = "Agent · Migrate /v2/search";
+      fan.updated = t;
+    };
+    setInterval(() => {
+      if (!t0) {
+        if (scanned(live.find((l) => l.s === fan)!) !== "full") return;
+        t0 = Date.now();
+        launch();
+        emitSessions();
+        return;
+      }
+      const t = Date.now();
+      if (rest) {
+        if (t > rest) {
+          rest = 0;
+          launch();
+          emitSessions();
+        }
+        return;
+      }
+      let changed = false;
+      for (const a of fan.agents) {
+        const p = plan.get(a.id);
+        if (a.finished || !p) continue;
+        if (t >= p.end) {
+          a.finished = true;
+          a.current = null;
+          a.activity.push(p.fail ? act("error", `cargo test -p atlas-api ${p.ep}::errors failed: expected 422, got 500`, t) : act("text", `/v2/${p.ep} returns v3 errors; 6 tests pass.`, t));
+          changed = true;
+        } else if (t >= p.next) {
+          const step = STEPS(p.ep)[p.k++ % 5];
+          a.current = step;
+          a.activity.push(act("tool", step, t));
+          a.tokens.output += 140 + Math.floor(Math.random() * 220);
+          a.tokens.total = (a.tokens.total ?? 0) + 1400;
+          p.next = t + 1800 + Math.random() * 2600;
+          changed = true;
+        }
+      }
+      if (fan.agents.every((a) => a.finished)) {
+        const failed = fan.agents.filter((a) => a.activity[a.activity.length - 1]?.kind === "error").length;
+        fan.activity.push(act("text", `Migrated ${fan.agents.length - failed} of ${fan.agents.length} endpoints to v3 errors; ${failed} need a look.`, t));
+        fan.status = "idle";
+        fan.current = null;
+        rest = t + 22_000;
+        changed = true;
+      }
+      if (changed) {
+        fan.updated = t;
+        fan.tokens.output += 300;
+        emitSessions();
+      }
+    }, 500);
+  }
+
   // A session that started two live child jobs (and has one that crashed): the Agents panel lists them too.
   const lightId = AGENTS_JOBS_ID;
   const lightSession = add(
@@ -628,24 +746,24 @@ export function mockBackend(): Backend {
       pid: 40601,
       background_tasks: true,
       tokens: tok(52_000, 7_400, 70_000),
-      activity: history("pixel", ["Bake the three light probes in the background and tell me which ones fail"], now - 5 * 60_000, 1, 4),
+      activity: history("p3d", ["Bake the three light probes in the background and tell me which ones fail"], now - 5 * 60_000, 1, 4),
       updated: now - 30_000,
     }),
     "pixel",
   );
   const lightScratch = `/private/tmp/claude-501/-Users-you-code-project-3d/${lightId}/scratchpad/jobs`;
-  const lj0 = add(session({ provider: "claude", id: "lightjob0", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the hall probe", status: "busy", pid: 40610, current: "Bash · blender -b rig.blend -f 1", tokens: tok(14_000, 2_100, 30_000), activity: history("coool", ["Bake the hall probe"], now - 40_000, 1, 4), updated: now - 2000 }), "coool", 4);
+  const lj0 = add(session({ provider: "claude", id: "lightjob0", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the hall probe", status: "busy", pid: 40610, current: "Bash · blender -b rig.blend -f 1", tokens: tok(14_000, 2_100, 30_000), activity: history("p3d", ["Bake the hall probe"], now - 40_000, 1, 4), updated: now - 2000 }), "coool", 4);
   {
     let n = 4;
     setInterval(() => {
       if (lj0.status !== "busy") return;
       const t = Date.now();
-      if (n >= WORK.coool.length) {
+      if (n >= WORK.p3d.length) {
         lj0.status = "ended";
         lj0.current = null;
         lj0.activity.push(act("text", "Baked the hall probe: 12.4 MB written to probes/hall.exr.", t));
       } else {
-        const a = parseStep(WORK.coool[n++], t);
+        const a = parseStep(WORK.p3d[n++], t);
         lj0.activity.push(a);
         lj0.current = a.kind === "tool" ? a.text : "thinking…";
         lj0.tokens.output += 180;
@@ -655,8 +773,8 @@ export function mockBackend(): Backend {
       emitSessions();
     }, 2600);
   }
-  add(session({ provider: "codex", id: "lightjob1", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the garden probe", status: "idle", pid: 40611, waiting_for: "Allow Bash: blender -b garden.blend -f 1", tokens: tok(9_000, 1_300, 22_000), activity: history("pixel", ["Bake the garden probe"], now - 90_000, 1, 5), updated: now - 20_000 }), "pixel", 5);
-  add(session({ provider: "claude", id: "lightjob2", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the attic probe", status: "ended", tokens: tok(11_000, 1_700, 24_000), activity: [...history("pixel", ["Bake the attic probe"], now - 240_000, 1, 4), act("error", "blender exited with code 139: segfault in the denoiser", now - 200_000)], updated: now - 200_000 }), "pixel");
+  add(session({ provider: "codex", id: "lightjob1", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the garden probe", status: "idle", pid: 40611, waiting_for: "Allow Bash: blender -b garden.blend -f 1", tokens: tok(9_000, 1_300, 22_000), activity: history("p3d", ["Bake the garden probe"], now - 90_000, 1, 5), updated: now - 20_000 }), "pixel", 5);
+  add(session({ provider: "claude", id: "lightjob2", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the attic probe", status: "ended", tokens: tok(11_000, 1_700, 24_000), activity: [...history("p3d", ["Bake the attic probe"], now - 240_000, 1, 4), act("error", "blender exited with code 139: segfault in the denoiser", now - 200_000)], updated: now - 200_000 }), "pixel");
 
   // Background shells (APP_SPEC "Background shells"): the lighting session runs two beside its jobs,
   // and a session with shells only (no subagents, no jobs) serves the docs site.
@@ -1000,6 +1118,9 @@ export function mockBackend(): Backend {
   const chCoool = newChat("claude", coool, {}, 0);
   chCoool.always.add("Bash");
   setTimeout(() => chCoool.send("Add a slash command menu to the chat composer"), 2200);
+  // A chat whose edit waits for the person: Mission control shows it inline (Allow / Deny).
+  const chAtlas = newChat("claude", atlas, {}, 0);
+  setTimeout(() => chAtlas.send("Make limiter budgets follow config reloads (review edits)"), 2600);
   // `?needs=demo`: a second chat with a pending question (the notes chat above already asks to run something).
   if (location.search.includes("needs=demo")) {
     const cq = newChat("claude", `${HOME}/code/atlas`, {}, 0);
@@ -1067,7 +1188,7 @@ export function mockBackend(): Backend {
     for (const l of live) {
       const s = l.s;
       if (l.chat) continue; // chats drive their own session
-      if (s.background_tasks || s.id === AGENTS_DEMO) continue; // the demo parents wait for their jobs / agents
+      if (s.background_tasks || s.id === AGENTS_DEMO || s.id === "f4a0e124") continue; // the demo parents wait for their jobs / agents
       if (s.parent) {
         // Background jobs: keep working; the first one sometimes waits for an approval.
         if (s.id === "job0") {
@@ -1098,7 +1219,17 @@ export function mockBackend(): Backend {
         continue;
       }
       if (s.status === "busy") {
-        if (Math.random() < 0.42) {
+        if ((l.hold ?? 0) > 0) {
+          // A `git commit` runs for a few ticks; then the commit is on the branch and the agent moves on.
+          l.hold!--;
+          if (l.hold === 0) {
+            git.commit(s.project || s.cwd, committing(s.current) || "Commit the work in progress", l.edited ?? []);
+            l.edited = [];
+            s.current = "thinking…";
+            s.updated = t;
+            changed = true;
+          }
+        } else if (Math.random() < 0.42) {
           const script = WORK[l.script];
           if (l.step >= script.length) {
             s.status = "idle";
@@ -1110,6 +1241,12 @@ export function mockBackend(): Backend {
           } else {
             const a = parseStep(script[l.step++], t);
             s.activity.push(a);
+            if (/^(Edit|Write) · /.test(a.text)) {
+              const f = relPath(a.text.split(" · ")[1], s.project || s.cwd);
+              if (!(l.edited ??= []).includes(f)) l.edited.push(f);
+              git.touch(s.project || s.cwd);
+            }
+            if (committing(a.text) !== null) l.hold = 3;
             if (s.activity.length > 300) s.activity.splice(0, s.activity.length - 300);
             s.current = a.kind === "tool" || a.kind === "agent" ? a.text : "thinking…";
             s.tokens.input += 800 + Math.floor(Math.random() * 3000);
@@ -1277,6 +1414,10 @@ export function mockBackend(): Backend {
     async pickFolder() {
       await delay(200);
       return `${HOME}/code/new-project`;
+    },
+    async gitTrail(path) {
+      await delay(80 + Math.random() * 120);
+      return git.trail(path);
     },
     async environment() {
       return { home: HOME, claude: "/usr/local/bin/claude", codex: "/opt/homebrew/bin/codex" };

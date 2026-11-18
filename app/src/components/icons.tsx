@@ -209,3 +209,33 @@ export const ILock = mk(
   </>,
 );
 export const IBolt = mk(<path d="M9.25 1.75l-6 7.5h4.5l-1 5 6-7.5h-4.5z" strokeLinejoin="round" />);
+
+/** A commit: a node on a line. */
+export const ICommit = mk(
+  <>
+    <circle cx="8" cy="8" r="2.75" />
+    <path d="M1.75 8h3.5M10.75 8h3.5" />
+  </>,
+);
+/** A pull request: a branch that comes back with an arrowhead into its base. */
+export const IPullRequest = mk(
+  <>
+    <circle cx="4.25" cy="3.75" r="1.75" />
+    <circle cx="4.25" cy="12.25" r="1.75" />
+    <circle cx="11.75" cy="12.25" r="1.75" />
+    <path d="M4.25 5.5v5M11.75 10.5V6.25a1.5 1.5 0 00-1.5-1.5H7.5M9 3.25L7.5 4.75 9 6.25" />
+  </>,
+);
+/** A deploy: an arrow leaving a base line. */
+export const IDeploy = mk(<path d="M8 10.75V2.25M4.75 5.5L8 2.25l3.25 3.25M2.25 10.25v2.5a1 1 0 001 1h9.5a1 1 0 001-1v-2.5" />);
+export const ITrash = mk(<path d="M2.25 4.25h11.5M6.25 4.25v-2h3.5v2M3.75 4.25l.75 9.5h7l.75-9.5M6.5 7v4M9.5 7v4" />);
+/** One job handed to many workers: a node fanning out to three. */
+export const IFanout = mk(
+  <>
+    <circle cx="3.5" cy="8" r="1.75" />
+    <path d="M5.25 8h2M7.25 8c0-3 1-4.25 3.5-4.25M7.25 8c0 3 1 4.25 3.5 4.25M7.25 8h3.5" />
+    {dot(12.75, 3.75)}
+    {dot(12.75, 8)}
+    {dot(12.75, 12.25)}
+  </>,
+);

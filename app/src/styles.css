@@ -732,3 +732,20 @@ html.page-hidden *::after {
 }
 .usage-pill-fill { animation: usage-pill-fill 2800ms linear both; }
 .reduce-motion .usage-pill-fill { animation: none; width: 100%; }
+
+/* Mission control: a ledger row that just arrived glows once, then settles (one-off; none under Reduce motion). */
+.mc-fresh {
+  animation: mc-fresh 1.8s ease-out 1;
+}
+@keyframes mc-fresh {
+  0%,
+  25% {
+    background-color: color-mix(in oklab, var(--status-running) 10%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.reduce-motion .mc-fresh {
+  animation: none;
+}
