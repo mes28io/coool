@@ -94,8 +94,19 @@ export function setMotionPref(p: MotionPref) {
 
 export function setMotionHints(h: MotionHints | null) {
   hints = h;
+  const before = state;
   apply();
+  // Settings shows each hint: re-render it even when the decision stayed the same.
+  if (state === before) {
+    state = { ...state };
+    subs.forEach((f) => f());
+  }
 }
+
+/** The device hints as last read (null until the backend answers, or in a build without them). */
+export const motionHints = () => hints;
+/** Whether macOS "Reduce motion" (Accessibility) is on. */
+export const systemReduceMotion = () => osReduce;
 
 /** True while motion is reduced (any reason). Cheap; safe to call during render. */
 export const reducedMotion = () => state.reduce;

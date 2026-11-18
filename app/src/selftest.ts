@@ -16,6 +16,7 @@
 // Settings > About / the coffee form to the device pilot, `pilot_run`, twice: learned, then from muscle memory).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
+import { ignoreChatDefaults } from "./lib/prefs";
 import { newChat } from "./lib/actions";
 import { api, isTauri } from "./lib/backend";
 import { chatNeeds, useChats, type Chat, type ChatItem } from "./lib/chat";
@@ -1803,7 +1804,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         return `${mine.length} iphone records; run 1 ${who(r1)}, run 2 ${who(r2)} (prev ${r2.map((r) => r.prev).join(" / ")})`;
       });
       await step("pilot-iphone: Settings > Device pilot shows the log's folder and size", async () => {
-        useStore.getState().openSettings("pilot");
+        useStore.getState().openSettings("devices");
         const el = await waitFor("the log's size", () => $("[data-pilot-log-size]"), 10_000);
         const bytes = Number(el.getAttribute("data-pilot-log-size"));
         const dir = $("[data-pilot-log-dir]")?.textContent ?? "";
@@ -1932,6 +1933,8 @@ export async function maybeRunSelfTest() {
   ({ invoke } = await import("@tauri-apps/api/core"));
   const cfg = (await invoke("selftest_config").catch(() => null)) as Config | null;
   if (!cfg) return;
+  // A test's chats start the way it says, never with the person's Settings > General defaults.
+  ignoreChatDefaults();
   tap();
   const names = cfg.scenario === "all" ? ALL : cfg.scenario.split(",").map((s) => s.trim());
   await log(`START ${names.join(",")} in ${cfg.dir}`);

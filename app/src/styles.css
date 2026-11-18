@@ -126,26 +126,26 @@
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-wordmark: "Pally", var(--font-sans); /* the coool wordmark only; Geist Sans when Pally was not fetched */
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  /* type scale: the only sizes in the app (see README in src/assets/fonts for the font pairing) */
-  --text-micro: 11px; /* uppercase section labels, keycaps */
-  --text-micro--line-height: 15px;
-  --text-small: 12.5px; /* secondary lines, chips, tags, timestamps */
-  --text-small--line-height: 18px;
-  --text-base: 14px; /* default UI text */
-  --text-base--line-height: 20px;
-  --text-prose: 15px; /* assistant prose, prompts, composer input */
-  --text-prose--line-height: 24px;
-  --text-title: 16px; /* chat / card / sheet titles */
-  --text-title--line-height: 22px;
-  --text-display: 24px; /* page titles, empty states */
-  --text-display--line-height: 30px;
+  /* type scale: the only sizes in the app; each is scaled by Settings > Appearance > Text size (--text-scale on :root, lib/prefs.ts) (see README in src/assets/fonts for the font pairing) */
+  --text-micro: calc(11px * var(--text-scale, 1)); /* uppercase section labels, keycaps */
+  --text-micro--line-height: calc(15px * var(--text-scale, 1));
+  --text-small: calc(12.5px * var(--text-scale, 1)); /* secondary lines, chips, tags, timestamps */
+  --text-small--line-height: calc(18px * var(--text-scale, 1));
+  --text-base: calc(14px * var(--text-scale, 1)); /* default UI text */
+  --text-base--line-height: calc(20px * var(--text-scale, 1));
+  --text-prose: calc(15px * var(--text-scale, 1)); /* assistant prose, prompts, composer input */
+  --text-prose--line-height: calc(24px * var(--text-scale, 1));
+  --text-title: calc(16px * var(--text-scale, 1)); /* chat / card / sheet titles */
+  --text-title--line-height: calc(22px * var(--text-scale, 1));
+  --text-display: calc(24px * var(--text-scale, 1)); /* page titles, empty states */
+  --text-display--line-height: calc(30px * var(--text-scale, 1));
   /* monospace sits 1px smaller than the sans it is inline with */
-  --text-mono-small: 12px;
-  --text-mono-small--line-height: 18px;
-  --text-mono-base: 13px;
-  --text-mono-base--line-height: 20px;
-  --text-mono-prose: 14px;
-  --text-mono-prose--line-height: 22px;
+  --text-mono-small: calc(12px * var(--text-scale, 1));
+  --text-mono-small--line-height: calc(18px * var(--text-scale, 1));
+  --text-mono-base: calc(13px * var(--text-scale, 1));
+  --text-mono-base--line-height: calc(20px * var(--text-scale, 1));
+  --text-mono-prose: calc(14px * var(--text-scale, 1));
+  --text-mono-prose--line-height: calc(22px * var(--text-scale, 1));
   --radius-card: 14px;
   --radius-sheet: 18px;
   --shadow-card: var(--shadow-card);
@@ -163,8 +163,8 @@ body {
   background: var(--panel);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 22px;
+  font-size: calc(15px * var(--text-scale, 1));
+  line-height: calc(22px * var(--text-scale, 1));
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   font-feature-settings: "ss01" on;
