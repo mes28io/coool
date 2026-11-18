@@ -23,6 +23,10 @@ const HISTORY_LINES: usize = 40;
 const TEXT_MAX: usize = 300;
 const HEADLINE_MAX: usize = 80;
 const NEEDS_MAX: usize = 140;
+const TITLE_MAX: usize = 56;
+/// Earlier prompts sampled into the request, so the title names the whole session.
+const EARLIER_PROMPTS: usize = 8;
+const EARLIER_MAX: usize = 120;
 
 const MIN_INTERVAL_MS: u64 = 45_000;
 const BACKOFF_MS: u64 = 5 * 60_000;
@@ -35,6 +39,10 @@ const KEY_RECHECK_MS: u64 = 30_000;
 pub struct Insight {
     pub headline: String,
     pub needs_you: Option<String>,
+    /// The model's title for the session as a whole (see [`crate::titles`]): only
+    /// a candidate, taken at a checkpoint when it names a different subject.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub generated_ms: u64,
 }
 
@@ -178,7 +186,11 @@ You are given a snapshot of one session. Reply with JSON only.\n\
 headline: one plain line, at most 80 characters, saying what the agent is doing (present tense while the \
 status is busy) or did (past tense when idle). No quotes, no emoji, no trailing period.\n\
 needs_you: null unless the session is blocked on the person: it asked a question, is awaiting approval, \
-hit an error it cannot get past, or is looping. Then one short line saying what it needs from them.";
+hit an error it cannot get past, or is looping. Then one short line saying what it needs from them.\n\
+title: a name for the whole session, not the current step: a short noun phrase (2 to 6 words, at most 48 \
+characters) naming what it is building or fixing, like \"Living chat titles\" or \"Sidebar unread dot fix\". \
+Never \"Chat about\", \"Session on\" or \"Discussion of\"; no quotes, no trailing period. If the current title \
+still names what the session is about, return it unchanged, word for word.";
 
 fn kind_label(k: ActivityKind) -> &'static str {
     match k {
@@ -206,11 +218,27 @@ fn folder_name(cwd: &str) -> String {
 pub(crate) fn build_prompt(s: &Session) -> String {
     let mut p = String::new();
     p.push_str(&format!("provider: {}\n", s.provider.label()));
-    p.push_str(&format!("title: {}\n", one_line(&s.title, TEXT_MAX)));
+    let title = s.name.as_ref().map(|n| n.title.as_str()).unwrap_or(&s.title);
+    p.push_str(&format!("current title: {}\n", one_line(title, TEXT_MAX)));
     p.push_str(&format!("folder: {}\n", folder_name(&s.cwd)));
     p.push_str(&format!("status: {}\n", status_label(s.status)));
     p.push_str(&format!("current tool: {}\n", s.current.as_deref().map(|c| one_line(c, TEXT_MAX)).unwrap_or_else(|| "none".into())));
     p.push_str(&format!("last prompt: {}\n", s.last_prompt.as_deref().map(|c| one_line(c, TEXT_MAX)).unwrap_or_else(|| "none".into())));
+    // A spread of the session's prompts (the first one, then evenly over the rest), so the
+    // title can name the whole session and not only its last 40 steps.
+    let prompts: Vec<&Activity> = s.activity.iter().filter(|a| a.kind == ActivityKind::Prompt).collect();
+    if prompts.len() > 1 {
+        p.push_str("prompts across the session (oldest first):\n");
+        let n = prompts.len().min(EARLIER_PROMPTS);
+        let mut last = usize::MAX;
+        for i in 0..n {
+            let at = if n == 1 { 0 } else { i * (prompts.len() - 1) / (n - 1) };
+            if at != last {
+                p.push_str(&format!("- {}\n", one_line(&prompts[at].text, EARLIER_MAX)));
+                last = at;
+            }
+        }
+    }
     p.push_str("recent activity (oldest first):\n");
     let start = s.activity.len().saturating_sub(HISTORY_LINES);
     for a in &s.activity[start..] {
@@ -235,9 +263,10 @@ fn request_body(s: &Session) -> Value {
                     "type": "object",
                     "properties": {
                         "headline": { "type": "string" },
-                        "needs_you": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                        "needs_you": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                        "title": { "type": "string" }
                     },
-                    "required": ["headline", "needs_you"],
+                    "required": ["headline", "needs_you", "title"],
                     "additionalProperties": false
                 }
             }
@@ -271,7 +300,12 @@ pub(crate) fn parse_insight_text(text: &str, generated_ms: u64) -> Result<Insigh
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case("null") && !n.eq_ignore_ascii_case("none"))
         .map(|n| truncate(&n, NEEDS_MAX));
-    Ok(Insight { headline, needs_you, generated_ms })
+    let title = v
+        .get("title")
+        .and_then(|t| t.as_str())
+        .map(|t| truncate(&clean_headline(t), TITLE_MAX))
+        .filter(|t| !t.is_empty() && !t.to_lowercase().starts_with("chat about") && !t.to_lowercase().starts_with("session "));
+    Ok(Insight { headline, needs_you, title, generated_ms })
 }
 
 /// Parses a full Messages API response body.
@@ -535,6 +569,8 @@ mod tests {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            title_facts: Default::default(),
+            name: None,
         }
     }
 
@@ -578,6 +614,25 @@ mod tests {
         assert_eq!(i.generated_ms, 7);
         let i = parse_insight_text(r#"{"headline":"Waiting","needs_you":"Approve the deploy"}"#, 0).unwrap();
         assert_eq!(i.needs_you.as_deref(), Some("Approve the deploy"));
+    }
+
+    #[test]
+    fn the_title_rides_along_in_the_same_request() {
+        let mut s = session("a", 3);
+        std::sync::Arc::make_mut(&mut s.activity).insert(0, act(ActivityKind::Prompt, "build the parser"));
+        std::sync::Arc::make_mut(&mut s.activity).push(act(ActivityKind::Prompt, "now the lexer"));
+        s.name = Some(crate::titles::Name { title: "Parser rewrite".into(), source: crate::titles::Source::Ai, previous: vec![] });
+        let p = build_prompt(&s);
+        assert!(p.contains("current title: Parser rewrite\n"), "{p}");
+        assert!(p.contains("- build the parser\n- now the lexer\n"), "{p}");
+        let b = request_body(&s);
+        assert_eq!(b["output_config"]["format"]["schema"]["required"], json!(["headline", "needs_you", "title"]));
+        // Fixture reply (no network): the title is parsed and cleaned.
+        let body = r#"{"content":[{"type":"text","text":"{\"headline\":\"Editing lexer.rs\",\"needs_you\":null,\"title\":\"\\\"Parser and lexer rewrite.\\\"\"}"}],"stop_reason":"end_turn"}"#;
+        let i = parse_response(body, 1).unwrap();
+        assert_eq!(i.title.as_deref(), Some("Parser and lexer rewrite"));
+        assert_eq!(parse_insight_text(r#"{"headline":"h","needs_you":null,"title":"Chat about parsers"}"#, 0).unwrap().title, None);
+        assert_eq!(parse_insight_text(r#"{"headline":"h","needs_you":null}"#, 0).unwrap().title, None);
     }
 
     #[test]
@@ -701,7 +756,7 @@ mod tests {
         // Finish a (ok) and b (error): c becomes eligible, b is backed off.
         let mk = |id: &str, ok: bool| {
             let fp = fingerprint(sessions.iter().find(|s| s.id == id).unwrap());
-            let r = if ok { Ok(Insight { headline: "h".into(), needs_you: None, generated_ms: 0 }) } else { Err("boom".to_string()) };
+            let r = if ok { Ok(Insight { headline: "h".into(), needs_you: None, title: None, generated_ms: 0 }) } else { Err("boom".to_string()) };
             ((Provider::Claude, id.to_string()), fp, r)
         };
         ins.tx.send(mk("a", true)).unwrap();

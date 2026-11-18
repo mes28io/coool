@@ -71,6 +71,8 @@ struct Core {
     streams: Mutex<HashMap<usize, Stream>>,
     chats: Mutex<HashMap<usize, ChatStream>>,
     insights: Mutex<Insights>,
+    /// CHAT_SPEC "Session titles": the shown title of every session, and the names the person gave.
+    titles: Mutex<coool_core::titles::Titles>,
     /// CHAT_SPEC "Plan usage".
     usage: UsageMonitor,
     /// Set once the user confirmed quitting (or nothing was running).
@@ -369,6 +371,28 @@ impl Core {
         self.previews.set_timelines(sessions.iter().map(|s| s.activity.clone()).collect());
         let sessions: Vec<(String, Session, Option<Insight>)> = {
             let mut ins = self.insights.lock().unwrap();
+            {
+                // Titles first, so an insight request knows the current title (CHAT_SPEC "Session titles").
+                let mut titles = self.titles.lock().unwrap();
+                let ai_on = ins.enabled();
+                for s in sessions.iter_mut() {
+                    let ai = if ai_on { ins.get(s.provider, &s.id).and_then(|i| i.title.clone()) } else { None };
+                    s.name = Some(titles.resolve(s, ai_on, ai.as_deref()));
+                }
+                titles.save();
+            }
+            {
+                // Notifications for a chat use the same title as the rest of the app.
+                let mut chats = self.chats.lock().unwrap();
+                for s in &sessions {
+                    if let (Some(id), Some(n)) = (s.chat, &s.name)
+                        && let Some(c) = chats.get_mut(&id)
+                        && c.title != n.title
+                    {
+                        c.title = n.title.clone();
+                    }
+                }
+            }
             ins.tick(&sessions);
             let mut seen: HashMap<String, usize> = HashMap::new();
             sessions
@@ -721,6 +745,18 @@ fn insights_clear_key(core: State<'_, Arc<Core>>) -> Res<()> {
     let mut ins = core.insights.lock().unwrap();
     let on = ins.enabled();
     ins.set_enabled(on);
+    Ok(())
+}
+
+/// Names a session in coool (pinned; CHAT_SPEC "Session titles"), or, with no
+/// name or a blank one, returns it to its automatic title.
+#[tauri::command(async)]
+fn rename_session(core: State<'_, Arc<Core>>, provider: Provider, id: String, name: Option<String>) -> Res<()> {
+    if id.is_empty() {
+        return Err("no session id".into());
+    }
+    core.titles.lock().unwrap().rename(provider, &id, name.as_deref());
+    core.kick();
     Ok(())
 }
 
@@ -1317,6 +1353,11 @@ pub fn run() {
         streams: Mutex::new(HashMap::new()),
         chats: Mutex::new(HashMap::new()),
         insights: Mutex::new(ins),
+        // A self-test keeps its names in its throwaway folder, never in the person's file.
+        titles: Mutex::new(coool_core::titles::Titles::at(match &selftest {
+            Some(t) => Some(t.titles_path()),
+            None => coool_core::titles::Titles::default_path(),
+        })),
         usage,
         allow_exit: AtomicBool::new(false),
         waker: Waker::new(),
@@ -1367,6 +1408,7 @@ pub fn run() {
             insights_set_key,
             insights_clear_key,
             insights_set_enabled,
+            rename_session,
             set_show_automation,
             pilot_log_status,
             pilot_log_set_enabled,
@@ -1567,6 +1609,8 @@ mod tests {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            title_facts: Default::default(),
+            name: None,
         }
     }
 

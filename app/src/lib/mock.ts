@@ -20,6 +20,7 @@ const PRESENCE_PROMPTS = {
 import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
 import { mockMac } from "./mockMac";
+import { mockName, mockRename } from "./mockTitles";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -940,7 +941,9 @@ export function mockBackend(): Backend {
       .filter(([, st]) => st !== "hidden")
       .map(([l, st]) => (st === "cheap" ? cheap(structuredClone(l.s)) : { ...decorate(structuredClone(l.s), l), loaded: true }))
       // Like the backend: whatever coool runs is coool's.
-      .map((s) => (s.chat != null || s.managed !== null ? { ...s, origin: "coool" as const } : s));
+      .map((s) => (s.chat != null || s.managed !== null ? { ...s, origin: "coool" as const } : s))
+      // CHAT_SPEC "Session titles": the resolved title rides on every session.
+      .map((s) => ({ ...s, name: mockName(s) }));
     // Like the backend: a parent counts its live child runs.
     for (const s of sessions) s.live_children = sessions.filter((c) => c.parent === s.id && c.status !== "ended").length;
     const order = { busy: 0, idle: 1, ended: 2 } as const;
@@ -1431,6 +1434,11 @@ export function mockBackend(): Backend {
       emitSessions();
     },
     async shellsFocus() {},
+    async renameSession(provider, id, name) {
+      await delay(60);
+      mockRename(provider, id, name);
+      emitSessions();
+    },
     async pickFolder() {
       await delay(200);
       return `${HOME}/code/new-project`;

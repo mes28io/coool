@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { displayTitle, folderName, homeShort, projectOf } from "../lib/format";
+import { displayTitle, folderName, homeShort, matchPrevious, previousTitles, projectOf } from "../lib/format";
 import { sessionKey } from "../lib/types";
 import { seenAt, isUnseen, leaves, resolveTarget, useStore } from "../store";
 import { openChatInTerminal } from "../lib/actions";
@@ -16,6 +16,8 @@ interface Item {
   group: "Sessions" | "Projects" | "Actions";
   label: string;
   hint?: string;
+  /** Other names it is found by: a session's previous titles (CHAT_SPEC "Session titles"). */
+  also?: string[];
   icon: ReactNode;
   keys?: string[];
   run: () => void;
@@ -61,6 +63,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         id: `s:${sessionKey(s)}`,
         group: "Sessions",
         label: displayTitle(s),
+        also: previousTitles(s),
         hint: s.origin === "automation" ? `${folderName(projectOf(s))} · by another tool` : folderName(projectOf(s)),
         icon: (
           <span className="flex items-center gap-1.5">
@@ -136,7 +139,14 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   }, [st, onClose, openWith]);
 
   const shown = useMemo(() => {
-    const scored = items.map((it) => ({ it, s: Math.max(score(q, it.label), score(q, it.hint ?? "") * 0.7) })).filter((x) => x.s > 0);
+    const scored = items
+      .map((it) => {
+        // A previous title matches a little below the current one; the row then says which name it found.
+        const s = Math.max(score(q, it.label), score(q, it.hint ?? "") * 0.7);
+        const was = matchPrevious(q, it.also ?? [], s, score);
+        return was ? { it: { ...it, hint: `was: ${was.title}` }, s: was.score } : { it, s };
+      })
+      .filter((x) => x.s > 0);
     if (q) scored.sort((a, b) => b.s - a.s);
     const order = { Sessions: 0, Actions: 1, Projects: 2 } as const;
     const res = q ? scored.map((x) => x.it) : scored.map((x) => x.it).sort((a, b) => order[a.group] - order[b.group]);

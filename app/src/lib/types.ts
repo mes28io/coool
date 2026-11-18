@@ -69,7 +69,20 @@ export interface Agent {
 export interface Insight {
   headline: string;
   needs_you: string | null;
+  /** The model's candidate title for the whole session (CHAT_SPEC "Session titles"); the backend decides whether it is used. */
+  title?: string;
   generated_ms: number;
+}
+
+/** CHAT_SPEC "Session titles": where a shown title comes from. */
+export type TitleSource = "manual" | "cli" | "ai" | "auto" | "first";
+
+/** CHAT_SPEC "Session titles": the title the backend resolved (one rule, every surface). */
+export interface SessionName {
+  title: string;
+  source: TitleSource;
+  /** Titles it had before, newest first. */
+  previous?: string[];
 }
 
 export interface Session {
@@ -101,6 +114,8 @@ export interface Session {
   chat?: number | null;
   models?: ModelUse[];
   insight?: Insight | null;
+  /** The title to show (CHAT_SPEC "Session titles"); missing on older backends. Read it through `displayTitle`. */
+  name?: SessionName | null;
   /**
    * Who started it: the person (terminal, IDE, desktop, phone), coool (its chats
    * and terminals, remembered across restarts), or another tool / agent

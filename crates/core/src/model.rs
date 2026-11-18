@@ -266,6 +266,13 @@ pub struct Session {
     /// filled by [`crate::hub::Hub::refresh`]. Left out of the JSON when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shells: Vec<crate::shells::Shell>,
+    /// What the transcript says about naming (see [`crate::titles`]); not sent.
+    #[serde(skip)]
+    pub title_facts: crate::titles::Facts,
+    /// The title to show, resolved by [`crate::titles::Titles::resolve`] (the app
+    /// fills it in before sending; None before that). Left out of the JSON when None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<crate::titles::Name>,
 }
 
 pub const MAX_ACTIVITY: usize = 300;
@@ -298,6 +305,9 @@ impl Session {
 
     /// Best human label: AI title, else the last prompt, else the folder name.
     pub fn display_title(&self) -> String {
+        if let Some(n) = &self.name {
+            return n.title.clone();
+        }
         if !self.title.is_empty() {
             return self.title.clone();
         }
