@@ -66,7 +66,7 @@ export function shortTitle(text: string, max = TITLE_MAX): string {
 }
 
 /** The insight headline is already the title (so don't show it twice). */
-export function headlineIsTitle(s: Pick<Session, "title" | "last_prompt" | "cwd"> & { insight?: Session["insight"] }): boolean {
+export function headlineIsTitle(s: Pick<Session, "title" | "last_prompt" | "cwd"> & { insight?: Session["insight"]; name?: Session["name"] }): boolean {
   const h = s.insight?.headline?.trim();
   return !!h && displayTitle(s) === shortTitle(h, 72);
 }
@@ -74,7 +74,16 @@ export function headlineIsTitle(s: Pick<Session, "title" | "last_prompt" | "cwd"
 /** A name the CLI gave from the prompt itself rather than a real title. */
 const promptLike = (title: string) => title.length > TITLE_MAX || title.includes("\n");
 
-export function displayTitle(s: Pick<Session, "title" | "last_prompt" | "cwd"> & { insight?: Session["insight"] }): string {
+type Titled = Pick<Session, "title" | "last_prompt" | "cwd"> & { insight?: Session["insight"]; name?: Session["name"] };
+
+/**
+ * The one title every surface shows (tabs, sidebar, Mission control, Needs you, the palette,
+ * notifications): the backend's resolved title (CHAT_SPEC "Session titles"), else, from an
+ * older backend, the CLI's name or a short form of the prompt.
+ */
+export function displayTitle(s: Titled): string {
+  const resolved = s.name?.title?.trim();
+  if (resolved) return resolved;
   const real = s.title && !(s.last_prompt && generic(s.title, s.cwd)) ? s.title : "";
   if (real && !promptLike(real)) return real;
   // No real name yet: the AI headline when insights are on, else a short form of the prompt.
@@ -83,6 +92,36 @@ export function displayTitle(s: Pick<Session, "title" | "last_prompt" | "cwd"> &
   if (real) return shortTitle(real);
   if (s.last_prompt) return shortTitle(s.last_prompt);
   return folderName(s.cwd) || "untitled";
+}
+
+/** Titles the session had before, newest first (never the current one). */
+export function previousTitles(s: Titled): string[] {
+  const now = displayTitle(s);
+  return (s.name?.previous ?? []).filter((p) => p && p !== now);
+}
+
+/** For a row's tooltip: "was: Claude Code fast mode credits". */
+export function titleWas(s: Titled): string | null {
+  const p = previousTitles(s);
+  return p.length ? `was: ${p.slice(0, 2).join(", ")}` : null;
+}
+
+/** A name the person gave in coool (pinned until they go back to automatic). */
+export const titlePinned = (s: Titled) => s.name?.source === "manual";
+
+/**
+ * Search by an earlier name: the previous title that best matches `q`, scored a
+ * little below a match on the current title, when it beats `current` (the score of
+ * the current label). `score` is the fuzzy matcher (lib/fuzzy.ts).
+ */
+export function matchPrevious(q: string, previous: string[], current: number, score: (q: string, t: string) => number): { title: string; score: number } | null {
+  if (!q) return null;
+  let best: { title: string; score: number } | null = null;
+  for (const p of previous) {
+    const sc = score(q, p) * 0.9;
+    if (sc > 0 && sc > current && (!best || sc > best.score)) best = { title: p, score: sc };
+  }
+  return best;
 }
 
 /** "Bash · cargo test" -> { name: "Bash", detail: "cargo test" } */

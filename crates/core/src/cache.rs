@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime};
 /// `source` and the subagent parent (session origin).
 /// v3: activity entries keep their full text (`Activity::full`, `shortened`).
 /// v9: parse state records `last_event` (newest real conversation event).
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 /// Bytes fingerprinted at the start and just before the saved offset.
 const PRINT: u64 = 4096;
 /// Total size the cache is kept under.

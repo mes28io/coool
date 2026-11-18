@@ -1,7 +1,8 @@
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { useClock } from "../lib/clock";
-import { ago, displayTitle, folderName, homeShort, projectOf } from "../lib/format";
+import { ago, displayTitle, folderName, homeShort, projectOf, titleWas } from "../lib/format";
+import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
 import { attention, sameAttention, useChatDigest, useUnseen, type Attention, type ChatDigest } from "../lib/live";
 import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
@@ -645,7 +646,11 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
   const unseen = useUnseen(s);
   // A waiting chat shows its green dot only until the person opens it.
   const status = att.needs ? "needs" : att.status === "idle" && !unseen ? "ended" : att.status;
+  // CHAT_SPEC "Session titles": double-click or right-click to rename; the tooltip says what it was called.
+  const edit = useTitleEdit(s);
+  const tip = [att.needs ?? att.background, titleWas(s)].filter(Boolean).join(" · ") || null;
   return (
+    <div className="relative" onDoubleClick={edit.start} onContextMenu={edit.openMenu}>
     <Row
       selected={selected}
       onClick={() => open({ kind: "session", key: sessionKey(s) })}
@@ -658,8 +663,11 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
       auto={auto}
       nested={nested}
       nest={nest ? { open: nest === "open", onToggle: () => setKidsOpen(sessionKey(s), nest !== "open") } : undefined}
-      tip={att.needs ?? att.background}
-      data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined }}
+      tip={tip}
+      data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined, "data-title-source": s.name?.source }}
     />
+      {edit.editing && <TitleInput s={s} onDone={edit.stop} className={cx("absolute inset-y-[3px] right-2 text-base", nested ? "left-[50px]" : "left-[34px]")} />}
+      {edit.menu && <TitleMenu s={s} at={edit.menu} onClose={edit.closeMenu} onRename={edit.start} />}
+    </div>
   );
 }, sameRow);

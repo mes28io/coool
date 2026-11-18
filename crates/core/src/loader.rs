@@ -71,6 +71,8 @@ pub(crate) struct View {
     pub agent_name: String,
     /// Claude: recent Bash tool calls (see [`crate::shells`]).
     pub bash: Vec<crate::shells::BashCall>,
+    /// What the transcript says about naming (see [`crate::titles`]).
+    pub title_facts: crate::titles::Facts,
 }
 
 /// Bytes read from the end of a file for [`tail_event`].
@@ -153,6 +155,8 @@ impl Parsed {
         v.models.clear();
         // Only the tail was read: the turn's start may be missing.
         v.tokens.turn_output = 0;
+        // Prompt and compaction counts need the whole file (an unknown count is never a checkpoint).
+        v.title_facts = crate::titles::Facts { cli_first: v.title_facts.cli_first, custom: v.title_facts.custom, ..Default::default() };
         v
     }
 }

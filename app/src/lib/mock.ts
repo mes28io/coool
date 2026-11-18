@@ -20,6 +20,7 @@ const PRESENCE_PROMPTS = {
 import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
 import { mockMac } from "./mockMac";
+import { mockName, mockRename } from "./mockTitles";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
@@ -1043,14 +1044,16 @@ export function mockBackend(): Backend {
       .filter(([, st]) => st !== "hidden")
       .map(([l, st]) => (st === "cheap" ? cheap(structuredClone(l.s)) : { ...decorate(structuredClone(l.s), l), loaded: true }))
       // Like the backend: whatever coool runs is coool's.
-      .map((s) => (s.chat != null || s.managed !== null ? { ...s, origin: "coool" as const } : s));
+      .map((s) => (s.chat != null || s.managed !== null ? { ...s, origin: "coool" as const } : s))
+      // CHAT_SPEC "Session titles": the resolved title rides on every session.
+      .map((s) => ({ ...s, name: mockName(s) }));
     // Demo knob (Mission control's project tabs): `coool.mock.projects` = N keeps the live sessions of N projects;
     // 8 adds an eighth project.
     const cap = mockProjectCap();
     if (cap) {
       const keep = new Set(MC_PROJECTS.slice(0, cap));
       sessions = sessions.filter((s) => s.status === "ended" || keep.has((s.project || s.cwd).split("/").pop() ?? ""));
-      if (cap >= 8) sessions.push(session({ provider: "codex", id: "pk8a01", cwd: `${HOME}/code/pocket-ledger`, title: "Import bank CSVs with column mapping", status: "idle", updated: Date.now() - 6 * 60_000, loaded: true }));
+      if (cap >= 8) sessions.push(((x) => ({ ...x, name: mockName(x) }))(session({ provider: "codex", id: "pk8a01", cwd: `${HOME}/code/pocket-ledger`, title: "Import bank CSVs with column mapping", status: "idle", updated: Date.now() - 6 * 60_000, loaded: true })));
     }
     // Like the backend: a parent counts its live child runs.
     for (const s of sessions) s.live_children = sessions.filter((c) => c.parent === s.id && c.status !== "ended").length;
@@ -1542,6 +1545,11 @@ export function mockBackend(): Backend {
       emitSessions();
     },
     async shellsFocus() {},
+    async renameSession(provider, id, name) {
+      await delay(60);
+      mockRename(provider, id, name);
+      emitSessions();
+    },
     async pickFolder() {
       await delay(200);
       return `${HOME}/code/new-project`;

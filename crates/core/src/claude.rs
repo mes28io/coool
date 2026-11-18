@@ -41,6 +41,9 @@ struct ParseState {
     /// Newest real conversation event, epoch ms (see [`event_ms`]).
     #[serde(default)]
     last_event: Option<u64>,
+    /// Naming facts (see [`crate::titles`]).
+    #[serde(default)]
+    titles: crate::titles::Facts,
 }
 
 /// When a transcript line is a real conversation event: a user entry, an
@@ -90,6 +93,7 @@ impl Parsed {
             origin: self.p.entrypoint.as_ref().map(|e| crate::origin::claude(Some(e), self.p.human)),
             bash: self.p.bash.clone(),
             last_event: self.p.last_event,
+            title_facts: self.p.titles.clone(),
             ..View::default()
         }
     }
@@ -376,6 +380,8 @@ fn session(id: &str, e: &Entry) -> Session {
         background_tasks: e.live.as_ref().is_some_and(|r| r.shell),
         waiting_for: e.live.as_ref().and_then(|r| r.waiting_for.clone()),
         shells: Vec::new(),
+        title_facts: v.title_facts.clone(),
+        name: None,
     }
 }
 
@@ -511,6 +517,22 @@ fn parse_line(
         Some("ai-title") => {
             if let Some(t) = v["aiTitle"].as_str() {
                 *title = t.to_string();
+                st.titles.cli_title(t);
+            }
+        }
+        // `/rename`: the person's own name for it, in the CLI.
+        Some("custom-title") => {
+            if let Some(t) = v["customTitle"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                st.titles.custom = Some(t.to_string());
+            }
+        }
+        // A compaction summary: shown like before (as a prompt), counted as a checkpoint, not a prompt.
+        Some("user") if v["isCompactSummary"].as_bool() == Some(true) => {
+            let c = &v["message"]["content"];
+            let s = c.as_str().map(str::to_string).or_else(|| result_text(c)).unwrap_or_default();
+            st.titles.compaction(&s);
+            if !s.trim().is_empty() && !s.starts_with('<') {
+                push_activity(activity, Activity::message(ts, ActivityKind::Prompt, &s, 400));
             }
         }
         Some("last-prompt") => {
@@ -524,6 +546,7 @@ fn parse_line(
             let p = &v["attachment"]["prompt"];
             let s = p.as_str().map(str::to_string).or_else(|| result_text(p)).unwrap_or_default();
             if !s.trim().is_empty() && !s.starts_with('<') {
+                st.titles.prompts += 1;
                 push_activity(activity, Activity::message(ts, ActivityKind::Prompt, &s, 400));
             }
         }
@@ -729,6 +752,7 @@ fn user_text(s: &str, ts: String, st: &mut ParseState, current: &mut Option<Stri
         return;
     }
     push_activity(activity, Activity::message(ts, ActivityKind::Prompt, s, 400));
+    st.titles.prompts += 1;
     st.turn_out = 0;
     *current = Some("thinking…".into());
 }

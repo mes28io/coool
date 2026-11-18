@@ -83,6 +83,11 @@ impl SelfTest {
         self.dir.join(".coool-selftest-own-sessions.json")
     }
 
+    /// coool's session titles, kept here instead of the real file.
+    pub fn titles_path(&self) -> PathBuf {
+        self.dir.join(".coool-selftest-titles.json")
+    }
+
     /// A fixed size, on top, so screenshots are comparable and unobstructed.
     pub fn prepare_window(&self, app: &AppHandle) {
         // `get_window`, not `get_webview_window`: once the in-app browser adds a child webview, `main` is a window

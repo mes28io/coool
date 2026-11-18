@@ -42,6 +42,8 @@ export interface Backend extends SettingsBackend {
   stopSession(a: { managed?: number | null; pid?: number | null }): Promise<void>;
   /** Stop a background shell (only a pid listed in some live session's `shells`). */
   stopShell(pid: number): Promise<void>;
+  /** CHAT_SPEC "Session titles": name a session in coool (pinned), or `null` / blank to go back to its automatic title. */
+  renameSession(provider: Provider, id: string, name: string | null): Promise<void>;
   /** The session ids on screen: only their shells get output tails. */
   shellsFocus(ids: string[]): Promise<void>;
   pickFolder(): Promise<string | null>;
@@ -499,6 +501,7 @@ async function tauriBackend(): Promise<Backend> {
     sendPrompt: (id, text) => invoke("send_prompt", { id, text }),
     stopSession: ({ managed, pid }) => invoke("stop_session", { managed: managed ?? null, pid: pid ?? null }),
     stopShell: (pid) => soft("stop_shell", { pid }),
+    renameSession: (provider, id, name) => soft("rename_session", { provider, id, name }),
     shellsFocus: (ids) => soft<void>("shells_focus", { ids }).catch(() => {}),
     pickFolder: () => invoke("pick_folder"),
     environment: () => invoke("environment"),

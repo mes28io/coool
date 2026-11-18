@@ -32,6 +32,9 @@ struct ParseState {
     /// Newest real conversation event, epoch ms (see [`event_ms`]).
     #[serde(default)]
     last_event: Option<u64>,
+    /// Naming facts (see [`crate::titles`]); the thread name comes from the index.
+    #[serde(default)]
+    titles: crate::titles::Facts,
 }
 
 /// When a rollout line is a real conversation event: a response item (message,
@@ -101,6 +104,7 @@ impl Parsed {
             origin: self.st.meta_seen.then(|| crate::origin::codex(&s.originator, &s.source)),
             parent: s.parent.clone(),
             agent_name: s.agent_name.clone(),
+            title_facts: self.st.titles.clone(),
             ..View::default()
         }
     }
@@ -134,6 +138,8 @@ pub struct CodexSource {
     entries: HashMap<PathBuf, Entry>,
     titles: Tail,
     title_map: HashMap<String, String>,
+    /// Each thread's first name in the index: a later, different one is a rename.
+    title_first: HashMap<String, String>,
     recent_window: Duration,
     /// Recently modified rollouts outside the RECENT_DAYS folders, from the last full scan.
     old_recent: HashSet<PathBuf>,
@@ -157,6 +163,7 @@ impl CodexSource {
             entries: HashMap::new(),
             titles,
             title_map: HashMap::new(),
+            title_first: HashMap::new(),
             recent_window,
             old_recent: HashSet::new(),
             walk: Arc::default(),
@@ -234,6 +241,7 @@ impl CodexSource {
         for l in self.titles.read_lines() {
             if let Ok(v) = serde_json::from_str::<Value>(&l)
                 && let (Some(id), Some(n)) = (v["id"].as_str(), v["thread_name"].as_str()) {
+                    self.title_first.entry(id.to_string()).or_insert_with(|| n.to_string());
                     self.title_map.insert(id.to_string(), n.to_string());
                 }
         }
@@ -383,6 +391,7 @@ impl CodexSource {
         } else {
             Status::Ended
         };
+        let title_facts = crate::titles::Facts { cli_first: self.title_first.get(&id).cloned().unwrap_or_default(), ..v.title_facts.clone() };
         Session {
             provider: Provider::Codex,
             title: self.title_map.get(&id).cloned().unwrap_or_default(),
@@ -409,6 +418,8 @@ impl CodexSource {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            title_facts,
+            name: None,
         }
     }
 }
@@ -511,6 +522,7 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
             }
             match role {
                 "user" => {
+                    st.titles.prompts += 1;
                     s.last_prompt = Some(one_line(&text, 400));
                     push_activity(&mut s.activity, Activity::message(ts, ActivityKind::Prompt, &text, 400));
                 }
@@ -519,6 +531,9 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
                 }
                 _ => {}
             }
+        }
+        (Some("compacted"), _) => {
+            st.titles.compaction(p["message"].as_str().unwrap_or(""));
         }
         (Some("response_item"), Some("function_call")) | (Some("response_item"), Some("custom_tool_call")) => {
             let name = p["name"].as_str().unwrap_or("tool");

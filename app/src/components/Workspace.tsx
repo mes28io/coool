@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion, Reorder } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chatTitle, needsAnswer, useChats } from "../lib/chat";
-import { displayTitle, folderName, projectOf } from "../lib/format";
+import { displayTitle, folderName, previousTitles, projectOf } from "../lib/format";
 import { useAttention, useUnseen } from "../lib/live";
 import { reducedMotion } from "../lib/motion";
 import type { Session } from "../lib/types";
@@ -257,7 +257,7 @@ function PanePicker({ leaf }: { leaf: Leaf }) {
   const [q, setQ] = useState("");
   const list = useMemo(() => {
     const ql = q.toLowerCase();
-    return sessions.filter((s) => !ql || displayTitle(s).toLowerCase().includes(ql) || s.cwd.toLowerCase().includes(ql)).slice(0, 8);
+    return sessions.filter((s) => !ql || displayTitle(s).toLowerCase().includes(ql) || previousTitles(s).some((p) => p.toLowerCase().includes(ql)) || s.cwd.toLowerCase().includes(ql)).slice(0, 8);
   }, [sessions, q]);
   const pick = (s: Session) => setPaneTarget(leaf.id, { kind: "session", key: sessionKey(s) });
 

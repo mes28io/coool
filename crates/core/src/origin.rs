@@ -257,7 +257,7 @@ impl OwnSessions {
     }
 }
 
-fn write_private(p: &Path, body: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(p: &Path, body: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(d) = p.parent() {
         let mut b = fs::DirBuilder::new();

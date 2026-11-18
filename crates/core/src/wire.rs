@@ -146,6 +146,8 @@ fn head_of(s: &Session) -> Session {
         background_tasks: s.background_tasks,
         waiting_for: s.waiting_for.clone(),
         shells: s.shells.clone(),
+        title_facts: s.title_facts.clone(),
+        name: s.name.clone(),
     }
 }
 
@@ -342,6 +344,8 @@ pub(crate) mod tests {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            title_facts: Default::default(),
+            name: None,
         }
     }
 
@@ -368,7 +372,7 @@ pub(crate) mod tests {
     #[test]
     fn insight_is_added_to_the_head() {
         let s = session("x", 0, 2);
-        let i = Insight { headline: "h".into(), needs_you: None, generated_ms: 5 };
+        let i = Insight { headline: "h".into(), needs_you: None, title: None, generated_ms: 5 };
         let with: Value = serde_json::from_str(&Sent::new(s, Some(i), None).to_json()).unwrap();
         assert_eq!((&with["id"], &with["insight"], with["activity"].as_array().map(Vec::len)), (&json!("x"), &json!({"headline": "h", "needs_you": null, "generated_ms": 5}), Some(2)));
     }
