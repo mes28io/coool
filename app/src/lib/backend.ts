@@ -2,7 +2,7 @@
 // when running in a plain browser (`pnpm dev`). See docs/APP_SPEC.md.
 
 import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
-import type { ChatEvent, ChatOptions, Environment, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
+import type { ChatEvent, ChatOptions, Environment, GitTrail, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
 import type { MotionHints } from "./motion";
 
 export interface PtyChunk {
@@ -44,6 +44,8 @@ export interface Backend {
   shellsFocus(ids: string[]): Promise<void>;
   pickFolder(): Promise<string | null>;
   environment(): Promise<Environment>;
+  /** A project's recent git history for Mission control's commit trail (read-only; crates/core/src/gitlog.rs). Rejects when `path` is not in a repository. */
+  gitTrail(path: string): Promise<GitTrail>;
   quit(): Promise<void>;
   onSessions(cb: (s: Snapshot) => void): Unlisten;
   onPtyOutput(cb: (c: PtyChunk) => void): Unlisten;
@@ -389,6 +391,7 @@ async function tauriBackend(): Promise<Backend> {
     shellsFocus: (ids) => soft<void>("shells_focus", { ids }).catch(() => {}),
     pickFolder: () => invoke("pick_folder"),
     environment: () => invoke("environment"),
+    gitTrail: (path) => invoke("git_trail", { path }),
     quit: () => invoke("quit_app"),
     usageRefresh: (provider) => invoke("usage_refresh", { provider }),
     usageResetCodex: (idempotencyKey) => invoke("usage_reset_codex", { idempotencyKey }),

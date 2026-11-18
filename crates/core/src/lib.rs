@@ -4,6 +4,7 @@
 pub mod artifact;
 pub mod cache;
 pub mod chat;
+pub mod gitlog;
 pub mod claude;
 pub mod codex;
 pub mod hub;

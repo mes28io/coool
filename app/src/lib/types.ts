@@ -342,4 +342,34 @@ export interface Environment {
   codex: string | null;
 }
 
+// ---------- git history (crates/core/src/gitlog.rs) ----------
+
+export interface TrailCommit {
+  sha: string;
+  short: string;
+  subject: string;
+  author: string;
+  /** Author time, epoch ms. */
+  time_ms: number;
+  /** Changed paths (repository-relative), at most 6. */
+  files: string[];
+  files_more: number;
+  /** Branches and tags at this commit. */
+  refs: string[];
+  /** Merge commits: the side branch it brought in. */
+  merge: { from: string | null; commits: TrailCommit[]; more: number } | null;
+}
+
+export interface GitTrail {
+  root: string;
+  /** null when HEAD is detached. */
+  branch: string | null;
+  head: string | null;
+  /** Newest first, along the first-parent line. */
+  commits: TrailCommit[];
+  more: boolean;
+  /** Paths with uncommitted changes, when known. */
+  uncommitted: number | null;
+}
+
 export const sessionKey = (s: Pick<Session, "provider" | "id">) => `${s.provider}:${s.id}`;

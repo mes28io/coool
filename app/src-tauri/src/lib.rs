@@ -758,6 +758,13 @@ struct Environment {
     codex: Option<String>,
 }
 
+/// A project's recent git history for Mission control's commit trail (read-only; see
+/// `coool_core::gitlog`). Errors (not a repository, git missing) come back as text.
+#[tauri::command(async)]
+fn git_trail(path: String) -> Result<coool_core::gitlog::GitTrail, String> {
+    coool_core::gitlog::trail(std::path::Path::new(&path)).map_err(|e| format!("{e:#}"))
+}
+
 /// Which CLIs are installed, so the new-session sheet can say so up front.
 #[tauri::command(async)]
 fn environment() -> Environment {
@@ -1062,6 +1069,7 @@ pub fn run() {
             usage_reset_codex,
             pick_folder,
             environment,
+            git_trail,
             running_count,
             quit_app,
             selftest::selftest_config,
