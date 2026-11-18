@@ -168,6 +168,7 @@ export function PanelBeam({
   radius,
   mark = "data-sim-driving",
   bezel = 0,
+  rim = false,
   children,
   style,
   className,
@@ -178,6 +179,8 @@ export function PanelBeam({
   mark?: string;
   /** A dark rim this many px wide around the child (a device's bezel): the beam's line rides on it, so it reads over any screen. */
   bezel?: number;
+  /** No bezel of its own, but a gutter the child leaves clear (the Browser's page): it goes dark while the beam runs, for the same reason. */
+  rim?: boolean;
   children: ReactNode;
   style?: CSSProperties;
   className?: string;
@@ -191,7 +194,12 @@ export function PanelBeam({
       theme="dark"
       borderRadius={radius}
       className={className}
-      style={{ ...BEAM_LAYERS, ...style, ...(bezel ? { padding: bezel, background: "#0b0b0c", boxSizing: "border-box" } : null) }}
+      style={{
+        ...BEAM_LAYERS,
+        ...style,
+        ...(bezel ? { padding: bezel, background: "#0b0b0c", boxSizing: "border-box" } : null),
+        ...(rim ? { background: on && !reduce ? "#0b0b0c" : "transparent", transition: "background-color 200ms" } : null),
+      }}
       {...(on ? { [mark]: true } : {})}
     >
       {/* The child gets its own stacking context below the beam's layers: without it, anything inside with a z-index

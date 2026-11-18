@@ -100,7 +100,7 @@ export function BrowserPanel({
         ) : (
           // The page area: the beam runs around it, in a thin gutter the native view leaves clear (HTML can't draw
           // over the native view).
-          <PanelBeam on={driving} slot={presence.slot} radius={7} mark="data-browser-driving" style={{ position: "absolute", top: 0, bottom: 0, left: 2, right: 0 }}>
+          <PanelBeam on={driving} slot={presence.slot} radius={7} rim mark="data-browser-driving" style={{ position: "absolute", top: 0, bottom: 0, left: 2, right: 0 }}>
             {native ? (
               <NativeHost key={key} tabKey={key} page={page} active={active} loading={!st || st.loading} />
             ) : (
