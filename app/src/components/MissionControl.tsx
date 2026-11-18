@@ -94,7 +94,6 @@ export function MissionControl() {
   const firstPaint = useRef(true);
   const stagger = firstPaint.current;
   if (ready) firstPaint.current = false;
-  const counts = { busy: live.filter((s) => att.get(s)!.status === "busy" && !att.get(s)!.needs).length, idle: live.filter((s) => att.get(s)!.status === "idle" && !att.get(s)!.needs).length, needs: needing.length };
 
   return (
     <AnimateScope enabled={false}>
@@ -109,7 +108,6 @@ export function MissionControl() {
             <EmptyState />
           ) : (
             <div onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
-              <Summary counts={counts} loading={loading} />
               {needing.length > 0 && (
                 <section className="mb-6" data-mc-needs={needing.length}>
                   <div className="mb-2.5 flex items-center gap-2 px-1">
@@ -146,23 +144,6 @@ export function MissionControl() {
         </div>
       </div>
     </AnimateScope>
-  );
-}
-
-function Summary({ counts, loading }: { counts: { busy: number; idle: number; needs: number }; loading: boolean }) {
-  const setSheet = useStore((s) => s.setSheet);
-  const parts = [counts.busy && `${counts.busy} working`, counts.idle && `${counts.idle} waiting`, counts.needs && `${counts.needs} need${counts.needs === 1 ? "s" : ""} you`].filter(Boolean);
-  return (
-    <div className="mb-6 flex h-[34px] items-center gap-3 px-1">
-      <span className="min-w-0 truncate text-base text-dim tnum">
-        {parts.join(" · ")}
-        {loading && " · reading more sessions…"}
-      </span>
-      <Button variant="outline" className="ml-auto h-[30px] px-2.5 text-small" onClick={() => setSheet({ kind: "new" })}>
-        <IPlus size={13} strokeWidth={2} />
-        New session
-      </Button>
-    </div>
   );
 }
 
