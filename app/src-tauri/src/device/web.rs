@@ -10,8 +10,11 @@
 //! - How: one script ([`LIB`], `web_agent.js`) evaluated with WKWebView's `evaluateJavaScript:…inContentWorld:` in a
 //!   content world of coool's own, so page scripts can't see or patch it. It reads the DOM (never cookies or web
 //!   storage) and masks password / card / one-time-code fields. There is no tool that runs the agent's own script.
-//! - Settling: after an action, the tool waits until the webview isn't loading and the DOM has been quiet for
-//!   [`QUIET_MS`] (a MutationObserver in that world), then returns the page (or "unchanged").
+//! - Settling ([`Mode`]): after an action, the tool waits until the webview isn't loading and the DOM has been quiet
+//!   for [`QUIET_MS`] (a MutationObserver in that world), not counting the spots that change on their own (a ticking
+//!   timer, a JS animation, a carousel); after a navigation, also until a page its scripts are still drawing has had
+//!   a longer quiet and shows something in the middle of the viewport (bounded). Then it returns the page (or
+//!   "unchanged"), saying when the page keeps changing on its own.
 
 use super::Devices;
 use super::gate::{self, Act, Dev, Risk};
@@ -27,6 +30,66 @@ use tauri::{Emitter, Manager, State};
 pub const LIB: &str = include_str!("web_agent.js");
 /// No DOM change for this long (and not loading) = settled.
 const QUIET_MS: f64 = 90.0;
+/// How long after a navigation was asked for the page it leaves may still answer (then whatever answers counts).
+const NAV_START_MS: u64 = 3000;
+
+/// Which settle rule (web_agent.js `idle`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Mode {
+    /// No DOM change at all for [`QUIET_MS`] (`browser_wait_for` idle: a page that never stops changing times out).
+    Quiet,
+    /// After an action: quiet apart from the spots that change on their own.
+    Act,
+    /// After a navigation: loaded, fonts in, a longer quiet while its scripts still draw it, something in the middle.
+    Nav,
+}
+
+impl Mode {
+    fn cmd(self) -> Value {
+        match self {
+            Mode::Quiet => json!({ "op": "idle" }),
+            Mode::Act => json!({ "op": "idle", "mode": "act" }),
+            Mode::Nav => json!({ "op": "idle", "mode": "nav" }),
+        }
+    }
+}
+
+/// How a settle ended.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Settled {
+    pub ms: u128,
+    /// It settled (else it gave up at its cap).
+    pub done: bool,
+    /// Spots that changed on their own in the last second (not waited for).
+    pub bg: u64,
+    /// Settled, though the middle of the viewport still showed nothing.
+    pub blank: bool,
+    /// Why it hadn't settled yet when it last looked: loading, fonts, changing, blank, click.
+    pub why: Option<String>,
+}
+
+impl Settled {
+    /// What the result should say beyond the time (empty when nothing).
+    pub fn note(&self) -> String {
+        let mut s = String::new();
+        if !self.done {
+            s += match self.why.as_deref() {
+                Some("blank") => " · the middle of the page still showed nothing when the wait ended: it may still be drawing (take a screenshot, or browser_wait_for its text)",
+                Some("fonts") => " · its fonts were still loading when the wait ended",
+                Some("loading") => " · it was still loading when the wait ended",
+                Some("changing") => " · it was still changing when the wait ended",
+                _ => "",
+            };
+        } else if self.blank {
+            s += " · the middle of the page shows nothing (it may still be drawing: take a screenshot, or browser_wait_for its text)";
+        }
+        if self.bg > 0 {
+            let spots = if self.bg == 1 { "1 spot".to_string() } else { format!("{} spots", self.bg) };
+            let _ = write!(s, " · the page keeps changing on its own ({spots}: a timer, an animation or a carousel); not waited for");
+        }
+        s
+    }
+}
 
 const NO_PAGE: &str = "This chat's browser panel has no page open. Call browser_navigate with a URL: it opens in the panel beside the chat.";
 const EMPTY_TAB: &str = "The browser panel's tab is empty (a new tab). Call browser_navigate with a URL.";
@@ -123,6 +186,10 @@ pub struct Snap {
     pub focus: Option<u64>,
     pub text: String,
     pub cut: Option<bool>,
+    /// Characters of text left out past `text_max`.
+    pub more_text: Option<usize>,
+    /// The text is the whole page's (`all`), not only what is in view.
+    pub whole: Option<bool>,
 }
 
 #[derive(Deserialize, Default, Debug, Clone)]
@@ -230,10 +297,18 @@ pub fn render(s: &Snap, loading: bool) -> String {
         o.push_str("(no interactive elements in view)\n");
     }
     if !s.text.is_empty() {
-        let _ = write!(o, "\nText in view:\n{}{}\n", s.text, if s.cut == Some(true) { " …" } else { "" });
+        let whole = s.whole == Some(true);
+        let _ = write!(o, "\n{}:\n{}\n", if whole { "Text on the page" } else { "Text in view" }, s.text);
+        if s.cut == Some(true) {
+            let more = s.more_text.map(|n| format!(", about {n} more characters left out")).unwrap_or_default();
+            let _ = writeln!(o, "[text truncated at {} characters{more}; observe with a higher text_max (up to {TEXT_MAX_CAP}) for more]", s.text.chars().count());
+        }
     }
     o
 }
+
+/// The most text an observe returns, whatever `text_max` asks for.
+const TEXT_MAX_CAP: u64 = 50_000;
 
 // ---------- URLs ----------
 
@@ -376,6 +451,12 @@ impl<'a> Browser<'a> {
         Ok(self.eval(&p.label, &json!({ "op": "presence" }))?["shown"].clone())
     }
 
+    /// How many click outlines and press rings are drawn on the active page now, for the self-test.
+    pub fn presence_marks(&self) -> Result<u64, String> {
+        let p = self.current().ok_or(NO_PAGE)?;
+        Ok(self.eval(&p.label, &json!({ "op": "presence" }))?["marks"].as_u64().unwrap_or(0))
+    }
+
     /// The actor's run is over (`None`: every actor of the chat): its cursor on the active page rests, then fades.
     pub fn presence_end(&self, actor: Option<String>) {
         let Some(p) = self.current() else { return };
@@ -489,33 +570,62 @@ impl<'a> Browser<'a> {
         self.state(label).is_some_and(|s| s.loading)
     }
 
-    /// Waits until the page isn't loading and its DOM has been quiet for [`QUIET_MS`] (at most `max_ms`): elapsed ms.
-    fn settle(&self, label: &str, max_ms: u64) -> u128 {
+    /// Waits until the page isn't loading and has settled by `mode`'s rule (at most `max_ms`).
+    fn settle_by(&self, label: &str, max_ms: u64, mode: Mode) -> Settled {
+        self.settle_from(label, max_ms, mode, None)
+    }
+
+    /// [`Self::settle_by`]; `old`: the document and URL a navigation leaves. Until the page answers from another
+    /// document or URL (at most [`NAV_START_MS`]), the old page answering "settled" doesn't count: the navigation
+    /// hasn't replaced it yet. (A same-document navigation changes only the URL.)
+    fn settle_from(&self, label: &str, max_ms: u64, mode: Mode, old: Option<&(String, String)>) -> Settled {
         let t0 = Instant::now();
         let max = Duration::from_millis(max_ms);
+        let mut out = Settled::default();
         std::thread::sleep(Duration::from_millis(15));
         loop {
             if !self.live(label) {
+                out.done = true;
                 break;
             }
             if !self.loading(label)
-                && let Ok(i) = self.eval(label, &json!({ "op": "idle" }))
-                && i["ready"].as_str() != Some("loading")
-                && i["pending"].is_null()
-                && i["quiet"].as_f64().unwrap_or(0.0) >= QUIET_MS
+                && let Ok(i) = self.eval(label, &mode.cmd())
             {
-                break;
+                out.bg = i["bg"].as_u64().unwrap_or(0);
+                out.blank = i["blank"] == true;
+                out.why = i["why"].as_str().map(String::from);
+                let stale = old.is_some_and(|(d, u)| i["doc"].as_str() == Some(d) && i["url"].as_str() == Some(u)) && t0.elapsed() < Duration::from_millis(NAV_START_MS);
+                if stale {
+                    out.why = Some("loading".into());
+                }
+                let ok = !stale
+                    && match i["settled"].as_bool() {
+                        Some(s) => s,
+                        None => i["ready"].as_str() != Some("loading") && i["pending"].is_null() && i["quiet"].as_f64().unwrap_or(0.0) >= QUIET_MS,
+                    };
+                if ok {
+                    out.done = true;
+                    break;
+                }
+            } else {
+                out.why = Some("loading".into());
             }
             if t0.elapsed() >= max {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        t0.elapsed().as_millis()
+        out.ms = t0.elapsed().as_millis();
+        out
+    }
+
+    /// Strict (`browser_wait_for` idle): no DOM change at all for [`QUIET_MS`]: elapsed ms (`max_ms` = it never was).
+    fn settle(&self, label: &str, max_ms: u64) -> u128 {
+        self.settle_by(label, max_ms, Mode::Quiet).ms
     }
 
     /// After a navigation was asked for: until it has started (loading, or another URL / document), then settled.
-    fn settle_navigation(&self, label: &str, before_url: &str, before_doc: Option<String>, max_ms: u64) -> u128 {
+    fn settle_navigation(&self, label: &str, before_url: &str, before_doc: Option<(String, String)>, max_ms: u64) -> Settled {
         let t0 = Instant::now();
         let started = Instant::now() + Duration::from_millis(1500);
         while Instant::now() < started {
@@ -523,29 +633,34 @@ impl<'a> Browser<'a> {
             if s.as_ref().is_some_and(|s| s.loading || s.url != before_url) {
                 break;
             }
-            if let (Some(d), Ok(i)) = (&before_doc, self.eval(label, &json!({ "op": "idle" })))
+            if let (Some((d, _)), Ok(i)) = (&before_doc, self.eval(label, &json!({ "op": "idle" })))
                 && i["doc"].as_str() != Some(d)
             {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        self.settle(label, max_ms);
-        t0.elapsed().as_millis()
+        let mut s = self.settle_from(label, max_ms, Mode::Nav, before_doc.as_ref());
+        s.ms = t0.elapsed().as_millis();
+        s
     }
 
-    fn doc(&self, label: &str) -> Option<String> {
-        self.eval(label, &json!({ "op": "idle" })).ok().and_then(|i| i["doc"].as_str().map(String::from))
+    /// The page's document token and URL as the page sees them (before a navigation, to tell when it replaced them).
+    fn doc(&self, label: &str) -> Option<(String, String)> {
+        let i = self.eval(label, &json!({ "op": "idle" })).ok()?;
+        Some((i["doc"].as_str()?.to_string(), i["url"].as_str().unwrap_or("").to_string()))
     }
 
     /// The page as text, remembered; `full: false` says "unchanged" when it is what the agent saw last.
     fn observe(&self, page: &Page, full: bool, a: &Value) -> Result<String, String> {
         let t = Instant::now();
+        // `all`: the whole page, elements and text (a long page's text runs to tens of thousands of characters).
+        let all = a["all"].as_bool() == Some(true);
         let cmd = json!({
             "op": "observe",
-            "max": a["max"].as_u64().unwrap_or(250).clamp(10, 2000),
-            "text_max": a["text_max"].as_u64().unwrap_or(2500).min(50_000),
-            "all": a["all"].as_bool() == Some(true),
+            "max": a["max"].as_u64().unwrap_or(if all { 600 } else { 250 }).clamp(10, 2000),
+            "text_max": a["text_max"].as_u64().unwrap_or(if all { 20_000 } else { 2500 }).min(TEXT_MAX_CAP),
+            "all": all,
             "presence": a.get("presence"),
             "say": a.get("say"),
         });
@@ -583,7 +698,7 @@ impl<'a> Browser<'a> {
     /// Waits for the active page to settle (ms); follows a tab the action opened.
     pub(super) fn pilot_settle(&self, max_ms: u64) -> u64 {
         match self.current() {
-            Some(p) => self.settle(&p.label, max_ms) as u64,
+            Some(p) => self.settle_by(&p.label, max_ms, Mode::Act).ms as u64,
             None => 0,
         }
     }
@@ -594,7 +709,7 @@ impl<'a> Browser<'a> {
         let before = self.state(&p.label).map(|s| s.url).unwrap_or_default();
         let doc = self.doc(&p.label);
         self.history(&p, "back")?;
-        Ok(self.settle_navigation(&p.label, &before, doc, 10_000) as u64)
+        Ok(self.settle_navigation(&p.label, &before, doc, 10_000).ms as u64)
     }
 
     pub(super) fn pilot_navigate(&self, raw: &str) -> Result<(), String> {
@@ -672,11 +787,11 @@ impl<'a> Browser<'a> {
         if a["observe"].as_bool() == Some(false) {
             return Ok(format!("{note} · {act_ms} ms"));
         }
-        let settle = self.settle(&page.label, 1500);
+        let settle = self.settle_by(&page.label, 1500, Mode::Act);
         // A click can open another tab, or the page can close itself: follow the panel's active tab.
         let page = self.current().unwrap_or(Page { label: page.label.clone(), tab: page.tab });
         let screen = self.observe(&page, false, a)?;
-        Ok(format!("{note}\n(act {act_ms} ms · settle {settle} ms)\n\n{screen}"))
+        Ok(format!("{note}\n(act {act_ms} ms · settle {} ms{})\n\n{screen}", settle.ms, settle.note()))
     }
 
     pub fn call(&self, name: &str, a: &Value) -> Result<Vec<Value>, String> {
@@ -708,11 +823,11 @@ impl<'a> Browser<'a> {
                 let raw = a["url"].as_str().ok_or("browser_navigate needs `url`")?;
                 let origin = self.app()?.state::<Arc<crate::Core>>().browsers.app_origin();
                 let url = agent_url(raw, origin.as_deref())?;
-                let p = self.navigate(url)?;
+                let (p, settled) = self.navigate(url)?;
                 let note = format!("opened {raw}");
                 let ms = t0.elapsed().as_millis();
                 let screen = self.observe(&p, true, a)?;
-                format!("{note}\n(load {ms} ms)\n\n{screen}")
+                format!("{note}\n(load {ms} ms{})\n\n{screen}", settled.note())
             }
             "browser_back" | "browser_forward" | "browser_reload" => {
                 let p = self.page()?;
@@ -721,10 +836,10 @@ impl<'a> Browser<'a> {
                 let before = self.state(&p.label).map(|s| s.url).unwrap_or_default();
                 let doc = self.doc(&p.label);
                 self.history(&p, action)?;
-                let ms = self.settle_navigation(&p.label, &before, doc, 10_000);
+                let settled = self.settle_navigation(&p.label, &before, doc, 10_000);
                 let p = self.current().unwrap_or(p);
                 let screen = self.observe(&p, true, a)?;
-                format!("{}\n(load {ms} ms)\n\n{screen}", match action { "back" => "went back", "forward" => "went forward", _ => "reloaded" })
+                format!("{what}\n(load {} ms{})\n\n{screen}", settled.ms, settled.note(), what = match action { "back" => "went back", "forward" => "went forward", _ => "reloaded" })
             }
             "browser_tabs" => self.tabs(a)?,
             "browser_wait_for" => {
@@ -858,7 +973,7 @@ impl<'a> Browser<'a> {
     }
 
     /// Loads `url` in the active tab (the panel opens one, and shows itself, when there is none).
-    fn navigate(&self, url: tauri::Url) -> Result<Page, String> {
+    fn navigate(&self, url: tauri::Url) -> Result<(Page, Settled), String> {
         self.app()?;
         self.gate_nav(&url)?;
         // The active tab's page (its webview brought back if needed); none, or a new tab: the panel opens one.
@@ -867,8 +982,8 @@ impl<'a> Browser<'a> {
             let before = self.state(&p.label).map(|s| s.url).unwrap_or_default();
             let doc = self.doc(&p.label);
             self.app()?.get_webview(&p.label).ok_or("the page closed")?.navigate(url).map_err(|e| e.to_string())?;
-            self.settle_navigation(&p.label, &before, doc, 10_000);
-            return Ok(p);
+            let s = self.settle_navigation(&p.label, &before, doc, 10_000);
+            return Ok((p, s));
         }
         self.activity(None, "navigate", Some(url.to_string()));
         self.emit("browser-agent", json!({ "chat": self.chat, "op": "open", "url": url.as_str() }));
@@ -876,8 +991,8 @@ impl<'a> Browser<'a> {
             return Err("the browser panel didn't open the page in time; try again".into());
         }
         let p = self.current().ok_or(NO_PAGE)?;
-        self.settle_navigation(&p.label, "", None, 10_000);
-        Ok(p)
+        let s = self.settle_navigation(&p.label, "", None, 10_000);
+        Ok((p, s))
     }
 
     fn tabs(&self, a: &Value) -> Result<String, String> {
@@ -1070,7 +1185,7 @@ impl<'a> Browser<'a> {
             return Err(format!("unknown batch step {s}"));
         };
         let note = self.act(&p, name, &args)?;
-        self.settle(&p.label, 1200);
+        self.settle_by(&p.label, 1200, Mode::Act);
         Ok(note)
     }
 
@@ -1111,7 +1226,7 @@ impl<'a> Browser<'a> {
             }
             if present.is_some_and(|h| h != gone) {
                 // The page may still be painting what it just showed.
-                self.settle(&page.label, 600);
+                self.settle_by(&page.label, 600, Mode::Act);
                 return Ok((true, t0.elapsed().as_millis(), page));
             }
             if t0.elapsed() >= timeout {
@@ -1148,10 +1263,10 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "browser_observe",
-            "description": "Read the page in this chat's Browser panel: URL, title, loading state, then one line per interactive element in view (`[id] role \"name\" value=… (x,y wxh)` in CSS px of the viewport) and the visible text. Password fields never show their value. all=true includes elements scrolled out of view; screenshot=true adds a JPEG.",
+            "description": "Read the page in this chat's Browser panel: URL, title, loading state, then one line per interactive element in view (`[id] role \"name\" value=… (x,y wxh)` in CSS px of the viewport) and the visible text. Password fields never show their value. all=true reads the whole page: elements scrolled out of view and all of its text (up to text_max; a cut says so); screenshot=true adds a JPEG.",
             "inputSchema": { "type": "object", "properties": {
-                "all": { "type": "boolean" }, "max": { "type": "number", "description": "Most elements to list (default 250)." },
-                "text_max": { "type": "number", "description": "Most characters of visible text (default 2500; 0 for none)." },
+                "all": { "type": "boolean" }, "max": { "type": "number", "description": "Most elements to list (default 250; 600 with all)." },
+                "text_max": { "type": "number", "description": "Most characters of text (default 2500 in view; 20000 with all; at most 50000; 0 for none)." },
                 "screenshot": { "type": "boolean" }, "max_size": { "type": "number", "description": "Screenshot width in pixels (default 800)." }
             } }
         }),
@@ -1257,7 +1372,7 @@ mod tests {
         assert!(r.contains("[5] button \"Menu\" expanded disabled (0,0 10x10) offscreen\n"), "{r}");
         assert!(r.contains("[6] combobox \"Color\" value=\"Blue\" options: Red | Blue (+3)"), "{r}");
         assert!(r.contains("… 2 more not listed"), "{r}");
-        assert!(r.ends_with("Text in view:\nExample Domain\nThis domain is for examples. …\n"), "{r}");
+        assert!(r.ends_with("Text in view:\nExample Domain\nThis domain is for examples.\n[text truncated at 43 characters; observe with a higher text_max (up to 50000) for more]\n"), "{r}");
         assert!(render(&s, true).contains("\nloading · "));
     }
 
@@ -1455,7 +1570,9 @@ var window = globalThis; var innerWidth = 600, innerHeight = 800, scrollX = 0, s
 var location = { href: 'https://example.com/form', origin: 'https://example.com' };
 function URL(h, base) { var abs = /^https?:/.test(h) ? h : 'https://example.com' + h; this.origin = abs.replace(/^(https?:\/\/[^/]+).*$/, '$1'); var rest = abs.slice(this.origin.length); this.pathname = rest.replace(/[?#].*$/, '') || '/'; this.search = ''; this.hash = ''; }
 function getComputedStyle(el) { var c = el.css || {}; return { display: c.display || 'block', visibility: c.visibility || 'visible', opacity: c.opacity || '1', cursor: c.cursor || 'auto', overflowX: 'visible', overflowY: 'visible' }; }
-function MutationObserver() {} MutationObserver.prototype.observe = function () {};
+function MutationObserver(cb) { globalThis.__mo = cb; } MutationObserver.prototype.observe = function () {};
+var T = 1000000; Date.now = function () { return T; };
+function mut(type, target) { __mo([{ type: type, target: target, addedNodes: [], removedNodes: [] }]); }
 var setTimeout = function () {};
 var document = { title: 'Sign in', readyState: 'complete', activeElement: null, createElement: function (t) { return new El(t); },
   getElementById: function (id) { var f = null; (function walk(n) { if (n.attrs && n.attrs.id === id) f = n; (n.childNodes || []).forEach(walk); })(document.body); return f; } };
@@ -1626,5 +1743,137 @@ email.labels = [document.body.childNodes[2]];
         js.run("document.body.childNodes[6].isConnected = false");
         let e = js.cmd(json!({ "op": "click", "id": 5 }));
         assert!(e["error"].as_str().unwrap().contains("no element [5]"), "{e}");
+    }
+
+    /// The page's timers by hand (as in the presence test): `runTimers(ms)` runs what is due within `ms`.
+    const TIMERS: &str = "var timers = []; setTimeout = function (f, ms) { timers.push([f, ms || 0]); return timers.length; }; clearTimeout = function () {};
+         var mkEl = document.createElement; document.createElement = function (t) { var e = mkEl(t); e.style.setProperty = function (k, v) { this[k] = v; }; e.attachShadow = function () { return this; }; return e; };
+         document.createElementNS = function (ns, t) { return document.createElement(t); };
+         function runTimers(upTo) { var due = timers.filter(function (t) { return t[1] <= upTo; }); timers = timers.filter(function (t) { return t[1] > upTo; }); due.forEach(function (t) { t[0](); }); return due.length; }
+         function drain() { for (var i = 0; i < 40 && runTimers(1000); i++) {} }";
+
+    #[test]
+    fn an_action_on_a_live_page_doesnt_wait_for_what_changes_on_its_own() {
+        let js = Js::new();
+        js.ok(json!({ "op": "observe" }));
+        // A clock ticking every 100 ms for 2 s, and a progress bar restyled every frame (16 ms).
+        js.run(
+            "var clock = h('span', {}, '0.0'); var bar = h('div'); document.body.appendChild(clock); document.body.appendChild(bar);
+             function tick(ms) { for (var t = 0; t < ms; t += 16) { T += 16; mut('attributes', bar); if (T % 100 < 16) mut('characterData', clock.childNodes[0]); } }
+             tick(2000);",
+        );
+        // The strict rule never sees quiet.
+        assert!(js.ok(json!({ "op": "idle" }))["quiet"].as_f64().unwrap() < 90.0);
+        js.ok(json!({ "op": "click", "id": 5 }));
+        // Not before QUIET ms after the action began, even when nothing else changed (its effect may be on a timer).
+        js.run("tick(48)");
+        assert_eq!(js.ok(json!({ "op": "idle", "mode": "act" }))["settled"], false);
+        js.run("tick(52)");
+        let i = js.ok(json!({ "op": "idle", "mode": "act" }));
+        assert_eq!(i["settled"], true, "{i}");
+        assert_eq!(i["bg"], 2, "the clock and the bar keep changing on their own: {i}");
+        // What the action changed counts: a list item 20 ms later, not settled until 90 ms after it.
+        js.run("var list = h('ul'); document.body.appendChild(list); tick(20); mut('childList', list); tick(40);");
+        let i = js.ok(json!({ "op": "idle", "mode": "act" }));
+        assert_eq!((i["settled"].as_bool(), i["why"].as_str()), (Some(false), Some("changing")), "{i}");
+        js.run("tick(80)");
+        assert_eq!(js.ok(json!({ "op": "idle", "mode": "act" }))["settled"], true);
+        // An animation the action starts (a 300 ms slide, restyled every frame) is waited for.
+        js.ok(json!({ "op": "click", "id": 5 }));
+        js.run("var panel = h('div'); document.body.appendChild(panel); for (var k = 0; k < 18; k++) { tick(16); mut('attributes', panel); }");
+        assert_eq!(js.ok(json!({ "op": "idle", "mode": "act" }))["settled"], false);
+        js.run("tick(100)");
+        assert_eq!(js.ok(json!({ "op": "idle", "mode": "act" }))["settled"], true);
+    }
+
+    #[test]
+    fn a_navigation_waits_for_content_in_the_middle_of_a_client_rendered_page() {
+        let js = Js::new();
+        // Loaded at T; the middle of the viewport shows an empty frame until `filled`.
+        js.run(
+            "globalThis.performance = { timeOrigin: T - 500, getEntriesByType: function () { return [{ loadEventEnd: 500 }]; } };
+             var frame = h('div', { rect: [0, 100, 600, 600] }); var filled = null; document.body.appendChild(frame);
+             document.elementFromPoint = function () { return filled || frame; };",
+        );
+        let nav = json!({ "op": "idle", "mode": "nav" });
+        // A static page: nothing changed after load and something shows in the middle: settled at once.
+        js.run("filled = document.body.childNodes[1]; T += 20;");
+        assert_eq!(js.ok(nav.clone())["settled"], true);
+        // A short static page whose middle is empty is done too (nothing changed after load, it has text).
+        js.run("filled = null; T += 20;");
+        let i = js.ok(nav.clone());
+        assert_eq!((i["settled"].as_bool(), i["blank"].as_bool()), (Some(true), None), "{i}");
+        // With scripts, an empty middle gets 300 ms after load for them to start drawing.
+        js.run("document.scripts = [{}];");
+        assert_eq!(js.ok(nav.clone())["why"], "blank");
+        js.run("T += 300;");
+        assert_eq!(js.ok(nav.clone())["settled"], true);
+        js.run("T -= 300; document.scripts = [];");
+        // A client-rendered page (its scripts changed it after load): blank in the middle, so not settled, for up to
+        // 2 s after load.
+        js.run("mut('childList', document.body); T += 400;");
+        let i = js.ok(nav.clone());
+        assert_eq!((i["settled"].as_bool(), i["why"].as_str()), (Some(false), Some("blank")), "{i}");
+        // Its scripts draw it: 300 ms of quiet is needed in the first 3 s after load (90 ms isn't enough).
+        js.run("var card = h('div', { rect: [100, 300, 300, 100] }, 'Route content ready'); frame.appendChild(card); mut('childList', frame); filled = card; T += 150;");
+        let i = js.ok(nav.clone());
+        assert_eq!((i["settled"].as_bool(), i["why"].as_str()), (Some(false), Some("changing")), "{i}");
+        js.run("T += 160;");
+        assert_eq!(js.ok(nav.clone())["settled"], true);
+        // A page that stays blank is waited for at most 2 s after load, then settles saying so.
+        js.run("filled = null; T += 2000;");
+        let i = js.ok(nav.clone());
+        assert_eq!((i["settled"].as_bool(), i["blank"].as_bool()), (Some(true), Some(true)), "{i}");
+        // A page that ticks all the time still settles after a navigation (the tick isn't its content arriving).
+        js.run("filled = card; var clock = h('span', {}, '0'); document.body.appendChild(clock); for (var k = 0; k < 30; k++) { T += 100; mut('characterData', clock.childNodes[0]); } T += 10;");
+        let i = js.ok(nav);
+        assert_eq!((i["settled"].as_bool(), i["bg"].as_u64()), (Some(true), Some(1)), "{i}");
+    }
+
+    #[test]
+    fn observe_all_reads_the_whole_pages_text_with_a_clear_cut() {
+        let js = Js::new();
+        js.run("for (var k = 1; k <= 40; k++) document.body.appendChild(h('p', { rect: [10, 900 + k * 50, 500, 40] }, 'Far section ' + k + ' text.'));");
+        let view = js.ok(json!({ "op": "observe" }));
+        assert!(!view["text"].as_str().unwrap().contains("Far section"), "{view}");
+        assert!(view["whole"].is_null());
+        let all = js.ok(json!({ "op": "observe", "all": true, "text_max": 20000 }));
+        let text = all["text"].as_str().unwrap();
+        assert!(text.contains("Far section 1 text.") && text.contains("Far section 40 text."), "{text}");
+        assert_eq!(all["whole"], true);
+        assert!(all["cut"].is_null());
+        // Bounded: cut at text_max, saying how much was left out.
+        let cut = js.ok(json!({ "op": "observe", "all": true, "text_max": 200 }));
+        assert_eq!(cut["text"].as_str().unwrap().chars().count(), 200);
+        assert_eq!(cut["cut"], true);
+        assert!(cut["more_text"].as_u64().unwrap() > 500, "{cut}");
+        let snap: super::Snap = serde_json::from_value(cut).unwrap();
+        let r = super::render(&snap, false);
+        assert!(r.contains("Text on the page:") && r.contains("[text truncated at 200 characters, about"), "{r}");
+    }
+
+    #[test]
+    fn the_click_outline_goes_with_its_element() {
+        let js = Js::new();
+        js.run(TIMERS);
+        let marks = || js.ok(json!({ "op": "presence" }))["marks"].as_u64().unwrap();
+        // An element that removes itself on click: by the time the cursor arrives it is gone, so nothing is drawn.
+        js.run(
+            "var self = h('button', { id: 'self', rect: [300, 600, 100, 30] }, 'Remove me'); document.body.appendChild(self);
+             self.addEventListener('click', function () { self.isConnected = false; document.body.removeChild(self); });",
+        );
+        let id = js.ok(json!({ "op": "observe" }))["els"].as_array().unwrap().iter().find(|e| e["name"] == "Remove me").unwrap()["id"].clone();
+        let p = json!({ "actor": "0:c1", "name": "Claude", "tint": "#0a84ff", "defer": 50, "from": [10, 10], "mark": null });
+        js.ok(json!({ "op": "click", "id": id, "presence": p }));
+        js.run("drain()");
+        assert_eq!(js.run("String(self.isConnected)"), "false");
+        assert_eq!(marks(), 0);
+        // One that stays: outlined (and the press ring) until the outline's own end.
+        js.ok(json!({ "op": "click", "id": 5, "presence": p }));
+        js.run("runTimers(60); runTimers(400);");
+        assert!(marks() >= 1, "outline drawn");
+        // It leaves while outlined (a banner that fades and removes itself): the outline goes with it.
+        js.run("document.body.childNodes[6].isConnected = false; runTimers(50);");
+        assert_eq!(marks(), 0);
     }
 }

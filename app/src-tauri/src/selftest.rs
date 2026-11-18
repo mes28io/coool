@@ -16,6 +16,8 @@
 //!   the sidebar only lists sessions under it (so no private titles show).
 //! - `COOOL_SELFTEST_SHOTS`: where `real-<name>.png` screenshots go (default: the folder).
 //! - `COOOL_SELFTEST_LOG`: the pass/fail log (default: `<folder>/selftest.log`).
+//! - `COOOL_SELFTEST_SITE`: the base URL of a local test site for the `browser-settle` scenario (e.g.
+//!   `http://127.0.0.1:8741/`, serving the pages that scenario names).
 //! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
 //!   frosted glass shows what is behind it (the `glass` scenario).
 //!
@@ -38,6 +40,7 @@ pub struct SelfTest {
     canonical: PathBuf,
     shots: PathBuf,
     log: PathBuf,
+    site: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -45,6 +48,7 @@ pub struct Config {
     scenario: String,
     dir: String,
     shots: String,
+    site: Option<String>,
 }
 
 impl SelfTest {
@@ -62,7 +66,8 @@ impl SelfTest {
         let log = std::env::var_os("COOOL_SELFTEST_LOG").map(PathBuf::from).unwrap_or_else(|| dir.join("selftest.log"));
         let _ = std::fs::create_dir_all(&shots);
         let _ = std::fs::write(&log, "");
-        Some(Self { scenario: scenario.trim().to_string(), dir, canonical, shots, log })
+        let site = std::env::var("COOOL_SELFTEST_SITE").ok().filter(|s| !s.trim().is_empty());
+        Some(Self { scenario: scenario.trim().to_string(), dir, canonical, shots, log, site })
     }
 
     /// The throwaway folder.
@@ -124,7 +129,7 @@ fn active(core: &Core) -> Result<&SelfTest, String> {
 #[tauri::command]
 pub fn selftest_config(core: State<'_, Arc<Core>>) -> Option<Config> {
     let t = core.selftest.as_ref()?;
-    Some(Config { scenario: t.scenario.clone(), dir: t.dir.to_string_lossy().into_owned(), shots: t.shots.to_string_lossy().into_owned() })
+    Some(Config { scenario: t.scenario.clone(), dir: t.dir.to_string_lossy().into_owned(), shots: t.shots.to_string_lossy().into_owned(), site: t.site.clone() })
 }
 
 #[tauri::command(async)]
@@ -553,6 +558,37 @@ pub fn selftest_browser_eval(app: AppHandle, core: State<'_, Arc<Core>>, id: Str
 pub fn selftest_page_cursors(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize) -> Result<serde_json::Value, String> {
     active(&core)?;
     crate::device::web::Browser::new(&devices, chat).presence_shown()
+}
+
+/// How many click outlines and press rings the page script draws on `chat`'s active Browser page now.
+#[tauri::command(async)]
+pub fn selftest_page_marks(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize) -> Result<u64, String> {
+    active(&core)?;
+    crate::device::web::Browser::new(&devices, chat).presence_marks()
+}
+
+/// One `browser_*` tool called directly on `chat`'s Browser panel, as the chat's agent would through the MCP server
+/// (the gate included), without a model: the `browser-settle` scenario. `save`: each image of the result is written to
+/// `<shots>/<save>.jpg` (n > 0: `<save>-<n>.jpg`) and replaced by its path.
+#[tauri::command(async)]
+pub fn selftest_browser_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize, name: String, args: serde_json::Value, save: Option<String>) -> Result<Vec<serde_json::Value>, String> {
+    use base64::Engine;
+    let t = active(&core)?;
+    let mut out = crate::device::web::Browser::new(&devices, chat).call(&name, &args)?;
+    let mut n = 0;
+    for v in out.iter_mut() {
+        if v["type"] != "image" {
+            continue;
+        }
+        let Some(stem) = save.as_deref() else { continue };
+        let stem: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+        let path = t.shots.join(if n == 0 { format!("{stem}.jpg") } else { format!("{stem}-{n}.jpg") });
+        n += 1;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(v["data"].as_str().unwrap_or("")).map_err(|e| e.to_string())?;
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        *v = serde_json::json!({ "type": "image", "path": path.to_string_lossy() });
+    }
+    Ok(out)
 }
 
 /// The same path as Cmd+Q (asks first when anything runs).

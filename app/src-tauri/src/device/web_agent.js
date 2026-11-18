@@ -46,18 +46,160 @@
       week: 1, time: 1, color: 1, range: 1,
     };
 
-    // Watch the page for the "settled" signal (after an action: no DOM change for a while).
+    // Watch the page for the "settled" signal (after an action: no DOM change for a while). Each change is also noted
+    // against the node it happened on (`spot`), so change the page makes on its own (a ticking timer, a JS animation,
+    // a carousel: the same few spots again and again) can be told apart from change an action caused (see `idle`).
     try {
       new MutationObserver(function (recs) {
+        var t = now();
+        var any = false;
         for (var i = 0; i < recs.length; i++) {
-          if (!isOurs(recs[i])) {
-            lastMutation = now();
-            mutations++;
-            return;
-          }
+          if (isOurs(recs[i])) continue;
+          any = true;
+          if (i < 400) note(spot(recs[i]), t);
+        }
+        if (any) {
+          lastMutation = t;
+          mutations++;
         }
       }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     } catch (e) {}
+
+    // ---- settle rules (APP_SPEC "Agent browser tools", Settling) ----
+    // `samples`: [time, spot], at most one per spot per SAMPLE_MS, kept for WINDOW_MS. A spot sampled at least
+    // CHURN_N times over at least CHURN_SPAN ms of the last CHURN_MS is "changing on its own"; so is one sampled twice
+    // or more, over at least BG_SPAN ms, in the BG_MS before an action began. Neither counts against "quiet" after
+    // the action; everything else does.
+    var SAMPLE_MS = 50, WINDOW_MS = 3000, CHURN_MS = 1200, CHURN_N = 6, CHURN_SPAN = 500, BG_MS = 2000, BG_SPAN = 400;
+    // After a navigation: the quiet a page that is still being drawn by its scripts needs, for how long after load
+    // that applies, and for how long after load a page whose middle shows nothing yet is waited for.
+    var QUIET = 90, NAV_QUIET = 300, NAV_QUIET_FOR = 3000, NAV_BLANK_FOR = 2000, NAV_GRACE = 300;
+    var lastT = typeof WeakMap === "function" ? new WeakMap() : null; // spot -> its last change
+    var lastS = typeof WeakMap === "function" ? new WeakMap() : null; // spot -> its last sample
+    var samples = [];
+    var poke = 0; // a change of our own making that still counts (a deferred click landing)
+    var actAt = 0;
+    var actBg = null; // the spots changing on their own when the last action began
+    var completeAt = 0;
+    function spot(r) {
+      var t = r.target;
+      return (r.type === "characterData" && t && t.parentNode) || t;
+    }
+    function note(k, t) {
+      if (!k || !lastT) return;
+      lastT.set(k, t);
+      var s = lastS.get(k);
+      if (s != null && t - s < SAMPLE_MS) return;
+      lastS.set(k, t);
+      samples.push([t, k]);
+      if (samples.length > 6000) samples.splice(0, 2000);
+    }
+    function trim(t) {
+      var i = 0;
+      while (i < samples.length && t - samples[i][0] > WINDOW_MS) i++;
+      if (i) samples.splice(0, i);
+    }
+    /** The spots sampled at least `n` times over at least `span` ms within [from, to). */
+    function churn(from, to, n, span) {
+      var seen = new Map();
+      var out = new Set();
+      for (var i = 0; i < samples.length; i++) {
+        var s = samples[i];
+        if (s[0] < from || s[0] >= to) continue;
+        var c = seen.get(s[1]);
+        if (!c) seen.set(s[1], (c = { n: 0, first: s[0] }));
+        c.n++;
+        if (c.n >= n && s[0] - c.first >= span) out.add(s[1]);
+      }
+      return out;
+    }
+    /** An action begins: what is changing on its own right now isn't waited for afterwards. */
+    function begin() {
+      actAt = now();
+      trim(actAt);
+      actBg = churn(actAt - BG_MS, actAt, 2, BG_SPAN);
+    }
+    /** When the document finished loading (epoch ms), or 0 while it hasn't. */
+    function loadedAt() {
+      try {
+        var pf = g.performance;
+        var nav = pf && pf.getEntriesByType && pf.getEntriesByType("navigation")[0];
+        if (nav && nav.loadEventEnd > 0 && pf.timeOrigin) return pf.timeOrigin + nav.loadEventEnd;
+      } catch (e) {}
+      if (document.readyState !== "complete") return 0;
+      if (!completeAt) completeAt = now();
+      return completeAt;
+    }
+    var MEDIA = { img: 1, svg: 1, canvas: 1, video: 1, iframe: 1, input: 1, textarea: 1, select: 1, button: 1, picture: 1, embed: 1, object: 1 };
+    /** Whether the element at a point draws something: its own text, an image or other media, a control. */
+    function draws(el) {
+      if (!el || el === document.body || el === document.documentElement) return false;
+      if (MEDIA[tagOf(el)] || (el.closest && el.closest("svg"))) return true;
+      var kids = el.childNodes || [];
+      for (var i = 0; i < kids.length; i++) if (kids[i].nodeType === 3 && norm(kids[i].nodeValue)) return true;
+      var st = getComputedStyle(el);
+      return !!st && !!st.backgroundImage && st.backgroundImage !== "none";
+    }
+    /** The middle of the viewport shows something (5×5 points over its central half). No way to tell: true. */
+    function middleDrawn() {
+      var vw = window.innerWidth || 0;
+      var vh = window.innerHeight || 0;
+      if (!document.elementFromPoint || !vw || !vh) return true;
+      for (var i = 0; i < 5; i++) for (var j = 0; j < 5; j++) if (draws(document.elementFromPoint(vw * (0.25 + 0.125 * i), vh * (0.25 + 0.125 * j)))) return true;
+      return false;
+    }
+    /**
+     * The settle signal. `quiet`: ms since any change. With `mode`, also `settled` and, when not, `why`:
+     * - `act` (after an action): no change for QUIET ms other than at spots changing on their own (`bg` says how many
+     *   changed in the last second), and no click still on its way.
+     * - `nav` (after a navigation): loaded, fonts in, and quiet as above for QUIET ms, or NAV_QUIET while the page's
+     *   scripts are still drawing it (it changed after load, within NAV_QUIET_FOR of it); and, within NAV_BLANK_FOR of
+     *   load, something drawn in the middle of the viewport (a client-rendered page shows its frame before its content;
+     *   a page with scripts gets NAV_GRACE ms after load for them to start).
+     */
+    function idle(c) {
+      var t = now();
+      trim(t);
+      var bg = churn(t - CHURN_MS, t + 1, CHURN_N, CHURN_SPAN);
+      if (c.mode === "act" && actBg) actBg.forEach(function (k) { bg.add(k); });
+      // After an action, its own change counts from when it began: always QUIET ms after it, as on a quiet page.
+      var own = c.mode === "act" ? Math.max(poke, actAt) : poke;
+      var moving = new Set();
+      for (var i = 0; i < samples.length; i++) {
+        var k = samples[i][1];
+        var lt = lastT.get(k) || samples[i][0];
+        if (bg.has(k)) {
+          if (t - lt < 1000) moving.add(k);
+        } else if (lt > own) own = lt;
+      }
+      var res = { quiet: pending ? 0 : t - lastMutation, own: pending ? 0 : t - own, bg: moving.size || undefined, pending: pending || undefined, mutations: mutations, ready: document.readyState, doc: DOC, url: String(location.href) };
+      if (!c.mode) return res;
+      var why = null;
+      if (pending) why = "click";
+      else if (document.readyState === "loading") why = "loading";
+      if (!why && c.mode === "nav") {
+        var la = loadedAt();
+        var since = t - la;
+        if (!la) why = "loading";
+        else if (document.fonts && document.fonts.status === "loading") why = "fonts";
+        else if (res.own < (since < NAV_QUIET_FOR && own > la ? NAV_QUIET : QUIET)) why = "changing";
+        else {
+          // An empty middle is waited for on a page its scripts are drawing (it changed after load, or has no text
+          // yet), and for NAV_GRACE ms after load on any page with scripts (they may not have started yet); a page
+          // without scripts, or a short one that leaves the middle empty, is done.
+          var drawing = own > la || !norm(document.body && document.body.textContent);
+          var scripted = !!(document.scripts && document.scripts.length);
+          if ((drawing || (since < NAV_GRACE && scripted)) && !middleDrawn()) {
+            if (!drawing || since < NAV_BLANK_FOR) why = "blank";
+            else res.blank = true;
+          }
+        }
+        res.since_load = la ? since : undefined;
+      } else if (!why && res.own < QUIET) why = "changing";
+      res.settled = !why;
+      if (why) res.why = why;
+      return res;
+    }
 
     function isOurs(r) {
       if (ours.has(r.target)) return true;
@@ -288,19 +430,25 @@
       var text = [];
       var textLen = 0;
       var textCut = false;
+      var textMore = 0; // characters left out past `text_max`
       var lastBlock = null;
       var visited = 0;
       var active = document.activeElement;
       var rects = typeof WeakMap === "function" ? new WeakMap() : null;
 
       function addText(s, block) {
-        if (textCut) return;
         s = norm(s);
         if (!s) return;
+        if (textCut) {
+          textMore += s.length + 1;
+          return;
+        }
         var sep = text.length ? (block !== lastBlock ? "\n" : " ") : "";
         lastBlock = block;
         if (textLen + sep.length + s.length > textMax) {
-          s = s.slice(0, Math.max(0, textMax - textLen - sep.length));
+          var room = Math.max(0, textMax - textLen - sep.length);
+          textMore += s.length - room;
+          s = s.slice(0, room);
           textCut = true;
           if (!s) return;
         }
@@ -313,7 +461,7 @@
         for (var i = 0; i < kids.length; i++) {
           var n = kids[i];
           if (n.nodeType === 3) {
-            if (!ctx.inI && !ctx.hidden && ctx.inView && textMax > 0) addText(n.nodeValue, ctx.block);
+            if (!ctx.inI && !ctx.hidden && (ctx.inView || all) && textMax > 0) addText(n.nodeValue, ctx.block);
             continue;
           }
           if (n.nodeType !== 1 || ours.has(n)) continue;
@@ -363,6 +511,8 @@
         focus: focus || undefined,
         text: text.join(""),
         cut: textCut || undefined,
+        more_text: textCut ? textMore : undefined,
+        whole: all || undefined,
       };
     }
 
@@ -558,21 +708,51 @@
       else placeLabel(a, x, y);
       return ms;
     }
-    /** On arrival: a press ring at the tip (`ring`) and a soft outline around the target. */
-    function land(p, r, delay, ring) {
+    /** The element an outline is drawn around has left the page or no longer shows. */
+    function gone(el) {
+      if (!el) return false;
+      if (el.isConnected === false) return true;
+      try {
+        if (el.checkVisibility) return !el.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+      } catch (e) {}
+      return !visibleEl(el);
+    }
+    /**
+     * On arrival: a press ring at the tip (`ring`) and a soft outline around the target `el`. Neither is drawn for an
+     * element that is already gone (a click that removed it lands before the cursor arrives), and both go as soon as
+     * it goes (a banner that fades out and removes itself): an outline never marks an empty spot.
+     */
+    function land(p, r, delay, ring, el) {
       var H = host();
       if (!H) return;
       var tint = p.tint || "#0a84ff";
+      var drawn = [];
+      var watch = function (left) {
+        if (!drawn.some(function (d) { return d.parentNode; })) return;
+        if (gone(el)) {
+          drawn.forEach(function (d) {
+            if (d.parentNode) d.parentNode.removeChild(d);
+          });
+          return;
+        }
+        if (left > 0) setTimeout(function () { watch(left - 50); }, 50);
+      };
       var at = function () {
+        if (gone(el)) return;
         if (r) {
           var o = mk("div", { position: "absolute", left: r.left - 3 + "px", top: r.top - 3 + "px", width: r.width + 6 + "px", height: r.height + 6 + "px", "box-sizing": "border-box", "border-radius": "7px", border: "1.5px solid " + tint, background: "color-mix(in srgb, " + tint + " 9%, transparent)", opacity: "0" }, H.root);
+          o.__cooolMark = true;
+          drawn.push(o);
           remove(o, animate(o, [{ opacity: 0 }, { opacity: 1, offset: 0.2 }, { opacity: 1, offset: 0.6 }, { opacity: 0 }], { duration: p.reduce ? 900 : 760, easing: "ease-out" }), 800);
         }
         var a = H.actors[p.actor];
         if (ring && a && !p.reduce) {
           var c = mk("div", { position: "absolute", left: a.x - 11 + "px", top: a.y - 11 + "px", width: "22px", height: "22px", "border-radius": "50%", border: "2px solid " + tint, "box-sizing": "border-box", opacity: "0" }, H.root);
+          c.__cooolMark = true;
+          drawn.push(c);
           remove(c, animate(c, [{ transform: "scale(.35)", opacity: 0.95 }, { transform: "scale(1.5)", opacity: 0 }], { duration: 440, easing: "cubic-bezier(.2,.7,.3,1)" }), 480);
         }
+        if (el) setTimeout(function () { watch(900); }, 50);
       };
       if (delay > 0) setTimeout(at, delay);
       else at();
@@ -685,10 +865,10 @@
       }
     }
     /** Marks the target: on arrival with presence, else the plain outline (no agent cursor). */
-    function mark(c, r, arrive, ring) {
+    function mark(c, r, arrive, ring, el) {
       if (!c.presence) return flash(r);
       try {
-        land(c.presence, r, arrive, ring);
+        land(c.presence, r, arrive, ring, el);
       } catch (e) {}
     }
     function presenceOp(c) {
@@ -704,7 +884,11 @@
         var a = P.actors[key];
         if (a.g.parentNode && !a.fade) shown.push({ actor: key, who: a.name.textContent, say: a.say.textContent });
       }
-      return { at: cursorAt(c) || null, shown: shown };
+      // `marks`: the click outlines and press rings drawn now (the self-test checks none outlives its element).
+      var marks = 0;
+      var kids = (P && P.host.parentNode && P.root.childNodes) || [];
+      for (var i = 0; i < kids.length; i++) if (kids[i].__cooolMark) marks++;
+      return { at: cursorAt(c) || null, shown: shown, marks: marks };
     }
     function cursorAt(c) {
       var a = c.presence && P && P.actors[c.presence.actor];
@@ -749,7 +933,7 @@
       }
       if (el.disabled === true) note = "it is disabled";
       var arrive = aim(c, r, "Clicking " + (plain(el) || short(el)));
-      mark(c, r, arrive, true);
+      mark(c, r, arrive, true, el);
       var base = { bubbles: true, cancelable: true, composed: true, clientX: p[0], clientY: p[1], screenX: p[0], screenY: p[1], button: 0, view: window };
       var pd = Object.assign({ pointerId: 1, pointerType: "mouse", isPrimary: true, buttons: 1 }, base);
       var fire = function () {
@@ -773,7 +957,7 @@
           try {
             fire();
           } catch (e) {}
-          lastMutation = now();
+          lastMutation = poke = now();
         }, defer);
       } else fire();
       return { what: short(el), x: Math.round(p[0]), y: Math.round(p[1]), note: note, at: cursorAt(c) };
@@ -819,7 +1003,7 @@
       var text = String(c.text == null ? "" : c.text);
       var r = reveal(el);
       var arrive = aim(c, r, typingPhrase(plain(el)));
-      mark(c, r, arrive, false);
+      mark(c, r, arrive, false, el);
       focusEl(el);
       var tag = tagOf(el);
       var hidden = secret(el);
@@ -947,7 +1131,7 @@
       var say = "Pressing " + (k[0] === " " ? "Space" : k[0]);
       if (c.id != null) {
         var pr = reveal(el);
-        mark(c, pr, aim(c, pr, say), true);
+        mark(c, pr, aim(c, pr, say), true, el);
         focusEl(el);
       } else if (c.presence) safeGlide(c.presence, null, null, say);
       if (k[0] === "Enter" && !m.shift && !m.control && !m.option && !m.command) return { key: "Enter", on: short(el), did: enter(el) };
@@ -1035,7 +1219,7 @@
         });
       }
       var sr = reveal(el);
-      mark(c, sr, aim(c, sr, "Choosing " + cut(norm(picked[0] ? picked[0].text : ""), 28)), false);
+      mark(c, sr, aim(c, sr, "Choosing " + cut(norm(picked[0] ? picked[0].text : ""), 28)), false, el);
       focusEl(el);
       for (var i = 0; i < o.length; i++) if (el.multiple) o[i].selected = picked.indexOf(o[i]) >= 0;
       if (!el.multiple) setValue(el, picked[0].value);
@@ -1205,21 +1389,26 @@
             if (c.presence && c.say) safeGlide(c.presence, null, null, c.say);
             return observe(c);
           case "click":
+            begin();
             return click(c);
           case "type":
+            begin();
             return type(c);
           case "select":
+            begin();
             return select(c);
           case "press":
+            begin();
             return press(c);
           case "scroll":
+            begin();
             return scroll(c);
           case "find":
             return find(c);
           case "inspect":
             return inspect(c);
           case "idle":
-            return { quiet: pending ? 0 : now() - lastMutation, pending: pending || undefined, mutations: mutations, ready: document.readyState, doc: DOC, url: String(location.href) };
+            return idle(c);
           case "presence":
             return presenceOp(c);
           case "shot":
@@ -1228,7 +1417,7 @@
             return {};
           case "flash": {
             var el = get(c);
-            mark(c, reveal(el), 0, false);
+            mark(c, reveal(el), 0, false, el);
             return { what: short(el) };
           }
           default:

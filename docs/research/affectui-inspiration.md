@@ -454,4 +454,6 @@ Both answer "is this sub-agent healthy and what is it doing for whom".
 9. **Chat timing: parallel tool calls share a start time.** See Build next #3: a step row's duration includes waiting for the calls before it in the same message.
 10. **Minor: the harness's window-shot naming lagged.** The agent issued navigate and screenshot in one message about 117 times, so window shots taken "at the screenshot" sometimes showed the next page. This only affects the research harness. The agent-side images are exact.
 
+**Follow-up (later fix).** Items 3, 5, 6 and 7 are fixed (APP_SPEC "Agent browser tools", Settling; self-tests `browser-settle` and `browser-real`: four affectui.com pages, each first screenshot after navigate showed the page's preview). Item 8 was Reduce motion: the static ring is `PanelBeam`'s reduced-motion fallback, drawn only when motion is reduced, and the run's screenshots also lack the press ring, which the page leaves out only when reduced; with motion not reduced the travelling beam showed and no static ring.
+
 The fixes made here are items 1, 2 and 4: `app/src-tauri/src/device/web_agent.js` and `app/src-tauri/src/device/web.rs`, with 2 new unit tests, all 52 device tests passing.
