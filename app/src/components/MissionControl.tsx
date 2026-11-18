@@ -154,8 +154,7 @@ function Summary({ counts, loading }: { counts: { busy: number; idle: number; ne
   const parts = [counts.busy && `${counts.busy} working`, counts.idle && `${counts.idle} waiting`, counts.needs && `${counts.needs} need${counts.needs === 1 ? "s" : ""} you`].filter(Boolean);
   return (
     <div className="mb-6 flex h-[34px] items-center gap-3 px-1">
-      <span className="text-display font-semibold tracking-[-0.02em] text-fg">Mission control</span>
-      <span className="hidden min-w-0 truncate text-small text-faint tnum @[560px]:inline">
+      <span className="min-w-0 truncate text-base text-dim tnum">
         {parts.join(" · ")}
         {loading && " · reading more sessions…"}
       </span>
