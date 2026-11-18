@@ -29,6 +29,13 @@ interface Native {
 }
 
 const natives = new Map<string, Native>();
+/** Told when a tab's webview appears or goes (lib/browserAgent.ts reports them to the backend). */
+const nativeListeners = new Set<() => void>();
+const nativesChanged = () => nativeListeners.forEach((f) => f());
+export function onNatives(cb: () => void): () => void {
+  nativeListeners.add(cb);
+  return () => nativeListeners.delete(cb);
+}
 /** Tabs whose webview the backend closed (too many alive): where they were, for the open `n` they had. */
 const resume = new Map<string, { url: string; n: number }>();
 
@@ -52,6 +59,7 @@ export const useNativeRects = create<{ byKey: Record<string, BrowserBounds> }>((
 const keyOf = (id: string) => [...natives].find(([, n]) => n.id === id)?.[0];
 const forget = (key: string) => {
   natives.delete(key);
+  nativesChanged();
   useBrowserState.setState((s) => {
     const byKey = { ...s.byKey };
     delete byKey[key];
@@ -144,6 +152,7 @@ export function place(key: string, page: Extract<BrowserPage, { kind: "web" }>, 
         fresh.id = id;
         fresh.busy = false;
         if (fresh.dead) return void api().browserClose(id);
+        nativesChanged();
         navigate(fresh);
         flush(key, fresh);
       })
@@ -178,6 +187,18 @@ export function closeNative(key: string) {
 }
 
 export const nativeId = (key: string) => natives.get(key)?.id ?? null;
+
+/**
+ * Makes sure tab `key` has a webview, for the chat's agent: when no panel shows it (another pane tab is in front,
+ * the pane is too narrow), it opens hidden at the panel's usual size, so the agent's tools work without the page on
+ * screen. A panel that shows it later just moves it into place.
+ */
+export function ensureNative(key: string, page: Extract<BrowserPage, { kind: "web" }>) {
+  if (natives.has(key)) return;
+  const w = useStore.getState().browserWidth;
+  const h = Math.max(400, window.innerHeight - 120);
+  place(key, page, { x: Math.max(0, window.innerWidth - w), y: 100, w, h, visible: false });
+}
 
 // ---------- overlays ----------
 

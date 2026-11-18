@@ -5,6 +5,7 @@
 //!   accessibility tree, all through the simulator's own frameworks (no idb, nothing downloaded).
 //! - [`observe`]: the tree as compact text with short stable element ids, for agents.
 //! - [`mcp`]: the `coool-device` MCP server every chat coool starts gets, bound to that chat's panel device.
+//! - [`web`]: that server's `browser_*` tools, which drive the chat's Browser panel.
 //!
 //! The panel and the chat's agent share one device: what the agent does is what the person sees (`sim-activity`
 //! events draw it on the panel).
@@ -13,6 +14,7 @@ pub mod helper;
 pub mod mcp;
 pub mod observe;
 pub mod simctl;
+pub mod web;
 
 use helper::{Helper, Screen};
 use serde::Serialize;
@@ -47,6 +49,8 @@ pub struct Devices {
     /// Serializes boots / device creation (two chats asking at once get one device, booted once).
     boot_lock: Mutex<()>,
     pub mcp: mcp::Mcp,
+    /// Each chat's browser panel tabs, for the `browser_*` tools.
+    pub web: web::Web,
 }
 
 /// What the panel draws for an action (ripple, swipe trail, "Agent is driving").

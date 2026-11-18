@@ -5,6 +5,7 @@
 
 import { createElement, useEffect, useRef, useState } from "react";
 import { api } from "../lib/backend";
+import { useAgentBrowsing } from "../lib/browserAgent";
 import { addressUrl, closeNative, hide, nativeId, onOverlays, overlayCovers, place, previewArtifact, tabKey, useBrowserState, type RecentPage } from "../lib/browser";
 import { useStore, type BrowserPage, type BrowserTab, type BrowserTabs } from "../store";
 import { artifactIcon } from "./ArtifactCard";
@@ -20,7 +21,22 @@ const host = (url: string) => {
 };
 const tabTitle = (t: BrowserTab) => (t.page.kind === "start" ? "New tab" : t.title?.trim() || host(t.url || t.page.url));
 
-export function BrowserPanel({ panelKey, state, active, onClose, recent }: { panelKey: string; state: BrowserTabs; active: boolean; onClose: () => void; recent: RecentPage[] }) {
+export function BrowserPanel({
+  panelKey,
+  chat,
+  state,
+  active,
+  onClose,
+  recent,
+}: {
+  panelKey: string;
+  /** The chat whose agent may drive this browser (its `browser_*` tools). */
+  chat?: number | null;
+  state: BrowserTabs;
+  active: boolean;
+  onClose: () => void;
+  recent: RecentPage[];
+}) {
   const tab = state.tabs.find((t) => t.id === state.active) ?? state.tabs[0];
   const key = tabKey(panelKey, tab.id);
   const st = useBrowserState((s) => s.byKey[key]);
@@ -42,9 +58,12 @@ export function BrowserPanel({ panelKey, state, active, onClose, recent }: { pan
     else if (!native) window.open(url, "_blank", "noopener");
   };
   const open = (u: string) => navigateBrowserTab(panelKey, tab.id, u);
+  // "Agent is browsing": for 3 s after the chat's agent acted on a tab of this panel.
+  const agent = useAgentBrowsing(chat);
+  const agentTab = agent ? (agent.tab ?? state.active) : null;
   return (
     <div className="flex h-full flex-col" data-browser-panel={page.kind}>
-      <TabStrip panelKey={panelKey} state={state} />
+      <TabStrip panelKey={panelKey} state={state} agentTab={agentTab} />
       <div className="flex h-[40px] shrink-0 items-center gap-0.5 border-b border-hairline pl-2 pr-1.5">
         <IconButton title="Back" disabled={!native || !st?.can_back} onClick={() => go("back")}>
           <IBack size={15} />
@@ -58,6 +77,16 @@ export function BrowserPanel({ panelKey, state, active, onClose, recent }: { pan
         <div className="ml-1.5 min-w-0 flex-1" title={url}>
           {!start && <Address key={key} url={url} shown={url.replace(/^https?:\/\//, "")} onGo={open} />}
         </div>
+        {agentTab !== null && (
+          <span
+            className="ml-1 flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-[color-mix(in_oklab,var(--status-running)_14%,transparent)] px-2 text-micro font-medium text-fg"
+            title="The chat's agent is using this browser"
+            data-browser-agent-pill
+          >
+            <span className="breathe size-[6px] rounded-full bg-[var(--status-running)]" aria-hidden />
+            Agent
+          </span>
+        )}
         <IconButton title="Open in default browser" disabled={start} onClick={openExternal}>
           <IExternal size={15} />
         </IconButton>
@@ -79,7 +108,7 @@ export function BrowserPanel({ panelKey, state, active, onClose, recent }: { pan
 }
 
 /** The panel's tabs: click to switch, x (on hover, or a middle click) to close, + for a new tab. */
-function TabStrip({ panelKey, state }: { panelKey: string; state: BrowserTabs }) {
+function TabStrip({ panelKey, state, agentTab }: { panelKey: string; state: BrowserTabs; agentTab: number | null }) {
   const selectBrowserTab = useStore((s) => s.selectBrowserTab);
   const closeBrowserTab = useStore((s) => s.closeBrowserTab);
   const openBrowser = useStore((s) => s.openBrowser);
@@ -117,7 +146,14 @@ function TabStrip({ panelKey, state }: { panelKey: string; state: BrowserTabs })
               data-browser-tab={t.id}
               data-browser-tab-active={on || undefined}
             >
-              <IGlobe size={12} className="shrink-0 opacity-70" />
+              {agentTab === t.id ? (
+                // The agent's working in this tab.
+                <span className="flex size-[12px] shrink-0 items-center justify-center" data-browser-agent-tab aria-label="Agent is using this tab">
+                  <span className="breathe size-[7px] rounded-full bg-[var(--status-running)]" />
+                </span>
+              ) : (
+                <IGlobe size={12} className="shrink-0 opacity-70" />
+              )}
               <span className="min-w-0 flex-1 truncate text-micro font-medium" {...(on ? { "data-browser-title": true } : {})}>
                 {title}
               </span>

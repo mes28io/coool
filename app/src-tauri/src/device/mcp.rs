@@ -6,6 +6,8 @@
 //! token (random per chat, per launch) as its first line, then pipes MCP's newline-delimited JSON-RPC both ways. An
 //! unknown token is refused. The app answers the protocol itself, so tools act on the same helper the panel shows.
 //!
+//! The `browser_*` tools ([`super::web`]) drive the chat's Browser panel through the same server and socket.
+//!
 //! Tools are shaped for few round trips: every action returns the screen after it settles (or "unchanged"), `batch`
 //! runs many actions in one call, `wait_for` replaces sleep loops, and element ids from `observe` are stable.
 
@@ -216,7 +218,7 @@ impl Session {
                 "protocolVersion": m["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
-                "instructions": INSTRUCTIONS,
+                "instructions": format!("{INSTRUCTIONS}\n\n{}", super::web::INSTRUCTIONS),
             })),
             "ping" => ok(json!({})),
             "tools/list" => ok(json!({ "tools": tools() })),
@@ -234,6 +236,10 @@ impl Session {
     }
 
     fn call(&mut self, name: &str, a: &Value) -> Result<Vec<Value>, String> {
+        // The chat's Browser panel: no simulator involved.
+        if name.starts_with("browser_") {
+            return super::web::Browser::new(&self.devices, self.chat).call(name, a);
+        }
         let t0 = Instant::now();
         // Listing or choosing a device doesn't need one booted first.
         let choosing = name == "device" && matches!(a["action"].as_str(), Some("list" | "select"));
@@ -648,6 +654,14 @@ fn describe_wait(a: &Value) -> String {
 }
 
 fn tools() -> Value {
+    let mut all = device_tools();
+    if let Value::Array(v) = &mut all {
+        v.extend(super::web::tools());
+    }
+    all
+}
+
+fn device_tools() -> Value {
     let target = json!({ "type": "string", "description": "Element id from observe, e.g. \"k3f\"" });
     let observe = json!({ "type": "boolean", "description": "Return the screen after the action settles (default true)." });
     json!([
@@ -738,7 +752,18 @@ mod tests {
         assert!(s.handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
         let list = s.handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
         let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(names, ["observe", "tap", "type", "swipe", "press", "batch", "wait_for", "app", "device"]);
+        assert_eq!(&names[..9], ["observe", "tap", "type", "swipe", "press", "batch", "wait_for", "app", "device"]);
+        assert_eq!(
+            &names[9..],
+            [
+                "browser_observe", "browser_click", "browser_type", "browser_select", "browser_scroll", "browser_press", "browser_navigate",
+                "browser_back", "browser_forward", "browser_reload", "browser_tabs", "browser_wait_for", "browser_screenshot", "browser_batch"
+            ]
+        );
+        assert!(init["result"]["instructions"].as_str().unwrap().contains("browser_navigate"));
+        // Without the app, a browser tool answers with an error result (and never boots a simulator).
+        let r = s.handle(&json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"browser_observe","arguments":{}}})).unwrap();
+        assert_eq!(r["result"]["isError"], true);
         let unknown = s.handle(&json!({"jsonrpc":"2.0","id":3,"method":"nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
     }

@@ -1336,6 +1336,14 @@ export function mockBackend(): Backend {
     onBrowserNewTab() {
       return () => {};
     },
+    // No agent browser tools without the app.
+    async browserAgentSync() {},
+    onBrowserAgent() {
+      return () => {};
+    },
+    onBrowserActivity() {
+      return () => {};
+    },
     // The iPhone panel (lib/mockSim.ts).
     ...mockSim(),
 
