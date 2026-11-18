@@ -73,6 +73,9 @@ pub struct PlanUsage {
     pub credits: Option<UsageCredits>,
     /// Codex only: free full resets (weekly + 5 h) the account can redeem.
     pub reset_credits: Option<u64>,
+    /// Codex only: when the soonest-expiring available reset credit expires
+    /// (ms since epoch); `None` when unknown or none expire.
+    pub reset_credits_expire_ms: Option<u64>,
     /// When the newest number here was obtained (ms since epoch).
     pub fetched_ms: u64,
     /// Where the newest number came from: `claude.get_usage`, `claude.cache`,
@@ -729,6 +732,7 @@ struct CodexProbe {
     note: Option<String>,
     buckets: HashMap<String, Value>,
     reset_credits: Option<u64>,
+    reset_credits_expire_ms: Option<u64>,
 }
 
 fn parse_codex_app_server(account: &Value, limits: &Value, as_of: u64) -> Result<CodexProbe> {
@@ -751,8 +755,16 @@ fn parse_codex_app_server(account: &Value, limits: &Value, as_of: u64) -> Result
     if buckets.is_empty() && note.is_none() && limits.is_null() {
         bail!("codex: no rate limits in the answer");
     }
-    let reset_credits = limits["rateLimitResetCredits"]["availableCount"].as_u64();
-    Ok(CodexProbe { as_of, plan, note, buckets, reset_credits })
+    let rc = &limits["rateLimitResetCredits"];
+    let reset_credits = rc["availableCount"].as_u64();
+    let reset_credits_expire_ms = rc["credits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["status"].as_str().is_none_or(|s| s == "available"))
+        .filter_map(|c| epoch_ms(&c["expiresAt"]))
+        .min();
+    Ok(CodexProbe { as_of, plan, note, buckets, reset_credits, reset_credits_expire_ms })
 }
 
 fn probe_codex() -> Result<CodexProbe> {
@@ -783,6 +795,70 @@ fn probe_codex() -> Result<CodexProbe> {
         bail!("codex: {e}");
     }
     parse_codex_app_server(&account.unwrap_or(Value::Null), &limits.unwrap_or(Value::Null), now_ms())
+}
+
+// ---------------------------------------------------------------- Codex reset credits
+
+/// What `account/rateLimitResetCredit/consume` answered (the app-server's
+/// `ConsumeAccountRateLimitResetCreditOutcome`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetOutcome {
+    /// A credit was spent and the eligible windows (5-hour and weekly) reset.
+    Reset,
+    /// No current window is eligible for a reset; nothing was spent.
+    NothingToReset,
+    /// The account has no reset credits.
+    NoCredit,
+    /// This idempotency key already completed a reset (a retry of a reset that went through).
+    AlreadyRedeemed,
+}
+
+/// The JSON-RPC lines for one redeem: the handshake, then the consume
+/// request (id 2). `idempotency_key` identifies one attempt; a retry of the
+/// same attempt must reuse it so the backend never spends two credits.
+fn codex_consume_lines(idempotency_key: &str) -> Vec<Value> {
+    let info = json!({"name": "coool", "title": "coool", "version": env!("CARGO_PKG_VERSION")});
+    vec![
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": info, "capabilities": null}}),
+        json!({"jsonrpc": "2.0", "method": "initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "account/rateLimitResetCredit/consume", "params": {"idempotencyKey": idempotency_key}}),
+    ]
+}
+
+/// The app-server's answer to the consume request (id 2): its `result` or its `error`.
+fn parse_consume_answer(v: &Value) -> Result<ResetOutcome> {
+    if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
+        bail!("codex: {}", e["message"].as_str().unwrap_or("reset failed"));
+    }
+    match v["result"]["outcome"].as_str() {
+        Some("reset") => Ok(ResetOutcome::Reset),
+        Some("nothingToReset") => Ok(ResetOutcome::NothingToReset),
+        Some("noCredit") => Ok(ResetOutcome::NoCredit),
+        Some("alreadyRedeemed") => Ok(ResetOutcome::AlreadyRedeemed),
+        Some(o) => bail!("codex: unexpected reset outcome `{o}`"),
+        None => bail!("codex: no reset outcome in the answer"),
+    }
+}
+
+/// Spend one Codex rate-limit reset credit through a short-lived `codex
+/// app-server` (`account/rateLimitResetCredit/consume`; the backend picks the
+/// credit). This spends something of the person's: call it only on their
+/// explicit confirmation.
+fn redeem_codex_reset(idempotency_key: &str) -> Result<ResetOutcome> {
+    let key = idempotency_key.trim();
+    if key.is_empty() || key.len() > 128 {
+        bail!("invalid idempotency key");
+    }
+    let mut answer = None;
+    run_probe("codex", &["app-server"], &[], &codex_consume_lines(key), |v| {
+        if v["id"].as_u64() == Some(2) {
+            answer = Some(v.clone());
+            return true;
+        }
+        false
+    })?;
+    parse_consume_answer(&answer.context("no answer")?)
 }
 
 // ---------------------------------------------------------------- monitor
@@ -831,6 +907,7 @@ struct CodexState {
     plan: Option<(u64, String)>,
     note: Option<String>,
     reset_credits: Option<u64>,
+    reset_credits_expire_ms: Option<u64>,
     rollout_files: Vec<(PathBuf, SystemTime, u64)>,
 }
 
@@ -933,6 +1010,18 @@ impl UsageMonitor {
         }
     }
 
+    /// Spend one Codex rate-limit reset credit (see [`redeem_codex_reset`]),
+    /// then probe Codex again so the new numbers and remaining count show.
+    /// Blocks for the app-server round trip; call it off the UI thread, and
+    /// only on the person's explicit confirmation.
+    pub fn redeem_codex_reset(&self, idempotency_key: &str) -> Result<ResetOutcome> {
+        let r = redeem_codex_reset(idempotency_key);
+        if self.probes {
+            self.refresh_now(Provider::Codex);
+        }
+        r
+    }
+
     pub fn get(&self, provider: Provider) -> Option<PlanUsage> {
         let g = self.inner.lock().unwrap();
         Self::compose(&g, provider, now_ms())
@@ -1025,6 +1114,7 @@ impl UsageMonitor {
                         }
                         c.note = r.note;
                         c.reset_credits = r.reset_credits;
+                        c.reset_credits_expire_ms = r.reset_credits_expire_ms;
                         for (id, v) in r.buckets {
                             c.buckets.insert(id, (r.as_of, "codex.app_server", v));
                         }
@@ -1047,6 +1137,7 @@ impl UsageMonitor {
                         windows: f.windows.clone(),
                         credits: f.credits.clone(),
                         reset_credits: None,
+                        reset_credits_expire_ms: None,
                         fetched_ms: f.as_of,
                         source: f.source.into(),
                         stale: false,
@@ -1058,6 +1149,7 @@ impl UsageMonitor {
                         windows: vec![],
                         credits: None,
                         reset_credits: None,
+                        reset_credits_expire_ms: None,
                         fetched_ms: 0,
                         source: String::new(),
                         stale: false,
@@ -1112,6 +1204,7 @@ impl UsageMonitor {
                     windows,
                     credits,
                     reset_credits: c.reset_credits,
+                    reset_credits_expire_ms: c.reset_credits_expire_ms,
                     fetched_ms: fetched,
                     source: source.into(),
                     stale: false,
@@ -1291,12 +1384,61 @@ not json"#;
         let r = parse_codex_app_server(&by_id(2), &by_id(3), 9).unwrap();
         assert_eq!(r.plan.as_deref(), Some("Plus"));
         assert_eq!(r.reset_credits, Some(3));
+        // Soonest expiry among the available credits.
+        assert_eq!(r.reset_credits_expire_ms, Some(1796070794000));
         assert!(r.note.is_none());
         let (ws, credits, plan) = parse_codex_snapshot(&r.buckets["codex"], r.as_of);
         assert_eq!(plan.as_deref(), Some("Plus"));
         assert_eq!(win(&ws, "codex:secondary").used_percent, Some(5.0));
         assert_eq!(win(&ws, "codex:secondary").window_minutes, Some(10080));
         assert_eq!(credits.unwrap().balance.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn codex_reset_credit_expiry_skips_spent_and_undated() {
+        let limits = json!({"rateLimits": {"limitId": "codex"}, "rateLimitResetCredits": {"availableCount": 2, "credits": [
+            {"id": "a", "status": "redeemed", "expiresAt": 100},
+            {"id": "b", "status": "available", "expiresAt": null},
+            {"id": "c", "status": "available", "expiresAt": 300}]}});
+        let r = parse_codex_app_server(&json!({"account": {"type": "chatgpt"}}), &limits, 1).unwrap();
+        assert_eq!((r.reset_credits, r.reset_credits_expire_ms), (Some(2), Some(300_000)));
+        let only_count = json!({"rateLimits": {"limitId": "codex"}, "rateLimitResetCredits": {"availableCount": 1, "credits": null}});
+        let r = parse_codex_app_server(&json!({}), &only_count, 1).unwrap();
+        assert_eq!((r.reset_credits, r.reset_credits_expire_ms), (Some(1), None));
+    }
+
+    #[test]
+    fn codex_consume_request_shape() {
+        // Never sent by tests: this only checks the lines a redeem would write.
+        let l = codex_consume_lines("6f1c0c1e-attempt");
+        assert_eq!(l.len(), 3);
+        assert_eq!((l[0]["method"].as_str(), l[0]["id"].as_u64()), (Some("initialize"), Some(1)));
+        assert_eq!(l[1]["method"], "initialized");
+        assert!(l[1].get("id").is_none());
+        assert_eq!(l[2]["id"], 2);
+        assert_eq!(l[2]["method"], "account/rateLimitResetCredit/consume");
+        // No creditId: the backend picks the next available credit.
+        assert_eq!(l[2]["params"], json!({"idempotencyKey": "6f1c0c1e-attempt"}));
+    }
+
+    #[test]
+    fn codex_consume_answers() {
+        let ok = |o: &str| parse_consume_answer(&json!({"id": 2, "result": {"outcome": o}})).unwrap();
+        assert_eq!(ok("reset"), ResetOutcome::Reset);
+        assert_eq!(ok("nothingToReset"), ResetOutcome::NothingToReset);
+        assert_eq!(ok("noCredit"), ResetOutcome::NoCredit);
+        assert_eq!(ok("alreadyRedeemed"), ResetOutcome::AlreadyRedeemed);
+        let e = parse_consume_answer(&json!({"id": 2, "error": {"code": -32600, "message": "chatgpt authentication required for rate limit reset credits"}})).unwrap_err();
+        assert_eq!(e.to_string(), "codex: chatgpt authentication required for rate limit reset credits");
+        assert!(parse_consume_answer(&json!({"id": 2, "result": {"outcome": "later"}})).is_err());
+        assert!(parse_consume_answer(&json!({"id": 2, "result": {}})).is_err());
+        assert_eq!(serde_json::to_value(ResetOutcome::NothingToReset).unwrap(), json!("nothing_to_reset"));
+    }
+
+    #[test]
+    fn codex_redeem_rejects_bad_keys_before_spawning() {
+        assert!(redeem_codex_reset("  ").unwrap_err().to_string().contains("idempotency"));
+        assert!(redeem_codex_reset(&"k".repeat(200)).unwrap_err().to_string().contains("idempotency"));
     }
 
     #[test]
@@ -1350,7 +1492,7 @@ not json"#;
     #[test]
     fn plan_usage_json_shape() {
         let (ws, credits, plan) = parse_codex_snapshot(&codex_rollout_limits(ROLLOUT)["codex"].1, 1);
-        let u = PlanUsage { provider: Provider::Codex, plan, windows: ws, credits, reset_credits: Some(3), fetched_ms: 1, source: "codex.rollout".into(), stale: false, error: None };
+        let u = PlanUsage { provider: Provider::Codex, plan, windows: ws, credits, reset_credits: Some(3), reset_credits_expire_ms: Some(1796070794000), fetched_ms: 1, source: "codex.rollout".into(), stale: false, error: None };
         let v = serde_json::to_value(&u).unwrap();
         assert_eq!(v["provider"], "codex");
         assert_eq!(v["windows"][0]["used_percent"], 0.0);

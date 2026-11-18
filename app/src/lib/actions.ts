@@ -6,7 +6,7 @@ import { useStore } from "../store";
 import { api, isNotAvailable } from "./backend";
 import { useChats, type PermissionAnswer } from "./chat";
 import { estimateSize } from "./termlite";
-import type { Provider, RememberOption, Session } from "./types";
+import type { Provider, RememberOption, ResetOutcome, Session } from "./types";
 import { sessionKey } from "./types";
 
 const toast = (t: string, tone: "info" | "error" = "info") => useStore.getState().toast(t, tone);
@@ -107,6 +107,11 @@ export async function chatCall(chat: number, f: () => Promise<unknown>): Promise
 /** Ask the backend for a fresh plan-usage reading; it arrives with a later `sessions` payload. Rejects if the command fails. */
 export function usageRefresh(provider: Provider): Promise<void> {
   return api().usageRefresh(provider);
+}
+
+/** Spend one Codex reset credit (CHAT_SPEC "Reset credits"). Rejects with the CLI's message if it fails. */
+export function usageResetCodex(idempotencyKey: string): Promise<ResetOutcome> {
+  return api().usageResetCodex(idempotencyKey);
 }
 
 /** Answer a question card: per question, the picked labels and/or typed text; null declines. */

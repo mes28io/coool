@@ -216,6 +216,7 @@ type PlanUsage = {
   windows: UsageWindow[];         // every limit the CLI reports, in its order
   credits: UsageCredits | null;   // Claude "extra usage" / Codex credits
   reset_credits: number | null;   // Codex: free full resets (weekly + 5 h) available
+  reset_credits_expire_ms: number | null; // Codex: soonest expiry among the available reset credits (null: unknown / none expire)
   fetched_ms: number;             // when the newest number here was read
   source: "claude.get_usage" | "claude.cache" | "claude.stream" | "codex.app_server" | "codex.rollout";
   stale: boolean;                 // fetched_ms older than 15 min
@@ -262,6 +263,16 @@ Real samples from this machine (`usage_print`, Claude Code 2.1.325, codex-cli 0.
 | `codex.app_server`: short-lived `codex app-server` in `$TMPDIR/coool-usage`: `initialize`, `initialized`, `account/read` (plan), `account/rateLimits/read` | `rateLimitsByLimitId` (all metered buckets), credits, spend-control limit (`individualLimit`), `rateLimitResetCredits.availableCount` | Now | No turn, no rollout file; the CLI makes the account requests; ~1-2 s | Same rule as the Claude probe |
 
 Self-test builds run the file sources only. `UsageMonitor::set_probes(false)` turns the probes off entirely.
+
+### Reset credits (Codex)
+
+Codex accounts can hold free "full reset" credits (`rateLimitResetCredits` in `account/rateLimits/read`: `availableCount`, plus `credits[]` with `status`, `expiresAt`, `title` such as "Full reset (Weekly + 5 hr)"). A credit is redeemed with the app-server request `account/rateLimitResetCredit/consume`, params `{ idempotencyKey: string, creditId?: string | null }` (no `creditId`: the backend picks the next available credit), answer `{ outcome: "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed" }`. Source: the installed CLI's own protocol, `codex app-server generate-ts` / `generate-json-schema` (0.145.0; in the stable, non-`--experimental` output: `v2/ConsumeAccountRateLimitResetCreditParams.ts`, `...Response.ts`, `...Outcome.ts`, `ClientRequest.ts`); the Codex TUI uses the same request.
+
+- Command: `usage_reset_codex({ idempotencyKey }) -> "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed"`, or an error string (the CLI's message, e.g. "chatgpt authentication required for rate limit reset credits", a timeout). Core: `UsageMonitor::redeem_codex_reset` runs a short-lived `codex app-server` in `$TMPDIR/coool-usage` with `initialize`, `initialized`, then the consume request (id 2), and then forces a Codex probe so the new numbers and the remaining count arrive with a later `sessions` payload.
+- Spending a credit can't be undone, so the UI only calls it after an explicit confirmation. One idempotency key (a UUID) per attempt; "Try again" after an error reuses it, so a retry of a request that did go through answers `already_redeemed` instead of spending a second credit. `nothingToReset` and `noCredit` spend nothing.
+- Never exercised against the real account by tests: the request lines and every answer are unit-tested (`usage.rs`), the UI against the mock (`?usage=limited`, `?usage=noresets`, `?usage=resetfail`).
+
+Claude has no user-redeemable reset: Claude Code's rate-limit options are extra usage, upgrade and waiting (checked in 2.1.327), so its windows only reset on their own.
 
 ### Limits of what can be known
 

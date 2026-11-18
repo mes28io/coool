@@ -2,7 +2,7 @@
 // when running in a plain browser (`pnpm dev`). See docs/APP_SPEC.md.
 
 import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
-import type { ChatEvent, ChatOptions, Environment, InsightsStatus, Provider, Snapshot } from "./types";
+import type { ChatEvent, ChatOptions, Environment, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
 import type { MotionHints } from "./motion";
 
 export interface PtyChunk {
@@ -51,6 +51,11 @@ export interface Backend {
   onConfirmQuit(cb: () => void): Unlisten;
   /** Ask for a plan-usage reading now; the result arrives with a later `sessions` payload. */
   usageRefresh(provider: Provider): Promise<void>;
+  /**
+   * Spend one Codex rate-limit reset credit (only after the person confirms), then re-probe Codex usage.
+   * `idempotencyKey` is one per attempt: reuse it when retrying that attempt so a retry never spends a second credit.
+   */
+  usageResetCodex(idempotencyKey: string): Promise<ResetOutcome>;
 
   // ---- chat sessions (CHAT_SPEC "Tauri contract additions") ----
   startChat(opts: ChatOptions): Promise<number>;
@@ -386,6 +391,7 @@ async function tauriBackend(): Promise<Backend> {
     environment: () => invoke("environment"),
     quit: () => invoke("quit_app"),
     usageRefresh: (provider) => invoke("usage_refresh", { provider }),
+    usageResetCodex: (idempotencyKey) => invoke("usage_reset_codex", { idempotencyKey }),
     onSessions,
     onPtyOutput: (cb) =>
       sub<{ id: number; data: string; offset: number }>("pty-output", (p) =>

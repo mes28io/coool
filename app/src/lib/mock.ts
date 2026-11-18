@@ -758,7 +758,9 @@ export function mockBackend(): Backend {
   });
 
   // ---------- plan usage ----------
-  // `?usage=none` (nothing known), `?usage=error` (Claude not signed in), `?usage=stale` (old readings).
+  // `?usage=none` (nothing known), `?usage=error` (Claude not signed in), `?usage=stale` (old readings),
+  // `?usage=limited` (Codex weekly limit hit, so a reset is worth it), `?usage=noresets` (no Codex reset credits),
+  // `?usage=resetfail` (redeeming a reset fails). Redeeming in the mock spends nothing real.
   const usageMode = typeof location !== "undefined" ? (/[?&]usage=(\w+)/.exec(location.search)?.[1] ?? "") : "";
   const nextMonday = () => {
     const d = new Date();
@@ -775,7 +777,7 @@ export function mockBackend(): Backend {
     const fetched = usageMode === "stale" ? t - 41 * 60_000 : t - 2 * 60_000;
     const stale = usageMode === "stale";
     const claude: PlanUsage = {
-      provider: "claude", plan: "Max 5x", source: "claude.get_usage", fetched_ms: fetched, stale, error: null, reset_credits: null,
+      provider: "claude", plan: "Max 5x", source: "claude.get_usage", fetched_ms: fetched, stale, error: null, reset_credits: null, reset_credits_expire_ms: null,
       credits: { enabled: true, unlimited: false, balance: null, used: 20, limit: 50, used_percent: 40, currency: "USD", detail: "20.00 of 50.00" },
       windows: [
         win("session", "Current session", "session", usageMode === "warn" ? 80 : 91, t + (60 + 54) * 60_000, 300, { severity: usageMode === "warn" ? "warning" : "critical", binding: true }),
@@ -784,17 +786,25 @@ export function mockBackend(): Backend {
       ],
     };
     const codex: PlanUsage = {
-      provider: "codex", plan: "Plus", source: "codex.app_server", fetched_ms: fetched, stale, error: null, reset_credits: 3,
+      provider: "codex", plan: "Plus", source: "codex.app_server", fetched_ms: fetched, stale, error: null,
+      reset_credits: usageMode === "noresets" ? 0 : 3, reset_credits_expire_ms: usageMode === "noresets" ? null : t + 12 * 24 * 3600_000,
       credits: { enabled: false, unlimited: false, balance: "0", used: null, limit: null, used_percent: null, currency: null, detail: null },
-      windows: [
-        win("codex:primary", "5-hour", "session", null, null, 300, { detail: "Reset since the last reading" }),
-        win("codex:secondary", "Weekly", "weekly", 5, t + 26 * 3600_000, 10080),
-      ],
+      windows:
+        usageMode === "limited"
+          ? [
+              win("codex:primary", "5-hour", "session", 64, t + (3 * 60 + 12) * 60_000, 300),
+              win("codex:secondary", "Weekly", "weekly", 100, t + (3 * 24 + 5) * 3600_000, 10080, { detail: "rate limit reached" }),
+            ]
+          : [
+              win("codex:primary", "5-hour", "session", null, null, 300, { detail: "Reset since the last reading" }),
+              win("codex:secondary", "Weekly", "weekly", 5, t + 26 * 3600_000, 10080),
+            ],
     };
     if (usageMode === "error") return { claude: { ...claude, plan: null, windows: [], credits: null, error: "Not signed in" }, codex };
     return { claude, codex };
   };
   const usage = mkUsage();
+  const resetKeys = new Set<string>();
 
   const snapshot = (): Snapshot => {
     if (!scan.started) return { sessions: [], pending: [], ptys: [], chats: [], loading: true };
@@ -1281,6 +1291,24 @@ export function mockBackend(): Backend {
       u.stale = false;
       u.windows = u.windows.map((w) => (w.used_percent === null ? w : { ...w, used_percent: Math.min(100, w.used_percent + 1), as_of_ms: u.fetched_ms }));
       emitSessions();
+    },
+    async usageResetCodex(key) {
+      await delay(1200);
+      if (usageMode === "resetfail") throw new Error("codex: rate limit reset consume timed out");
+      const u = usage.codex;
+      if (!u) throw new Error("codex: no usage data");
+      if (resetKeys.has(key)) return "already_redeemed";
+      if (!u.reset_credits) return "no_credit";
+      if (!u.windows.some((w) => (w.used_percent ?? 0) > 0)) return "nothing_to_reset";
+      resetKeys.add(key);
+      const t = Date.now();
+      u.reset_credits -= 1;
+      if (u.reset_credits === 0) u.reset_credits_expire_ms = null;
+      u.fetched_ms = t;
+      u.stale = false;
+      u.windows = u.windows.map((w) => ({ ...w, used_percent: 0, detail: null, as_of_ms: t, resets_ms: w.window_minutes ? t + w.window_minutes * 60_000 : w.resets_ms }));
+      emitSessions();
+      return "reset";
     },
     onSessions(cb) {
       subs.sessions.add(cb);

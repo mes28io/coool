@@ -25,7 +25,7 @@ use coool_core::insights::{self, Insight, Insights};
 use coool_core::model::{Provider, Session};
 use coool_core::wire::Sent;
 use coool_core::pty::RawLog;
-use coool_core::usage::{PlanUsage, UsageMonitor};
+use coool_core::usage::{PlanUsage, ResetOutcome, UsageMonitor};
 use coool_core::watch::{Watch, Waker};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -734,6 +734,17 @@ fn usage_refresh(core: State<'_, Arc<Core>>, provider: Provider) {
     core.kick();
 }
 
+/// Spend one Codex rate-limit reset credit (`account/rateLimitResetCredit/consume`
+/// through a short-lived `codex app-server`), then re-probe Codex usage. The
+/// UI calls this only after the person confirms; `idempotency_key` is one per
+/// attempt, reused on a retry so a retry never spends a second credit.
+#[tauri::command(async)]
+fn usage_reset_codex(core: State<'_, Arc<Core>>, idempotency_key: String) -> Result<ResetOutcome, String> {
+    let r = core.usage.redeem_codex_reset(&idempotency_key).map_err(|e| format!("{e:#}"));
+    core.kick();
+    r
+}
+
 #[tauri::command(async)]
 fn pick_folder(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
@@ -1048,6 +1059,7 @@ pub fn run() {
             insights_set_enabled,
             set_show_automation,
             usage_refresh,
+            usage_reset_codex,
             pick_folder,
             environment,
             running_count,
