@@ -115,6 +115,8 @@ export interface Backend {
   onBrowserAgent(cb: (r: BrowserAgentRequest) => void): Unlisten;
   /** A chat's agent acted on its browser panel (the panel shows it). */
   onBrowserActivity(cb: (a: BrowserActivity) => void): Unlisten;
+  /** A `pilot_run` of a chat's agent, after each step and at its end (device/pilot). */
+  onPilotProgress(cb: (p: PilotProgress) => void): Unlisten;
 
   // ---- iPhone: the iOS Simulator in the right panel (components/DevicePanel.tsx) ----
   /** The simulators (coool's own first); `available: false` with a reason when there is no Xcode / not macOS. */
@@ -161,13 +163,52 @@ export interface SimActivity {
   /** The coool chat whose agent acted (null: none / the user). */
   chat: number | null;
   source: "agent" | "user";
-  kind: "tap" | "swipe" | "type" | "press" | "app" | "observe" | "device";
+  /** `end`: the agent's run is over (the "Agent is driving" mark goes off now). */
+  kind: "tap" | "swipe" | "type" | "press" | "app" | "observe" | "device" | "end";
   /** Points, like `simInput`'s touches; a swipe goes from (x, y) to (x2, y2). */
   x?: number;
   y?: number;
   x2?: number;
   y2?: number;
   label?: string;
+}
+
+/** One step of a device pilot run (device/pilot/mod.rs `Step`). */
+export interface PilotStep {
+  n: number;
+  /** `memory` (muscle memory), `haiku` (Claude Haiku) or another decider. */
+  decider: string;
+  action: string;
+  verb: string;
+  perceive_ms: number;
+  decide_ms: number;
+  act_ms: number;
+  settle_ms: number;
+  note?: string;
+}
+/** A pilot run's state (device/pilot/mod.rs `Outcome`): `status` is final once `end` is set. */
+export interface PilotOutcome {
+  status: "done" | "stuck" | "surprised" | "out_of_budget";
+  verified: boolean;
+  reason: string;
+  goal: string;
+  target: "iphone" | "browser";
+  steps: PilotStep[];
+  wall_ms: number;
+  start_ms: number;
+  deciders: Record<string, number>;
+  decide_ms: number;
+  haiku: string;
+  haiku_usd: number;
+  checks: [string, boolean][];
+}
+export interface PilotProgress {
+  chat: number;
+  run: number;
+  /** Epoch ms the run started. */
+  started: number;
+  end: boolean;
+  outcome: PilotOutcome;
 }
 
 export interface BrowserBounds {
@@ -375,6 +416,7 @@ async function tauriBackend(): Promise<Backend> {
     browserAgentSync: (chat, tabs, active) => invoke("browser_agent_sync", { chat, tabs, active }),
     onBrowserAgent: (cb) => sub<BrowserAgentRequest>("browser-agent", cb),
     onBrowserActivity: (cb) => sub<BrowserActivity>("browser-activity", cb),
+    onPilotProgress: (cb) => sub<PilotProgress>("pilot-progress", cb),
     simDevices: async () => {
       try {
         return await soft<SimList>("sim_devices");

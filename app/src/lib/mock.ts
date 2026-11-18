@@ -1344,6 +1344,9 @@ export function mockBackend(): Backend {
     onBrowserActivity() {
       return () => {};
     },
+    onPilotProgress() {
+      return () => {};
+    },
     // The iPhone panel (lib/mockSim.ts).
     ...mockSim(),
 

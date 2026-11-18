@@ -468,6 +468,54 @@ impl<'a> Browser<'a> {
         Ok(if same && !full { format!("Page unchanged ({n} elements; observe {ms} ms).") } else { format!("{text}(observe {ms} ms)") })
     }
 
+    // ---- for the device pilot (super::pilot::drivers) ----
+
+    /// The active page's snapshot (remembered like an observe, so its ids work for the act calls and the caller's
+    /// own `browser_*` tools afterwards) and whether it is still loading.
+    pub(super) fn pilot_snapshot(&self) -> Result<(Snap, bool), String> {
+        let page = self.page()?;
+        let v = self.eval(&page.label, &json!({ "op": "observe", "max": 150, "text_max": 1500 }))?;
+        let snap: Snap = serde_json::from_value(v).map_err(|e| format!("bad snapshot: {e}"))?;
+        let loading = self.loading(&page.label);
+        let text = render(&snap, loading);
+        self.web().last.lock().unwrap().insert(self.chat, Last { label: page.label.clone(), doc: snap.doc.clone(), text });
+        Ok((snap, loading))
+    }
+
+    /// One action on the active page by tool name (`browser_click`, `browser_type`, …), without the observe after.
+    pub(super) fn pilot_act(&self, name: &str, a: &Value) -> Result<String, String> {
+        let p = self.page()?;
+        self.act(&p, name, a)
+    }
+
+    /// Waits for the active page to settle (ms); follows a tab the action opened.
+    pub(super) fn pilot_settle(&self, max_ms: u64) -> u64 {
+        match self.current() {
+            Some(p) => self.settle(&p.label, max_ms) as u64,
+            None => 0,
+        }
+    }
+
+    pub(super) fn pilot_back(&self) -> Result<u64, String> {
+        let p = self.page()?;
+        self.activity(Some(p.tab), "back", None);
+        let before = self.state(&p.label).map(|s| s.url).unwrap_or_default();
+        let doc = self.doc(&p.label);
+        self.history(&p, "back")?;
+        Ok(self.settle_navigation(&p.label, &before, doc, 10_000) as u64)
+    }
+
+    pub(super) fn pilot_navigate(&self, raw: &str) -> Result<(), String> {
+        let origin = self.app()?.state::<Arc<crate::Core>>().browsers.app_origin();
+        self.navigate(agent_url(raw, origin.as_deref())?).map(|_| ())
+    }
+
+    /// "Agent" marks on: the run is acting (`kind`), or off for good (`end`).
+    pub(super) fn pilot_activity(&self, kind: &str) {
+        let tab = self.current().map(|p| p.tab);
+        self.activity(tab, kind, None);
+    }
+
     /// The document token of the agent's last observe of this page (ids from another document are refused).
     fn last_doc(&self, page: &Page) -> Option<String> {
         self.web().last.lock().unwrap().get(&self.chat).filter(|l| l.label == page.label).map(|l| l.doc.clone())

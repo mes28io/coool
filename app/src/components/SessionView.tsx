@@ -145,6 +145,11 @@ export function SessionView({
     let t: ReturnType<typeof setTimeout> | undefined;
     const off = api().onSimActivity((a) => {
       if (a.chat !== chatId || a.source !== "agent") return;
+      // The run is over: nothing to show, and the button stops lighting up.
+      if (a.kind === "end") {
+        clearTimeout(t);
+        return setPhoneBusy(false);
+      }
       const st = useStore.getState();
       const l = live.current;
       const now = Date.now();

@@ -32,6 +32,8 @@ libc = "0.2"
 anyhow = "1"
 dirs = "7"
 tauri-plugin-opener = "2"
+# The device pilot's Haiku decider (src/device/pilot/haiku.rs); already in the tree through coool-core.
+ureq = "3"
 
 # Reduce-motion hints (motion.rs): Low Power Mode, thermal state. Both crates are already in Tauri's tree.
 # `NSGeometry`: the self-test's native clicks (selftest.rs).

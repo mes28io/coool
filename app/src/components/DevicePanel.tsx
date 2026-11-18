@@ -6,6 +6,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, type SimActivity, type SimDevice, type SimInput, type SimList } from "../lib/backend";
+import { useChats } from "../lib/chat";
 import { useStore } from "../store";
 import { ICaret, ICheck, IClose, IHome, ILock, IPhone } from "./icons";
 import { Button, cx, IconButton, Popover } from "./primitives";
@@ -112,21 +113,33 @@ export function DevicePanel({ panelKey, chat, active, onClose }: { panelKey: str
   const booting = busy === "boot" || busy === "setup" || st === "Booting";
   const stopping = busy === "shutdown" || st === "Shutting Down";
 
-  // "Agent is driving": for ~3 s after this device's latest agent action.
+  // "Agent is driving": for ~3 s after this device's latest agent action, and off at once when the agent's run (a
+  // pilot run: `end`) or its chat's turn is over.
   const [driving, setDriving] = useState(false);
   useEffect(() => {
     if (!udid) return;
     let t: ReturnType<typeof setTimeout> | undefined;
+    let chat: number | null = null;
+    const stop = () => {
+      clearTimeout(t);
+      setDriving(false);
+      chat = null;
+    };
     const off = api().onSimActivity((a) => {
       if (a.udid !== udid || a.source !== "agent") return;
+      if (a.kind === "end") return stop();
+      chat = a.chat;
       setDriving(true);
       clearTimeout(t);
-      t = setTimeout(() => setDriving(false), 3000);
+      t = setTimeout(stop, 3000);
+    });
+    const offTurns = useChats.subscribe((s, prev) => {
+      if (chat !== null && prev.chats[chat]?.turnStart != null && s.chats[chat]?.turnStart == null) stop();
     });
     return () => {
       off();
-      clearTimeout(t);
-      setDriving(false);
+      offTurns();
+      stop();
     };
   }, [udid]);
 

@@ -6,6 +6,7 @@
 //! - [`observe`]: the tree as compact text with short stable element ids, for agents.
 //! - [`mcp`]: the `coool-device` MCP server every chat coool starts gets, bound to that chat's panel device.
 //! - [`web`]: that server's `browser_*` tools, which drive the chat's Browser panel.
+//! - [`pilot`]: that server's `pilot_run`, a fast loop that drives the iPhone or the Browser panel to a goal.
 //!
 //! The panel and the chat's agent share one device: what the agent does is what the person sees (`sim-activity`
 //! events draw it on the panel).
@@ -13,6 +14,7 @@
 pub mod helper;
 pub mod mcp;
 pub mod observe;
+pub mod pilot;
 pub mod simctl;
 pub mod web;
 
@@ -154,6 +156,12 @@ impl Devices {
         }
         inner.helpers.insert(udid.to_string(), h.clone());
         Ok(h)
+    }
+
+    /// coool's own folder for device things (the helper, the pilot's memory): the app's data folder, or the
+    /// self-test's throwaway one.
+    pub fn data_dir(&self) -> Option<PathBuf> {
+        self.bin_dir.get().and_then(|b| b.parent()).map(|p| p.to_path_buf())
     }
 
     pub fn screen(&self, udid: &str) -> Res<Screen> {

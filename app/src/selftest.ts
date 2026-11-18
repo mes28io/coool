@@ -12,7 +12,8 @@
 // Agents driving the panels through the `coool-device` MCP tools (not in `all`; real model calls, a few cents):
 // `agent-browser` (a Claude Haiku chat fills a local form in the Browser panel), `agent-browser-codex` (the same on
 // Codex's cheapest model), `agent-iphone` (a Haiku chat reads the iOS version in Settings on a simulator the test
-// creates for itself, "coool selftest iPhone", and deletes at the end).
+// creates for itself, "coool selftest iPhone", and deletes at the end), `pilot-iphone` / `pilot-browser` (a Haiku chat hands
+// Settings > About / the coffee form to the device pilot, `pilot_run`, twice: learned, then from muscle memory).
 // Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { newChat } from "./lib/actions";
@@ -370,6 +371,51 @@ async function agentBrowser(ctx: Ctx, provider: "claude" | "codex", model: strin
     return `pill after ${r.seen["[data-browser-agent-pill]"]} ms, tab mark after ${r.seen["[data-browser-agent-tab]"]} ms`;
   });
   if (key) useStore.getState().closeBrowser(key);
+}
+
+// ---------- the device pilot (pilot_run) ----------
+
+interface PilotRunResult {
+  status: string;
+  verified: boolean;
+  reason: string;
+  steps: { n: number; decider: string; action: string; perceive_ms: number; decide_ms: number; act_ms: number; settle_ms: number }[];
+  wall_ms: number;
+  start_ms: number;
+  deciders: Record<string, number>;
+  decide_ms: number;
+  haiku_usd: number;
+  haiku_tokens: number;
+  haiku_cached_tokens: number;
+  checks: [string, boolean][];
+}
+/** The chat's pilot_run calls in a turn, with their outcomes (the JSON after the result's first line). */
+function pilotRuns(r: AgentRun): { tool: Tool; out: PilotRunResult | null }[] {
+  return r.tools
+    .filter((t) => toolName(t) === "pilot_run")
+    .map((t) => {
+      const i = t.output.indexOf("\n{");
+      let out: PilotRunResult | null = null;
+      try {
+        out = i >= 0 ? (JSON.parse(t.output.slice(i + 1)) as PilotRunResult) : null;
+      } catch {
+        out = null;
+      }
+      return { tool: t, out };
+    });
+}
+/** One line of numbers for the log: wall, start, steps by decider, decision latency, cost. */
+function pilotLine(o: PilotRunResult): string {
+  const model = o.steps.filter((s) => s.decider !== "memory");
+  const lat = model.map((s) => s.decide_ms);
+  const by = Object.entries(o.deciders).map(([k, n]) => `${n} ${k}`).join(", ");
+  return `${o.status}${o.verified ? " verified" : ""}: wall ${o.wall_ms} ms (start ${o.start_ms} ms, steps ${o.wall_ms - o.start_ms} ms), ${o.steps.length} steps (${by}); model decisions ${lat.length ? `${lat.join("/")} ms` : "none"}; memory decisions ${o.steps.filter((s) => s.decider === "memory").map((s) => s.decide_ms).join("/") || "none"} ms; haiku $${o.haiku_usd.toFixed(5)}, ${o.haiku_tokens} input tokens (${o.haiku_cached_tokens} cached); steps: ${o.steps.map((s) => `${s.n}.${s.action}[${s.decider} p${s.perceive_ms}/d${s.decide_ms}/a${s.act_ms}/s${s.settle_ms}]`).join(" ")}`;
+}
+/** After a turn: the panels' "Agent" marks must be off (they used to linger for 3 s after the agent's last action). */
+async function marksOff(sel: string): Promise<string> {
+  const t = Date.now();
+  await waitFor(`${sel} to go away`, () => !$(sel), 1_500);
+  return `${sel} off ${Date.now() - t} ms after the turn ended`;
 }
 
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
@@ -1628,6 +1674,164 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         return `deleted ${gone.join(", ") || "nothing"}`;
       });
     }
+  },
+
+  /**
+   * A Claude Haiku chat hands "Settings > General > About" to the device pilot (`pilot_run`) on the test's own
+   * simulator, twice: the first run learns the path (Claude Haiku decides), the second replays it from muscle memory.
+   * The harness reads the simulator's screen itself to confirm About is showing.
+   */
+  async "pilot-iphone"(ctx) {
+    const SIM = "coool selftest iPhone";
+    let id = -1;
+    let udid = "";
+    let runtime = "";
+    const prompt =
+      'Call the coool-device tool pilot_run exactly once, with goal "Open General, then About", target "iphone", app "com.apple.Preferences" and success [{"text_visible":"iOS Version"}]. Don\'t call any other tool. Then reply with one line: iOS version: <the version in the final screen>.';
+    try {
+      await step("pilot-iphone: the test's own simulator is booted in a Haiku chat's iPhone panel", async () => {
+        const t = Date.now();
+        udid = await api().simEnsureDevice();
+        await api().simBoot(udid);
+        const dev = (await api().simDevices()).devices.find((d) => d.udid === udid);
+        if (dev?.name !== SIM) throw new Fail(`made ${dev?.name}`);
+        runtime = dev.runtime;
+        ctx.model = PERF_MODEL;
+        id = await startClaude(ctx);
+        ctx.model = undefined;
+        await waitFor("ready", () => chat(id)?.ready, 60_000);
+        await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+        await sleep(1500);
+        const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+        useStore.getState().setRightPanel(key, "device");
+        await waitFor("the panel showing the booted device", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 60_000);
+        // Let a fresh device finish its first-boot work before timing anything.
+        await sleep(4000);
+        return `${udid} (${runtime}) ready in ${Date.now() - t} ms`;
+      });
+      if (id < 0) return;
+      const runs: PilotRunResult[] = [];
+      for (const n of [1, 2]) {
+        const r = await agentTurn(id, {
+          prompt,
+          marks: [
+            ["[data-pilot-substep]", `pilot-iphone-run${n}-live`],
+            ["[data-sim-driving]", `pilot-iphone-run${n}-driving`],
+          ],
+          ms: 240_000,
+        });
+        await step(`pilot-iphone run ${n}: pilot_run ends done, its checks verified`, async () => {
+          const p = pilotRuns(r);
+          if (p.length !== 1) throw new Fail(`${p.length} pilot_run calls; tools: ${r.all.join(", ") || "none"}`);
+          const o = p[0].out;
+          if (!o) throw new Fail(`no outcome in ${p[0].tool.output.slice(0, 300)}`);
+          if (o.status !== "done" || !o.verified) throw new Fail(`${o.status}: ${o.reason}; ${pilotLine(o)}`);
+          runs.push(o);
+          await log(`PILOT iphone run ${n} ${pilotLine(o)}`);
+          return pilotLine(o);
+        });
+        await step(`pilot-iphone run ${n}: the simulator shows About (the backend's own read), the reply has the version, the chat showed the run`, async () => {
+          const screen = (await invoke("selftest_sim_screen", { udid })) as string;
+          if (!/iOS Version/.test(screen) || !/About/.test(screen)) throw new Fail(`screen:\n${screen.slice(0, 600)}`);
+          const major = runtime.split(" ")[1]?.split(".")[0] ?? "?";
+          if (!new RegExp(`\\b${major}(\\.\\d+)*\\b`).test(r.reply)) throw new Fail(`reply ${JSON.stringify(r.reply)} lacks ${runtime}`);
+          if (r.seen["[data-pilot-substep]"] === undefined) throw new Fail("the chat never showed the pilot's live steps");
+          const card = $("[data-pilot-status]");
+          if (!card || !/done/.test(card.textContent ?? "")) throw new Fail(`pilot step shows ${card?.textContent}`);
+          await shot(`pilot-iphone-run${n}-after`);
+          return `reply ${JSON.stringify(r.reply.trim().slice(0, 100))}; live steps after ${r.seen["[data-pilot-substep]"]} ms; turn ${r.turnMs} ms`;
+        });
+        await step(`pilot-iphone run ${n}: "Agent is driving" showed, and is off once the turn ended`, async () => {
+          if (r.seen["[data-sim-driving]"] === undefined) throw new Fail('the panel never showed "Agent is driving"');
+          return marksOff("[data-sim-driving]");
+        });
+      }
+      await step("pilot-iphone: the second run is mostly muscle memory and faster", async () => {
+        if (runs.length < 2) throw new Fail("a run failed");
+        const [a, b] = runs;
+        const mem = b.deciders.memory ?? 0;
+        if (mem * 2 < b.steps.length) throw new Fail(`only ${mem} of ${b.steps.length} steps from memory`);
+        const steps = (o: PilotRunResult) => o.wall_ms - o.start_ms;
+        if (steps(b) >= steps(a)) throw new Fail(`second run's steps took ${steps(b)} ms vs ${steps(a)} ms`);
+        return `run 1: ${a.wall_ms} ms (steps ${steps(a)} ms, ${JSON.stringify(a.deciders)}); run 2: ${b.wall_ms} ms (steps ${steps(b)} ms, ${JSON.stringify(b.deciders)})`;
+      });
+    } finally {
+      await step("pilot-iphone: the test's simulator is shut down and deleted", async () => {
+        if (id >= 0) useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+        await sleep(500);
+        const gone = (await invoke("selftest_sim_delete")) as string[];
+        const left = (await api().simDevices()).devices.filter((d) => d.name === SIM);
+        if (left.length) throw new Fail(`still there: ${left.map((d) => d.udid).join(", ")}`);
+        return `deleted ${gone.join(", ") || "nothing"}`;
+      });
+    }
+  },
+
+  /**
+   * A Claude Haiku chat hands the coffee-order form (the `agent-browser` page) to the device pilot on the Browser
+   * panel, twice. The page's own reports confirm what was typed, clicked and submitted.
+   */
+  async "pilot-browser"(ctx) {
+    const NAME = "Ada Lovelace";
+    const CUPS = 3;
+    const REF = `CUP-${100 + 7 * CUPS + NAME.length}`;
+    let id = -1;
+    let url = "";
+    await step("pilot-browser: a Haiku chat starts, its Browser panel closed", async () => {
+      url = ((await invoke("selftest_probe_server")) as string).replace(/\/probe$/, "/form");
+      const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+      await newChat({ provider: "claude", cwd: ctx.cfg.dir, model: PERF_MODEL });
+      id = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+      await waitFor("ready", () => chat(id)?.ready, 90_000);
+      await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+      await sleep(1500);
+      return `chat ${id}, ${url}`;
+    });
+    if (id < 0) return;
+    const runs: PilotRunResult[] = [];
+    for (const n of [1, 2]) {
+      const earlier = (await probeResults()).length;
+      const r = await agentTurn(id, {
+        prompt: `Call the coool-device tool pilot_run exactly once with target "browser", url "${url}", goal "Fill in the name and the email, press Add cup until the cups counter shows ${CUPS}, then press Submit order", inputs {"name":"${NAME}","email":"ada@example.com"} and success [{"text_visible":"${CUPS} cups, reference"}]. Don't call any other tool. Then reply with the exact confirmation sentence from the final screen, nothing else.`,
+        marks: [
+          ["[data-pilot-substep]", `pilot-browser-run${n}-live`],
+          ["[data-browser-agent-pill]", `pilot-browser-run${n}-acting`],
+        ],
+        ms: 240_000,
+      });
+      await step(`pilot-browser run ${n}: pilot_run ends done, its checks verified`, async () => {
+        const p = pilotRuns(r);
+        if (p.length !== 1) throw new Fail(`${p.length} pilot_run calls; tools: ${r.all.join(", ") || "none"}`);
+        const o = p[0].out;
+        if (!o) throw new Fail(`no outcome in ${p[0].tool.output.slice(0, 300)}`);
+        if (o.status !== "done" || !o.verified) throw new Fail(`${o.status}: ${o.reason}; ${pilotLine(o)}`);
+        runs.push(o);
+        await log(`PILOT browser run ${n} ${pilotLine(o)}`);
+        return pilotLine(o);
+      });
+      await step(`pilot-browser run ${n}: the page really took the order (its own report), the reply quotes it`, async () => {
+        const forms = (await probeResults()).slice(earlier).filter((p) => p.step === "form");
+        const last = forms[forms.length - 1];
+        if (!last) throw new Fail("the page never reported a change");
+        if (!last.submitted || last.name !== NAME || last.cups !== CUPS || last.email !== "ada@example.com") throw new Fail(`page state ${JSON.stringify(last)}`);
+        if (!String(last.confirmation).includes(REF)) throw new Fail(`confirmation ${last.confirmation}`);
+        if (!r.reply.includes(REF)) throw new Fail(`reply ${JSON.stringify(r.reply)} lacks ${REF}`);
+        await shot(`pilot-browser-run${n}-after`);
+        return `reply ${JSON.stringify(r.reply.trim().slice(0, 120))}; turn ${r.turnMs} ms`;
+      });
+      await step(`pilot-browser run ${n}: the "Agent" pill showed, and is off once the turn ended`, async () => {
+        if (r.seen["[data-browser-agent-pill]"] === undefined) throw new Fail("no Agent pill on the panel");
+        return marksOff("[data-browser-agent-pill]");
+      });
+    }
+    await step("pilot-browser: the second run leans on muscle memory", async () => {
+      if (runs.length < 2) throw new Fail("a run failed");
+      const [a, b] = runs;
+      const mem = b.deciders.memory ?? 0;
+      if (mem * 2 < b.steps.length) throw new Fail(`only ${mem} of ${b.steps.length} steps from memory`);
+      return `run 1: ${a.wall_ms} ms ${JSON.stringify(a.deciders)}; run 2: ${b.wall_ms} ms ${JSON.stringify(b.deciders)}`;
+    });
+    useStore.getState().closeBrowser(chatPanelKey(id));
   },
 
   async quit(ctx) {
