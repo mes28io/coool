@@ -213,6 +213,11 @@ impl Slot {
         self.view.lock().unwrap().clone()
     }
 
+    /// The transcript this slot reads. Waits while a worker parses a slice of it.
+    pub(crate) fn path(&self) -> PathBuf {
+        self.state.lock().unwrap().path.clone()
+    }
+
     fn publish(&self, v: View) {
         *self.view.lock().unwrap() = Arc::new(v);
     }

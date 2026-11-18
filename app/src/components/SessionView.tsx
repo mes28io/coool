@@ -11,7 +11,7 @@ import { keysCaptured } from "../lib/macKeys";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
-import { chatModels, chatTitle, pendingPermission, useChats } from "../lib/chat";
+import { chatModels, chatTitle, pendingPermission, useChats, type Chat } from "../lib/chat";
 import { displayTitle, folderName } from "../lib/format";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -485,7 +485,7 @@ export function SessionView({
               ) : k === "mac" ? (
                 <MacPanel chat={r.chat} active={active} onClose={() => setPanel("closed")} />
               ) : (
-                <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} />
+                <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} map={contextMapProps(session, chat)} />
               )
             }
           </RightPanel>
@@ -494,6 +494,18 @@ export function SessionView({
     </div>
     </BrowserContext.Provider>
   );
+}
+
+/** The Models panel's context map: for a session with a transcript, its subagents each with their own context. */
+function contextMapProps(s: Session | null | undefined, chat: Chat | undefined) {
+  if (!s?.id || s.loaded === false) return null;
+  return {
+    provider: s.provider,
+    sessionId: s.id,
+    cwd: s.cwd,
+    agents: s.agents.map((a) => ({ id: a.id, label: a.description || a.kind, model: a.model, context: a.tokens.context })),
+    compacting: chat?.compacting || /^compacting/i.test(s.current ?? ""),
+  };
 }
 
 function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat: boolean; onChange: (m: ViewMode) => void; compact: boolean }) {

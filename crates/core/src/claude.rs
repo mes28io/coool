@@ -259,6 +259,15 @@ impl ClaudeSource {
         self.entries.iter().map(|(id, e)| session(id, e)).collect()
     }
 
+    /// The transcript of a session, or of one of its subagents.
+    pub(crate) fn transcript(&self, id: &str, agent: Option<&str>) -> Option<PathBuf> {
+        let e = self.entries.get(id)?;
+        match agent {
+            None => Some(e.slot.path()),
+            Some(a) => e.agents.iter().find(|x| x.id == a && x.has_file).map(|x| x.slot.path()),
+        }
+    }
+
     /// Recent Bash calls of a session and its subagents (they run in the same
     /// process, so their shells are its children too) that may still run
     /// (foreground calls that returned are left out), oldest first.
