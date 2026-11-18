@@ -4,6 +4,8 @@ import { displayTitle, folderName, homeShort, projectOf } from "../lib/format";
 import { sessionKey } from "../lib/types";
 import { seenAt, isUnseen, leaves, resolveTarget, useStore } from "../store";
 import { openChatInTerminal } from "../lib/actions";
+import { api } from "../lib/backend";
+import { useOpenWithName } from "../lib/prefs";
 import { IFolder, IGauge, IGear, IGrid, IMoon, IPlus, ISearch, ISplitDown, ISplitRight, IStop, ISun, ITerminal } from "./icons";
 import { cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
 import { askStop } from "./SessionView";
@@ -46,6 +48,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const [sel, setSel] = useState(0);
   const list = useRef<HTMLDivElement>(null);
   const st = useStore();
+  const openWith = useOpenWithName();
 
   const items = useMemo<Item[]>(() => {
     const done = (f: () => void) => () => {
@@ -81,6 +84,15 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         icon: <IFolder size={16} />,
         run: done(() => st.setSheet({ kind: "new", cwd: proj })),
       });
+      // Settings > General > "Open files and folders in".
+      out.push({
+        id: `o:${proj}`,
+        group: "Projects",
+        label: `Open ${folderName(proj)} in ${openWith}`,
+        hint: homeShort(proj),
+        icon: <IFolder size={16} />,
+        run: done(() => void api().openPath(proj).catch((e) => st.toast(String(e), "error"))),
+      });
     }
     const tab = st.tabs.find((t) => t.id === st.activeTab);
     const leaf = tab ? leaves(tab.root).find((l) => l.id === tab.focus) : undefined;
@@ -89,7 +101,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       { id: "a:new", group: "Actions", label: "New session", icon: <IPlus size={16} />, keys: ["⌘", "T"], run: done(() => st.setSheet({ kind: "new" })) },
       { id: "a:usage", group: "Actions", label: "Show usage", icon: <IGauge size={16} />, run: done(() => st.openSettings("usage")) },
       { id: "a:home", group: "Actions", label: "Home", icon: <IGrid size={16} />, run: done(() => st.activate(null)) },
-      { id: "a:settings", group: "Actions", label: "Settings", hint: "Appearance, sessions, AI insights, usage", icon: <IGear size={16} />, keys: ["⌘", ","], run: done(() => st.openSettings()) },
+      { id: "a:settings", group: "Actions", label: "Settings", hint: "General, notifications, appearance, shortcuts, providers, devices, storage", icon: <IGear size={16} />, keys: ["⌘", ","], run: done(() => st.openSettings()) },
       {
         id: "a:theme",
         group: "Actions",
@@ -121,7 +133,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       });
     }
     return out;
-  }, [st, onClose]);
+  }, [st, onClose, openWith]);
 
   const shown = useMemo(() => {
     const scored = items.map((it) => ({ it, s: Math.max(score(q, it.label), score(q, it.hint ?? "") * 0.7) })).filter((x) => x.s > 0);

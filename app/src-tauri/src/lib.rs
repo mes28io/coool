@@ -9,11 +9,16 @@
 //! handles cloned out of the Hub, so a slow refresh never delays streamed text.
 //! See docs/APP_SPEC.md ("Backend contract") and docs/CHAT_SPEC.md.
 
+mod apps;
 mod artifact;
 mod browser;
 mod device;
 mod env;
+mod login;
 mod motion;
+mod notify;
+mod power;
+mod prefs;
 mod selftest;
 mod trace;
 
@@ -30,6 +35,7 @@ use coool_core::watch::{Watch, Waker};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -50,6 +56,8 @@ struct ChatStream {
     handle: ChatHandle,
     seq: u64,
     exit_sent: bool,
+    /// "Claude in atlas": how its notifications name it.
+    title: String,
 }
 
 struct Core {
@@ -73,6 +81,12 @@ struct Core {
     selftest: Option<selftest::SelfTest>,
     /// Settings sheet: "Show runs started by other tools" (persisted).
     show_automation: AtomicBool,
+    /// Settings > General: ask before quitting while agents run (persisted; on by default).
+    confirm_quit: AtomicBool,
+    /// Settings > General: "Prevent sleep while agents are working" (see [`power`]).
+    power: Mutex<power::Keeper>,
+    /// Settings > Notifications (see [`notify`]).
+    notifier: notify::Notifier,
     /// `COOOL_TRACE_SESSIONS`: latency trace (off unless set).
     trace: Option<trace::Trace>,
     /// Artifact previews (see [`artifact`]).
@@ -353,7 +367,7 @@ impl Core {
         }
         // Artifact previews only serve what a timeline the UI holds published.
         self.previews.set_timelines(sessions.iter().map(|s| s.activity.clone()).collect());
-        let sessions = {
+        let sessions: Vec<(String, Session, Option<Insight>)> = {
             let mut ins = self.insights.lock().unwrap();
             ins.tick(&sessions);
             let mut seen: HashMap<String, usize> = HashMap::new();
@@ -375,6 +389,10 @@ impl Core {
         self.usage.tick();
         let usage = UsageOut { claude: self.usage.get(Provider::Claude), codex: self.usage.get(Provider::Codex) };
         let show_automation = self.show_automation.load(Ordering::Relaxed);
+        // Working agents coool runs: chats mid-turn, and its terminal sessions the transcript shows busy.
+        let working = chats.iter().filter(|c| c.state == ChatState::Working).count()
+            + sessions.iter().filter(|(_, s, _)| s.managed.is_some() && s.chat.is_none() && s.status == coool_core::model::Status::Busy).count();
+        self.power.lock().unwrap().update(working);
         (sessions, Rest { pending, ptys, loading, chats, usage, show_automation })
     }
 
@@ -579,11 +597,12 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
     opts.cwd = expand_tilde(&opts.cwd);
     check_launch(opts.provider, &opts.cwd)?;
     let provider = opts.provider;
+    let cwd = opts.cwd.clone();
     let id = {
         let mut hub = core.hub.lock().unwrap();
         let id = hub.start_chat(opts).map_err(|e| format!("couldn't start {}: {e:#}", provider.label()))?;
         let handle = hub.chat(id).expect("just started").handle();
-        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false });
+        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd) });
         core.pump_waker.kick();
         id
     };
@@ -599,6 +618,7 @@ fn chat_send(core: State<'_, Arc<Core>>, id: usize, text: String) -> Res<()> {
 
 #[tauri::command(async)]
 fn chat_interrupt(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
+    core.notifier.user_stopped(id);
     core.with_chat(id, |c| c.interrupt())
 }
 
@@ -639,6 +659,7 @@ fn chat_respond_question(core: State<'_, Arc<Core>>, id: usize, request_id: Stri
 
 #[tauri::command(async)]
 fn chat_stop(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
+    core.notifier.user_stopped(id);
     core.with_chat(id, |c| {
         c.stop();
         Ok(())
@@ -845,6 +866,194 @@ fn quit_app(app: AppHandle, core: State<'_, Arc<Core>>) {
     app.exit(0);
 }
 
+// ---- Settings page (APP_SPEC "Settings") ----
+
+/// "Claude in atlas": a chat as its notifications name it.
+fn chat_title(provider: Provider, cwd: &str) -> String {
+    let name = if provider == Provider::Codex { "Codex" } else { "Claude" };
+    let folder = std::path::Path::new(cwd).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    if folder.is_empty() { name.to_string() } else { format!("{name} in {folder}") }
+}
+
+/// The General and Notifications options the backend applies.
+#[derive(Serialize, Deserialize)]
+struct AppPrefs {
+    confirm_quit: bool,
+    prevent_sleep: bool,
+    notify: notify::Prefs,
+    open_with: String,
+}
+
+#[tauri::command(async)]
+fn prefs_get(core: State<'_, Arc<Core>>) -> AppPrefs {
+    let s = settings::load(core.selftest.as_ref());
+    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with }
+}
+
+/// Saves and applies them at once (the power assertion is taken or released right here).
+#[tauri::command(async)]
+fn prefs_set(core: State<'_, Arc<Core>>, prefs: AppPrefs) -> Res<()> {
+    core.confirm_quit.store(prefs.confirm_quit, Ordering::Relaxed);
+    core.power.lock().unwrap().set_enabled(prefs.prevent_sleep);
+    *core.notifier.prefs.lock().unwrap() = prefs.notify.clone();
+    let mut s = settings::load(core.selftest.as_ref());
+    s.confirm_quit = prefs.confirm_quit;
+    s.prevent_sleep = prefs.prevent_sleep;
+    s.notify = prefs.notify;
+    s.open_with = prefs.open_with;
+    settings::save(core.selftest.as_ref(), &s).map_err(err)
+}
+
+#[tauri::command]
+fn power_status(core: State<'_, Arc<Core>>) -> power::PowerStatus {
+    core.power.lock().unwrap().status()
+}
+
+#[tauri::command(async)]
+fn notify_permission() -> notify::Permission {
+    notify::permission()
+}
+
+#[tauri::command(async)]
+fn notify_request() -> notify::Permission {
+    notify::request()
+}
+
+/// "Send a test notification".
+#[tauri::command(async)]
+fn notify_test(core: State<'_, Arc<Core>>) -> Res<()> {
+    let sound = core.notifier.prefs.lock().unwrap().sound;
+    notify::post("coool", "Notifications are on. An agent that needs you will show up like this.", sound)
+}
+
+#[tauri::command(async)]
+fn login_status() -> login::LoginStatus {
+    login::status()
+}
+
+#[tauri::command(async)]
+fn login_set(enabled: bool) -> Res<login::LoginStatus> {
+    login::set(enabled)
+}
+
+#[tauri::command(async)]
+fn apps_installed() -> Vec<apps::App> {
+    apps::installed()
+}
+
+/// Opens a file or folder with the app chosen in Settings > General.
+#[tauri::command(async)]
+fn open_path(core: State<'_, Arc<Core>>, path: String) -> Res<()> {
+    let app = settings::load(core.selftest.as_ref()).open_with;
+    apps::open(&app, &expand_tilde(&path))
+}
+
+/// Opens a page of System Settings (notifications, login items) for what only macOS can change.
+#[tauri::command(async)]
+fn open_system_settings(pane: String) -> Res<()> {
+    let url = match pane.as_str() {
+        "notifications" => "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+        "login" => "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+        _ => return Err("unknown pane".into()),
+    };
+    std::process::Command::new("open").arg(url).status().map_err(err)?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+fn cli_status() -> Vec<prefs::clis::CliStatus> {
+    let (a, b) = (thread::spawn(|| prefs::clis::check("claude")), thread::spawn(|| prefs::clis::check("codex")));
+    [a, b].into_iter().filter_map(|h| h.join().ok()).collect()
+}
+
+#[tauri::command(async)]
+fn connections(project: Option<String>) -> prefs::connections::Connections {
+    let p = project.map(|p| PathBuf::from(expand_tilde(&p)));
+    prefs::connections::read_default(p.as_deref())
+}
+
+/// "Open file" in Connections: only one of the config files Connections reads, with the chosen app.
+#[tauri::command(async)]
+fn open_config_file(core: State<'_, Arc<Core>>, path: String, project: Option<String>) -> Res<()> {
+    let home = dirs::home_dir().ok_or("no home folder")?;
+    let p = project.map(|p| PathBuf::from(expand_tilde(&p)));
+    let known = prefs::connections::known_files(&home, p.as_deref());
+    if !known.iter().any(|k| k.as_path() == std::path::Path::new(&path)) {
+        return Err("not one of the config files coool reads".into());
+    }
+    // Opening never writes: the editor does only what the person does there.
+    let app = settings::load(core.selftest.as_ref()).open_with;
+    apps::open(&app, &path)
+}
+
+#[tauri::command(async)]
+fn worktrees_list(project: String) -> prefs::worktrees::Worktrees {
+    prefs::worktrees::list(std::path::Path::new(&expand_tilde(&project)))
+}
+
+/// Removes a merged, clean agent worktree (refused otherwise; never forced).
+#[tauri::command(async)]
+fn worktree_remove(project: String, path: String) -> Res<prefs::worktrees::Worktrees> {
+    let root = PathBuf::from(expand_tilde(&project));
+    prefs::worktrees::remove(&root, std::path::Path::new(&path))?;
+    Ok(prefs::worktrees::list(&root))
+}
+
+fn storage_paths(devices: &device::Devices) -> prefs::storage::Paths {
+    prefs::storage::Paths { cache: dirs::cache_dir().map(|d| d.join("coool")), data: devices.data_dir(), config: dirs::config_dir().map(|d| d.join("coool")) }
+}
+
+#[derive(Serialize)]
+struct Storage {
+    items: Vec<prefs::storage::Item>,
+    /// coool's own simulator, when there is one.
+    simulator: Option<SimInfo>,
+}
+
+#[derive(Serialize)]
+struct SimInfo {
+    udid: String,
+    name: String,
+    state: String,
+    runtime: String,
+    device_type: String,
+    bytes: Option<u64>,
+}
+
+fn own_simulator() -> Option<SimInfo> {
+    let d = device::simctl::devices().ok()?.into_iter().find(|d| d.coool)?;
+    Some(SimInfo { bytes: prefs::storage::simulator_size(&d.udid), udid: d.udid, name: d.name, state: d.state, runtime: d.runtime, device_type: d.device_type })
+}
+
+fn storage_of(devices: &device::Devices) -> Storage {
+    let paths = storage_paths(devices);
+    let sim = thread::spawn(own_simulator);
+    let items = prefs::storage::items(&paths);
+    Storage { items, simulator: sim.join().ok().flatten() }
+}
+
+#[tauri::command(async)]
+fn storage_status(devices: State<'_, Arc<device::Devices>>) -> Storage {
+    storage_of(&devices)
+}
+
+#[tauri::command(async)]
+fn storage_clear(devices: State<'_, Arc<device::Devices>>, id: String) -> Res<Storage> {
+    prefs::storage::clear(&storage_paths(&devices), &id)?;
+    Ok(storage_of(&devices))
+}
+
+/// Settings > Devices > iPhone: erase coool's own simulator (shut down first). Refuses any other device.
+#[tauri::command(async)]
+fn sim_erase(devices: State<'_, Arc<device::Devices>>, udid: String) -> Res<()> {
+    if !device::simctl::device(&udid)?.coool {
+        return Err("Only coool's own simulator can be erased here.".into());
+    }
+    devices.shutdown(&udid)?;
+    let out = std::process::Command::new("xcrun").args(["simctl", "erase", &udid]).stdin(std::process::Stdio::null()).output().map_err(err)?;
+    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
+}
+
 // ---------- settings ----------
 
 mod settings {
@@ -862,6 +1071,21 @@ mod settings {
         /// "Save pilot decisions for training" (on by default; local only).
         #[serde(default = "yes")]
         pub pilot_log: bool,
+        /// Ask before quitting while agents run.
+        #[serde(default = "yes")]
+        pub confirm_quit: bool,
+        /// Hold a no-idle-sleep assertion while agents work.
+        #[serde(default)]
+        pub prevent_sleep: bool,
+        #[serde(default)]
+        pub notify: crate::notify::Prefs,
+        /// The app files and folders open in (`apps::KNOWN` id, or "system").
+        #[serde(default = "system")]
+        pub open_with: String,
+    }
+
+    fn system() -> String {
+        "system".into()
     }
 
     fn yes() -> bool {
@@ -870,7 +1094,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, notify: Default::default(), open_with: system() }
         }
     }
 
@@ -957,6 +1181,7 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                         continue;
                     }
                     for e in &events {
+                        core.notifier.on_event(id, &c.title, &e.kind);
                         match e.kind {
                             ChatEventKind::Exited { .. } => {
                                 c.exit_sent = true;
@@ -1028,7 +1253,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
 fn request_quit(app: &AppHandle) {
     let core = app.state::<Arc<Core>>();
     let running = core.running();
-    if running > 0 && !core.allow_exit.load(Ordering::SeqCst) {
+    if running > 0 && !core.allow_exit.load(Ordering::SeqCst) && core.confirm_quit.load(Ordering::Relaxed) {
         let _ = app.emit("confirm-quit", running);
     } else {
         core.allow_exit.store(true, Ordering::SeqCst);
@@ -1097,6 +1322,9 @@ pub fn run() {
         waker: Waker::new(),
         selftest,
         show_automation: AtomicBool::new(prefs.show_automation),
+        confirm_quit: AtomicBool::new(prefs.confirm_quit),
+        power: Mutex::new(power::Keeper::new(power::system(), prefs.prevent_sleep)),
+        notifier: notify::Notifier::new(prefs.notify.clone()),
         trace: trace::Trace::from_env(),
         previews: artifact::Previews::default(),
         browsers: browser::Browsers::default(),
@@ -1151,6 +1379,25 @@ pub fn run() {
             git_trail,
             running_count,
             quit_app,
+            prefs_get,
+            prefs_set,
+            power_status,
+            notify_permission,
+            notify_request,
+            notify_test,
+            login_status,
+            login_set,
+            apps_installed,
+            open_path,
+            open_system_settings,
+            cli_status,
+            connections,
+            open_config_file,
+            worktrees_list,
+            worktree_remove,
+            storage_status,
+            storage_clear,
+            sim_erase,
             selftest::selftest_config,
             selftest::selftest_log,
             selftest::selftest_shot,
@@ -1224,6 +1471,9 @@ pub fn run() {
         .on_window_event(|win, ev| {
             if let WindowEvent::Focused(f) = ev {
                 win.state::<Arc<Core>>().usage.set_active(*f);
+                if win.label() == "main" {
+                    win.state::<Arc<Core>>().notifier.set_focused(*f);
+                }
             }
             // The rest is the main window's: pop-ups of the in-app browser (browser.rs) and artifact previews close freely.
             if win.label() != "main" {
@@ -1236,7 +1486,7 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = ev {
                 let core = win.state::<Arc<Core>>();
                 let running = core.running();
-                if !core.allow_exit.load(Ordering::SeqCst) && running > 0 {
+                if !core.allow_exit.load(Ordering::SeqCst) && running > 0 && core.confirm_quit.load(Ordering::Relaxed) {
                     api.prevent_close();
                     let _ = win.emit("confirm-quit", running);
                 }
@@ -1249,7 +1499,7 @@ pub fn run() {
         RunEvent::ExitRequested { code, api, .. } => {
             let core = handle.state::<Arc<Core>>();
             let running = core.running();
-            if code.is_none() && !core.allow_exit.load(Ordering::SeqCst) && running > 0 {
+            if code.is_none() && !core.allow_exit.load(Ordering::SeqCst) && running > 0 && core.confirm_quit.load(Ordering::Relaxed) {
                 api.prevent_exit();
                 let _ = handle.emit("confirm-quit", running);
             }

@@ -46,7 +46,7 @@ export type RightPanelKind = "agents" | "models" | "browser" | "device";
 /** What the left sidebar panel shows: one view at a time. Projects is the default. */
 export type SidebarView = "projects" | "needs";
 /** The full-screen Settings page's categories, in order (components/SettingsPage.tsx). */
-export const SETTINGS_SECTIONS = ["appearance", "sessions", "insights", "pilot", "usage", "about"] as const;
+export const SETTINGS_SECTIONS = ["general", "notifications", "appearance", "shortcuts", "providers", "devices", "git", "connections", "storage", "usage", "insights", "about"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /**
@@ -122,7 +122,7 @@ function readSettingsLast(): SettingsSection {
     const v = localStorage.getItem("coool.settingsSection");
     if (v && v !== "usage" && (SETTINGS_SECTIONS as readonly string[]).includes(v)) return v as SettingsSection;
   } catch {}
-  return "appearance";
+  return "general";
 }
 
 function readNum(k: string, d: number) {

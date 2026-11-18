@@ -5,6 +5,7 @@
 import { useStore } from "../store";
 import { api, isNotAvailable } from "./backend";
 import { useChats, type PermissionAnswer } from "./chat";
+import { getChatDefaults } from "./prefs";
 import { estimateSize } from "./termlite";
 import type { Provider, RememberOption, ResetOutcome, Session } from "./types";
 import { sessionKey } from "./types";
@@ -20,8 +21,12 @@ function place(target: { kind: "chat"; id: number } | { kind: "pty"; id: number 
 /** New chat (default for anything coool starts). Falls back to a terminal session. */
 export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; leaf?: string; model?: string | null; permissionMode?: string | null }): Promise<boolean> {
   try {
-    const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: a.model ?? null, permission_mode: a.permissionMode ?? null });
-    useChats.getState().ensure({ id, provider: a.provider, cwd: a.cwd, session_id: null, model: a.model ?? null, state: "idle", running: true });
+    // Settings > General: what a new chat starts with, unless the caller chose.
+    const d = getChatDefaults()[a.provider];
+    const model = a.model === undefined ? d.model : a.model;
+    const mode = a.permissionMode === undefined ? d.mode : a.permissionMode;
+    const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: model ?? null, permission_mode: mode ?? null });
+    useChats.getState().ensure({ id, provider: a.provider, cwd: a.cwd, session_id: null, model: model ?? null, state: "idle", running: true });
     place({ kind: "chat", id }, a.leaf);
     if (a.prompt?.trim()) await api().chatSend(id, a.prompt.trim());
     return true;

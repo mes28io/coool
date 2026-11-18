@@ -8,6 +8,7 @@ import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import { SessionsMerge } from "./sessionsMerge";
 import { mockHints } from "./motion";
+import { mockSettings } from "./mockSettings";
 import { mockSim } from "./mockSim";
 import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
@@ -1147,6 +1148,7 @@ export function mockBackend(): Backend {
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 
   const insights: InsightsStatus = readInsights();
+  const sim = mockSim();
   const pilotLog = { enabled: true, dir: "~/Library/Application Support/sh.coool.app/pilot", bytes: 184_320, files: 1 };
   const saveInsights = () => {
     try {
@@ -1468,7 +1470,8 @@ export function mockBackend(): Backend {
       return () => {};
     },
     async motionHints() {
-      return mockHints(location.search);
+      // A healthy Apple-silicon laptop on power unless `?power=` says otherwise (Settings > Appearance lists each hint).
+      return mockHints(location.search) ?? { low_power: false, thermal: "nominal", on_battery: false, battery_pct: 86, intel: false, memory_gb: 36, perf_cores: 12, busy_at_launch: false, reduce: false, reason: null };
     },
     onMotionHints() {
       return () => {};
@@ -1518,7 +1521,9 @@ export function mockBackend(): Backend {
       return () => {};
     },
     // The iPhone panel (lib/mockSim.ts).
-    ...mockSim(),
+    ...sim,
+    // The Settings page (lib/mockSettings.ts).
+    ...mockSettings({ shutdown: (udid) => sim.simShutdown(udid) }),
 
     // ---------- chats ----------
     async startChat({ provider, cwd, resume, model, permission_mode }) {

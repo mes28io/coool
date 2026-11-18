@@ -6,6 +6,7 @@ import { openAgentsDemo } from "./lib/agentsDemo";
 import { rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
 import { useMotion } from "./lib/motion";
+import { matchShortcut } from "./lib/shortcuts";
 import { syncWindow } from "./lib/boot";
 import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
@@ -30,31 +31,45 @@ function applyTheme(t: "dark" | "light") {
   requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("no-transitions")));
 }
 
+/** What each global shortcut in lib/shortcuts.ts does. */
+function runShortcut(id: string, e: KeyboardEvent) {
+  const st = useStore.getState();
+  switch (id) {
+    case "palette":
+      return st.setPalette(!st.palette);
+    case "new":
+      return st.setSheet({ kind: "new" });
+    case "settings":
+      return st.openSettings();
+    case "theme":
+      return st.toggleTheme();
+    case "sidebar":
+      return st.toggleSidebar();
+    case "home":
+      return st.activate(null);
+    case "tab":
+      return st.activateIndex(Number(e.key) - 1);
+    case "close":
+      return st.closeFocused();
+    case "split-right":
+      return st.split("row");
+    case "split-down":
+      return st.split("col");
+  }
+}
+
 function useShortcuts() {
   useEffect(() => {
+    // The table and its matching live in lib/shortcuts.ts (also what Settings > Keyboard shortcuts lists).
     const onKey = (e: KeyboardEvent) => {
+      const sc = matchShortcut(e);
+      if (!sc) return;
+      e.preventDefault();
+      e.stopPropagation();
       const st = useStore.getState();
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod) return;
-      const k = e.key.toLowerCase();
-      let hit = true;
       // While the Settings page is up, pane and sidebar shortcuts would act on things out of sight: they wait.
-      const away = st.settings !== null && (((k === "b" || k === "w") && !e.shiftKey) || k === "\\" || e.code === "Backslash");
-      if (away) hit = true;
-      else if (k === "k") st.setPalette(!st.palette);
-      else if (k === "t" && !e.shiftKey) st.setSheet({ kind: "new" });
-      else if (k === "b" && !e.shiftKey) st.toggleSidebar();
-      else if (k === "w" && !e.shiftKey) st.closeFocused();
-      else if (k === "\\" || e.code === "Backslash") st.split(e.shiftKey ? "col" : "row");
-      else if (k === "l" && e.shiftKey) st.toggleTheme();
-      else if (k === "," && !e.shiftKey) st.openSettings();
-      else if (/^[1-9]$/.test(e.key) && !e.shiftKey) st.activateIndex(Number(e.key) - 1);
-      else if (k === "0" && !e.shiftKey) st.activate(null);
-      else hit = false;
-      if (hit) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      if (sc.hiddenBySettings && st.settings !== null) return;
+      runShortcut(sc.id, e);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);

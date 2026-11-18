@@ -239,3 +239,13 @@ export const IFanout = mk(
     {dot(12.75, 12.25)}
   </>,
 );
+/** Connections (MCP servers, hooks, plugins): a plug, two prongs over a rounded body and its cord. */
+export const IPlug = mk(<path d="M5.75 1.75v3M10.25 1.75v3M3.75 4.75h8.5v2a4.25 4.25 0 01-8.5 0zM8 11v3.25" />);
+/** Storage: a drive, a wide frame with its light and a label line. */
+export const IDisk = mk(
+  <>
+    <rect x="1.75" y="4.25" width="12.5" height="7.5" rx="1.5" />
+    <path d="M4.25 8h3.5" />
+    {dot(11.25, 8)}
+  </>,
+);

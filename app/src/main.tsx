@@ -11,6 +11,8 @@ import { initBackend } from "./lib/backend";
 import { startBrowserAgent } from "./lib/browserAgent";
 import { startPilot } from "./lib/pilot";
 import { setMotionHints } from "./lib/motion";
+import { useChats } from "./lib/chat";
+import { rememberModels } from "./lib/prefs";
 
 // "Reduce motion: Auto" follows the device (Low Power Mode, heat, battery) as well as the system setting.
 void initBackend().then((b) => {
@@ -20,6 +22,11 @@ void initBackend().then((b) => {
   startPilot();
   b.onMotionHints(setMotionHints);
   void b.motionHints().then(setMotionHints);
+  // The models chats report, for Settings > General's default model before any chat of that provider runs.
+  useChats.subscribe((s, p) => {
+    if (s.chats === p.chats) return;
+    for (const c of Object.values(s.chats)) if (c.modelOptions.length && p.chats[c.id]?.modelOptions !== c.modelOptions) rememberModels(c.provider, c.modelOptions);
+  });
 });
 
 // Wait for the bundled fonts so xterm measures Geist Mono, not a fallback.

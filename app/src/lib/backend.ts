@@ -4,6 +4,7 @@
 import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
 import type { ChatEvent, ChatOptions, Environment, GitTrail, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
 import type { MotionHints } from "./motion";
+import type { SettingsBackend } from "./settingsTypes";
 
 export interface PtyChunk {
   id: number;
@@ -28,7 +29,8 @@ export interface ChatBatch {
   events: ChatEvent[];
 }
 
-export interface Backend {
+/** The Settings page's calls are in settingsTypes.ts. */
+export interface Backend extends SettingsBackend {
   kind: "tauri" | "mock";
   listSessions(): Promise<Snapshot>;
   spawnSession(a: { provider: Provider; cwd: string; args?: string[]; rows: number; cols: number }): Promise<number>;
@@ -396,6 +398,25 @@ async function tauriBackend(): Promise<Backend> {
     pilotLogSetEnabled: (enabled) => soft("pilot_log_set_enabled", { enabled }),
     pilotLogReveal: () => soft("pilot_log_reveal"),
     pilotLogDelete: () => soft("pilot_log_delete"),
+    prefsGet: () => soft("prefs_get"),
+    prefsSet: (prefs) => soft("prefs_set", { prefs }),
+    powerStatus: () => soft("power_status"),
+    notifyPermission: () => soft("notify_permission"),
+    notifyRequest: () => soft("notify_request"),
+    notifyTest: () => soft("notify_test"),
+    loginStatus: () => soft("login_status"),
+    loginSet: (enabled) => soft("login_set", { enabled }),
+    appsInstalled: () => soft("apps_installed"),
+    openPath: (path) => soft("open_path", { path }),
+    openSystemSettings: (pane) => soft("open_system_settings", { pane }),
+    cliStatus: () => soft("cli_status"),
+    connections: (project) => soft("connections", { project }),
+    openConfigFile: (path, project) => soft("open_config_file", { path, project }),
+    worktreesList: (project) => soft("worktrees_list", { project }),
+    worktreeRemove: (project, path) => soft("worktree_remove", { project, path }),
+    storageStatus: () => soft("storage_status"),
+    storageClear: (id) => soft("storage_clear", { id }),
+    simErase: (udid) => soft("sim_erase", { udid }),
     listSessions: async () => merge.full(await invoke<FullWire>("list_sessions")) ?? merge.snapshot(),
     spawnSession: (req) => invoke("spawn_session", { req }),
     resumeSession: (req) => invoke("resume_session", { req }),
