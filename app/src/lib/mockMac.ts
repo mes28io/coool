@@ -157,17 +157,19 @@ export function mockMac(): Mac {
       streams.get(stream)?.timers.forEach(clearInterval);
       streams.delete(stream);
     },
-    async macInput(input) {
-      if (input.kind === "pointer" || input.kind === "scroll") {
-        cursor.x = input.x;
-        cursor.y = input.y;
-      } else if (input.kind === "text") typed += input.text;
-      else if (input.kind === "keyDown") {
-        if (input.code === 51) typed = typed.slice(0, -1);
-        else if (input.code === 36) typed = "";
-        else if (input.code === 49) typed += " ";
-      } else return;
-      push();
+    async macInput(inputs) {
+      for (const input of inputs) {
+        if (input.kind === "pointer" || input.kind === "scroll") {
+          cursor.x = input.x;
+          cursor.y = input.y;
+        } else if (input.kind === "text") typed += input.text;
+        else if (input.kind === "keyDown") {
+          if (input.code === 51) typed = typed.slice(0, -1);
+          else if (input.code === 36) typed = "";
+          else if (input.code === 49) typed += " ";
+        } else continue;
+        push();
+      }
     },
     async macBind() {},
     async macNetwork(mode) {

@@ -157,10 +157,33 @@ export const BEAM = { size: "md", colorVariant: "colorful", strength: 1, brightn
 const BEAM_LAYERS = { "--beam-stroke-opacity": 3.8, "--beam-inner-opacity": 2.2, "--beam-bloom-opacity": 2 } as CSSProperties;
 
 /**
+ * The beam's line, in px, and how far in from the frame's outer edge it runs. The package draws a 1 px stroke on the
+ * very edge, which around a device read as a faint glow at one corner, and in the light theme its light merged with
+ * the light page beside it. Thicker and set into the dark bezel (dark on both sides), it reads as a line of light
+ * travelling around the device in either theme.
+ */
+const BEAM_LINE = 4;
+const BEAM_INSET = 1.5;
+/**
+ * The package's stroke and bloom rings at [`BEAM_LINE`], `inset` in from the edge (its `css` prop; `{id}` is its
+ * instance). The stroke's own light is a white band at three quarters at most, with the colours only in a few fixed
+ * spots (a corner glow on a frame this size); here it is a comet that is white at its head and coloured along its tail,
+ * on the package's travelling angle and mask.
+ */
+const beamCss = (radius: number, inset: number) => {
+  const r = Math.max(0, radius - inset);
+  const ring = `[data-beam="{id}"][data-active]::after, [data-beam="{id}"][data-fading]::after, [data-beam="{id}"] [data-beam-bloom] { inset: ${inset}px; padding: ${BEAM_LINE}px; border-radius: ${r}px; clip-path: inset(0 round ${r}px); }`;
+  const comet = `[data-beam="{id}"][data-active]::after, [data-beam="{id}"][data-fading]::after { background: conic-gradient(from var(--beam-angle-{id}), transparent 0%, transparent 52%, rgba(80, 140, 255, 0.35) 58%, rgba(150, 90, 255, 0.75) 64%, rgba(255, 90, 190, 0.95) 70%, #fff 76%, rgba(255, 255, 255, 0.6) 79%, transparent 81%, transparent 100%); }`;
+  return `${ring}\n${comet}`;
+};
+
+/**
  * The beam around a panel's frame: wraps the frame (its one child) and, while `on`, a light travels around its border
- * (`border-beam`, drawn inside the wrapper's edge). It starts with the first action and fades shortly after the last.
- * Reduced motion: no travelling light; a static ring in the acting agent's tint instead. `mark`: a data attribute set
- * while it drives (the self-tests look for it). Extra props (style, className, handlers) go to the wrapper.
+ * (`border-beam`, an overlay whose edge only is drawn). It starts with the first action and fades shortly after the
+ * last. Reduced motion: the animated beam isn't mounted at all (none of its CSS animations run); a static ring in the
+ * acting agent's tint instead. The wrapper and the child are the same elements either way, so a change of motion
+ * (Auto makes one when the machine gets busy) never remounts the screen. `mark`: a data attribute set while it drives
+ * (the self-tests look for it). `style` and `className` go to the wrapper.
  */
 export function PanelBeam({
   on,
@@ -187,29 +210,42 @@ export function PanelBeam({
 }) {
   const reduce = useMotion().reduce;
   return (
-    // `theme="dark"` whatever coool's theme: what is under the beam is a device's screen or bezel, not the app's surface.
-    <BorderBeam
-      {...BEAM}
-      active={on && !reduce}
-      theme="dark"
-      borderRadius={radius}
+    <div
       className={className}
       style={{
-        ...BEAM_LAYERS,
+        position: "relative",
+        borderRadius: radius,
+        overflow: "hidden",
         ...style,
         ...(bezel ? { padding: bezel, background: "#0b0b0c", boxSizing: "border-box" } : null),
         ...(rim ? { background: on && !reduce ? "#0b0b0c" : "transparent", transition: "background-color 200ms" } : null),
       }}
       {...(on ? { [mark]: true } : {})}
     >
-      {/* The child gets its own stacking context below the beam's layers: without it, anything inside with a z-index
-          (the screen, the cursor layer) paints over the beam and hides it. */}
+      {/* The child gets its own stacking context below the beam: without it, anything inside with a z-index (the
+          screen, the cursor layer) paints over the beam and hides it. */}
       <div className={bezel ? "relative z-0 isolate size-full overflow-hidden" : "absolute inset-0 z-0 isolate"} style={bezel ? { borderRadius: Math.max(0, radius - bezel) } : undefined}>
         {children}
       </div>
+      {!reduce && (
+        // `theme="dark"` whatever coool's theme: under the beam is a device's bezel or the dark gutter, not the app's
+        // surface. The package's rule makes its box `position: relative`; the inline style wins.
+        <BorderBeam
+          {...BEAM}
+          active={on}
+          theme="dark"
+          borderRadius={radius}
+          css={beamCss(radius, bezel >= BEAM_LINE + 2 * BEAM_INSET ? BEAM_INSET : 0)}
+          style={{ ...BEAM_LAYERS, position: "absolute", inset: 0, zIndex: 3, pointerEvents: "none" }}
+          data-presence-beam
+          aria-hidden
+        >
+          <span />
+        </BorderBeam>
+      )}
       {on && reduce && (
         <div className="pointer-events-none absolute inset-0 z-[4]" style={{ borderRadius: radius, boxShadow: `inset 0 0 0 2px ${tint(slot)}` }} data-presence-static aria-hidden />
       )}
-    </BorderBeam>
+    </div>
   );
 }

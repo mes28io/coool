@@ -21,7 +21,7 @@ const OUT: f64 = 0.50e-6;
 const CACHE_WRITE: f64 = 0.125e-6;
 const CACHE_READ: f64 = 0.01e-6;
 
-const SYSTEM: &str = "You are the fast pilot of a phone or browser, working for a coding agent that gave you a goal. \
+const SYSTEM: &str = "You are the fast pilot of a phone, a browser or a Mac, working for a coding agent that gave you a goal. \
 Each turn you get the goal, the names of the input values you may type, the steps already taken, and the current \
 screen: its visible text and a numbered list of the actions possible right now. Call `act` with the number of the \
 single best next action.
@@ -35,6 +35,9 @@ Fill each field once, with the input whose name matches the field. Never set a f
 when there is one.
 - `scroll down` reveals more of a list or page when what you need is not listed; `scroll up` goes back.
 - `back` returns to the previous screen when you went the wrong way.
+- On a Mac, `launch app <name>` opens that app (or brings it to the front): to open or use an app, launch it \
+rather than looking for it in Finder, the Dock or a menu. `press command+n` makes a new window or document; `press \
+escape` closes a menu, dialog or panel that is in the way.
 - Something already selected, checked or showing the wanted value is done: don't tap it again.
 - A step that changed nothing shouldn't be repeated; try another way.
 - On a system alert, choose the button the goal implies; if the goal doesn't say, prefer the least permissive one.

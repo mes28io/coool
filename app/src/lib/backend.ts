@@ -171,7 +171,8 @@ export interface Backend extends SettingsBackend {
   /** Streams the guest screen as JPEG frames to `onFrame` (on change, plus one every ~2 s) until `macDetach`; `w`/`h` in guest pixels. */
   macAttach(onFrame: (jpeg: ArrayBuffer) => void): Promise<{ w: number; h: number; stream: number }>;
   macDetach(stream: number): Promise<void>;
-  macInput(input: MacInput): Promise<void>;
+  /** The person's input into the Mac panel, applied in this order (one call at a time keeps the order: see MacScreen). */
+  macInput(inputs: MacInput[]): Promise<void>;
   /** The Mac panel shows for this chat (`on`), or was closed: the chat's agent tools act on the Mac while bound. */
   macBind(chat: number, on: boolean): Promise<void>;
   /** The Mac's network switch: reads it, or sets it (`on`, `local`, `off`); applies now when it can, else at next boot. */
@@ -617,7 +618,7 @@ async function tauriBackend(): Promise<Backend> {
       return soft("mac_attach", { frames });
     },
     macDetach: (stream) => soft("mac_detach", { stream }),
-    macInput: (input) => soft("mac_input", { input }),
+    macInput: (inputs) => soft("mac_input", { input: inputs }),
     macBind: (chat, on) => soft("mac_bind", { chat, on }),
     macNetwork: (mode) => soft("mac_network", { mode: mode ?? null }),
     onMacState: (cb) => sub<Partial<MacStatus>>("mac-state", cb),

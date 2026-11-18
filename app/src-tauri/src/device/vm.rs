@@ -34,9 +34,12 @@ static VM_AGENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/coool-vm-agen
 /// The Mac's id in `sim-activity` events (the panel tells it from simulators by this).
 pub const UDID: &str = "mac";
 /// The guest agent's build: setup reinstalls it (and re-grants Accessibility) when this changes.
-const AGENT_VERSION: &str = "4";
+const AGENT_VERSION: &str = "5";
 /// Bytes that must stay free after the restore image is downloaded: the install (~19 GB) plus a margin.
 const INSTALL_RESERVE: u64 = 25_000_000_000;
+/// What marks an alert about coool's agent (its executable's name, or its bundle's): the background-activity alerts
+/// [`Vm::dismiss_agent_alerts`] closes.
+const AGENT_ALERT_MATCH: [&str; 2] = ["coool-vm-agent", "coool agent"];
 /// The guest's account (created by Apple's guest provisioning on first boot). Its password is random per VM.
 const GUEST_USER: &str = "coool";
 pub const SHARED_IN_GUEST: &str = "/Volumes/My Shared Files";
@@ -235,6 +238,7 @@ impl Vm {
         match r {
             Ok(()) => {
                 *self.ready.lock().unwrap() = true;
+                self.dismiss_agent_alerts(d);
                 self.set(d, json!({ "state": "running", "step": null }));
                 Ok(format!("booted in {:.1} s", t0.elapsed().as_secs_f64()))
             }
@@ -317,23 +321,36 @@ impl Vm {
             self.step(d, "granting the agent Accessibility in the guest");
             self.grant_accessibility(d, secrets)?;
         }
-        self.dismiss_banners(d);
         self.call(d, json!({ "cmd": "markProvisioned", "agentVersion": AGENT_VERSION, "username": GUEST_USER }), Duration::from_secs(5))?;
         Ok(())
     }
 
-    /// Installing the agent posts an "App Background Activity" banner that stays until dismissed: swipe such
-    /// banners away so the person's first look at the Mac is clean.
-    fn dismiss_banners(&self, d: &Devices) {
-        for _ in 0..8 {
-            let Ok(words) = self.ocr(d) else { return };
-            let Some(f) = words.iter().find(|(w, f)| f[0] > 640.0 && (w.contains("Background Activity") || w.contains("can run in the"))).map(|(_, f)| *f) else {
-                return;
-            };
-            let (x, y) = (f[0] + 120.0, f[1] + 20.0);
-            let _ = self.call(d, json!({ "cmd": "drag", "x": x, "y": y, "x2": x + 500.0, "y2": y, "ms": 250 }), Duration::from_secs(5));
-            std::thread::sleep(Duration::from_millis(900));
-        }
+    /// The guest's "App Background Activity: … can run in the background" alerts about coool's own agent stay on its
+    /// screen across restarts until someone closes them, and macOS posts a new one at login whenever the agent's
+    /// launch item looks new to it (before agent version 5 the launch item ran the agent's binary itself, so every
+    /// agent build was a new item). Close them as the Mac comes up: the agent closes each through its own Close
+    /// action, a few times over the first seconds after login (macOS restores them a moment after the session
+    /// starts). The first pass before the boot returns (no alerts: a few ms), so the first look shows none; the later
+    /// ones in the background.
+    fn dismiss_agent_alerts(&self, d: &Devices) {
+        let Ok(h) = self.helper(d) else { return };
+        let req = json!({ "cmd": "agent", "request": { "cmd": "dismissNotifications", "match": AGENT_ALERT_MATCH }, "timeout": 10.0 });
+        let note = |pass: usize, r: &Res<Value>| match r {
+            Ok(v) if v["closed"].as_u64().unwrap_or(0) > 0 => eprintln!("coool-vm: closed {} agent alert(s) (pass {pass})", v["closed"]),
+            Err(e) => eprintln!("coool-vm: closing agent alerts (pass {pass}): {e}"),
+            _ => {}
+        };
+        note(0, &h.call(req.clone(), Duration::from_secs(14)));
+        std::thread::spawn(move || {
+            for (i, wait) in [1500u64, 2500, 4000, 7000].into_iter().enumerate() {
+                std::thread::sleep(Duration::from_millis(wait));
+                let r = h.call(req.clone(), Duration::from_secs(14));
+                note(i + 1, &r);
+                if r.is_err() && !h.alive() {
+                    return;
+                }
+            }
+        });
     }
 
     fn wait_ssh(&self, d: &Devices, timeout: Duration) -> Res<String> {
@@ -639,25 +656,26 @@ PLIST
 # that requirement) survives agent updates. An install signed otherwise (by the build's hash) loses its grant.
 codesign -s - -f -i sh.coool.vm-agent -r='designated => identifier "sh.coool.vm-agent"' "$APP" >/dev/null 2>&1
 if [ -n "$RESET" ]; then tccutil reset Accessibility sh.coool.vm-agent >/dev/null 2>&1 || true; fi
+# The job's program is /bin/sh, which execs the agent: macOS's Background Task Management keys a launch item on its
+# program's code signature and posts a new "can run in the background" alert (kept on screen until dismissed) at the
+# next login for every new signature, so an agent that ran itself made one per agent build. sh's never changes with
+# ours. The agent process is still the agent (exec), with its own Accessibility grant.
 PL="$HOME/Library/LaunchAgents/sh.coool.vm-agent.plist"
 cat > "$PL" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>sh.coool.vm-agent</string>
-<key>ProgramArguments</key><array><string>$APP/Contents/MacOS/coool-vm-agent</string></array>
+<key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>exec "\$0"</string><string>$APP/Contents/MacOS/coool-vm-agent</string></array>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
 <key>LimitLoadToSessionType</key><string>Aqua</string>
 <key>ProcessType</key><string>Interactive</string>
 </dict></plist>
 PLIST
-# Loaded already (the session loads LaunchAgents at login): restart it on the new build; else load it.
-if launchctl print gui/$(id -u)/sh.coool.vm-agent >/dev/null 2>&1; then
-  launchctl kickstart -k gui/$(id -u)/sh.coool.vm-agent
-else
-  launchctl bootstrap gui/$(id -u) "$PL"
-fi
+# Loaded already (the session loads LaunchAgents at login): unload it, so the new build and job definition load.
+launchctl bootout gui/$(id -u)/sh.coool.vm-agent >/dev/null 2>&1 || true
+i=0; until launchctl bootstrap gui/$(id -u) "$PL" 2>/dev/null || [ $i -ge 20 ]; do sleep 0.5; i=$((i+1)); done
 touch "$HOME/.ssh/authorized_keys"
 grep -qF '{public_key}' "$HOME/.ssh/authorized_keys" || echo '{public_key}' >> "$HOME/.ssh/authorized_keys"
 chmod 700 "$HOME/.ssh"; chmod 600 "$HOME/.ssh/authorized_keys"
@@ -781,9 +799,18 @@ pub fn mac_bind(devices: State<'_, Arc<Devices>>, chat: usize, on: bool) {
     }
 }
 
-/// The person's own input from the panel (pointer, scroll, raw key codes, pasted text).
+/// The person's own input from the panel (pointer, scroll, raw key codes, pasted text): one input, or a list applied
+/// in order. The panel sends one call at a time (a list of what came in meanwhile): calls run on threads of their
+/// own, so two in flight could reach the Mac in either order.
 #[tauri::command(async)]
 pub fn mac_input(devices: State<'_, Arc<Devices>>, input: Value) -> Res<()> {
+    match input {
+        Value::Array(list) => list.iter().try_for_each(|i| one_input(&devices, i)),
+        i => one_input(&devices, &i),
+    }
+}
+
+fn one_input(devices: &Devices, input: &Value) -> Res<()> {
     let vm = &devices.vm;
     let t = Duration::from_secs(5);
     let req = match input["kind"].as_str().unwrap_or("") {
@@ -792,10 +819,10 @@ pub fn mac_input(devices: State<'_, Arc<Devices>>, input: Value) -> Res<()> {
         "keyDown" => json!({ "cmd": "keyDown", "code": input["code"] }),
         "keyUp" => json!({ "cmd": "keyUp", "code": input["code"] }),
         "key" => json!({ "cmd": "key", "name": input["name"], "modifiers": input["modifiers"] }),
-        "text" => return type_text(&devices, input["text"].as_str().unwrap_or("")),
+        "text" => return type_text(devices, input["text"].as_str().unwrap_or("")),
         k => return Err(format!("unknown input {k:?}")),
     };
-    vm.call(&devices, req, t).map(|_| ())
+    vm.call(devices, req, t).map(|_| ())
 }
 
 /// Types text: key by key when a US keyboard has every character, else through the guest's pasteboard.
@@ -1435,7 +1462,9 @@ mod tests {
     #[test]
     fn setup_script_installs_the_agent_and_keeps_secrets_quoted() {
         let s = setup_script("Pw7abc", "ssh-ed25519 AAAA coool-vm");
-        assert!(s.contains("launchctl bootstrap gui/$(id -u)") && s.contains("launchctl kickstart -k"));
+        assert!(s.contains("launchctl bootstrap gui/$(id -u)") && s.contains("launchctl bootout gui/$(id -u)/sh.coool.vm-agent"));
+        // A stable program (see the script): an agent update is not a new background item.
+        assert!(s.contains("<array><string>/bin/sh</string><string>-c</string><string>exec \"\\$0\"</string><string>$APP/Contents/MacOS/coool-vm-agent</string></array>"));
         assert!(s.contains("<string>sh.coool.vm-agent</string>"));
         assert!(s.contains("printf '%s\\n' 'Pw7abc' | sudo -S"));
         assert!(s.contains("grep -qF 'ssh-ed25519 AAAA coool-vm'"));

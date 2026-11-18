@@ -430,7 +430,7 @@ function Frame({
   return (
     <div className="absolute inset-0 flex items-center justify-center">
       {around ? (
-        <PanelBeam on={around.on} slot={around.slot} radius={10} bezel={4} style={size}>
+        <PanelBeam on={around.on} slot={around.slot} radius={12} bezel={7} style={size}>
           {frame}
         </PanelBeam>
       ) : (
@@ -515,7 +515,27 @@ function MacScreen({ active, box, initial }: { active: boolean; box: { w: number
   const presence = usePresenceOf(simTarget(MAC_UDID));
 
   // ---- input ----
-  const send = (input: MacInput) => void api().macInput(input).catch(() => {});
+  // One call at a time, in order: the backend runs each call on a thread of its own, so two calls in flight can reach
+  // the Mac in either order (a key's up before its down loses the key; keys before the click that focuses a field land
+  // elsewhere). What comes in while a call is in flight goes in the next one, as a batch.
+  const queue = useRef<MacInput[]>([]);
+  const sending = useRef(false);
+  const flush = () => {
+    const batch = queue.current.splice(0);
+    if (!batch.length) {
+      sending.current = false;
+      return;
+    }
+    sending.current = true;
+    void api()
+      .macInput(batch)
+      .catch(() => {})
+      .finally(flush);
+  };
+  const send = (input: MacInput) => {
+    queue.current.push(input);
+    if (!sending.current) flush();
+  };
   const buttons = useRef(0);
   const at = useRef({ x: 0, y: 0 });
   const moveAt = useRef<{ x: number; y: number } | null>(null);
@@ -582,13 +602,13 @@ function MacScreen({ active, box, initial }: { active: boolean; box: { w: number
         const dy = Math.round(w.dy);
         w.dx = 0;
         w.dy = 0;
-        if (dx || dy) void api().macInput({ kind: "scroll", ...p, dx, dy }).catch(() => {});
+        if (dx || dy) send({ kind: "scroll", ...p, dx, dy });
       });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-    // toPx reads refs and the canvas only.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+    // toPx and send read refs and the canvas only.
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies, react-hooks/exhaustive-deps
   }, []);
 
   const pasteWait = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

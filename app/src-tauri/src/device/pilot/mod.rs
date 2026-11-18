@@ -204,6 +204,9 @@ pub struct Screen {
     pub home: bool,
     pub w: f64,
     pub h: f64,
+    /// Mac: apps the pilot may launch by name (the installed apps the goal names, else all of them), offered as
+    /// `launch` candidates. Not part of the signature: it is the same on every screen of a run.
+    pub apps: Vec<String>,
 }
 
 impl Screen {
@@ -303,9 +306,16 @@ pub enum Verb {
     Submit,
     Scroll,
     Back,
+    /// Mac: launch (or bring to the front) an app by name.
+    Launch,
+    /// Mac: a keyboard shortcut (`key`, from [`MAC_KEYS`]).
+    Press,
     Done,
     Stuck,
 }
+
+/// The Mac's keyboard shortcuts offered as `press` candidates: (key as `mac_press` takes it, what it does).
+pub const MAC_KEYS: [(&str, &str); 2] = [("command+n", "new window / new document"), ("escape", "close a menu, dialog or panel")];
 
 impl Verb {
     pub fn name(self) -> &'static str {
@@ -315,6 +325,8 @@ impl Verb {
             Verb::Submit => "submit",
             Verb::Scroll => "scroll",
             Verb::Back => "back",
+            Verb::Launch => "launch",
+            Verb::Press => "press",
             Verb::Done => "done",
             Verb::Stuck => "stuck",
         }
@@ -343,17 +355,27 @@ pub struct Action {
     pub input_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<&'static str>,
+    /// `launch`: the app's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    /// `press`: the shortcut ([`MAC_KEYS`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<&'static str>,
 }
 
 impl Action {
     fn new(verb: Verb) -> Self {
-        Action { id: 0, verb, target: None, input_key: None, dir: None }
+        Action { id: 0, verb, target: None, input_key: None, dir: None, app: None, key: None }
     }
 
     /// Coordinate-free identity, for muscle memory: the same action on another run of the same screen.
     pub fn key(&self) -> String {
         let t = self.target.as_ref().map(|t| format!("{}|{}", t.role, t.label)).unwrap_or_default();
-        format!("{}|{t}|{}|{}", self.verb.name(), self.input_key.as_deref().unwrap_or(""), self.dir.unwrap_or(""))
+        let mut k = format!("{}|{t}|{}|{}", self.verb.name(), self.input_key.as_deref().unwrap_or(""), self.dir.unwrap_or(""));
+        if let Some(x) = self.app.as_deref().or(self.key) {
+            let _ = write!(k, "|{x}");
+        }
+        k
     }
 
     /// One line for the model and the log: `tap button "General"`.
@@ -371,6 +393,11 @@ impl Action {
             (Verb::Submit, _) => "submit: press the keyboard's Return / Go key".into(),
             (Verb::Scroll, _) => format!("scroll {}", self.dir.unwrap_or("down")),
             (Verb::Back, _) => "back: go back one screen / page".into(),
+            (Verb::Launch, _) => format!("launch app {:?}: open it (or bring it to the front)", self.app.as_deref().unwrap_or("?")),
+            (Verb::Press, _) => {
+                let k = self.key.unwrap_or("?");
+                format!("press {k}: {}", MAC_KEYS.iter().find(|m| m.0 == k).map(|m| m.1).unwrap_or("a shortcut"))
+            }
             (Verb::Done, _) => "done: the goal is achieved on this screen".into(),
             (Verb::Stuck, _) => "stuck: no action here makes progress".into(),
             (v, None) => v.name().into(),
@@ -386,9 +413,17 @@ const MAX_ELEMENT_ACTIONS: usize = 40;
 
 /// The typed candidate set for a screen: taps on what can be tapped, `set_text <key>` per text field and input key,
 /// `submit` while typing, scrolls, `back`, then `done` and `stuck`. Ids are positions in the list. On a system alert
-/// only its buttons (and done / stuck) are offered.
+/// only its buttons (and done / stuck) are offered. The Mac also gets `launch` per app in [`Screen::apps`] (first:
+/// opening an app is how most Mac goals start) and `press` per shortcut in [`MAC_KEYS`].
 pub fn candidates(s: &Screen, inputs: &BTreeMap<String, String>, target: Target) -> Vec<Action> {
     let mut out = Vec::new();
+    if target == Target::Mac && !s.alert {
+        for app in &s.apps {
+            let mut a = Action::new(Verb::Launch);
+            a.app = Some(app.clone());
+            out.push(a);
+        }
+    }
     let visible: Vec<&Elem> = s.elems.iter().filter(|e| !e.offscreen && !e.disabled).collect();
     let mut n = 0;
     for e in &visible {
@@ -436,6 +471,13 @@ pub fn candidates(s: &Screen, inputs: &BTreeMap<String, String>, target: Target)
         }
         if target != Target::Iphone || !s.home {
             out.push(Action::new(Verb::Back));
+        }
+    }
+    if target == Target::Mac {
+        for (k, _) in MAC_KEYS {
+            let mut a = Action::new(Verb::Press);
+            a.key = Some(k);
+            out.push(a);
         }
     }
     out.push(Action::new(Verb::Done));
@@ -827,7 +869,7 @@ pub fn run(goal: &Goal, driver: &mut dyn Driver, mem: &mut memory::Memory, mut d
         let mut sig = signature(&screen);
         // A tap that seems to have changed nothing may only be slow to show: settle once more and look again.
         if sig == last_sig
-            && matches!(last_verb, Some(Verb::Tap | Verb::Back | Verb::Submit))
+            && matches!(last_verb, Some(Verb::Tap | Verb::Back | Verb::Submit | Verb::Launch | Verb::Press))
             && driver.settle_again() > 0
             && let Ok((s, ms)) = driver.perceive()
         {
@@ -1080,7 +1122,7 @@ pub fn call(devices: &super::Devices, chat: usize, a: &Value) -> Result<String, 
         }
         Target::Mac => {
             devices.vm.ensure(devices, chat)?;
-            let mut d = drivers::Mac { t: super::vm::MacTools { d: devices, chat } };
+            let mut d = drivers::Mac { t: super::vm::MacTools { d: devices, chat }, apps: Vec::new() };
             run(&goal, &mut d, &mut mem, decider, &note, &mut emit)
         }
     };

@@ -14,7 +14,7 @@
 #import <sys/vsock.h>
 #import <mach/mach_time.h>
 
-#define AGENT_VERSION @"4"
+#define AGENT_VERSION @"5"
 static const unsigned kPort = 7333;
 
 static double nowMs(void) {
@@ -213,6 +213,79 @@ static NSDictionary *element(NSDictionary *m) {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Notifications
+
+/// The text of an element and its descendants (titles, descriptions, values), to a few levels.
+static void collectText(AXUIElementRef el, int depth, NSMutableString *into) {
+  CFStringRef keys[] = {kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute};
+  for (int i = 0; i < 3; i++) {
+    NSString *t = textOf(attr(el, keys[i]));
+    if (t) [into appendFormat:@"%@ ", t];
+  }
+  if (depth <= 0) return;
+  for (id k in attr(el, kAXChildrenAttribute) ?: @[]) collectText((__bridge AXUIElementRef)k, depth - 1, into);
+}
+
+/// The first descendant (breadth first) with a custom accessibility action named `name` whose text mentions one of
+/// `match`, and that action's full name.
+static id findClosable(AXUIElementRef root, NSArray<NSString *> *match, NSString *name, NSString **action) {
+  NSMutableArray *level = [NSMutableArray arrayWithObject:(__bridge id)root];
+  for (int d = 0; d < 12 && level.count; d++) {
+    NSMutableArray *next = [NSMutableArray array];
+    for (id e in level) {
+      AXUIElementRef el = (__bridge AXUIElementRef)e;
+      CFArrayRef names = NULL;
+      if (AXUIElementCopyActionNames(el, &names) == kAXErrorSuccess && names) {
+        for (NSString *a in (__bridge NSArray *)names) {
+          // Custom actions read "Name:Close\nTarget:…".
+          if (![a hasPrefix:[@"Name:" stringByAppendingString:name]] && ![a isEqual:name]) continue;
+          NSMutableString *text = [NSMutableString string];
+          collectText(el, 4, text);
+          for (NSString *w in match) {
+            if ([text rangeOfString:w options:NSCaseInsensitiveSearch].location != NSNotFound) {
+              *action = a;
+              CFRelease(names);
+              return e;
+            }
+          }
+        }
+        CFRelease(names);
+      }
+      [next addObjectsFromArray:attr(el, kAXChildrenAttribute) ?: @[]];
+    }
+    level = next;
+  }
+  return nil;
+}
+
+/// Closes Notification Center's banners and alerts whose text mentions one of `match` (each through its own Close
+/// action, as a person's click on its close button): the guest's "App Background Activity: coool-vm-agent can run in
+/// the background" alerts, which stay on screen across restarts until dismissed. How many it closed.
+static NSDictionary *dismissNotifications(NSDictionary *m, NSString **err) {
+  if (!AXIsProcessTrusted()) { *err = @"no accessibility permission"; return nil; }
+  NSArray *match = [m[@"match"] isKindOfClass:NSArray.class] ? m[@"match"] : @[@"coool"];
+  NSRunningApplication *nc = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.notificationcenterui"].firstObject;
+  if (!nc) return @{@"closed": @0, @"left": @0};
+  AXUIElementRef app = AXUIElementCreateApplication(nc.processIdentifier);
+  AXUIElementSetMessagingTimeout(app, 1.0);
+  int closed = 0;
+  double t0 = nowMs();
+  // One at a time: closing one re-lays out the rest (a stack expands).
+  while (closed < 40 && nowMs() - t0 < num(m, @"timeoutMs", 6000)) {
+    NSString *action = nil;
+    id el = findClosable(app, match, @"Close", &action);
+    if (!el) break;
+    if (AXUIElementPerformAction((__bridge AXUIElementRef)el, (__bridge CFStringRef)action) != kAXErrorSuccess) break;
+    closed++;
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.35]];
+  }
+  NSString *a = nil;
+  BOOL left = findClosable(app, match, @"Close", &a) != nil;
+  CFRelease(app);
+  return @{@"closed": @(closed), @"left": @(left), @"ms": @(round(nowMs() - t0))};
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Apps
 
 static NSURL *appURL(NSString *name) {
@@ -348,6 +421,7 @@ static NSDictionary *handle(NSDictionary *m, NSString **err) {
     return @{};
   }
   if ([cmd isEqual:@"getPasteboard"]) return @{@"text": [NSPasteboard.generalPasteboard stringForType:NSPasteboardTypeString] ?: @""};
+  if ([cmd isEqual:@"dismissNotifications"]) return dismissNotifications(m, err);
   if ([cmd isEqual:@"run"]) return run(m, err);
   *err = [NSString stringWithFormat:@"unknown command %@", cmd];
   return nil;
