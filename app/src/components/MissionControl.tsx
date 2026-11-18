@@ -4,18 +4,18 @@
 // agents changed, and the branch's commit trail. Ended sessions are listed under "Earlier".
 
 import { AnimatePresence, motion } from "motion/react";
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { answerPermission } from "../lib/actions";
 import { useAgentCards } from "../lib/agentCards";
 import { pendingPermission, pendingQuestion, useChats, type ChatItem } from "../lib/chat";
 import { useClock } from "../lib/clock";
-import { ago, displayTitle, folderName, fmtElapsed, headlineIsTitle, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
+import { ago, displayTitle, folderName, fmtElapsed, fmtTokens, headlineIsTitle, homeShort, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { useGitTrail } from "../lib/gitTrail";
 import { attention, liveJobs, sameAttention, useChatDigest, useUnseen, type Attention } from "../lib/live";
-import { changesFromActivity, changesFromChat, committing, fanout, foldAgentRows, mergeChanges, type Change, type ItemLike } from "../lib/mission";
+import { changesFromActivity, changesFromChat, committing, fanout, ledgerRows, mergeChanges, type Change, type ItemLike } from "../lib/mission";
 import { AnimateScope, useMotion } from "../lib/motion";
-import { useStableOrder } from "../lib/stable";
+import { contextWindow } from "../lib/models";
 import { turnTotals } from "../lib/turn";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -23,9 +23,10 @@ import { useStore, type Since } from "../store";
 import { ChangeLedger, type LedgerSource } from "./ChangeLedger";
 import { CommitTrail, type Committing } from "./CommitTrail";
 import { FanOut } from "./FanOut";
-import { ICaret, IForward, IPlay, IPlus, ISpark, ITerminal, toolIcon } from "./icons";
+import { IAgent, IForward, IPlay, IPlus, ITerminal } from "./icons";
 import { editPairs, InlineDiff } from "./InlineDiff";
-import { AutoTag, Button, ContextMeter, cx, ease, Elapsed, Kbd, LiveClock, NeedsBadge, PathText, Popover, ProviderMark, softSpring, StatusDot } from "./primitives";
+import { Age, Card, CardHeader, Node, TEXT_X } from "./MissionCard";
+import { AutoTag, Button, cx, ease, Kbd, NeedsBadge, PathText, ProviderMark, softSpring, StatusDot } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { RecentSkeleton, Skel } from "./Skeletons";
 import { Wordmark } from "./Wordmark";
@@ -50,7 +51,6 @@ export function MissionControl() {
   const pendingChats = useStore((s) => s.pendingChats);
   const chatInfos = useStore((s) => s.chatInfos);
   const digest = useChatDigest();
-  const [hover, setHover] = useState(false);
 
   const { live, att } = useMemo(() => {
     const att = new Map<Session, Attention>();
@@ -85,9 +85,6 @@ export function MissionControl() {
     const rank = (p: Project) => (p.needs ? 0 : p.busy || p.starting.length ? 1 : 2);
     return [...by.values()].sort((a, b) => rank(a) - rank(b) || folderName(a.path).localeCompare(folderName(b.path)));
   }, [live, att, pending, ptys, pendingChats, chatInfos]);
-  // Held still while the pointer is over the page, so a section never moves under it.
-  const shown = useStableOrder(projects, (p) => p.path, hover);
-
   // One project at a time. It starts on the latest active one and stays there (another project getting busy never
   // swaps the page under the person) until they pick another from the header, or its last agent ends.
   const [picked, setPicked] = useState<string | null>(null);
@@ -116,7 +113,7 @@ export function MissionControl() {
           ) : nothing ? (
             <EmptyState />
           ) : (
-            <div onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
+            <div>
               {needing.length > 0 && (
                 <section className="mb-6" data-mc-needs={needing.length}>
                   <div className="mb-2.5 flex items-center gap-2 px-1">
@@ -132,7 +129,12 @@ export function MissionControl() {
                   </div>
                 </section>
               )}
-              {current && <ProjectSection key={current.path} p={current} att={att} i={0} stagger={stagger} others={shown} onPick={setPicked} />}
+              {current && (
+                <>
+                  <ProjectTabs projects={projects} current={current} onPick={setPicked} />
+                  <ProjectSection key={current.path} p={current} att={att} stagger={stagger} />
+                </>
+              )}
             </div>
           )}
 
@@ -206,9 +208,103 @@ function NeedsCard({ s, att, i }: { s: Session; att: Attention; i: number }) {
   );
 }
 
+// ---------- project tabs ----------
+
+const tabTone = (p: Project): "needs" | "busy" | "idle" => (p.needs ? "needs" : p.busy || p.starting.length ? "busy" : "idle");
+
+/**
+ * The projects with live agents as a row of tabs (by name, so they never reorder under the pointer), each
+ * with its state (a needs-you / working / waiting dot) and how many live sessions it has. One click
+ * switches; ←/→ (and Home/End) move between them when the row has focus. Many projects scroll sideways,
+ * the edges fading, and the current one is kept in view. The current project's path and + (new session
+ * there) sit at the right.
+ */
+function ProjectTabs({ projects, current, onPick }: { projects: Project[]; current: Project; onPick: (path: string) => void }) {
+  const setSheet = useStore((st) => st.setSheet);
+  const list = useMemo(() => [...projects].sort((a, b) => folderName(a.path).localeCompare(folderName(b.path)) || a.path.localeCompare(b.path)), [projects]);
+  const scroller = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ l: false, r: false });
+  const readEdges = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const l = el.scrollLeft > 1;
+    const r = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setEdges((e) => (e.l === l && e.r === r ? e : { l, r }));
+  };
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    el.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    readEdges();
+    const ro = new ResizeObserver(readEdges);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [current.path, list.length]);
+  const move = (e: React.KeyboardEvent) => {
+    const i = list.findIndex((p) => p.path === current.path);
+    const to = e.key === "ArrowRight" ? i + 1 : e.key === "ArrowLeft" ? i - 1 : e.key === "Home" ? 0 : e.key === "End" ? list.length - 1 : null;
+    if (to === null) return;
+    e.preventDefault();
+    const next = list[Math.max(0, Math.min(list.length - 1, to))];
+    onPick(next.path);
+    requestAnimationFrame(() => scroller.current?.querySelector<HTMLElement>(`[data-mc-tab="${CSS.escape(next.path)}"]`)?.focus());
+  };
+  const fade = `linear-gradient(90deg, ${edges.l ? "transparent 0, #000 28px" : "#000 0"}, ${edges.r ? "#000 calc(100% - 28px), transparent 100%" : "#000 100%"})`;
+  return (
+    <header className="mb-3 flex h-[36px] items-center gap-3" data-mc-tabs={list.length}>
+      <div
+        ref={scroller}
+        role="tablist"
+        aria-label="Projects with live agents"
+        onKeyDown={move}
+        onScroll={readEdges}
+        className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        style={{ maskImage: fade, WebkitMaskImage: fade }}
+      >
+        {list.map((p) => {
+          const on = p.path === current.path;
+          const tone = tabTone(p);
+          const n = p.sessions.length + p.starting.length;
+          return (
+            <button
+              key={p.path}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              tabIndex={on ? 0 : -1}
+              data-mc-tab={p.path}
+              data-mc-switch-to={folderName(p.path)}
+              title={`${homeShort(p.path)} · ${p.needs ? `${p.needs} need${p.needs === 1 ? "s" : ""} you` : p.busy || p.starting.length ? `${p.busy + p.starting.length} working` : "waiting"}`}
+              onClick={() => onPick(p.path)}
+              className={cx(
+                "flex h-[32px] shrink-0 items-center gap-2 rounded-[9px] border px-2.5 text-base transition-colors duration-150",
+                on ? "border-hairline bg-raised text-fg shadow-card" : "border-transparent text-dim hover:text-fg",
+              )}
+            >
+              <TabDot tone={tone} />
+              <span className="max-w-[180px] truncate">{folderName(p.path)}</span>
+              <span className={cx("text-small tnum", tone === "needs" ? "text-needs-text" : "text-faint")}>{n}</span>
+            </button>
+          );
+        })}
+      </div>
+      <PathText path={current.path} className="hidden min-w-0 max-w-[30%] shrink text-mono-small text-faint @[720px]:flex" />
+      <button type="button" title={`New session in ${folderName(current.path)}`} onClick={() => setSheet({ kind: "new", cwd: current.path })} className="flex size-[28px] shrink-0 items-center justify-center rounded-[8px] text-dim transition-colors hover:bg-hover hover:text-fg">
+        <IPlus size={13} strokeWidth={2} />
+      </button>
+    </header>
+  );
+}
+
+/** A tab's state, still (the page's spinners stay on the session rows). */
+function TabDot({ tone }: { tone: "needs" | "busy" | "idle" }) {
+  if (tone === "needs") return <StatusDot status="needs" size={7} />;
+  return <span className={cx("size-[7px] shrink-0 rounded-full", tone === "busy" ? "bg-[var(--status-running)]" : "bg-[color-mix(in_oklab,var(--status-waiting)_45%,transparent)]")} />;
+}
+
 // ---------- a project ----------
 
-/** Every change in the project's sessions (live, or ended within the window), newest first. */
+/** Every change in the project's sessions (live, or ended within the window), newest first, before the ledger's rules. */
 function useProjectChanges(path: string, branch: string | null): { changes: Change[]; sources: Record<string, LedgerSource> } {
   const feeding = useStore(
     useShallow((st) => {
@@ -223,128 +319,85 @@ function useProjectChanges(path: string, branch: string | null): { changes: Chan
     feeding.forEach((s, i) => {
       const key = sessionKey(s);
       sources[key] = { provider: s.provider, title: displayTitle(s) };
+      // Paths are judged against the project (an agent's worktree inside it maps back to the project's files).
       const its = items[i];
       if (its && its.length) {
-        lists.push(changesFromChat(key, its as ItemLike[], s.cwd || path, branch));
+        lists.push(changesFromChat(key, its as ItemLike[], path, branch));
         return;
       }
-      lists.push(changesFromActivity(key, s.activity, s.cwd || path, branch));
-      for (const a of s.agents) lists.push(changesFromActivity(key, a.activity, s.cwd || path, branch).map((c) => ({ ...c, id: `${c.id}@${a.id}`, step: `g:${a.id}` })));
+      lists.push(changesFromActivity(key, s.activity, path, branch));
+      for (const a of s.agents) lists.push(changesFromActivity(key, a.activity, path, branch).map((c) => ({ ...c, id: `${c.id}@${a.id}`, step: `g:${a.id}` })));
     });
-    const agentOf = (c: Change) => (c.step.startsWith("g:") ? c.step.slice(2) : null);
-    return { changes: foldAgentRows(mergeChanges(lists, Infinity), agentOf).slice(0, 40), sources };
+    return { changes: mergeChanges(lists, Infinity), sources };
   }, [feeding, items, path, branch]);
 }
 
-function ProjectSection({ p, att, i, stagger, others, onPick }: { p: Project; att: Map<Session, Attention>; i: number; stagger: boolean; others: Project[]; onPick: (path: string) => void }) {
-  const [menu, setMenu] = useState(false);
+const agentOf = (c: Change) => (c.step.startsWith("g:") ? c.step.slice(2) : null);
+
+function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Attention>; stagger: boolean }) {
   const open = useStore((st) => st.open);
   const focusAgent = useStore((st) => st.focusAgent);
-  const setSheet = useStore((st) => st.setSheet);
   const reduce = useMotion().reduce;
   const commit = p.sessions.map((s) => (att.get(s)!.status === "busy" ? committing(s.current) : null)).find((m) => m !== null) ?? null;
   const committer = commit !== null ? p.sessions.find((s) => committing(s.current) === commit) : undefined;
   // The trail's branch names pushes and merges in the ledger; the ledger's git rows re-read the trail.
   const [branch, setBranch] = useState<string | null>(null);
-  const { changes, sources } = useProjectChanges(p.path, branch);
-  const gitRows = changes.filter((c) => c.kind === "commit" || c.kind === "merge" || c.kind === "push").length;
+  const { changes: all, sources } = useProjectChanges(p.path, branch);
+  const gitRows = all.filter((c) => c.kind === "commit" || c.kind === "merge" || c.kind === "push").length;
   const entry = useGitTrail(p.path, `${gitRows}|${commit ?? "-"}`);
   const trail = entry?.trail ?? null;
   if (trail && trail.branch !== branch) setBranch(trail.branch);
   const showTrail = !entry || !!trail;
   const committingRow: Committing | null = commit !== null && committer ? { message: commit, key: sessionKey(committer) } : null;
+  // The trail owns git history; the ledger keeps what it can't show.
+  const changes = useMemo(() => ledgerRows(all, { agentOf, trail: showTrail ? (trail?.commits ?? []) : null }), [all, trail, showTrail]);
 
   const openChange = (c: Change) => {
     open({ kind: "session", key: c.session });
     if (c.step.startsWith("g:")) focusAgent(c.step.slice(2));
   };
-  const ledger = <ChangeLedger changes={changes} sources={sources} onOpen={openChange} />;
+  const working = p.busy + p.starting.length;
+  const waiting = p.sessions.length - p.busy - p.needs;
+  const meta = [p.needs > 0 && <span key="n" className="text-needs-text">{p.needs} need{p.needs === 1 ? "s" : ""} you</span>, working > 0 && <span key="w">{working} working</span>, waiting > 0 && <span key="i">{waiting} waiting</span>].filter(Boolean);
 
   return (
     <motion.section
       initial={stagger && !reduce ? { opacity: 0, y: 12 } : false}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ ...softSpring, opacity: { duration: 0.3 }, delay: stagger ? Math.min(i, 6) * 0.06 : 0 }}
+      transition={{ ...softSpring, opacity: { duration: 0.3 } }}
       data-mc-project={folderName(p.path)}
     >
-      <header className="mb-2.5 flex h-[28px] items-center gap-2.5 px-1">
-        {/* The project on show, and the way to another one: the other projects with live agents are in its menu. */}
-        <div className="relative -ml-1.5 flex min-w-0 items-center">
-          <button
-            type="button"
-            data-pop-anchor
-            data-mc-switch
-            disabled={others.length < 2}
-            aria-haspopup="menu"
-            aria-expanded={menu}
-            title={others.length < 2 ? undefined : "Switch project"}
-            onClick={() => setMenu((v) => !v)}
-            className={cx("flex h-[30px] min-w-0 items-center gap-2.5 rounded-[8px] px-1.5 text-left transition-colors duration-150", others.length > 1 && "hover:bg-hover", menu && "bg-hover")}
-          >
-            <span className="shrink-0 text-title font-semibold tracking-[-0.01em] text-fg">{folderName(p.path)}</span>
-            <PathText path={p.path} className="hidden min-w-0 text-small text-faint @[720px]:flex" />
-            {others.length > 1 && <ICaret size={12} className={cx("shrink-0 text-faint transition-transform duration-150", menu && "rotate-180")} />}
-          </button>
-          <Popover open={menu} onClose={() => setMenu(false)} width={320}>
-            <div className="max-h-[360px] overflow-y-auto p-1" role="menu">
-              {others.map((o) => (
-                <button
-                  key={o.path}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={o.path === p.path}
-                  data-mc-switch-to={folderName(o.path)}
-                  onClick={() => {
-                    setMenu(false);
-                    onPick(o.path);
-                  }}
-                  className={cx("flex w-full items-center gap-2.5 rounded-[7px] px-2.5 py-1.5 text-left transition-colors duration-150 hover:bg-hover", o.path === p.path && "bg-hover")}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-base text-fg">{folderName(o.path)}</span>
-                    <PathText path={o.path} className="text-small text-faint" />
-                  </span>
-                  <span className="shrink-0 text-small tnum">
-                    {o.needs > 0 ? (
-                      <span className="text-needs-text">{o.needs} need{o.needs === 1 ? "s" : ""} you</span>
-                    ) : o.busy > 0 || o.starting.length > 0 ? (
-                      <span className="text-dim">{o.busy + o.starting.length} working</span>
-                    ) : (
-                      <span className="text-faint">{o.sessions.length} waiting</span>
-                    )}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </Popover>
-        </div>
-        <span className="ml-auto flex shrink-0 items-center gap-3 text-small text-faint tnum">
-          {p.needs > 0 && <span className="text-needs-text">{p.needs} need{p.needs === 1 ? "s" : ""} you</span>}
-          {p.busy > 0 && <span>{p.busy} working</span>}
-          <button type="button" title={`New session in ${folderName(p.path)}`} onClick={() => setSheet({ kind: "new", cwd: p.path })} className="flex size-[26px] items-center justify-center rounded-[7px] text-dim transition-colors hover:bg-hover hover:text-fg">
-            <IPlus size={13} strokeWidth={2} />
-          </button>
-        </span>
-      </header>
-      <div className={cx("grid items-start gap-3", "@[900px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]")}>
-        <div className="flex min-w-0 flex-col gap-3">
-          <div className="overflow-hidden rounded-[14px] border border-hairline bg-bg" data-mc-sessions={p.sessions.length}>
-            {p.sessions.map((s, k) => (
-              <SessionRow key={sessionKey(s)} s={s} att={att.get(s)!} first={k === 0} />
-            ))}
-            {p.starting.map((e, k) => (
-              <StartingRow key={e.k} p={e.p} chat={e.chat} first={k === 0 && p.sessions.length === 0} />
-            ))}
-          </div>
-          {showTrail && ledger}
-        </div>
-        {showTrail ? <CommitTrail trail={trail} loading={!entry} committing={committingRow} /> : ledger}
+      {/* One grid: sessions and changes on the left, the trail on the right spanning both, so the columns end together. */}
+      <div className="grid items-stretch gap-3 @[900px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] @[900px]:grid-rows-[auto_1fr]">
+        <Card className="@[900px]:col-start-1 @[900px]:row-start-1" data-mc-sessions={p.sessions.length}>
+          <CardHeader icon={IAgent} title="Sessions" meta={meta.length ? meta : undefined} />
+          {p.sessions.map((s, k) => (
+            <SessionRow key={sessionKey(s)} s={s} att={att.get(s)!} first={k === 0} />
+          ))}
+          {p.starting.map((e, k) => (
+            <StartingRow key={e.k} p={e.p} chat={e.chat} first={k === 0 && p.sessions.length === 0} />
+          ))}
+        </Card>
+        <ChangeLedger changes={changes} sources={sources} onOpen={openChange} className={showTrail ? "@[900px]:col-start-1 @[900px]:row-start-2" : "@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1"} />
+        {showTrail && <CommitTrail trail={trail} loading={!entry} committing={committingRow} className="@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1" />}
       </div>
     </motion.section>
   );
 }
 
 // ---------- session rows ----------
+
+/** The context window, only when it is filling up (half or more): "72% context", amber from 75% of a known window. */
+function ContextNote({ context, model }: { context: number; model: string | null }) {
+  const w = contextWindow(model, null);
+  const pct = context / w.tokens;
+  if (pct < 0.5) return null;
+  return (
+    <span className={cx("shrink-0 text-small tnum", w.source !== "assumed" && pct >= 0.75 ? "text-busy-text" : "text-faint")} title={`Context ${fmtTokens(context)} of ${fmtTokens(w.tokens)}`}>
+      {Math.round(pct * 100)}% context
+    </span>
+  );
+}
 
 /** When the current tool / thinking phase began. Chats: precise, from event timestamps. */
 function useRowSince(s: Session): { at: number; approx: boolean } {
@@ -367,7 +420,7 @@ function useRowSince(s: Session): { at: number; approx: boolean } {
   return since ? { at: since.currentAt, approx: true } : { at: s.updated, approx: true };
 }
 
-/** Start of the session's latest turn (its fan-out is the subagents started since). */
+/** Start of the session's latest turn (its fan-out is the subagents started since, and any still running). */
 function useTurnStart(s: Session): number | null {
   const chatStart = useChats((st) => {
     const c = s.chat != null ? st.chats[s.chat] : undefined;
@@ -384,21 +437,20 @@ const sameRow = (a: RowProps, b: RowProps) => a.s === b.s && a.first === b.first
 const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
   const open = useStore((st) => st.open);
   const focusAgent = useStore((st) => st.focusAgent);
-  const age = useClock((now) => ago(s.updated, now));
   const unseen = useUnseen(s);
   const chat = useChats((st) => (s.chat != null ? st.chats[s.chat] : undefined));
   const cards = useAgentCards(s, chat);
   const turnStart = useTurnStart(s);
   const now = useClock((t) => Math.floor(t / 15_000) * 15_000);
-  const batch = useMemo(() => fanout(cards, turnStart, now), [cards, turnStart, now]);
   const shells = att.status !== "ended" ? (s.shells ?? []) : [];
+  // Every worker the row's "N agents, M jobs working" counts is in the fan-out.
+  const batch = useMemo(() => fanout(cards, turnStart, now, 90_000, shells.length), [cards, turnStart, now, shells.length]);
   const since = useRowSince(s);
   const key = sessionKey(s);
   const needs = att.needs;
   const busy = att.status === "busy" && !needs && !att.background;
   const thinking = busy && (!s.current || isThinking(s.current));
   const cur = busy && !thinking && s.current ? splitTool(s.current) : null;
-  const CurIcon = cur ? toolIcon(cur.name) : ISpark;
   const running = att.agents;
   const jobs = liveJobs(s);
   const crew = running.length ? `${running.length} ${running.length === 1 ? "agent" : "agents"}${jobs > 0 ? `, ${jobs} ${jobs === 1 ? "job" : "jobs"}` : ""} working` : null;
@@ -406,58 +458,50 @@ const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
   const worked = turn.startMs !== null && turn.endMs !== null && turn.endMs > turn.startMs ? turn.endMs - turn.startMs : 0;
   const headline = s.insight?.headline && !headlineIsTitle(s) ? s.insight.headline : null;
   const pendingLoad = s.loaded === false;
-  const showFan = batch.length >= 2 || (batch.length > 0 && shells.length > 0);
+  const showFan = batch.length > 0 || shells.length >= 2;
+  const live = busy && !pendingLoad && !since.approx;
 
   return (
-    <div className={cx(!first && "border-t border-hairline")} data-mc-session={key}>
-      <button type="button" onClick={() => open({ kind: "session", key })} className="group flex min-h-[54px] w-full items-center gap-3 px-3.5 py-2 text-left transition-colors duration-150 hover:bg-hover">
-        <span className="flex size-[16px] shrink-0 items-center justify-center" title={needs ? "Needs you" : att.background ? `Working in background · ${att.background}` : att.status === "busy" ? "Working" : "Waiting for you"}>
-          {(att.status !== "idle" || unseen || needs) && <StatusDot status={needs ? "needs" : att.status} size={8} />}
-          {att.status === "idle" && !unseen && !needs && <span className="size-[6px] rounded-full bg-[color-mix(in_oklab,var(--status-waiting)_45%,transparent)]" />}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <ProviderMark provider={s.provider} size={12} />
-            <span className="min-w-0 truncate text-base font-medium text-fg">{displayTitle(s)}</span>
-            {s.origin === "automation" && <AutoTag />}
+    <div data-mc-session={key} data-first={first || undefined}>
+      <button type="button" onClick={() => open({ kind: "session", key })} className="group flex h-[36px] w-full items-center gap-2.5 px-3.5 text-left transition-colors duration-150 hover:bg-hover">
+        <Node>
+          <span className="flex" title={needs ? "Needs you" : att.background ? `Working in background · ${att.background}` : att.status === "busy" ? "Working" : "Waiting for you"}>
+            {att.status !== "idle" || unseen || needs ? <StatusDot status={needs ? "needs" : att.status} size={8} /> : <span className="size-[6px] rounded-full bg-[color-mix(in_oklab,var(--status-waiting)_45%,transparent)]" />}
           </span>
-          <span className="mt-0.5 flex h-[18px] min-w-0 items-center gap-1.5 text-small">
-            {pendingLoad ? (
-              <Skel w="45%" h={8} />
-            ) : needs ? (
-              <span className="min-w-0 truncate text-needs-text" title={needs}>
-                {needs}
-              </span>
-            ) : crew ? (
-              <span className="min-w-0 truncate text-dim">{crew}</span>
-            ) : att.background ? (
-              <span className="min-w-0 truncate text-dim">{att.background}</span>
-            ) : busy ? (
-              <>
-                <CurIcon size={12} className="shrink-0 text-faint" />
-                {cur ? (
-                  <span className="min-w-0 truncate text-dim">
-                    {cur.name}
-                    {cur.detail && <span className="ml-1.5 font-mono text-mono-small text-faint">{shortDetail(cur.detail)}</span>}
-                  </span>
-                ) : (
-                  <span className="text-dim">Thinking</span>
-                )}
-              </>
-            ) : (
-              <span className="min-w-0 truncate text-faint" title={headline ?? undefined}>
-                {headline ?? (worked ? `Waiting for you · worked ${fmtElapsed(worked)}` : `Waiting for you · ${age}`)}
-              </span>
-            )}
+        </Node>
+        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="min-w-0 max-w-[62%] shrink-0 truncate text-base text-fg" title={displayTitle(s)}>
+            {displayTitle(s)}
           </span>
+          {s.origin === "automation" && <AutoTag className="self-center" />}
+          {pendingLoad ? (
+            <Skel w={90} h={8} className="self-center" />
+          ) : (
+            <span className={cx("min-w-0 flex-1 truncate text-small", needs ? "text-needs-text" : busy || crew || att.background ? "text-dim" : "text-faint")} title={needs || headline || undefined}>
+              {needs
+                ? needs
+                : crew
+                  ? crew
+                  : att.background
+                    ? att.background
+                    : busy
+                      ? cur
+                        ? (
+                            <>
+                              {cur.name}
+                              {cur.detail && <span className="ml-1.5 font-mono text-mono-small text-faint">{shortDetail(cur.detail)}</span>}
+                            </>
+                          )
+                        : "Thinking"
+                      : (headline ?? (worked ? `Waiting · worked ${fmtElapsed(worked)}` : "Waiting for you"))}
+            </span>
+          )}
         </span>
-        <span className="flex shrink-0 flex-col items-end gap-1">
-          {busy && !pendingLoad ? <LiveClock since={since.approx ? null : since.at} className="text-small text-faint" /> : <span className="text-small text-faint tnum">{age}</span>}
-          {!pendingLoad && <ContextMeter context={s.tokens.context} model={s.model} compact />}
-        </span>
+        {!pendingLoad && <ContextNote context={s.tokens.context} model={s.model} />}
+        <Age ms={live ? since.at : s.updated} title={live ? "On this step for" : "Last active"} className={live ? "text-dim" : undefined} />
       </button>
       {showFan && (
-        <div className="px-3.5 pb-3 pl-[42px]">
+        <div className="pb-3 pr-3.5" style={{ paddingLeft: TEXT_X }}>
           <FanOut
             cards={batch}
             shells={shells}
@@ -477,18 +521,15 @@ function StartingRow({ p, chat, first }: { p?: PtyInfo; chat?: ChatInfo; first: 
   const info = (p ?? chat)!;
   const ready = !!chat && chat.state === "idle";
   return (
-    <button type="button" onClick={() => open(chat ? { kind: "chat", id: chat.id } : { kind: "pty", id: p!.id })} className={cx("flex min-h-[54px] w-full items-center gap-3 px-3.5 py-2 text-left transition-colors hover:bg-hover", !first && "border-t border-hairline")}>
-      <span className="flex size-[16px] shrink-0 items-center justify-center">
+    <button type="button" onClick={() => open(chat ? { kind: "chat", id: chat.id } : { kind: "pty", id: p!.id })} className="flex h-[36px] w-full items-center gap-2.5 px-3.5 text-left transition-colors hover:bg-hover" data-first={first || undefined}>
+      <Node>
         <StatusDot status={ready ? "idle" : "starting"} size={8} />
+      </Node>
+      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span className="shrink-0 truncate text-base text-fg">New {info.provider === "claude" ? "Claude Code" : "Codex"} {chat ? "chat" : "session"}</span>
+        <span className="min-w-0 truncate text-small text-dim">{ready ? "Ready for a first prompt" : chat ? "Starting" : "Waiting for the transcript"}</span>
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <ProviderMark provider={info.provider} size={12} />
-          <span className="truncate text-base font-medium text-fg">New {info.provider === "claude" ? "Claude Code" : "Codex"} {chat ? "chat" : "session"}</span>
-        </span>
-        <span className="mt-0.5 block h-[18px] text-small text-dim">{ready ? "Ready for a first prompt" : chat ? "Starting" : "Waiting for the transcript"}</span>
-      </span>
-      {p && <Elapsed since={p.started} className="shrink-0 text-small text-faint" />}
+      <Age ms={p ? p.started : null} />
     </button>
   );
 }
@@ -523,9 +564,9 @@ function ProjectSkeleton() {
             <div className="flex flex-col gap-3">
               <div className="rounded-[14px] border border-hairline bg-bg">
                 {[0, 1].map((r) => (
-                  <div key={r} className={cx("flex h-[54px] items-center gap-3 px-3.5", r > 0 && "border-t border-hairline")}>
+                  <div key={r} className={cx("flex h-[36px] items-center gap-2.5 px-3.5", r > 0 && "border-t border-hairline")}>
                     <Skel w={8} h={8} i={r} />
-                    <div className="flex flex-1 flex-col gap-2">
+                    <div className="flex flex-1 items-center gap-3">
                       <Skel w={r ? "45%" : "60%"} h={10} i={r} />
                       <Skel w={r ? "30%" : "38%"} h={8} i={r + 1} />
                     </div>
