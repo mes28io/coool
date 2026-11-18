@@ -6,9 +6,31 @@ use serde::Serialize;
 use serde_json::Value;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 /// The device coool creates for itself on first use.
 pub const COOOL_DEVICE_NAME: &str = "coool iPhone";
+
+/// Set by the self-test ([`set_only_device`]): the one device that counts as coool's own this run.
+static ONLY: OnceLock<String> = OnceLock::new();
+
+/// Self-test: coool's own device is `name` (created on first use) and no other device counts as coool's, so the
+/// person's "coool iPhone" is never picked, booted or driven by a test run.
+pub fn set_only_device(name: &str) {
+    let _ = ONLY.set(name.to_string());
+}
+
+/// The name of the device [`ensure_coool_device`] makes.
+pub fn own_name() -> &'static str {
+    ONLY.get().map(String::as_str).unwrap_or(COOOL_DEVICE_NAME)
+}
+
+fn is_coool(name: &str, only: Option<&str>) -> bool {
+    match only {
+        Some(n) => name == n,
+        None => name.starts_with("coool "),
+    }
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -30,10 +52,15 @@ fn run(args: &[&str]) -> Result<String, String> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let line = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim().to_string();
-        Err(format!("simctl {}: {line}", args.first().copied().unwrap_or("")))
+        Err(format!("simctl {}: {}", args.first().copied().unwrap_or(""), error_text(&String::from_utf8_lossy(&out.stderr))))
     }
+}
+
+/// simctl's error output on one line. All of it: the reason ("Unable to shutdown device in current state: Shutdown")
+/// comes after a generic first line, and `boot` / `shutdown` look for it.
+fn error_text(stderr: &str) -> String {
+    let t = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    if t.is_empty() { "failed".into() } else { t }
 }
 
 /// Why simulators can't be used here, if they can't (no Xcode / simctl).
@@ -62,6 +89,11 @@ fn type_name(id: &str) -> String {
 }
 
 pub fn parse_devices(json: &str) -> Vec<SimDevice> {
+    parse_devices_as(json, ONLY.get().map(String::as_str))
+}
+
+/// `only`: the one device that counts as coool's (the self-test's), else every "coool …" one.
+fn parse_devices_as(json: &str, only: Option<&str>) -> Vec<SimDevice> {
     let v: Value = serde_json::from_str(json).unwrap_or_default();
     let mut out = Vec::new();
     let Some(map) = v["devices"].as_object() else { return out };
@@ -76,7 +108,7 @@ pub fn parse_devices(json: &str) -> Vec<SimDevice> {
             let name = d["name"].as_str().unwrap_or_default().to_string();
             out.push(SimDevice {
                 udid: d["udid"].as_str().unwrap_or_default().to_string(),
-                coool: name.starts_with("coool "),
+                coool: is_coool(&name, only),
                 name,
                 state: d["state"].as_str().unwrap_or_default().to_string(),
                 runtime: runtime_name(rt),
@@ -134,11 +166,20 @@ fn pick_type() -> Result<(String, String), String> {
 
 /// coool's own device, created on first use.
 pub fn ensure_coool_device() -> Result<String, String> {
-    if let Some(d) = devices()?.into_iter().find(|d| d.name == COOOL_DEVICE_NAME) {
+    if let Some(d) = devices()?.into_iter().find(|d| d.name == own_name()) {
         return Ok(d.udid);
     }
     let (ty, rt) = pick_type()?;
-    Ok(run(&["create", COOOL_DEVICE_NAME, &ty, &rt])?.trim().to_string())
+    Ok(run(&["create", own_name(), &ty, &rt])?.trim().to_string())
+}
+
+/// Deletes one of coool's own devices (shutting it down first); refuses any other.
+pub fn delete(udid: &str) -> Result<(), String> {
+    if !device(udid)?.coool {
+        return Err("not one of coool's own simulators".into());
+    }
+    shutdown(udid)?;
+    run(&["delete", udid]).map(|_| ())
 }
 
 /// Boots headless (no Simulator.app) and waits until the device has finished booting.
@@ -244,5 +285,24 @@ mod tests {
         assert_eq!(d[0].runtime, "iOS 27.0");
         assert_eq!(d[0].device_type, "iPhone 18 Pro");
         assert!(d[0].coool && !d[1].coool);
+    }
+
+    #[test]
+    fn errors_keep_the_reason_after_the_first_line() {
+        let e = "An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=405):\nUnable to shutdown device in current state: Shutdown\n";
+        assert!(error_text(e).contains("current state: Shutdown"));
+        assert_eq!(error_text("\n"), "failed");
+    }
+
+    #[test]
+    fn selftest_device_is_the_only_coool_one() {
+        let j = r#"{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[
+            {"udid":"B","name":"coool iPhone","state":"Booted","isAvailable":true,"deviceTypeIdentifier":"x.iPhone-18-Pro"},
+            {"udid":"T","name":"coool selftest iPhone","state":"Shutdown","isAvailable":true,"deviceTypeIdentifier":"x.iPhone-18-Pro"}]}}"#;
+        let d = parse_devices_as(j, Some("coool selftest iPhone"));
+        assert_eq!(d[0].udid, "T");
+        assert!(d[0].coool);
+        assert!(!d.iter().find(|d| d.udid == "B").unwrap().coool);
+        assert!(parse_devices_as(j, None).iter().all(|d| d.coool));
     }
 }

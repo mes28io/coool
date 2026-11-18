@@ -75,8 +75,14 @@ pub struct Activity {
 impl Devices {
     /// Called once from the app's setup: where the helper lives, and the MCP socket.
     pub fn init(self: &Arc<Self>, app: &AppHandle) {
+        self.init_in(app, app.path().app_local_data_dir().ok());
+    }
+
+    /// As [`Self::init`], with the helper and socket under `dir` (the self-test's throwaway folder, so a test build
+    /// never replaces the helper the person's coool runs).
+    pub fn init_in(self: &Arc<Self>, app: &AppHandle, dir: Option<PathBuf>) {
         let _ = self.app.set(app.clone());
-        if let Ok(d) = app.path().app_local_data_dir() {
+        if let Some(d) = dir {
             let _ = self.bin_dir.set(d.join("bin"));
             if let Err(e) = mcp::start(self.clone(), &d) {
                 eprintln!("coool: device MCP server not started: {e}");

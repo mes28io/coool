@@ -11,7 +11,7 @@
 
 import { createContext, useContext } from "react";
 import { create } from "zustand";
-import { useStore, type BrowserPage } from "../store";
+import { onPanelRekey, useStore, type BrowserPage } from "../store";
 import { api, type BrowserBounds, type BrowserState } from "./backend";
 import type { ArtifactInfo } from "./types";
 
@@ -45,6 +45,30 @@ const splitKey = (key: string): [string, number] | null => {
   const i = key.lastIndexOf("#tab");
   return i < 0 ? null : [key.slice(0, i), Number(key.slice(i + 4))];
 };
+/** `rec` with every key of panel `from`'s tabs (`from#tabN`) renamed to `to#tabN`; `rec` itself when none. */
+export function rekeyTabs<T>(rec: Record<string, T>, from: string, to: string): Record<string, T> {
+  const p = `${from}#tab`;
+  if (!Object.keys(rec).some((k) => k.startsWith(p))) return rec;
+  return Object.fromEntries(Object.entries(rec).map(([k, v]) => [k.startsWith(p) ? `${to}#tab${k.slice(p.length)}` : k, v]));
+}
+
+// A new chat's panel moves to its session's key (store.movePanels): its tabs' webviews, states and rects go along,
+// so the page stays on screen and the agent keeps acting on it.
+onPanelRekey((from, to) => {
+  const p = `${from}#tab`;
+  for (const m of [natives, resume] as Map<string, unknown>[]) {
+    // A copy: the map changes as it goes.
+    for (const [k, v] of Array.from(m)) {
+      if (!k.startsWith(p)) continue;
+      m.delete(k);
+      m.set(`${to}#tab${k.slice(p.length)}`, v);
+    }
+  }
+  useBrowserState.setState((s) => ({ byKey: rekeyTabs(s.byKey, from, to) }));
+  useNativeRects.setState((s) => ({ byKey: rekeyTabs(s.byKey, from, to) }));
+  nativesChanged();
+});
+
 /** The tab key of the tab a session's browser shows. */
 export function activeTabKey(panelKey: string): string | null {
   const b = useStore.getState().browser[panelKey];

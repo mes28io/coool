@@ -398,6 +398,32 @@ function keepRecord<V>(prev: Record<string | number, V>, next: Record<string | n
 const sameSince = (a: Since, b: Since) =>
   a.status === b.status && a.current === b.current && a.statusAt === b.statusAt && a.currentAt === b.currentAt && a.observed === b.observed && a.currentObserved === b.currentObserved;
 
+/** Told when a panel's state moves to another key (lib/browser.ts moves its tabs' webviews along). */
+const rekeyListeners = new Set<(from: string, to: string) => void>();
+export function onPanelRekey(cb: (from: string, to: string) => void): () => void {
+  rekeyListeners.add(cb);
+  return () => rekeyListeners.delete(cb);
+}
+
+/**
+ * A new chat's view keeps its right panel under `chat:<id>` until its session exists, then under the session's key.
+ * Without moving them, a panel opened before that (the agent's browser on the first prompt, the iPhone) vanished
+ * mid-turn and the agent's next tool found no page. Each `[from, to]` moves only when `to` has nothing of its own.
+ */
+export function movePanels(st: Pick<State, "rightPanel" | "browser" | "lastBrowser" | "device">, moves: [string, string][]): Partial<Pick<State, "rightPanel" | "browser" | "lastBrowser" | "device">> {
+  const out: Partial<Pick<State, "rightPanel" | "browser" | "lastBrowser" | "device">> = {};
+  for (const field of ["rightPanel", "browser", "lastBrowser", "device"] as const) {
+    let rec: Record<string, unknown> = st[field];
+    for (const [from, to] of moves) {
+      if (!(from in rec) || to in rec) continue;
+      rec = { ...rec, [to]: rec[from] };
+      delete rec[from];
+    }
+    if (rec !== st[field]) (out as Record<string, unknown>)[field] = rec;
+  }
+  return out;
+}
+
 export const useStore = create<State>((set, get) => ({
   ready: false,
   loading: false,
@@ -639,7 +665,15 @@ export const useStore = create<State>((set, get) => ({
     const usage = { claude: snap.usage?.claude ?? null, codex: snap.usage?.codex ?? null };
     const keptPtyOwner = keepRecord(st.ptyOwner, ptyOwner);
     const keptChatOwner = keepRecord(st.chatOwner, chatOwner);
+    // A chat that just got its session: its view's panels move from `chat:<id>` to the session's key.
+    const moves: [string, string][] = Object.entries(chatOwner)
+      .filter(([c, k]) => st.chatOwner[Number(c)] !== k)
+      .map(([c, k]) => [`chat:${c}`, k]);
+    const panels = movePanels(st, moves);
+    // The webviews first, so a panel rendering under the new key finds its tabs' views instead of opening new ones.
+    for (const [from, to] of moves) if (panels.browser?.[to] || panels.lastBrowser?.[to]) rekeyListeners.forEach((f) => f(from, to));
     set({
+      ...panels,
       ready: true,
       loading: !!snap.loading,
       sessions: keepList(st.sessions, vis.sessions),
