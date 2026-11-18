@@ -1,5 +1,6 @@
 import type { SVGProps } from "react";
 import { AgentMark } from "./AgentMark";
+import { parseMcp } from "../lib/toolNames";
 
 /*
  * coool's icon set: original drawings made in the style of Vercel's Geist icons (no Geist paths are copied).
@@ -175,6 +176,12 @@ export function IAgent({ size = 14, className }: P) {
 }
 
 export function toolIcon(name: string) {
+  const mcp = parseMcp(name);
+  if (mcp) {
+    if (!/^coool[-_]device$/i.test(mcp.server)) return IPlug;
+    if (mcp.tool === "pilot_run") return IBolt;
+    return mcp.tool.startsWith("browser_") ? IGlobe : mcp.tool.startsWith("mac_") ? IMac : IPhone;
+  }
   const n = name.toLowerCase();
   if (/(bash|shell|exec|command)/.test(n)) return ITerminal;
   if (/(edit|write|notebook|apply_patch|patch)/.test(n)) return IPencil;

@@ -659,14 +659,23 @@ export function mockBackend(): Backend {
     }),
     "pixel",
   );
+  const HANDOFF: Record<string, string> = {
+    ag3d1: "Make UV unwrapping respect seams over 60°, then wire image textures through the new sampler.\nRun cargo test uv:: and texture:: before reporting.",
+    ag3d2: "Fix the curve-to-mesh crash on empty splines and port text objects to the glyph cache.",
+    ag3d3: "Read the glTF importer and list what KHR_materials_variants needs; don't edit anything.",
+    ag3d4: "Polish pass on the toolbar, tooltips and panel spacing from the design review notes.",
+    ag3d5: "List every bpy.ops operator the add-on calls and since which Blender version each is stable.",
+  };
   const mkAgent = (id: string, kind: string, description: string, finished: boolean, steps: string[], ageS: number, result?: string): Agent => ({
     id,
     kind,
     description,
     finished,
     current: finished ? null : steps[0],
-    tokens: tok(9_000 + steps.length * 700, 1_200 + steps.length * 300, 16_000),
-    activity: [...steps.map((x, i) => parseStep(x, now - (ageS - i * 6) * 1000)), ...(result ? [act("text", result, now - (ageS - steps.length * 6) * 1000)] : [])],
+    // `total`: Claude Code's count for a subagent (latest context plus output), what its context bar shows.
+    tokens: { ...tok(9_000 + steps.length * 700, 1_200 + steps.length * 300, 16_000), total: id === "ag3d2" ? 842_000 : 14_000 + steps.length * 11_000 },
+    // The lead's handoff is the subagent's first prompt.
+    activity: [act("prompt", HANDOFF[id] ?? description, now - ageS * 1000 - 1000), ...steps.map((x, i) => parseStep(x, now - (ageS - i * 6) * 1000)), ...(result ? [act("text", result, now - (ageS - steps.length * 6) * 1000)] : [])],
     model: kind === "Explore" ? "claude-haiku-5-5" : "claude-sonnet-5-5",
   });
   // What each running agent does next, one step every few seconds. `!` marks a failed step; the
@@ -1270,6 +1279,14 @@ export function mockBackend(): Backend {
     }, 600);
   }
   if (location.search.includes("agents=chat")) void import("./mockAgents").then((m) => m.runAgentsChat(newChat("claude", `${HOME}/code/blender-addon`, {}, 0))); // see mockAgents.ts
+  // `?tools=demo`: a chat that drives the Browser, iPhone and Mac through coool-device (readable step rows, where the
+  // turn went, a subagent near its context limit): one finished turn, then a live one (`?tools=demo&live=0`: no live turn).
+  if (location.search.includes("tools=demo")) {
+    const c = newChat("claude", `${HOME}/code/affect-study`, {}, 0);
+    void c.seed(["Walk the affectUI agent components in the Browser panel (device demo)"], now - 4 * 60_000).then(() => {
+      if (!location.search.includes("live=0")) setTimeout(() => c.send("Now check the sign-in flow again on a fresh page (device demo)"), 1500);
+    });
+  }
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 
   // `?presence=iphone|mac|browser`: an agent drives that panel on a loop (lib/mockPresence.ts).

@@ -9,6 +9,7 @@ import { useNow } from "../lib/clock";
 import { ago, displayTitle } from "../lib/format";
 import { attention } from "../lib/live";
 import { sessionKey } from "../lib/types";
+import { permissionWhat } from "../lib/toolNames";
 import { useStore } from "../store";
 import { IBack } from "./icons";
 import { Button, cx, ease, IconButton, ProviderMark } from "./primitives";
@@ -38,8 +39,6 @@ export function useNeedsYou() {
 
 type Needed = ReturnType<typeof useNeedsYou>[number];
 
-/** "Bash · pnpm build" -> "pnpm build". */
-const brief = (tool: string, summary: string) => (summary.startsWith(tool + " · ") ? summary.slice(tool.length + 3) : summary);
 
 function NeedsRow({ s, a, order }: Needed & { order: string }) {
   const open = useStore((st) => st.open);
@@ -75,8 +74,10 @@ function NeedsRow({ s, a, order }: Needed & { order: string }) {
             <span className="block truncate text-base text-fg">
               {perm ? (
                 <>
-                  <span className="font-medium">{perm.tool}</span>
-                  <span className="text-dim"> · {brief(perm.tool, perm.summary)}</span>
+                  <span className="font-medium" title={perm.tool}>
+                    {permissionWhat(perm.tool, perm.input, perm.summary).name}
+                  </span>
+                  <span className="text-dim"> · {permissionWhat(perm.tool, perm.input, perm.summary).detail}</span>
                 </>
               ) : ask ? (
                 (ask.questions[0]?.question ?? "A question")

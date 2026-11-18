@@ -8,6 +8,10 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "rea
 import { answerPermission, answerQuestion } from "../lib/actions";
 import { type Chat, type ChatItem, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
+import { rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
+import { agentFill, handoffLine, taskPrompt } from "../lib/agentFill";
+import { FillBar, Handoff } from "./AgentFill";
+import { LiveTurnBar, TurnBar, useTurnBreakdown, Waterfall } from "./TurnBreakdown";
 import { modelLabel } from "../lib/models";
 import type { Activity, ArtifactInfo, RememberOption } from "../lib/types";
 import { ArtifactCard, artifactVersions } from "./ArtifactCard";
@@ -353,6 +357,7 @@ export function ChatTimeline({
           {showRow && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
               <LiveIndicator since={now.at ?? idleSince} mood={now.mood} detail={now.detail} agents={now.agents} mainActive={now.mainActive} timerSince={chat.turnStart ?? idleSince} tokens={Math.max(0, Math.max(chat.outShown, chat.tokens.output) - chat.turnOut0)} />
+              <LiveTurnBar chat={chat} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -539,21 +544,19 @@ function relPath(p: string, cwd: string): string {
   return homeShort(p);
 }
 
-function toolSummary(t: Tool, cwd: string): string {
+/** A step as it reads (lib/toolNames.ts): built-ins keep their name, with a file path relative to the chat's folder. */
+function stepRow(t: Tool, cwd: string): ToolRow {
+  const r = toolRow({ name: t.name, input: t.input, output: t.output, summary: t.summary, ok: t.ok, running: t.endTs === null });
+  if (r.family !== "tool") return r;
   // From the input when it names a file: the core's one-line summary may have clipped a long path.
   const i = (t.input ?? {}) as Record<string, unknown>;
   const file = typeof i.file_path === "string" ? i.file_path : typeof i.notebook_path === "string" ? i.notebook_path : null;
-  if (file && cwd) return relPath(file, cwd);
-  return stripToolName(t.name, t.summary || "");
+  return file && cwd ? { ...r, detail: relPath(file, cwd) } : r;
 }
 
-function chipsFor(tools: Tool[]) {
-  const m = new Map<string, number>();
-  for (const t of tools) {
-    const n = t.agent ? "Agent" : t.name;
-    m.set(n, (m.get(n) ?? 0) + 1);
-  }
-  return [...m.entries()].slice(0, 4);
+function toolSummary(t: Tool, cwd: string): string {
+  const r = stepRow(t, cwd);
+  return r.family === "tool" ? r.detail : rowText(r);
 }
 
 const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { tools: Tool[]; chat: Chat; nested: Map<string, ChatItem[]>; latest: boolean }) {
@@ -566,7 +569,8 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
   }, [holdsFocus]);
   const isOpen = open ?? (latest || active || tools.length <= 2);
   const mountKeys = useRef(new Set(tools.map((t) => t.key)));
-  const failed = tools.filter((t) => t.ok === false && !t.stopped).length;
+  // A wait that timed out is not a failure to act on (lib/toolNames.ts `soft`).
+  const failed = tools.filter((t) => t.ok === false && !t.stopped && !toolRow({ name: t.name, input: t.input, output: t.output, ok: t.ok }).soft).length;
   const end = Math.max(...tools.map((t) => t.endTs ?? t.ts));
   const span = end - tools[0].ts;
   const pendingTool = chat.pendingPermission ? (chat.items.find((i) => i.kind === "permission" && i.requestId === chat.pendingPermission) as Perm | undefined)?.tool : undefined;
@@ -587,10 +591,10 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
           <span className="font-medium text-dim group-hover:text-fg/85">Ran {tools.length === 1 ? "1 step" : `${tools.length} steps`}</span>
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-          {chipsFor(tools).map(([name, n]) => (
-            <span key={name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">
+          {toolChips(tools).map(([name, n]) => (
+            <span key={name} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim" data-step-chip={name}>
               {name}
-              {n > 1 && <span className="tnum text-faint">{n}</span>}
+              {n > 1 && <span className="tnum text-faint">×{n}</span>}
             </span>
           ))}
           {failed > 0 && <span className="inline-flex h-[22px] shrink-0 items-center rounded-[6px] bg-[color-mix(in_oklab,var(--error)_10%,transparent)] px-1.5 text-small font-medium text-err-text">{failed} failed</span>}
@@ -660,7 +664,7 @@ function PilotRun({ t, chat, fresh }: { t: Tool; chat: number; fresh?: boolean }
   const ok = o?.status === "done";
   return (
     <div data-pilot-run={o?.status ?? "running"}>
-      <StepLine name={`Pilot · ${target}`} detail={goal} active={running} failed={t.ok === false} fresh={fresh} stamp={clockTime(t.ts)} since={t.ts} />
+      <StepLine name={`Pilot · ${target}`} tool={t.name} detail={goal} active={running} failed={t.ok === false} fresh={fresh} stamp={clockTime(t.ts)} since={t.ts} />
       {(steps.length > 0 || ended) && (
         <div className="mb-1 ml-[28px] mt-0.5 flex flex-col gap-[3px] border-l border-hairline pl-3">
           {steps.map((s) => (
@@ -701,11 +705,14 @@ function PilotRun({ t, chat, fresh }: { t: Tool; chat: number; fresh?: boolean }
 function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean; fresh?: boolean; stoppedIn?: boolean }) {
   const [open, setOpen] = useState(false);
   const hasOut = !!t.output && t.endTs !== null;
+  const r = stepRow(t, cwd);
   return (
-    <div>
+    <div data-step-family={r.family}>
       <StepLine
-        name={t.name}
-        detail={dense ? shortDetail(toolSummary(t, cwd)) : toolSummary(t, cwd)}
+        name={r.label}
+        tool={t.name}
+        soft={r.soft}
+        detail={dense && r.family === "tool" ? shortDetail(r.detail) : r.detail}
         active={t.endTs === null}
         waiting={waiting}
         failed={t.ok === false}
@@ -723,7 +730,7 @@ function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Too
             <pre
               className={cx(
                 "selectable mb-1.5 ml-[6px] mt-0.5 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-[8px] border border-hairline px-3 py-2 font-mono text-mono-small leading-[16px]",
-                t.ok === false && !t.stopped && !stoppedIn ? "bg-[color-mix(in_oklab,var(--error)_6%,transparent)] text-err-text/90" : "bg-[color-mix(in_oklab,var(--dim)_6%,transparent)] text-dim",
+                t.ok === false && !t.stopped && !stoppedIn && !r.soft ? "bg-[color-mix(in_oklab,var(--error)_6%,transparent)] text-err-text/90" : "bg-[color-mix(in_oklab,var(--dim)_6%,transparent)] text-dim",
               )}
             >
               {t.output}
@@ -761,6 +768,15 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const end: AgentEnd = tool.ok === false ? (tool.stopped || !tool.output.trim() || isStopReason(tool.output) ? "stopped" : "failed") : "done";
   const reason = tool.ok === false ? tool.output.split("\n").find((l) => l.trim())?.trim().replace(/^\[(.*)\]$/, "$1") || null : null;
   const title = stripToolName(tool.name, tool.summary);
+  const fill = agentFill(chat.agents[tool.id]?.total, modelIds[0] ?? null);
+  const prompt = taskPrompt(tool.input);
+  const handoff = handoffLine(prompt, title);
+  const extra = (fill || handoff) && (
+    <div className="flex flex-col gap-1 px-3 pb-1.5" data-agent-extra>
+      {fill && <FillBar fill={fill} running={running} />}
+      {handoff && <Handoff text={handoff} full={prompt} />}
+    </div>
+  );
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
@@ -792,6 +808,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
         ) : (
           <FinishedAgentHead end={end} title={title} parts={agentResultParts(steps.length, (tool.endTs ?? tool.ts) - tool.ts, agentOut)} reason={end === "done" ? null : reason} open={open} onToggle={toggle} />
         )}
+        {running && extra}
         <FoldBody open={open}>
           {!running && (
             <div className="flex items-center gap-2 px-3 pb-1">
@@ -806,6 +823,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
               )}
             </div>
           )}
+          {!running && extra}
           {shownSteps.length > 0 && (
             <div className="pb-1.5 pl-[14px] pr-1">
               {hidden > 0 && <div className="pb-0.5 pl-[20px] text-small text-faint">{hidden} earlier</div>}
@@ -1194,13 +1212,46 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
   }
   const verb = item.failed ? "Failed after" : item.ok ? "Worked for" : "Stopped after";
   const parts = [item.tools > 0 && `${item.tools} tool ${item.tools === 1 ? "use" : "uses"}`, model && modelLabel(model)].filter(Boolean) as string[];
-  return (
-    <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
+  const b = useTurnBreakdown(chat, item);
+  const [open, setOpen] = useState(false);
+  const row = (
+    <>
       {item.failed ? <IAlert size={13} className="text-err-text" /> : item.ok ? <ICheck size={13} className="text-faint" /> : <IReturn size={13} />}
       <span className={cx("font-medium", item.failed ? "text-err-text" : "text-dim")}>
         {verb} <span className="tnum">{fmtElapsed(item.durationMs)}</span>
       </span>
-      {parts.length > 0 && <span>· {parts.join(" · ")}</span>}
+      {parts.length > 0 && <span className="min-w-0 truncate">· {parts.join(" · ")}</span>}
+    </>
+  );
+  if (!b)
+    return (
+      <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
+        {row}
+      </div>
+    );
+  return (
+    <div className="-mt-1 px-1" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        title={open ? "Hide where the time went" : "Where the time went"}
+        className="group -mx-1 flex max-w-full items-center gap-1.5 rounded-[6px] px-1 text-left text-small text-faint transition-colors duration-150 hover:bg-hover"
+        data-turn-toggle
+      >
+        {row}
+        <motion.span animate={{ rotate: open ? 90 : 0 }} transition={{ duration: 0.16, ease }} className="flex size-[14px] shrink-0 items-center justify-center text-faint opacity-60 group-hover:opacity-100">
+          <IChevron size={11} />
+        </motion.span>
+      </button>
+      <TurnBar b={b} className="mt-1.5" />
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reducedMotion() ? 0 : 0.24, ease }} className="overflow-hidden">
+            <Waterfall b={b} />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
