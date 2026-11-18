@@ -644,6 +644,9 @@ impl<'a> Browser<'a> {
             use base64::Engine;
             let w = self.app()?.get_webview(&page.label).ok_or("the page closed")?;
             let max = max.unwrap_or(800.0).clamp(200.0, 2000.0);
+            // The agent's own cursor and label are drawn in the page: hidden for the snapshot, or the agent reads them
+            // as the page's (a real run took coool's "Claude · Scrolling down" label for part of the site).
+            let _ = self.eval(&page.label, &json!({ "op": "shot", "hide": true }));
             let (tx, rx) = std::sync::mpsc::channel();
             w.with_webview(move |pw| {
                 crate::browser::native::snapshot_jpeg(pw.inner(), max, 0.5, move |r| {
@@ -651,7 +654,9 @@ impl<'a> Browser<'a> {
                 })
             })
             .map_err(|e| e.to_string())?;
-            let jpeg = rx.recv_timeout(Duration::from_secs(8)).map_err(|_| "no snapshot within 8 s (is the page hidden?)".to_string())??;
+            let jpeg = rx.recv_timeout(Duration::from_secs(8)).map_err(|_| "no snapshot within 8 s (is the page hidden?)".to_string());
+            let _ = self.eval(&page.label, &json!({ "op": "shot", "hide": false }));
+            let jpeg = jpeg??;
             Ok(json!({ "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(jpeg), "mimeType": "image/jpeg" }))
         }
         #[cfg(not(target_os = "macos"))]
@@ -726,7 +731,13 @@ impl<'a> Browser<'a> {
                 self.activity(Some(p.tab), "wait", None);
                 let (ok, ms, p) = self.wait(&p, a)?;
                 let screen = self.observe(&p, true, a)?;
-                let head = if ok { format!("{} after {ms} ms", describe_wait(a)) } else { format!("timed out after {ms} ms waiting for {}", describe_wait(a)) };
+                let head = if ok {
+                    format!("{} after {ms} ms", describe_wait(a))
+                } else if a["idle"].as_bool() == Some(true) && a["text"].is_null() && a["selector"].is_null() && a["url"].is_null() {
+                    format!("timed out after {ms} ms waiting for the page to settle: it keeps changing (live content or an animation); the page as it is now")
+                } else {
+                    format!("timed out after {ms} ms waiting for {}", describe_wait(a))
+                };
                 if !ok {
                     return Err(format!("{head}\n\n{screen}"));
                 }
@@ -997,7 +1008,10 @@ impl<'a> Browser<'a> {
             if a["idle"].as_bool() == Some(true) {
                 let ms = self.settle(&p.label, timeout.as_millis() as u64);
                 let label = p.label.clone();
-                return Ok((!self.loading(&label), ms, Page { label, tab: p.tab }));
+                // `settle` gives up at the timeout: a page that never went quiet (a live clock, a ticking counter,
+                // an animation that rewrites the DOM) didn't settle, so say it timed out instead of "settled after 5 s".
+                let quiet = ms < timeout.as_millis();
+                return Ok((quiet && !self.loading(&label), ms, Page { label, tab: p.tab }));
             }
             return Err("browser_wait_for needs `text`, `selector`, `url` or `idle: true`".into());
         }
@@ -1416,6 +1430,21 @@ email.labels = [document.body.childNodes[2]];
     }
 
     #[test]
+    fn names_hold_inside_content_visibility_auto_subtrees() {
+        let js = Js::new();
+        // Off screen under `content-visibility: auto`, innerText reads "" though the heading holds text (WebKit, Chrome);
+        // a heading that is really empty stays nameless.
+        js.run(
+            "var skipped = h('h3', { rect: [10, 1600, 200, 20], props: { innerText: '', checkVisibility: function (o) { return !(o && o.contentVisibilityAuto); } } }, 'Agent Trail');\
+             var empty = h('h3', { rect: [10, 1650, 200, 20], props: { innerText: '', checkVisibility: function () { return true; } } }, '');\
+             document.body.appendChild(skipped); document.body.appendChild(empty);",
+        );
+        let s = js.ok(json!({ "op": "observe", "all": true }));
+        let heads: Vec<String> = s["els"].as_array().unwrap().iter().filter(|e| e["role"] == "heading").map(|e| e["name"].as_str().unwrap_or("").to_string()).collect();
+        assert!(heads.contains(&"Agent Trail".to_string()), "{heads:?}");
+    }
+
+    #[test]
     fn password_values_never_leave_the_page() {
         let js = Js::new();
         let raw = js.run(&format!("{LIB}({})", json!({ "op": "observe", "all": true })));
@@ -1494,6 +1523,12 @@ email.labels = [document.body.childNodes[2]];
         assert!(js.ok(json!({ "op": "idle" }))["pending"].is_null());
         // The label: who, then what.
         assert!(js.run("JSON.stringify(document.documentElement.childNodes.map(function n(e) { return e.textContent; }))").contains("ClaudeClicking Remember me"));
+        // A screenshot hides the cursors while it is taken (the agent shouldn't read its own label as the page's).
+        let host = "document.documentElement.childNodes.filter(function (e) { return /Claude/.test(e.textContent); })[0].style.visibility";
+        js.ok(json!({ "op": "shot", "hide": true }));
+        assert_eq!(js.run(host), "hidden");
+        js.ok(json!({ "op": "shot", "hide": false }));
+        assert_eq!(js.run(host), "visible");
         // Ending the run rests the cursor, then fades it out.
         assert_eq!(js.ok(json!({ "op": "presence", "end": true, "presence": { "actor": "0:c1" } }))["ended"], true);
         // Without presence the click lands at once, as before.
