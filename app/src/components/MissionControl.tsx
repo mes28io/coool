@@ -4,8 +4,7 @@
 // agents changed, and the branch's commit trail. Ended sessions are listed under "Earlier".
 
 import { AnimatePresence, motion } from "motion/react";
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { answerPermission } from "../lib/actions";
 import { useAgentCards } from "../lib/agentCards";
 import { pendingPermission, pendingQuestion, useChats, type ChatItem } from "../lib/chat";
@@ -13,14 +12,16 @@ import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, fmtElapsed, fmtTokens, headlineIsTitle, homeShort, isThinking, projectOf, shortDetail, splitTool, tsToMs } from "../lib/format";
 import { useGitTrail } from "../lib/gitTrail";
 import { attention, liveJobs, sameAttention, useChatDigest, useUnseen, type Attention } from "../lib/live";
-import { changesFromActivity, changesFromChat, committing, fanout, ledgerRows, mergeChanges, type Change, type ItemLike } from "../lib/mission";
+import { committing, fanout, ledgerRows, overlaps, type Change, type OverlapEdit } from "../lib/mission";
+import { agentOf, publishOverlaps, useProjectChanges } from "../lib/projectChanges";
 import { AnimateScope, useMotion } from "../lib/motion";
 import { contextWindow } from "../lib/models";
 import { turnTotals } from "../lib/turn";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { useStore, type Since } from "../store";
-import { ChangeLedger, type LedgerSource } from "./ChangeLedger";
+import { AwayStrip } from "./Away";
+import { ChangeLedger } from "./ChangeLedger";
 import { CommitTrail, type Committing } from "./CommitTrail";
 import { FanOut } from "./FanOut";
 import { IAgent, IForward, IPlay, IPlus, ITerminal } from "./icons";
@@ -30,9 +31,6 @@ import { AutoTag, Button, cx, ease, Kbd, NeedsBadge, PathText, ProviderMark, sof
 import { resumeInto } from "./SessionView";
 import { RecentSkeleton, Skel } from "./Skeletons";
 import { Wordmark } from "./Wordmark";
-
-/** Sessions that ended this long ago still feed their project's ledger. */
-const LEDGER_WINDOW_MS = 6 * 3600_000;
 
 interface Project {
   path: string;
@@ -129,6 +127,7 @@ export function MissionControl() {
                   </div>
                 </section>
               )}
+              <AwayStrip att={att} />
               {current && (
                 <>
                   <ProjectTabs projects={projects} current={current} onPick={setPicked} />
@@ -304,36 +303,6 @@ function TabDot({ tone }: { tone: "needs" | "busy" | "idle" }) {
 
 // ---------- a project ----------
 
-/** Every change in the project's sessions (live, or ended within the window), newest first, before the ledger's rules. */
-function useProjectChanges(path: string, branch: string | null): { changes: Change[]; sources: Record<string, LedgerSource> } {
-  const feeding = useStore(
-    useShallow((st) => {
-      const cut = Date.now() - LEDGER_WINDOW_MS;
-      return st.sessions.filter((s) => projectOf(s) === path && (s.status !== "ended" || s.updated > cut));
-    }),
-  );
-  const items = useChats(useShallow((st) => feeding.map((s) => (s.chat != null ? st.chats[s.chat]?.items : undefined))));
-  return useMemo(() => {
-    const lists: Change[][] = [];
-    const sources: Record<string, LedgerSource> = {};
-    feeding.forEach((s, i) => {
-      const key = sessionKey(s);
-      sources[key] = { provider: s.provider, title: displayTitle(s) };
-      // Paths are judged against the project (an agent's worktree inside it maps back to the project's files).
-      const its = items[i];
-      if (its && its.length) {
-        lists.push(changesFromChat(key, its as ItemLike[], path, branch));
-        return;
-      }
-      lists.push(changesFromActivity(key, s.activity, path, branch));
-      for (const a of s.agents) lists.push(changesFromActivity(key, a.activity, path, branch).map((c) => ({ ...c, id: `${c.id}@${a.id}`, step: `g:${a.id}` })));
-    });
-    return { changes: mergeChanges(lists, Infinity), sources };
-  }, [feeding, items, path, branch]);
-}
-
-const agentOf = (c: Change) => (c.step.startsWith("g:") ? c.step.slice(2) : null);
-
 function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Attention>; stagger: boolean }) {
   const open = useStore((st) => st.open);
   const focusAgent = useStore((st) => st.focusAgent);
@@ -342,15 +311,32 @@ function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Att
   const committer = commit !== null ? p.sessions.find((s) => committing(s.current) === commit) : undefined;
   // The trail's branch names pushes and merges in the ledger; the ledger's git rows re-read the trail.
   const [branch, setBranch] = useState<string | null>(null);
-  const { changes: all, sources } = useProjectChanges(p.path, branch);
+  const { changes: all, sources, people } = useProjectChanges(p.path, branch);
   const gitRows = all.filter((c) => c.kind === "commit" || c.kind === "merge" || c.kind === "push").length;
   const entry = useGitTrail(p.path, `${gitRows}|${commit ?? "-"}`);
   const trail = entry?.trail ?? null;
   if (trail && trail.branch !== branch) setBranch(trail.branch);
   const showTrail = !entry || !!trail;
   const committingRow: Committing | null = commit !== null && committer ? { message: commit, key: sessionKey(committer) } : null;
-  // The trail owns git history; the ledger keeps what it can't show.
-  const changes = useMemo(() => ledgerRows(all, { agentOf, trail: showTrail ? (trail?.commits ?? []) : null }), [all, trail, showTrail]);
+  // Files two live sessions both have pending edits to, once git has answered (a commit by either side counts).
+  const found = useMemo(() => (entry ? overlaps(all, people, { agentOf, trail: trail?.commits ?? null }) : []), [all, people, entry, trail]);
+  useEffect(() => publishOverlaps(p.path, found), [p.path, found]);
+  // The trail owns git history; the ledger keeps what it can't show. An overlapping file's own row is the pinned overlap row.
+  const changes = useMemo(() => {
+    const pinned = new Set(found.map((o) => o.file));
+    return ledgerRows(all, { agentOf, trail: showTrail ? (trail?.commits ?? []) : null }).filter((c) => !((c.kind === "edit" || c.kind === "create") && pinned.has(c.object)));
+  }, [all, trail, showTrail, found]);
+  const openEdit = (e: OverlapEdit) => {
+    open({ kind: "session", key: e.session });
+    if (e.agent) focusAgent(e.agent);
+  };
+  // Two sessions side by side; two agents of one session: that session, on the newer one.
+  const openBoth = ([a, b]: OverlapEdit[]) => {
+    openEdit(a);
+    if (!b || b.session === a.session) return;
+    useStore.getState().split("row");
+    openEdit(b);
+  };
 
   const openChange = (c: Change) => {
     open({ kind: "session", key: c.session });
@@ -378,7 +364,7 @@ function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Att
             <StartingRow key={e.k} p={e.p} chat={e.chat} first={k === 0 && p.sessions.length === 0} />
           ))}
         </Card>
-        <ChangeLedger changes={changes} sources={sources} onOpen={openChange} className={showTrail ? "@[900px]:col-start-1 @[900px]:row-start-2" : "@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1"} />
+        <ChangeLedger changes={changes} sources={sources} onOpen={openChange} overlaps={found} onOpenSession={openEdit} onOpenBoth={openBoth} className={showTrail ? "@[900px]:col-start-1 @[900px]:row-start-2" : "@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1"} />
         {showTrail && <CommitTrail trail={trail} loading={!entry} committing={committingRow} className="@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1" />}
       </div>
     </motion.section>

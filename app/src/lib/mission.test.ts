@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cellCounts, cellState, changesFromActivity, changesFromChat, committing, compactSpan, fanout, foldAgentRows, heredocs, hmsToMs, ledgerRows, lineCounts, mergeChanges, projectPath, relPath, sideEffect, wordDiff, type ItemLike } from "./mission.ts";
+import { cellCounts, cellState, changesFromActivity, changesFromChat, committing, compactSpan, fanout, foldAgentRows, heredocs, hmsToMs, ledgerRows, lineCounts, mergeChanges, overlaps, projectPath, relPath, sideEffect, treeOf, wordDiff, worktreeOf, type Change, type ItemLike } from "./mission.ts";
 import type { Activity } from "./types.ts";
 
 const NOW = new Date(2026, 10, 18, 15, 0, 0).getTime();
@@ -266,4 +266,94 @@ test("ledgerRows: the same uncommitted file from several sessions is one row", (
   const mk = (id: string, session: string, ts: number) => ({ id, session, kind: "edit" as const, action: "Edited", object: "src/a.ts", times: 1, ts, step: `a:${id}`, added: 1, removed: 0 });
   const out = ledgerRows([mk("x", "s1", 9), mk("y", "s2", 5), mk("z", "s1", 3)], { agentOf: () => null, trail: [] });
   assert.deepEqual(out.map((c) => [c.id, c.times, c.added]), [["x", 3, 3]]);
+});
+
+// ---------- file overlap between live sessions ----------
+
+test("worktreeOf and treeOf: the project's checkout, an agent worktree, a checkout elsewhere", () => {
+  const root = "/Users/you/code/app";
+  assert.equal(worktreeOf("/Users/you/code/app/.claude/worktrees/agent-ab12/src/a.ts", root), "agent-ab12");
+  assert.equal(worktreeOf("~/code/app/.coool/worktrees/w1/src/a.ts", root), "w1");
+  assert.equal(worktreeOf("/Users/you/code/app/src/a.ts", root), null);
+  assert.equal(projectPath("/Users/you/code/app/.codex/worktrees/w2/src/a.ts", root), "src/a.ts");
+  assert.equal(treeOf(root, root), "");
+  assert.equal(treeOf(`${root}/app`, root), "", "a folder inside the checkout is the same copy");
+  assert.equal(treeOf(`${root}/.claude/worktrees/agent-ab12`, root), "agent-ab12");
+  assert.equal(treeOf("/Users/you/code/app-wt", root), "/Users/you/code/app-wt");
+});
+
+test("changesFromChat: an edit inside an agent worktree carries the worktree", () => {
+  const items: ItemLike[] = [{ kind: "tool", id: "e1", name: "Edit", summary: "", input: { file_path: "/r/.claude/worktrees/agent-x/src/a.ts", old_string: "a", new_string: "b" }, ts: 1, endTs: 2, ok: true, output: "", parent: null }];
+  const [c] = changesFromChat("claude:s", items, "/r");
+  assert.deepEqual([c.object, c.tree], ["src/a.ts", "agent-x"]);
+});
+
+const ed = (session: string, ts: number, object = "src/stripe.ts", o: Partial<Change> = {}): Change => ({ id: `${session}|${ts}|${object}`, session, kind: "edit", action: "Edited", object, times: 1, ts, step: `c:${ts}`, added: 2, removed: 1, ...o });
+const ses = (live: boolean, tree = "") => ({ live, tree });
+const none = { agentOf: () => null, trail: [] };
+
+test("overlaps: two live sessions in the same checkout are a clash; in separate worktrees, a merge", () => {
+  const rows = [ed("claude:a", 500), ed("codex:b", 260), ed("claude:a", 100, "src/only-a.ts")];
+  const same = overlaps(rows, { "claude:a": ses(true), "codex:b": ses(true) }, none);
+  assert.equal(same.length, 1);
+  assert.deepEqual([same[0].file, same[0].kind, same[0].gapMs, same[0].by.map((b) => b.session)], ["src/stripe.ts", "same", 240, ["claude:a", "codex:b"]]);
+  const wt = overlaps(rows, { "claude:a": ses(true, "agent-1"), "codex:b": ses(true, "agent-2") }, none);
+  assert.equal(wt[0].kind, "merge");
+  // One in the checkout, one in a worktree: separate copies too.
+  assert.equal(overlaps(rows, { "claude:a": ses(true), "codex:b": ses(true, "agent-2") }, none)[0].kind, "merge");
+  // An edit's own worktree (a subagent's) wins over the session's folder.
+  const sub = [ed("claude:a", 500, "src/stripe.ts", { tree: "agent-9" }), ed("codex:b", 260)];
+  assert.equal(overlaps(sub, { "claude:a": ses(true), "codex:b": ses(true) }, none)[0].kind, "merge");
+});
+
+test("overlaps: committed work is not an overlap, by either side", () => {
+  const sessions = { "claude:a": ses(true), "codex:b": ses(true) };
+  // a committed after its edit: only b's edit is pending.
+  const rows = [ed("claude:a", 100), ed("claude:a", 150, "Fix it", { kind: "commit", id: "commit" }), ed("codex:b", 200)];
+  assert.deepEqual(overlaps(rows, sessions, none), []);
+  // b's edit landed in a commit on the trail (someone ran `git add -A && git commit`): nothing pending on b's side.
+  const both = [ed("claude:a", 300_000), ed("codex:b", 200_000)];
+  assert.deepEqual(overlaps(both, sessions, { agentOf: () => null, trail: [{ time_ms: 250_000, files: ["src/stripe.ts"] }] }), []);
+  // A trail commit from before the edit doesn't cover it.
+  assert.equal(overlaps(both, sessions, { agentOf: () => null, trail: [{ time_ms: 150_000, files: ["src/stripe.ts"] }] }).length, 1);
+});
+
+test("overlaps: in a worktree, a commit is not enough; it counts until merged", () => {
+  const sessions = { "claude:a": ses(true, "agent-1"), "codex:b": ses(true, "agent-2") };
+  const rows = [ed("claude:a", 100), ed("claude:a", 150, "Pricing", { kind: "commit", id: "commit" }), ed("codex:b", 200)];
+  assert.equal(overlaps(rows, sessions, none).length, 1, "a's commit is in its own branch");
+  const merged = [{ time_ms: 400, files: ["CHANGELOG.md"], merge: { commits: [{ time_ms: 150, files: ["src/stripe.ts"] }] } }];
+  assert.deepEqual(overlaps(rows, sessions, { agentOf: () => null, trail: merged }), [], "merged into the branch: a's side landed");
+});
+
+test("overlaps: needs a live session, two distinct sessions, and skips lockfiles; moves count both paths", () => {
+  const rows = [ed("claude:a", 100), ed("codex:b", 200)];
+  assert.deepEqual(overlaps(rows, { "claude:a": ses(false), "codex:b": ses(false) }, none), [], "both ended");
+  assert.equal(overlaps(rows, { "claude:a": ses(false), "codex:b": ses(true) }, none).length, 1);
+  assert.deepEqual(overlaps([ed("claude:a", 100), ed("claude:a", 200)], { "claude:a": ses(true) }, none), [], "one session, twice");
+  const locks = ["pnpm-lock.yaml", "Cargo.lock", "src/__snapshots__/a.snap"].flatMap((f) => [ed("claude:a", 1, f), ed("codex:b", 2, f)]);
+  assert.deepEqual(overlaps(locks, { "claude:a": ses(true), "codex:b": ses(true) }, none), []);
+  const move = [ed("claude:a", 100, "src/old.ts", { kind: "move", before: "src/old.ts", after: "src/new.ts" }), ed("codex:b", 200, "src/new.ts")];
+  assert.deepEqual(overlaps(move, { "claude:a": ses(true), "codex:b": ses(true) }, none).map((o) => o.file), ["src/new.ts"]);
+});
+
+test("overlaps: an orchestrator's subagents are separate authors; the session's own repeat edits are not", () => {
+  const agentOf = (c: Change) => (c.step.startsWith("g:") ? c.step.slice(2) : null);
+  const rows = [
+    ed("claude:o", 300, "src/mock.ts", { step: "g:a1", tree: "agent-a1" }),
+    ed("claude:o", 200, "src/mock.ts", { step: "g:a2", tree: "agent-a2" }),
+    ed("claude:o", 100, "src/own.ts"),
+    ed("claude:o", 150, "src/own.ts"),
+  ];
+  const out = overlaps(rows, { "claude:o": ses(true) }, { agentOf, trail: [] });
+  assert.deepEqual(out.map((o) => [o.file, o.kind, o.by.map((e) => e.agent)]), [["src/mock.ts", "merge", ["a1", "a2"]]]);
+  // Two agents in the session's own checkout: a clash.
+  const same = [ed("claude:o", 300, "src/x.ts", { step: "g:a1" }), ed("claude:o", 200, "src/x.ts", { step: "g:a2" })];
+  assert.equal(overlaps(same, { "claude:o": ses(true) }, { agentOf, trail: [] })[0].kind, "same");
+});
+
+test("overlaps: same-copy clashes first, then newest", () => {
+  const rows = [ed("claude:a", 900, "src/x.ts"), ed("codex:b", 800, "src/x.ts"), ed("claude:a", 100, "src/y.ts"), ed("claude:c", 50, "src/y.ts")];
+  const out = overlaps(rows, { "claude:a": ses(true, "agent-1"), "codex:b": ses(true, "agent-2"), "claude:c": ses(true, "agent-1") }, none);
+  assert.deepEqual(out.map((o) => [o.file, o.kind]), [["src/y.ts", "same"], ["src/x.ts", "merge"]]);
 });

@@ -11,6 +11,7 @@ import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolNam
 import { modelLabel } from "../lib/models";
 import type { Activity, ArtifactInfo, RememberOption } from "../lib/types";
 import { ArtifactCard, artifactVersions } from "./ArtifactCard";
+import { AwayCard, useChatAway } from "./Away";
 import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
@@ -125,6 +126,9 @@ export function ChatTimeline({
   onResume?: () => void;
 }) {
   const { blocks, children } = useMemo(() => buildBlocks(chat.items), [chat.items]);
+  // "While you were away": the card goes before the first block with anything after the person left.
+  const gone = useChatAway(chat);
+  const awayAt = gone ? blocks.findIndex((b) => blockAfter(b, gone.away.left)) : -1;
   const earlier = useChats((s) => s.earlier[chat.id]);
   const initial = useRef<Set<string> | null>(null);
   if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
@@ -186,6 +190,26 @@ export function ChatTimeline({
     ro.observe(inner);
     return () => ro.disconnect();
   }, []);
+
+  // The away card starts the reading: when it first shows above the view, scroll it to the top (the jump
+  // button then says there is more below). Once per absence.
+  const awayShown = useRef<number | null>(null);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !gone || gone.away.folded || awayShown.current === gone.away.back) return;
+    // After the timeline has settled (pinned to the bottom, fonts and code laid out).
+    const t = setTimeout(() => {
+      const card = el.querySelector<HTMLElement>("[data-away-card]");
+      if (!card) return;
+      awayShown.current = gone.away.back;
+      const top = card.getBoundingClientRect().top - el.getBoundingClientRect().top - ((bar.current?.offsetHeight ?? 0) + 16);
+      if (top >= 0) return;
+      stick.current = false;
+      setAway(true);
+      el.scrollTo({ top: el.scrollTop + top, behavior: "auto" });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [gone]);
 
   // New INPUT (a prompt or steering note sent, an approval or question answered) always scrolls to the bottom and re-pins.
   const inputs = chat.notes.length + chat.items.reduce((n, i) => n + (i.kind === "prompt" || (i.kind === "permission" && i.answer) || (i.kind === "question" && i.answer) ? 1 : 0), 0);
@@ -335,7 +359,11 @@ export function ChatTimeline({
         {blocks.map((b, i) => {
           const fresh = !initial.current!.has(b.key);
           const isLast = i === blocks.length - 1;
-          return (
+          const card = i === awayAt && gone && (
+            <AwayCard key="away" chatKey={gone.key} sum={gone.sum} folded={!!gone.away.folded} canRetry={chat.running && chat.state === "idle"} onRetry={onSuggest} onJump={jump} />
+          );
+          return [
+            card,
             <motion.div key={b.key} data-block={b.key} className={cx(!isLast && i < blocks.length - 8 && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={{ duration: 0.32, ease }}>
               {b.type === "plan" ? (
                 <PlanBlock b={b} chat={chat} />
@@ -346,8 +374,8 @@ export function ChatTimeline({
               ) : (
                 <ItemView item={b.item} chat={chat} onOpenTerminal={onOpenTerminal} onResume={isLast ? onResume : undefined} />
               )}
-            </motion.div>
-          );
+            </motion.div>,
+          ];
         })}
         <AnimatePresence>
           {showRow && (
@@ -365,6 +393,14 @@ export function ChatTimeline({
     </div>
     </div>
   );
+}
+
+/** Whether a block holds anything from after `t` (where the away card goes). */
+function blockAfter(b: Block, t: number): boolean {
+  if (b.type === "item") return b.item.ts > t;
+  if (b.type === "steps") return b.tools.some((x) => x.ts > t);
+  if (b.type === "plan") return b.calls.some((x) => x.ts > t);
+  return false;
 }
 
 function PlanBlock({ b, chat }: { b: Extract<Block, { type: "plan" }>; chat: Chat }) {

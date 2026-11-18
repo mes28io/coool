@@ -5,6 +5,7 @@ import { create } from "zustand";
 import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { api, isTauri } from "./lib/backend";
+import type { Away } from "./lib/away";
 
 export type Target = { kind: "session"; key: string } | { kind: "pty"; id: number } | { kind: "chat"; id: number };
 export type Leaf = { type: "leaf"; id: string; target: Target | null };
@@ -191,6 +192,15 @@ interface State {
   seen: Seen;
   /** Record that the person has seen this session as of `updated` (never moves backwards). */
   markSeen(key: string, updated: number): void;
+  /**
+   * The person has these on screen now (session keys, or APP_SEEN for the app window): refreshes their
+   * wall-clock `seen.at`, and when one comes back after AWAY_GAP_MS off screen, records that absence in `away`.
+   */
+  touchSeen(keys: string[]): void;
+  /** This visit's absence per key (session key, or APP_SEEN): what "While you were away" reads. Not persisted. */
+  away: Record<string, Away>;
+  /** "Got it": fold that key's away card or strip for this visit. */
+  foldAway(key: string): void;
 
   tabs: Tab[];
   activeTab: string | null;
@@ -290,7 +300,15 @@ interface State {
 export interface Seen {
   base: number;
   m: Record<string, number>;
+  /** Key -> when the person last had it on screen (wall clock, epoch ms): session keys and APP_SEEN. */
+  at?: Record<string, number>;
 }
+/** The `seen.at` / `away` key for the app window itself (Mission control's "While you were away"). */
+export const APP_SEEN = "@app";
+/** Off screen at least this long counts as an absence (whether it is worth a card is lib/away.ts's call). */
+const AWAY_GAP_MS = 90_000;
+/** `seen.at` is refreshed at most this often per key (App.tsx touches every 30 s while in view). */
+const TOUCH_MS = 15_000;
 const SEEN_KEY = "coool.seen";
 const SEEN_TTL = 30 * 24 * 3600_000;
 function readSeen(): Seen {
@@ -305,8 +323,10 @@ function readSeen(): Seen {
         const cutoff = now - SEEN_TTL;
         const m: Record<string, number> = {};
         for (const [k, t] of Object.entries(v.m)) if (typeof t === "number" && t >= cutoff) m[k] = t;
+        const at: Record<string, number> = {};
+        for (const [k, t] of Object.entries(v.at ?? {})) if (typeof t === "number" && t >= cutoff) at[k] = t;
         // Dropped entries were all older than the cutoff, so lifting the baseline keeps them seen.
-        out = { base: isTauri ? Math.max(v.base, cutoff) : v.base, m };
+        out = { base: isTauri ? Math.max(v.base, cutoff) : v.base, m, at };
       }
     } else localStorage.setItem(SEEN_KEY, JSON.stringify(out));
   } catch {
@@ -488,7 +508,7 @@ export const useStore = create<State>((set, get) => ({
   markSeen(key, updated) {
     const { seen } = get();
     if (!isUnseen(seen, key, updated)) return;
-    const next: Seen = { base: seen.base, m: { ...seen.m, [key]: updated } };
+    const next: Seen = { ...seen, m: { ...seen.m, [key]: updated } };
     set({ seen: next });
     try {
       localStorage.setItem(SEEN_KEY, JSON.stringify(next));
@@ -496,6 +516,28 @@ export const useStore = create<State>((set, get) => ({
       /* ignore */
     }
   },
+  touchSeen(keys) {
+    const { seen, away } = get();
+    const now = Date.now();
+    let at: Record<string, number> | null = null;
+    let gone: Record<string, Away> | null = null;
+    for (const k of keys) {
+      const last = seen.at?.[k];
+      // Back after an absence: remember it for this visit, before the mark moves.
+      if (last !== undefined && now - last >= AWAY_GAP_MS) (gone ??= { ...away })[k] = { left: last, back: now };
+      if (last === undefined || now - last >= TOUCH_MS) (at ??= { ...seen.at })[k] = now;
+    }
+    if (!at) return;
+    const next: Seen = { ...seen, at };
+    set(gone ? { seen: next, away: gone } : { seen: next });
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  },
+  away: {},
+  foldAway: (key) => set((s) => (s.away[key] && !s.away[key].folded ? { away: { ...s.away, [key]: { ...s.away[key], folded: true } } } : s)),
   tabs: [],
   activeTab: null,
   modes: {},
