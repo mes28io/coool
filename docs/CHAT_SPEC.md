@@ -89,6 +89,10 @@ RememberOption = { id: string,            // pass to respond_permission_remember
 - `respond_permission(id, true, true)` (the old "always") applies the first option only if it is this-chat-only, else allows once: a saved rule is applied only through `respond_permission_remember`, from a control that says so.
 - UI: the card's second action is the list of options (label + detail; saved ones marked with their file); after one is applied, the timeline note says what changed ("this chat is now in Accept edits mode", "allowing `touch e.txt` in this chat", "… saved to .claude/settings.local.json") and a mode switch flashes the mode chip. ⇧⌘↵ applies the first option when it is this-chat-only.
 
+### Requests of coool's own
+
+coool itself can ask the person in a chat, through the same request UI (the device gate, APP_SPEC "Device permissions"): `ChatHandle::ask(tool, summary, input, remember) -> (request_id, Receiver<ExternalAnswer>)` pushes an ordinary `permission_request` (`request_id` starting `coool-`; for the device gate `input.coool_device = {device, kind, lead, body, note}`) and the chat reads `waiting_permission` until it is answered. The answer goes through the usual calls: `respond_permission(id, allow, always)` (`always` applies the first option only if it is this-chat-only) and `respond_permission_remember(id, option)` resolve it in coool (`Allow`, `Remember(option)`, `Deny`) and never reach the CLI. While such a request waits, the chat's state stays `waiting_permission` even when the CLI reports `working` (the CLI doesn't know about it); the CLI reporting `idle` (the turn ended, Stop, an exit) cancels it (`Cancelled`). `ChatHandle::withdraw(id, note)` takes back one nobody answered (a timeout), with an info `notice`. A remember option of coool's own has `scope: "project"` and `file: "coool (Settings > Devices)"`: saved in coool's data, not in a settings file.
+
 ### Questions
 
 When the agent asks the person a question mid-task (Claude's `AskUserQuestion` tool; Codex's `item/tool/requestUserInput`), the driver emits `question` instead of `permission_request`, and the chat state is `waiting_permission` until it is answered:

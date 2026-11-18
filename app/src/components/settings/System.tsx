@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { homeShort } from "../../lib/format";
-import { api, isNotAvailable, type PilotLogStatus, type SimDevice, type SimList } from "../../lib/backend";
+import { api, isNotAvailable, type DeviceGrant, type DeviceKind, type MacStatus, type PilotLogStatus, type SimDevice, type SimList } from "../../lib/backend";
+import { NetworkSwitch } from "../MacPanel";
 import type { CliStatus, StorageStatus } from "../../lib/settingsTypes";
-import { IAlert, ICheck, IRefresh } from "../icons";
+import { IAlert, ICheck, IClose, IRefresh } from "../icons";
 import { Button, IconButton, ProviderMark } from "../primitives";
 import { Command, ConfirmButton, ErrorLine, errText, fmtBytes, Group, Mono, Note, Row, Switch, Tag, useLoad } from "./ui";
 
@@ -151,6 +152,111 @@ function IPhone() {
   );
 }
 
+function Mac() {
+  const [st, setSt] = useState<MacStatus | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api()
+      .macStatus()
+      .then((s) => live && setSt(s))
+      .catch((e) => live && setErr(errText(e)));
+    const off = api().onMacState((p) => setSt((s) => (s ? { ...s, ...p } : s)));
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  return (
+    <Group label="Mac" attr="devices-mac" footer="The sandbox Mac sees one folder of this computer, its shared folder, and none of your other files.">
+      {!st ? (
+        <Row label="Sandbox Mac" desc={err ?? "…"} />
+      ) : !st.available || st.state === "absent" ? (
+        <Row attr="mac-none" label="Sandbox Mac" k="mac vm virtual machine" desc={!st.available ? (st.reason ?? "Not available on this Mac.") : "Not installed. Install it from the Mac panel (the Mac button in a chat's header)."} />
+      ) : (
+        <Row attr="mac-network" label="Network" k="mac vm network internet offline local sandbox shared folder" desc="What the sandbox Mac can reach. A change applies at once while it runs (it keeps its network device), else at the next boot.">
+          <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_8%,transparent)] px-3 py-2 text-small">
+            <NetworkSwitch status={st} />
+          </div>
+        </Row>
+      )}
+    </Group>
+  );
+}
+
+const DEVICE_NAME: Record<DeviceKind, string> = { browser: "Browser", iphone: "iPhone", mac: "Mac" };
+
+/** What projects allowed the agents' device tools to do without asking ("Always in this project"), revocable. */
+function Permissions() {
+  const [rows, setRows] = useState<DeviceGrant[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [avail, setAvail] = useState(true);
+  useEffect(() => {
+    api()
+      .deviceGrants()
+      .then(setRows)
+      .catch((e) => (isNotAvailable(e) ? setAvail(false) : setErr(errText(e))));
+  }, []);
+  const revoke = (project: string, device?: DeviceKind, site?: string) =>
+    api()
+      .deviceGrantsRevoke(project, device, site)
+      .then(setRows)
+      .catch((e) => setErr(errText(e)));
+  const chip = (label: string, title: string, onRemove: () => void, attr: string) => (
+    <span key={label} className="inline-flex items-center gap-1 rounded-[6px] border border-line bg-raised py-px pl-1.5 pr-0.5 text-small text-fg" data-grant={attr}>
+      {label}
+      <button type="button" title={title} aria-label={title} onClick={onRemove} className="flex size-[16px] items-center justify-center rounded-[4px] text-faint hover:bg-hover hover:text-fg">
+        <IClose size={10} />
+      </button>
+    </span>
+  );
+  return (
+    <Group
+      label="Agent permissions"
+      attr="devices-permissions"
+      footer="In chats that ask before commands, agents ask before they first change something on a device, and always before a form submit, a password, a new site, a command in the Mac or an install. What a project allowed for good is listed here."
+    >
+      {!avail ? (
+        <Row label="Allowed in projects" desc="Not available in this build of coool." />
+      ) : !rows ? (
+        <Row label="Allowed in projects" desc={err ?? "…"} />
+      ) : rows.length === 0 ? (
+        <Row attr="grants-none" label="Allowed in projects" k="permissions allow always project browser iphone mac sites" desc="Nothing yet. Choosing “Always … in this project” on a request adds it here." />
+      ) : (
+        rows.map((g) => (
+          <Row
+            key={g.project}
+            attr={`grants-${g.project}`}
+            label={<Mono>{homeShort(g.project)}</Mono>}
+            k={`permissions allow always project ${g.project} ${g.devices.join(" ")} ${g.sites.join(" ")}`}
+            control={<ConfirmButton label="Revoke all…" confirm="Revoke" attr="grants-revoke-all" onConfirm={() => revoke(g.project)} />}
+          >
+            <div className="flex flex-col gap-1.5 text-small text-dim">
+              {g.devices.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="w-[64px] shrink-0 text-faint">Devices</span>
+                  {g.devices.map((d) => chip(DEVICE_NAME[d], `Ask again before ${DEVICE_NAME[d]} changes in this project`, () => void revoke(g.project, d), `device-${d}`))}
+                </div>
+              )}
+              {g.sites.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="w-[64px] shrink-0 text-faint">Sites</span>
+                  {g.sites.map((s) => chip(s, `Ask again before opening ${s}`, () => void revoke(g.project, undefined, s), `site-${s}`))}
+                </div>
+              )}
+            </div>
+          </Row>
+        ))
+      )}
+      {err && rows && (
+        <div className="pb-3">
+          <ErrorLine>{err}</ErrorLine>
+        </div>
+      )}
+    </Group>
+  );
+}
+
 function Pilot() {
   const [st, setSt] = useState<PilotLogStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -271,7 +377,8 @@ export function Devices() {
         />
       </Group>
       <IPhone />
-      {/* Mac: the sandbox Mac panel's section goes here once its backend is in the tree (it isn't in this build). */}
+      <Mac />
+      <Permissions />
       <Pilot />
     </>
   );

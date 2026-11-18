@@ -463,6 +463,36 @@ impl Core {
     }
 }
 
+/// The device gate's view of the chats (device/gate.rs): their permission mode, and their permission requests.
+struct ChatAsker(std::sync::Weak<Core>);
+
+impl ChatAsker {
+    fn handle(&self, chat: usize) -> Option<ChatHandle> {
+        let core = self.0.upgrade()?;
+        let chats = core.chats.lock().unwrap();
+        chats.get(&chat).map(|c| c.handle.clone())
+    }
+}
+
+impl device::gate::Asker for ChatAsker {
+    fn mode(&self, chat: usize) -> Option<String> {
+        self.handle(chat).map(|h| h.permission_mode())
+    }
+    fn ask(&self, chat: usize, tool: &str, summary: &str, input: serde_json::Value, remember: Vec<coool_core::chat::RememberOption>) -> Option<(String, std::sync::mpsc::Receiver<coool_core::chat::ExternalAnswer>)> {
+        let r = self.handle(chat)?.ask(tool, summary, input, remember);
+        // Wake the pump so the request shows at once.
+        if let Some(core) = self.0.upgrade() {
+            core.pump_waker.kick();
+        }
+        r
+    }
+    fn withdraw(&self, chat: usize, id: &str, note: &str) {
+        if let Some(h) = self.handle(chat) {
+            h.withdraw(id, note);
+        }
+    }
+}
+
 fn check_launch(provider: Provider, dir: &str) -> Res<()> {
     if !std::path::Path::new(dir).is_dir() {
         return Err(format!("not a folder: {dir}"));
@@ -1430,6 +1460,9 @@ pub fn run() {
             device::vm::mac_detach,
             device::vm::mac_input,
             device::vm::mac_bind,
+            device::vm::mac_network,
+            device::gate::device_grants,
+            device::gate::device_grants_revoke,
             device::web::browser_agent_sync,
             device::web::browser_presence_end,
             device::presence_motion,
@@ -1468,6 +1501,11 @@ pub fn run() {
                     devices.init_in(&handle, Some(t.dir().join(".coool-device")));
                 }
                 None => devices.init(&handle),
+            }
+            // The device gate asks through the chats' own permission requests.
+            devices.gate.set_asker(Box::new(ChatAsker(Arc::downgrade(&c))));
+            if let Some(ms) = std::env::var("COOOL_GATE_TIMEOUT_MS").ok().and_then(|v| v.parse::<u64>().ok()).filter(|_| c.selftest.is_some()) {
+                devices.gate.set_timeout(std::time::Duration::from_millis(ms));
             }
             let d = devices.clone();
             c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, cwd, provider| d.mcp.server_for(id, cwd, provider).into_iter().collect())));

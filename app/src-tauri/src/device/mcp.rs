@@ -11,6 +11,7 @@
 //! Tools are shaped for few round trips: every action returns the screen after it settles (or "unchanged"), `batch`
 //! runs many actions in one call, `wait_for` replaces sleep loops, and element ids from `observe` are stable.
 
+use super::gate::{Act, Dev, Risk};
 use super::observe::{self, Tree};
 use super::{Activity, Devices, simctl};
 use serde_json::{Value, json};
@@ -62,8 +63,11 @@ impl Mcp {
             command: exe.to_string_lossy().into_owned(),
             args: vec![PROXY_FLAG.into()],
             env: vec![(SOCKET_ENV.into(), socket.to_string_lossy().into_owned()), (TOKEN_ENV.into(), token)],
-            // The tools only touch the simulator in this chat's panel, which the person watches.
+            // Callable without the CLI's own prompt (Codex's would be an elicitation coool can't answer); coool's
+            // own gate (device/gate.rs) asks the person where the chat's permission mode says to.
             allow_all: true,
+            // A call can wait for the person (the gate, 5 min at most) or run a whole pilot goal.
+            tool_timeout_sec: Some(900),
         })
     }
 
@@ -277,6 +281,12 @@ impl Session {
             return super::web::Browser::new(&self.devices, self.chat).call(name, a);
         }
         let t0 = Instant::now();
+        // The permission gate, for what changes something (reading never asks).
+        if self.devices.gate_asks(self.chat)
+            && let Some(act) = self.iphone_act(name, a)
+        {
+            self.devices.gate_check(self.chat, act)?;
+        }
         // Listing or choosing a device doesn't need one booted first.
         let choosing = name == "device" && matches!(a["action"].as_str(), Some("list" | "select"));
         let udid = match self.devices.bound(self.chat) {
@@ -326,6 +336,42 @@ impl Session {
         };
         out.insert(0, json!({ "type": "text", "text": text }));
         Ok(out)
+    }
+
+    /// What an iPhone tool call changes, for the gate (None: it only reads).
+    fn iphone_act(&self, name: &str, a: &Value) -> Option<Act> {
+        let label = |v: &Value| -> String {
+            let id = v.as_str().unwrap_or("").trim_matches(['[', ']']).to_string();
+            let last = self.devices.mcp.last.lock().unwrap();
+            let n = last.get(&self.chat).and_then(|(t, _)| t.nodes.iter().find(|n| n.id == id).and_then(|n| n.label.clone().or(n.identifier.clone())));
+            n.map(|l| format!("“{}”", l.chars().take(60).collect::<String>())).unwrap_or_else(|| if id.is_empty() { "a point".into() } else { format!("[{id}]") })
+        };
+        let what = match name {
+            "observe" | "wait_for" => return None,
+            "tap" => format!("Tap {}", label(if a["target"].is_null() { &a["id"] } else { &a["target"] })),
+            "type" => format!("Type “{}”", a["text"].as_str().unwrap_or("").chars().take(60).collect::<String>()),
+            "swipe" => match a["scroll"].as_str() {
+                Some(d) => format!("Scroll {d}"),
+                None => "Swipe".into(),
+            },
+            "press" => format!("Press {}", a["button"].as_str().or(a["key"].as_str()).unwrap_or("a key")),
+            "batch" => format!("Run {} steps", a["actions"].as_array().map(|v| v.len()).unwrap_or(0)),
+            "app" => match a["action"].as_str().unwrap_or("") {
+                "list" => return None,
+                "install" => {
+                    let path = a["path"].as_str().unwrap_or("").to_string();
+                    return Some(Act::new(Dev::Iphone, format!("Install {path}")).risk(Some(Risk::Install { what: path })));
+                }
+                "open_url" => format!("Open {}", a["url"].as_str().unwrap_or("a URL")),
+                act => format!("{} {}", if act == "launch" { "Launch" } else { "Quit" }, a["bundle_id"].as_str().unwrap_or("an app")),
+            },
+            "device" => match a["action"].as_str().unwrap_or("status") {
+                "status" | "list" => return None,
+                act => format!("Device: {act}{}", a["udid"].as_str().or(a["value"].as_str()).map(|v| format!(" {v}")).unwrap_or_default()),
+            },
+            _ => return None,
+        };
+        Some(Act::new(Dev::Iphone, what))
     }
 
     fn activity(&self, udid: &str, kind: &'static str, at: Option<(f64, f64)>, to: Option<(f64, f64)>, label: Option<String>) {

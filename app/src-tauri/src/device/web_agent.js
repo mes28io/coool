@@ -1129,6 +1129,52 @@
       return st.visibility !== "hidden" && st.display !== "none";
     }
 
+    /**
+     * What an action on `c.id` (else the focused element) would do, for coool's permission gate, before it runs: whether
+     * it submits a form (and the submit button's label), whether it types into a password or payment field (and the
+     * field's name), where a link goes, and the page's URL. Reads only; changes nothing.
+     */
+    function inspect(c) {
+      var el = c.id != null ? get(c) : document.activeElement || document.body;
+      var tag = tagOf(el);
+      var res = { what: short(el), url: String(location.href) };
+      var ty = tag === "input" ? inputType(el) : "";
+      if (c.act === "type") {
+        var f = field(el) || el;
+        var ac = String(attr(f, "autocomplete") || "").toLowerCase();
+        var nm = (String(attr(f, "name") || "") + " " + String(attr(f, "id") || "")).toLowerCase();
+        if (/(^|\s)cc-(number|csc|exp|exp-month|exp-year|name|type)(\s|$)/.test(ac) || /(^|[^a-z])(cc-?(num|number|csc|cvc|cvv)|card-?(num|number|no)|cardnumber|cvc|cvv|iban)([^a-z]|$)/.test(nm)) res.secret = "payment";
+        else if (secret(f)) res.secret = "password";
+        if (res.secret) res.field = plain(f) || (inputType(f) === "password" ? "Password" : "field");
+        el = f;
+        tag = tagOf(el);
+        ty = tag === "input" ? inputType(el) : "";
+      }
+      var form = el.form || (el.closest ? el.closest("form") : null);
+      var btn = el.closest ? el.closest("button, input[type=submit], input[type=image]") : null;
+      var key = String(c.key || "").toLowerCase();
+      var mods = (c.modifiers || []).length > 0;
+      var enter = (key === "enter" || key === "return") && !mods;
+      var activates = c.act === "click" || (c.act === "press" && (enter || key === " " || key === "space"));
+      if (btn && activates) {
+        var bt = String(attr(btn, "type") || "submit").toLowerCase();
+        var bform = btn.form || (btn.closest ? btn.closest("form") : null);
+        if (bform && (bt === "submit" || bt === "image" || (tagOf(btn) === "input" && /^(submit|image)$/.test(inputType(btn))))) {
+          res.submits = true;
+          res.label = plain(btn) || "Submit";
+        }
+      } else if (form && tag === "input" && !/^(checkbox|radio|button|reset|file|color|range)$/.test(ty) && ((c.act === "type" && c.submit) || (c.act === "press" && enter))) {
+        var sb = form.querySelector && form.querySelector("button[type=submit], button:not([type]), input[type=submit], input[type=image]");
+        res.submits = true;
+        res.label = (sb && plain(sb)) || "the form";
+      }
+      if (c.act === "click") {
+        var a = el.closest ? el.closest("a[href]") : null;
+        if (a && a.href) res.href = String(a.href);
+      }
+      return res;
+    }
+
     function find(c) {
       if (c.selector) {
         var el;
@@ -1166,6 +1212,8 @@
             return scroll(c);
           case "find":
             return find(c);
+          case "inspect":
+            return inspect(c);
           case "idle":
             return { quiet: pending ? 0 : now() - lastMutation, pending: pending || undefined, mutations: mutations, ready: document.readyState, doc: DOC, url: String(location.href) };
           case "presence":

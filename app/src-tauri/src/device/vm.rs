@@ -133,6 +133,7 @@ impl Vm {
                 emit_state(&app, &status, json!({ "state": st, "vmState": st }));
             }
             Some("progress") => emit_state(&app, &status, json!({ "progress": v })),
+            Some("network") => emit_state(&app, &status, json!({ "networkNow": v["networkNow"] })),
             Some("error") => emit_state(&app, &status, json!({ "error": v["error"] })),
             _ => {}
         });
@@ -211,15 +212,26 @@ impl Vm {
         self.set(d, json!({ "error": null, "progress": null }));
         let secrets = Secrets::load_or_create(&vm_dir())?;
         let needs_setup = !provisioned || self.agent_version_stale();
+        let network = network_setting();
+        // coool's one-time setup reaches the guest over SSH from this computer: with the network off, that boot gets
+        // the host-only network (this computer only, never the internet), unplugged again once setup is done.
+        let setup_local = needs_setup && network == Network::Off && state != "running";
         if state != "running" {
             let mut req = json!({ "cmd": "start" });
+            if setup_local {
+                req["network"] = json!("local");
+                self.step(d, "starting with the network on this computer only, for setup");
+            }
             if !provisioned {
                 // Apple's guest provisioning (macOS 27): the account, auto-login and SSH, with no Setup Assistant.
                 req["provision"] = json!({ "fullName": "coool", "username": GUEST_USER, "password": secrets.password, "autoLogin": true, "ssh": true });
             }
             self.call(d, req, Duration::from_secs(120))?;
         }
-        let r = if needs_setup { self.setup(d, &secrets) } else { self.wait_agent(d, Duration::from_secs(120)).map(|_| ()) };
+        let mut r = if needs_setup { self.setup(d, &secrets) } else { self.wait_agent(d, Duration::from_secs(120)).map(|_| ()) };
+        if setup_local && r.is_ok() {
+            r = self.call(d, json!({ "cmd": "network", "mode": "off", "save": false }), Duration::from_secs(10)).map(|_| ());
+        }
         match r {
             Ok(()) => {
                 *self.ready.lock().unwrap() = true;
@@ -236,6 +248,14 @@ impl Vm {
     fn agent_version_stale(&self) -> bool {
         let cfg = std::fs::read(vm_dir().join("config.json")).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).unwrap_or_default();
         cfg["agentVersion"].as_str() != Some(AGENT_VERSION)
+    }
+
+    /// Settings > Devices and the Mac panel: the network switch. Saved for the next boot, and applied now when the
+    /// running Mac has a network device (`applies`: "now" or "next boot").
+    pub fn set_network(&self, d: &Devices, mode: Network) -> Res<Value> {
+        let r = self.call(d, json!({ "cmd": "network", "mode": mode.as_str() }), Duration::from_secs(10))?;
+        self.set(d, json!({ "network": mode.as_str(), "networkNow": r["networkNow"] }));
+        Ok(r)
     }
 
     pub fn shutdown(&self, d: &Devices) -> Res<()> {
@@ -655,7 +675,71 @@ echo coool-setup-ok
     )
 }
 
+// ---- the network setting ----
+
+/// The Mac's network: `On` (NAT: the internet and this computer), `Local` (host-only: this computer only), `Off` (no
+/// network device). Kept in the VM folder's config.json (`network`), default On.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Network {
+    On,
+    Local,
+    Off,
+}
+
+impl Network {
+    pub fn parse(s: &str) -> Option<Network> {
+        match s {
+            "on" => Some(Network::On),
+            "local" => Some(Network::Local),
+            "off" => Some(Network::Off),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Network::On => "on",
+            Network::Local => "local",
+            Network::Off => "off",
+        }
+    }
+    /// The one line of plain truth the panel and Settings show.
+    pub fn truth(self) -> &'static str {
+        match self {
+            Network::On => "The Mac reaches the internet and this computer's network services. Anything in its shared folder can leave this computer.",
+            Network::Local => "The Mac reaches only this computer (a dev server here, for example), not the internet. coool's own tools work.",
+            Network::Off => "The Mac has no network at all: nothing in it, or in its shared folder, can leave through it. coool's own tools still work.",
+        }
+    }
+}
+
+/// The saved setting (config.json `network`; On when unset).
+pub fn network_setting() -> Network {
+    network_in(&vm_dir())
+}
+
+fn network_in(dir: &Path) -> Network {
+    std::fs::read(dir.join("config.json")).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v["network"].as_str().and_then(Network::parse)).unwrap_or(Network::On)
+}
+
 // ---- Tauri commands (the panel) ----
+
+/// The network switch: `mode` sets it (on, local, off); answers `{ network, networkNow?, applies, truth }`.
+#[tauri::command(async)]
+pub fn mac_network(devices: State<'_, Arc<Devices>>, mode: Option<String>) -> Res<Value> {
+    let mut r = match mode {
+        Some(m) => {
+            let n = Network::parse(&m).ok_or("network is on, local or off")?;
+            devices.vm.set_network(&devices, n)?
+        }
+        None => {
+            let s = devices.vm.status(&devices);
+            json!({ "network": s["network"].as_str().unwrap_or(network_setting().as_str()), "networkNow": s["networkNow"] })
+        }
+    };
+    let n = r["network"].as_str().and_then(Network::parse).unwrap_or(Network::On);
+    r["truth"] = json!(n.truth());
+    Ok(r)
+}
 
 #[tauri::command(async)]
 pub fn mac_status(devices: State<'_, Arc<Devices>>) -> Value {
@@ -834,8 +918,60 @@ pub struct MacTools<'a> {
 }
 
 impl MacTools<'_> {
+    /// What a Mac tool call changes, for the gate (None: it only reads). `project`: the chat's folder.
+    pub fn gate_act(name: &str, a: &Value, project: Option<&str>) -> Option<super::gate::Act> {
+        use super::gate::{Act, Dev, Risk};
+        let shared = |p: &str| p.contains(SHARED_IN_GUEST) || p.contains("My Shared Files");
+        let what = match name {
+            "mac_observe" | "mac_screenshot" | "mac_wait_for" | "mac_scroll" => return None,
+            "mac_shell" => {
+                let c = a["command"].as_str().unwrap_or("").to_string();
+                return Some(Act::new(Dev::Mac, "Run a command").risk(Some(Risk::Shell { command: c })));
+            }
+            "mac_share" => {
+                let p = a["path"].as_str().unwrap_or("").to_string();
+                let inside = project.filter(|d| !d.is_empty()).is_some_and(|d| Path::new(&p).starts_with(d));
+                let act = Act::new(Dev::Mac, format!("Copy {p} into the Mac's shared folder"));
+                return Some(if inside { act } else { act.risk(Some(Risk::Share { path: p })) });
+            }
+            "mac_device" => match a["action"].as_str().unwrap_or("status") {
+                "status" => return None,
+                x => format!("{} the Mac", if x == "boot" { "Boot" } else { "Shut down" }),
+            },
+            "mac_app" => {
+                let action = a["action"].as_str().unwrap_or("");
+                let target = a["app"].as_str().or(a["url"].as_str()).unwrap_or("").to_string();
+                match action {
+                    "list" => return None,
+                    "launch" | "open" if shared(&target) => return Some(Act::new(Dev::Mac, format!("Open {target}")).risk(Some(Risk::Launch { what: target }))),
+                    "launch" => format!("Launch {target}"),
+                    "open" => format!("Open {target}"),
+                    _ => format!("Quit {target}"),
+                }
+            }
+            "mac_batch" => {
+                let steps = a["actions"].as_array().cloned().unwrap_or_default();
+                if let Some(t) = steps.iter().filter_map(|s| s["launch"].as_str()).find(|t| shared(t)) {
+                    return Some(Act::new(Dev::Mac, format!("Open {t}")).risk(Some(Risk::Launch { what: t.to_string() })));
+                }
+                format!("Run {} steps", steps.len())
+            }
+            "mac_click" => "Click in the Mac".to_string(),
+            "mac_type" => format!("Type “{}”", a["text"].as_str().unwrap_or("").chars().take(60).collect::<String>()),
+            "mac_press" => format!("Press {}", a["key"].as_str().unwrap_or("a key")),
+            _ => return None,
+        };
+        Some(Act::new(Dev::Mac, what))
+    }
+
     pub fn call(&self, name: &str, a: &Value) -> Res<Vec<Value>> {
         let t0 = Instant::now();
+        // The permission gate, for what changes something (reading never asks).
+        if self.d.gate_asks(self.chat)
+            && let Some(act) = Self::gate_act(name, a, self.d.mcp.cwd(self.chat).as_deref())
+        {
+            self.d.gate_check(self.chat, act)?;
+        }
         if name == "mac_share" {
             return Ok(vec![text(self.share(a)?)]);
         }
@@ -1318,6 +1454,44 @@ mod tests {
     fn agent_flags_accept_objc_booleans() {
         assert!(truthy(&json!(true)) && truthy(&json!(1)));
         assert!(!truthy(&json!(false)) && !truthy(&json!(0)) && !truthy(&Value::Null));
+    }
+
+    #[test]
+    fn the_network_setting_reads_from_the_vm_config() {
+        let d = std::env::temp_dir().join(format!("coool-vm-net-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(network_in(&d), Network::On, "no config: on");
+        std::fs::write(d.join("config.json"), br#"{"installed":true,"network":"off"}"#).unwrap();
+        assert_eq!(network_in(&d), Network::Off);
+        std::fs::write(d.join("config.json"), br#"{"network":"local"}"#).unwrap();
+        assert_eq!(network_in(&d), Network::Local);
+        std::fs::write(d.join("config.json"), br#"{"network":"bogus"}"#).unwrap();
+        assert_eq!(network_in(&d), Network::On, "unknown: on");
+        for n in [Network::On, Network::Local, Network::Off] {
+            assert_eq!(Network::parse(n.as_str()), Some(n));
+        }
+        assert!(Network::On.truth().contains("shared folder can leave"));
+        assert!(Network::Off.truth().contains("no network"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn mac_tools_ask_for_what_changes_and_always_for_commands_and_the_shared_folder() {
+        use crate::device::gate::Risk;
+        for read in [("mac_observe", json!({})), ("mac_screenshot", json!({})), ("mac_wait_for", json!({"text":"x"})), ("mac_scroll", json!({"direction":"down"})), ("mac_app", json!({"action":"list"})), ("mac_device", json!({"action":"status"}))] {
+            assert!(MacTools::gate_act(read.0, &read.1, None).is_none(), "{read:?}");
+        }
+        let a = MacTools::gate_act("mac_click", &json!({"target":"k3f"}), None).unwrap();
+        assert!(a.risk.is_none());
+        let a = MacTools::gate_act("mac_shell", &json!({"command":"ls /"}), None).unwrap();
+        assert_eq!(a.risk, Some(Risk::Shell { command: "ls /".into() }));
+        let a = MacTools::gate_act("mac_app", &json!({"action":"launch","app":"/Volumes/My Shared Files/My.app"}), None).unwrap();
+        assert!(matches!(a.risk, Some(Risk::Launch { .. })));
+        assert!(MacTools::gate_act("mac_app", &json!({"action":"launch","app":"TextEdit"}), None).unwrap().risk.is_none());
+        let a = MacTools::gate_act("mac_batch", &json!({"actions":[{"click":"a"},{"launch":"/Volumes/My Shared Files/x.pkg"}]}), None).unwrap();
+        assert!(matches!(a.risk, Some(Risk::Launch { .. })));
+        assert!(MacTools::gate_act("mac_share", &json!({"path":"/work/app/build/My.app"}), Some("/work/app")).unwrap().risk.is_none());
+        assert!(matches!(MacTools::gate_act("mac_share", &json!({"path":"/Users/x/.ssh"}), Some("/work/app")).unwrap().risk, Some(Risk::Share { .. })));
     }
 
     #[test]

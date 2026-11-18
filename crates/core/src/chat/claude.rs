@@ -1350,6 +1350,7 @@ mod tests {
             args: vec!["--coool-device-mcp".into()],
             env: vec![("COOOL_DEVICE_TOKEN".into(), "t\"1".into())],
             allow_all: true,
+            tool_timeout_sec: Some(900),
         }.clone()]);
         assert_eq!(a.len(), 2);
         let cfg: Value = serde_json::from_str(a[0].strip_prefix("--mcp-config=").unwrap()).unwrap();

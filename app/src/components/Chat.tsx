@@ -26,7 +26,7 @@ import { openChanges } from "../lib/infoRequest";
 import { isPlanTool, isSyntheticPlan, isTaskNoise, parsePlan, planForTurn } from "../lib/plan";
 import { PlanCard } from "./PlanCard";
 import { NoteRows } from "./SteerStrip";
-import { IAlert, IChevron, ICheck, IClose, IFile, IReturn, ITerminal } from "./icons";
+import { IAlert, IChevron, ICheck, IClose, IFile, IGlobe, IMac, IPhone, IReturn, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
 import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot, TokenCount } from "./primitives";
@@ -839,7 +839,22 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
 
 // ---------- approval ----------
 
+/** coool's own request from the device gate (APP_SPEC "Device permissions"): it says what and where itself. */
+interface DeviceAsk {
+  device: "browser" | "iphone" | "mac";
+  kind: string;
+  lead: string;
+  body: string;
+  note?: string | null;
+}
+export const deviceAsk = (p: Pick<Perm, "input">): DeviceAsk | null => {
+  const d = (p.input as { coool_device?: DeviceAsk } | null)?.coool_device;
+  return d && typeof d.lead === "string" ? d : null;
+};
+
 function permDetail(p: Perm, cwd: string): { lead: string; body: string; full?: string; note?: string } {
+  const dev = deviceAsk(p);
+  if (dev) return { lead: dev.lead, body: dev.body, note: dev.note ?? undefined };
   const i = (p.input ?? {}) as Record<string, unknown>;
   if (typeof i.command === "string") return { lead: "run a command", body: i.command, note: typeof i.description === "string" ? i.description : undefined };
   if (typeof i.file_path === "string") return { lead: /write/i.test(p.tool) ? "create a file" : "edit a file", body: cwd ? relPath(i.file_path, cwd) : i.file_path, full: i.file_path };
@@ -897,7 +912,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
             <Ticks text={option.label} />
           </span>
           {quick && <Kbd className="ml-auto shrink-0">⇧⌘↵</Kbd>}
-          {saved && <span className="ml-auto flex shrink-0 items-center gap-1.5 rounded-[6px] border border-line bg-raised px-1.5 text-small font-medium text-dim"><span className="size-[6px] rounded-full bg-busy" />{option.scope === "user" ? "Saved, all projects" : "Saved to file"}</span>}
+          {saved && <span className="ml-auto flex shrink-0 items-center gap-1.5 rounded-[6px] border border-line bg-raised px-1.5 text-small font-medium text-dim"><span className="size-[6px] rounded-full bg-busy" />{option.scope === "user" ? "Saved, all projects" : option.file?.startsWith("coool") ? "Saved in coool" : "Saved to file"}</span>}
         </span>
         <span className="mt-0.5 block text-small text-dim">{option.detail}</span>
       </span>
@@ -908,6 +923,7 @@ function RememberRow({ option, quick, onPick }: { option: RememberOption; quick:
 function Approval({ item, chat }: { item: Perm; chat: Chat }) {
   if (item.tool === "ExitPlanMode") return <PlanApproval item={item} chat={chat} />;
   const d = permDetail(item, chat.cwd);
+  const dev = deviceAsk(item);
   const who = chat.provider === "claude" ? "Claude" : "Codex";
   const quick = item.remember[0]?.scope === "chat" ? item.remember[0] : null;
   return (
@@ -921,10 +937,11 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
           transition={{ type: "spring", stiffness: 420, damping: 32 }}
           className="attn-card rounded-[14px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
           data-approval={item.requestId}
+          data-device-approval={dev ? dev.kind : undefined}
         >
           <div className="flex items-center gap-2 px-3.5 pb-1.5 pt-3.5">
             <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-needs-text">
-              <ITerminal size={15} />
+              {dev?.device === "browser" ? <IGlobe size={15} /> : dev?.device === "iphone" ? <IPhone size={15} /> : dev?.device === "mac" ? <IMac size={15} /> : <ITerminal size={15} />}
             </span>
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
               {who} wants to {d.lead}

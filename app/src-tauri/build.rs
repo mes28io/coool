@@ -63,7 +63,7 @@ fn vm_helpers() {
         matches!(cmd.status(), Ok(s) if s.success())
     };
     let host = ok_target
-        && build("coool-vm", "native/coool-vm.m", &["Foundation", "Virtualization", "CoreImage", "ImageIO", "Vision", "AppKit", "IOSurface", "QuartzCore"], &["-lz"])
+        && build("coool-vm", "native/coool-vm.m", &["Foundation", "Virtualization", "CoreImage", "ImageIO", "Vision", "AppKit", "IOSurface", "QuartzCore", "vmnet"], &["-lz"])
         && matches!(
             std::process::Command::new("codesign")
                 .args(["-s", "-", "-f", "--entitlements", "native/coool-vm.entitlements"])

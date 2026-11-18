@@ -50,6 +50,9 @@ pub struct McpServer {
     pub env: Vec<(String, String)>,
     /// Pre-approve every tool of this server (Claude: `--allowedTools=mcp__<name>`).
     pub allow_all: bool,
+    /// How long one tool call may take (Codex's `tool_timeout_sec`, 60 s by default; Claude Code waits as long as
+    /// the call runs). A call can wait for the person (coool's device gate), or run a whole pilot goal.
+    pub tool_timeout_sec: Option<u64>,
 }
 
 /// Builds the MCP servers for a chat from its id.
@@ -408,7 +411,12 @@ struct Shared {
     backend: Box<dyn Backend>,
     events: VecDeque<ChatEvent>,
     next_seq: u64,
+    /// What the UI was told (the backend's state, or `waiting_permission` while an outside request is pending).
     state: ChatState,
+    /// The state the CLI's backend last reported.
+    backend_state: ChatState,
+    /// Permission requests of coool's own (see [`ChatHandle::ask`]), waiting for the person.
+    external: Vec<External>,
     session_id: Option<String>,
     model: String,
     permission_mode: String,
@@ -419,6 +427,25 @@ struct Shared {
 }
 
 impl Shared {
+    fn effective_state(&self) -> ChatState {
+        if self.external.is_empty() { self.backend_state } else { ChatState::WaitingPermission }
+    }
+
+    /// Re-announces the state after an outside request came or went.
+    fn refresh_state(&mut self) {
+        let eff = self.effective_state();
+        if eff != self.state {
+            self.state = eff;
+            self.next_seq += 1;
+            self.events.push_back(ChatEvent { seq: self.next_seq, ts: now_ms(), kind: ChatEventKind::State { state: eff } });
+        }
+    }
+
+    fn take_external(&mut self, request_id: &str) -> Option<External> {
+        let i = self.external.iter().position(|x| x.id == request_id)?;
+        Some(self.external.remove(i))
+    }
+
     fn trace(&mut self, dir: &str, v: Value) {
         if let Some(f) = self.trace.as_mut() {
             let rec = json!({"t": now_ms(), "dir": dir, "line": v});
@@ -426,13 +453,22 @@ impl Shared {
         }
     }
 
-    fn push(&mut self, kind: ChatEventKind) {
-        match &kind {
+    fn push(&mut self, mut kind: ChatEventKind) {
+        match &mut kind {
             ChatEventKind::State { state } => {
-                if *state == self.state {
+                self.backend_state = *state;
+                // The turn ended (or the CLI exited) while coool's own request waited: nobody can use the answer.
+                if *state == ChatState::Idle && !self.external.is_empty() {
+                    for x in self.external.drain(..) {
+                        let _ = x.tx.send(ExternalAnswer::Cancelled("the turn ended before the person answered".into()));
+                    }
+                }
+                let eff = self.effective_state();
+                if eff == self.state {
                     return;
                 }
-                self.state = *state;
+                self.state = eff;
+                *state = eff;
             }
             ChatEventKind::Ready { session_id, model, permission_mode, .. } => {
                 if !session_id.is_empty() {
@@ -490,6 +526,71 @@ impl ChatHandle {
     pub fn is_running(&self) -> bool {
         lock(&self.shared).running
     }
+
+    /// The chat's permission mode as the CLI last reported it (`ready.permission_mode`): Claude's mode, Codex's
+    /// approval policy. Empty until the CLI said.
+    pub fn permission_mode(&self) -> String {
+        lock(&self.shared).permission_mode.clone()
+    }
+
+    /// A permission request of coool's own (not the CLI's): shown exactly like one from the CLI
+    /// (`permission_request`, the chat `waiting_permission`, "Needs you"), and answered through
+    /// [`Chat::respond_permission`] / [`Chat::respond_permission_remember`] with the id this returns. The answer
+    /// arrives on the receiver; the request is cancelled when the turn ends first. None when the chat has ended.
+    pub fn ask(&self, tool: &str, summary: &str, input: Value, remember: Vec<RememberOption>) -> Option<(String, mpsc::Receiver<ExternalAnswer>)> {
+        let mut sh = lock(&self.shared);
+        if !sh.running {
+            return None;
+        }
+        let id = format!("coool-{}", uuid_v4());
+        let (tx, rx) = mpsc::channel();
+        sh.external.push(External { id: id.clone(), tx, remember: remember.clone() });
+        sh.push(ChatEventKind::PermissionRequest { request_id: id.clone(), tool: tool.into(), summary: summary.into(), input, remember });
+        sh.refresh_state();
+        Some((id, rx))
+    }
+
+    /// Takes back a request from [`Self::ask`] nobody answered (it timed out), with a note in the chat.
+    pub fn withdraw(&self, request_id: &str, note: &str) {
+        let mut sh = lock(&self.shared);
+        if sh.take_external(request_id).is_some() {
+            if !note.is_empty() {
+                sh.push(ChatEventKind::notice(NoticeLevel::Info, note));
+            }
+            sh.refresh_state();
+        }
+    }
+}
+
+/// The person's answer to a request from [`ChatHandle::ask`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalAnswer {
+    Allow,
+    /// Allow, and apply the request's remember option with this id.
+    Remember(String),
+    Deny,
+    /// Nobody can answer any more (the turn ended, the chat exited): why.
+    Cancelled(String),
+}
+
+struct External {
+    id: String,
+    tx: mpsc::Sender<ExternalAnswer>,
+    remember: Vec<RememberOption>,
+}
+
+/// Answers coool's own request `request_id` if it is one: Some(result), else None (the CLI's).
+fn answer_external(shared: &Mutex<Shared>, request_id: &str, answer: impl FnOnce(&[RememberOption]) -> Result<ExternalAnswer>) -> Option<Result<()>> {
+    let mut sh = lock(shared);
+    let i = sh.external.iter().position(|x| x.id == request_id)?;
+    let a = match answer(&sh.external[i].remember) {
+        Ok(a) => a,
+        Err(e) => return Some(Err(e)),
+    };
+    let x = sh.external.remove(i);
+    let _ = x.tx.send(a);
+    sh.refresh_state();
+    Some(Ok(()))
 }
 
 fn events_since(shared: &Mutex<Shared>, seq: u64) -> (Vec<ChatEvent>, u64) {
@@ -551,6 +652,8 @@ impl Chat {
             events: VecDeque::new(),
             next_seq: 0,
             state: ChatState::Idle,
+            backend_state: ChatState::Idle,
+            external: Vec::new(),
             session_id: None,
             model: String::new(),
             permission_mode: String::new(),
@@ -723,6 +826,16 @@ impl Chat {
     /// [`Chat::respond_permission_remember`]). With no such option, `always`
     /// allows once.
     pub fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool) -> Result<()> {
+        let ext = answer_external(&self.shared, request_id, |opts| {
+            Ok(match (allow, always, opts.first().filter(|o| !o.persistent())) {
+                (false, _, _) => ExternalAnswer::Deny,
+                (true, true, Some(o)) => ExternalAnswer::Remember(o.id.clone()),
+                (true, _, _) => ExternalAnswer::Allow,
+            })
+        });
+        if let Some(r) = ext {
+            return r;
+        }
         let call = json!({"call": "respond_permission", "request_id": request_id, "allow": allow, "always": always});
         self.with_backend(call, |b, o| b.respond_permission(request_id, allow, always, o))
     }
@@ -730,6 +843,15 @@ impl Chat {
     /// Allow, and apply the [`RememberOption`] with id `remember` from the
     /// request's `permission_request.remember`.
     pub fn respond_permission_remember(&mut self, request_id: &str, remember: &str) -> Result<()> {
+        let ext = answer_external(&self.shared, request_id, |opts| {
+            if !opts.iter().any(|o| o.id == remember) {
+                bail!("no remember option {remember} for request {request_id}");
+            }
+            Ok(ExternalAnswer::Remember(remember.to_string()))
+        });
+        if let Some(r) = ext {
+            return r;
+        }
         let call = json!({"call": "respond_permission", "request_id": request_id, "allow": true, "remember": remember});
         self.with_backend(call, |b, o| b.respond_permission_remember(request_id, remember, o))
     }
@@ -1103,6 +1225,82 @@ mod tests {
         assert!(!h.is_running());
         assert!(c.send("late").is_err());
         assert_eq!(c.info().id, 7);
+    }
+
+    /// coool's own permission requests (the device gate's): shown like the CLI's, answered through the same calls,
+    /// the chat `waiting_permission` meanwhile even while the backend reports `working`, cancelled when the turn ends.
+    #[test]
+    fn outside_requests_wait_for_the_person_and_end_with_the_turn() {
+        struct Nop;
+        impl Backend for Nop {
+            fn start(&mut self, _: &mut Out) {}
+            fn on_line(&mut self, line: &str, o: &mut Out) {
+                let state = if line.trim_matches('"') == "idle" { ChatState::Idle } else { ChatState::Working };
+                o.ev(ChatEventKind::State { state });
+            }
+            fn send(&mut self, t: &str, o: &mut Out) -> Result<()> {
+                o.write(&Value::String(t.into()));
+                Ok(())
+            }
+            fn interrupt(&mut self, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn set_model(&mut self, _: &str, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn set_permission_mode(&mut self, _: &str, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn respond_permission(&mut self, _: &str, _: bool, _: bool, _: &mut Out) -> Result<()> {
+                bail!("not the backend's")
+            }
+            fn on_exit(&mut self, _: &mut Out) {}
+        }
+        // `cat` echoes each written line back: "working" / "idle" drive the backend's state.
+        let mut c = Chat::spawn(3, Provider::Claude, "/", "/bin/cat", &[], Box::new(Nop)).unwrap();
+        let wait_state = |c: &Chat, s: ChatState| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while c.state() != s && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(c.state(), s);
+        };
+        c.send("working").unwrap();
+        wait_state(&c, ChatState::Working);
+        let h = c.handle();
+        let chat_opt = RememberOption { id: "chat".into(), label: "Allow in this chat".into(), detail: String::new(), scope: RememberScope::Chat, file: None, mode: None, rules: vec![] };
+        let (id, rx) = h.ask("Browser", "open example.com", json!({"x": 1}), vec![chat_opt]).unwrap();
+        assert_eq!(c.state(), ChatState::WaitingPermission);
+        let (evs, _) = c.events_since(0);
+        assert!(evs.iter().any(|e| matches!(&e.kind, ChatEventKind::PermissionRequest { request_id, tool, .. } if *request_id == id && tool == "Browser")));
+        // The backend saying "working" meanwhile doesn't end the wait.
+        c.send("working").unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(c.state(), ChatState::WaitingPermission);
+        assert!(c.respond_permission_remember(&id, "project").is_err(), "an option the request didn't offer");
+        c.respond_permission(&id, true, true).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), ExternalAnswer::Remember("chat".into()));
+        assert_eq!(c.state(), ChatState::Working);
+        assert!(c.respond_permission(&id, true, false).is_err(), "answered once; then it is the backend's (which refuses)");
+        // Deny, then a request the turn's end cancels, then one withdrawn after a timeout.
+        let (id2, rx2) = h.ask("Mac", "run ls", json!({}), vec![]).unwrap();
+        c.respond_permission(&id2, false, false).unwrap();
+        assert_eq!(rx2.recv_timeout(Duration::from_secs(1)).unwrap(), ExternalAnswer::Deny);
+        let (_, rx3) = h.ask("Mac", "run ls", json!({}), vec![]).unwrap();
+        c.send("idle").unwrap();
+        assert!(matches!(rx3.recv_timeout(Duration::from_secs(5)).unwrap(), ExternalAnswer::Cancelled(_)));
+        wait_state(&c, ChatState::Idle);
+        let (id4, rx4) = h.ask("Mac", "run ls", json!({}), vec![]).unwrap();
+        assert_eq!(c.state(), ChatState::WaitingPermission);
+        h.withdraw(&id4, "No answer: denied");
+        assert_eq!(c.state(), ChatState::Idle);
+        assert!(rx4.try_recv().is_err());
+        c.stop();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while c.is_running() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(h.ask("Mac", "x", json!({}), vec![]).is_none(), "an ended chat can't ask");
     }
 
     #[test]

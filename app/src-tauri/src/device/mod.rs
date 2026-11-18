@@ -12,6 +12,7 @@
 //! The panel and the chat's agent share one device: what the agent does is what the person sees (`sim-activity`
 //! events draw it on the panel).
 
+pub mod gate;
 pub mod helper;
 pub mod mcp;
 pub mod observe;
@@ -58,6 +59,8 @@ pub struct Devices {
     pub web: web::Web,
     /// The sandboxed Mac (one VM, shared by the chats that use it), for the Mac panel and the `mac_*` tools.
     pub vm: vm::Vm,
+    /// The permission gate every action of an agent passes (device/gate.rs).
+    pub gate: gate::Gate,
     /// coool's "Reduce motion" (the frontend reports it): the page cursors in the Browser panel don't glide.
     reduce_motion: std::sync::atomic::AtomicBool,
 }
@@ -109,6 +112,7 @@ impl Devices {
         let _ = self.app.set(app.clone());
         if let Some(d) = dir {
             let _ = self.bin_dir.set(d.join("bin"));
+            self.gate.set_store(d.join("device-grants.json"));
             if let Err(e) = mcp::start(self.clone(), &d) {
                 eprintln!("coool: device MCP server not started: {e}");
             }
@@ -139,6 +143,19 @@ impl Devices {
         if let Some(app) = self.app.get() {
             let _ = app.emit_to("main", event, payload);
         }
+    }
+
+    /// Whether the gate may ask in this chat now (its mode asks): callers do extra work only then.
+    pub fn gate_asks(&self, chat: usize) -> bool {
+        self.gate.mode(chat) != gate::Mode::Free
+    }
+
+    /// The gate's say on an action of `chat`'s agent that changes something (see [`gate::Gate::check`]).
+    pub fn gate_check(&self, chat: usize, act: gate::Act) -> Res<()> {
+        if !self.gate_asks(chat) {
+            return Ok(());
+        }
+        self.gate.check(chat, self.mcp.cwd(chat).as_deref(), act)
     }
 
     pub fn activity(&self, mut a: Activity) {

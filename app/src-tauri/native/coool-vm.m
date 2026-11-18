@@ -35,6 +35,7 @@
 #import <zlib.h>
 #import <objc/runtime.h>
 #import <IOSurface/IOSurface.h>
+#import <vmnet/vmnet.h>
 
 // ---------------------------------------------------------------------------------------------------
 // Private input / screenshot surface (selectors only; nothing links privately).
@@ -596,6 +597,46 @@ static void setState(NSString *s) {
 @end
 static CVDelegate *gDelegate;
 
+// ---------------------------------------------------------------------------------------------------
+// The network (APP_SPEC "Mac panel (sandbox VM)" > Network): config.json `network` is "on" (NAT: the internet and
+// this computer), "local" (a host-only vmnet network: this computer only, no DNS proxy, no NAT) or "off" (no
+// network device at all). A VM booted with a device switches between them live (its attachment changes; "off"
+// detaches it, like pulling the cable); one booted without a device needs a restart to get one.
+
+static NSString *gNetBoot = nil;  // what the running VM booted with (nil: stopped)
+static NSString *gNetNow = nil;   // what is attached now
+static vmnet_network_ref gHostNet = NULL;
+
+static NSString *netSetting(NSDictionary *cfg) {
+  NSString *n = cfg[@"network"];
+  return [@[@"on", @"local", @"off"] containsObject:n] ? n : @"on";
+}
+
+/// The attachment for a mode (nil for "off", or when host-only isn't available on this macOS).
+static VZNetworkDeviceAttachment *netAttachment(NSString *mode, NSString **err) {
+  if ([mode isEqualToString:@"on"]) return [[VZNATNetworkDeviceAttachment alloc] init];
+  if ([mode isEqualToString:@"local"]) {
+    if (@available(macOS 26.0, *)) {
+      if (!gHostNet) {
+        vmnet_return_t st = VMNET_SUCCESS;
+        vmnet_network_configuration_ref c = vmnet_network_configuration_create(VMNET_HOST_MODE, &st);
+        if (!c) { if (err) *err = [NSString stringWithFormat:@"host-only network: vmnet status %d", st]; return nil; }
+        // Nothing but this computer: no DNS proxy (no lookups for the guest), no NAT (host mode has none).
+        vmnet_network_configuration_disable_dns_proxy(c);
+        vmnet_network_configuration_disable_nat44(c);
+        vmnet_network_configuration_disable_nat66(c);
+        gHostNet = vmnet_network_create(c, &st);
+        CFRelease(c);
+        if (!gHostNet) { if (err) *err = [NSString stringWithFormat:@"host-only network: vmnet status %d", st]; return nil; }
+      }
+      return [[VZVmnetNetworkDeviceAttachment alloc] initWithNetwork:gHostNet];
+    }
+    if (err) *err = @"a host-only network needs macOS 26 on this Mac";
+    return nil;
+  }
+  return nil;
+}
+
 static NSString *macAddress(NSMutableDictionary *cfg) {
   NSString *mac = cfg[@"mac"];
   if (!mac) {
@@ -605,7 +646,7 @@ static NSString *macAddress(NSMutableDictionary *cfg) {
   return mac;
 }
 
-static VZVirtualMachineConfiguration *makeConfig(NSMutableDictionary *cfg, VZMacHardwareModel *model, NSString **err) {
+static VZVirtualMachineConfiguration *makeConfig(NSMutableDictionary *cfg, VZMacHardwareModel *model, NSString *net, NSString **err) {
   NSError *e = nil;
   VZMacPlatformConfiguration *platform = [[VZMacPlatformConfiguration alloc] init];
   platform.hardwareModel = model;
@@ -633,10 +674,17 @@ static VZVirtualMachineConfiguration *makeConfig(NSMutableDictionary *cfg, VZMac
   if (!disk) { *err = [NSString stringWithFormat:@"disk: %@", e.localizedDescription]; return nil; }
   c.storageDevices = @[[[VZVirtioBlockDeviceConfiguration alloc] initWithAttachment:disk]];
 
-  VZVirtioNetworkDeviceConfiguration *net = [[VZVirtioNetworkDeviceConfiguration alloc] init];
-  net.attachment = [[VZNATNetworkDeviceAttachment alloc] init];
-  net.MACAddress = [[VZMACAddress alloc] initWithString:macAddress(cfg)];
-  c.networkDevices = @[net];
+  if (![net isEqualToString:@"off"]) {
+    NSString *ne = nil;
+    VZNetworkDeviceAttachment *att = netAttachment(net, &ne);
+    if (!att) { *err = ne ?: @"no network attachment"; return nil; }
+    VZVirtioNetworkDeviceConfiguration *nd = [[VZVirtioNetworkDeviceConfiguration alloc] init];
+    nd.attachment = att;
+    nd.MACAddress = [[VZMACAddress alloc] initWithString:macAddress(cfg)];
+    c.networkDevices = @[nd];
+  } else {
+    c.networkDevices = @[];
+  }
 
   c.keyboards = @[[[VZUSBKeyboardConfiguration alloc] init]];
   c.pointingDevices = @[[[VZUSBScreenCoordinatePointingDeviceConfiguration alloc] init], [[VZMacTrackpadConfiguration alloc] init]];
@@ -708,7 +756,7 @@ static NSDictionary *install(NSDictionary *m, NSString **err) {
   int fd = open(P(@"disk.img").fileSystemRepresentation, O_CREAT | O_TRUNC | O_RDWR, 0600);
   if (fd < 0 || ftruncate(fd, (off_t)(diskGB << 30)) != 0) { if (fd >= 0) close(fd); *err = @"couldn't create the disk image"; setState(@"stopped"); return nil; }
   close(fd);
-  VZVirtualMachineConfiguration *c = makeConfig(cfg, req.hardwareModel, err);
+  VZVirtualMachineConfiguration *c = makeConfig(cfg, req.hardwareModel, @"on", err);
   if (!c) { setState(@"stopped"); return nil; }
   saveConfig(cfg);
   __block NSError *ie = nil;
@@ -772,7 +820,9 @@ static void startVM(NSDictionary *m, id rid) {
   if (![cfg[@"installed"] boolValue]) { fail(rid, @"This Mac isn't installed yet."); return; }
   VZMacHardwareModel *model = savedModel(cfg);
   if (!model) { fail(rid, @"config.json has no hardware model"); return; }
-  VZVirtualMachineConfiguration *c = makeConfig(cfg, model, &err);
+  // `network` in the request: this boot only (coool's first-run setup needs SSH from this computer).
+  NSString *net = [@[@"on", @"local", @"off"] containsObject:m[@"network"]] ? m[@"network"] : netSetting(cfg);
+  VZVirtualMachineConfiguration *c = makeConfig(cfg, model, net, &err);
   if (!c) { fail(rid, err); return; }
   saveConfig(cfg);
   VZMacOSVirtualMachineStartOptions *opts = [[VZMacOSVirtualMachineStartOptions alloc] init];
@@ -806,6 +856,8 @@ static void startVM(NSDictionary *m, id rid) {
         fail(rid, [NSString stringWithFormat:@"couldn't start the Mac: %@", e.localizedDescription]);
         return;
       }
+      gNetBoot = net;
+      gNetNow = net;
       attachView();
       warmOCR();
       setState(@"running");
@@ -1237,6 +1289,9 @@ static void handle(NSDictionary *m) {
     r[@"memoryMB"] = cfg[@"memoryMB"] ?: @6144;
     r[@"w"] = @(gDisplay.width);
     r[@"h"] = @(gDisplay.height);
+    r[@"network"] = netSetting(cfg);
+    if (gVM && gNetNow) r[@"networkNow"] = gNetNow;
+    if (gVM && gNetBoot) r[@"networkDevice"] = @(![gNetBoot isEqualToString:@"off"]);
     r[@"free"] = @(freeBytes(gDir));
     struct stat st;
     if (stat(P(@"disk.img").fileSystemRepresentation, &st) == 0) {
@@ -1267,6 +1322,26 @@ static void handle(NSDictionary *m) {
     startVM(m, rid);
   } else if ([cmd isEqualToString:@"stop"]) {
     stopVM(m, rid);
+  } else if ([cmd isEqualToString:@"network"]) {
+    // Saves the setting (unless `save: false`) and applies it now when the running VM has a network device.
+    NSString *mode = m[@"mode"];
+    if (![@[@"on", @"local", @"off"] containsObject:mode]) { fail(rid, @"network is on, local or off"); return; }
+    if (![m[@"save"] isEqual:@NO]) {
+      NSMutableDictionary *cfg = loadConfig();
+      cfg[@"network"] = mode;
+      saveConfig(cfg);
+    }
+    dispatch_async(gVMQ, ^{
+      if (!gVM) { reply(rid, @{@"network": mode, @"applies": @"next boot"}); return; }
+      if (gVM.networkDevices.count == 0) { reply(rid, @{@"network": mode, @"networkNow": gNetNow ?: @"off", @"applies": [mode isEqualToString:@"off"] ? @"now" : @"next boot"}); return; }
+      NSString *err = nil;
+      VZNetworkDeviceAttachment *att = netAttachment(mode, &err);
+      if (!att && ![mode isEqualToString:@"off"]) { fail(rid, err ?: @"no attachment"); return; }
+      gVM.networkDevices.firstObject.attachment = att;
+      gNetNow = mode;
+      event(@"network", @{@"networkNow": mode});
+      reply(rid, @{@"network": mode, @"networkNow": mode, @"applies": @"now"});
+    });
   } else if ([cmd isEqualToString:@"ip"]) {
     NSString *ip = guestIP();
     ip ? reply(rid, @{@"ip": ip}) : fail(rid, @"no address yet");

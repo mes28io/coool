@@ -1,10 +1,10 @@
 // The Mac panel's mock (`pnpm dev`): a VM that "installs" in a few seconds (progress events), boots through a short
 // setup, streams a generated desktop as JPEG frames, and makes a fake agent click every ~7 s while attached.
 
-import type { Backend, MacStatus } from "./backend";
+import { MAC_NETWORK_TRUTH, type Backend, type MacStatus } from "./backend";
 import { emitMockSimActivity } from "./mockSim";
 
-type Mac = Pick<Backend, "macStatus" | "macInstall" | "macBoot" | "macShutdown" | "macAttach" | "macDetach" | "macInput" | "macBind" | "onMacState">;
+type Mac = Pick<Backend, "macStatus" | "macInstall" | "macBoot" | "macShutdown" | "macAttach" | "macDetach" | "macInput" | "macBind" | "macNetwork" | "onMacState">;
 
 const W = 1280;
 const H = 800;
@@ -80,6 +80,7 @@ export function mockMac(): Mac {
     diskBytes: 0,
     free: 182e9,
     sharedDir: "/Users/you/Library/Application Support/sh.coool/mac/shared",
+    network: "on",
   };
   const listeners = new Set<(s: Partial<MacStatus>) => void>();
   const emit = (p: Partial<MacStatus>) => {
@@ -130,12 +131,12 @@ export function mockMac(): Mac {
         }
         st.provisioned = true;
       }
-      emit({ state: "running", step: undefined });
+      emit({ state: "running", step: undefined, networkNow: st.network ?? "on" });
     },
     async macShutdown() {
       emit({ state: "stopping" });
       await wait(700);
-      emit({ state: "stopped" });
+      emit({ state: "stopped", networkNow: null });
     },
     async macAttach(onFrame) {
       const stream = ++ids;
@@ -169,6 +170,14 @@ export function mockMac(): Mac {
       push();
     },
     async macBind() {},
+    async macNetwork(mode) {
+      if (mode) {
+        // Live when the running Mac has a network device (it always does in the mock).
+        emit({ network: mode, networkNow: st.state === "running" ? mode : null });
+      }
+      const n = st.network ?? "on";
+      return { network: n, networkNow: st.networkNow ?? null, applies: st.state === "running" ? "now" : "next boot", truth: MAC_NETWORK_TRUTH[n] };
+    },
     onMacState(cb) {
       listeners.add(cb);
       return () => listeners.delete(cb);

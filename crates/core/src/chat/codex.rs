@@ -86,6 +86,9 @@ pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
         if s.allow_all {
             a.extend(["-c".into(), format!("{key}.default_tools_approval_mode=\"approve\"")]);
         }
+        if let Some(t) = s.tool_timeout_sec {
+            a.extend(["-c".into(), format!("{key}.tool_timeout_sec={t}")]);
+        }
     }
     a
 }
@@ -1179,6 +1182,7 @@ mod tests {
             args: vec!["--coool-device-mcp".into()],
             env: vec![("COOOL_DEVICE_TOKEN".into(), "t\"1".into())],
             allow_all: true,
+            tool_timeout_sec: Some(900),
         }]);
         assert_eq!(
             a,
@@ -1191,6 +1195,8 @@ mod tests {
                 r#"mcp_servers.coool-device.env={"COOOL_DEVICE_TOKEN"="t\"1"}"#,
                 "-c",
                 r#"mcp_servers.coool-device.default_tools_approval_mode="approve""#,
+                "-c",
+                "mcp_servers.coool-device.tool_timeout_sec=900",
             ]
         );
     }

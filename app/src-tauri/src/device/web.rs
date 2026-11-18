@@ -14,6 +14,7 @@
 //!   [`QUIET_MS`] (a MutationObserver in that world), then returns the page (or "unchanged").
 
 use super::Devices;
+use super::gate::{self, Act, Dev, Risk};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -762,7 +763,74 @@ impl<'a> Browser<'a> {
         Ok(out)
     }
 
+    // ---- the permission gate (device/gate.rs) ----
+
+    /// The gate's say on an action that changes something, on the page `p` (or none): asks when the chat's mode and
+    /// what it allowed say so. Free modes return at once, before any page work.
+    fn gate(&self, act: impl FnOnce() -> Act) -> Result<(), String> {
+        if !self.devices.gate_asks(self.chat) {
+            return Ok(());
+        }
+        self.devices.gate_check(self.chat, act())
+    }
+
+    /// Before a click / type / select / press: what it would do on the page (a form submit, a password or payment
+    /// field, a link to another site), read by the page script without changing anything.
+    fn gate_act(&self, p: &Page, name: &str, a: &Value) -> Result<(), String> {
+        if !self.devices.gate_asks(self.chat) {
+            return Ok(());
+        }
+        let verb = &name["browser_".len()..];
+        let mut cmd = json!({ "op": "inspect", "act": verb, "key": a["key"], "modifiers": a["modifiers"], "submit": a["submit"] });
+        if let Some(id) = element_id(&a["id"]) {
+            cmd["id"] = json!(id);
+            if let Some(d) = self.last_doc(p) {
+                cmd["doc"] = json!(d);
+            }
+        }
+        // A bad id fails the same way in the action itself; the page's URL then still decides the site.
+        let r = self.eval(&p.label, &cmd).unwrap_or(Value::Null);
+        let url = r["url"].as_str().map(String::from).or_else(|| self.state(&p.label).map(|s| s.url)).unwrap_or_default();
+        let here = gate::site(&url);
+        let there = r["href"].as_str().filter(|h| h.starts_with("http")).and_then(gate::site);
+        let what = r["what"].as_str().unwrap_or("the page").to_string();
+        let mut risk = None;
+        if let Some(kind) = r["secret"].as_str() {
+            risk = Some(Risk::Secret { kind: if kind == "payment" { "payment" } else { "password" }, field: r["field"].as_str().unwrap_or("field").to_string() });
+        } else if r["submits"] == true {
+            risk = Some(Risk::Submit { label: r["label"].as_str().unwrap_or("Submit").to_string() });
+        }
+        let on = here.as_deref().map(|s| format!(" on {s}")).unwrap_or_default();
+        let line = match verb {
+            "click" if there.is_some() && there != here => format!("Follow {what} to {}", there.as_deref().unwrap_or("")),
+            "click" => format!("Click {what}{on}"),
+            "type" => format!("Type into {what}{on}"),
+            "select" => format!("Choose in {what}{on}"),
+            _ => format!("Press {} on {what}{on}", a["key"].as_str().unwrap_or("a key")),
+        };
+        let site = if there.is_some() && verb == "click" { there } else { here };
+        self.devices.gate_check(self.chat, Act::new(Dev::Browser, line).site(site).risk(risk))
+    }
+
+    /// Before loading `url` (navigate, a new tab): the site it goes to.
+    fn gate_nav(&self, url: &tauri::Url) -> Result<(), String> {
+        self.gate(|| {
+            let s = gate::site(url.as_str());
+            Act::new(Dev::Browser, format!("Open {}", url.as_str().trim_end_matches('/'))).site(s)
+        })
+    }
+
     fn history(&self, p: &Page, action: &str) -> Result<(), String> {
+        self.gate(|| {
+            let url = self.state(&p.label).map(|s| s.url).unwrap_or_default();
+            let s = gate::site(&url);
+            let what = match action {
+                "back" => "Go back",
+                "forward" => "Go forward",
+                _ => "Reload the page",
+            };
+            Act::new(Dev::Browser, format!("{what}{}", s.as_deref().map(|s| format!(" on {s}")).unwrap_or_default())).site(s)
+        })?;
         let w = self.app()?.get_webview(&p.label).ok_or("the page closed")?;
         if action == "reload" {
             return w.reload().map_err(|e| e.to_string());
@@ -781,6 +849,7 @@ impl<'a> Browser<'a> {
     /// Loads `url` in the active tab (the panel opens one, and shows itself, when there is none).
     fn navigate(&self, url: tauri::Url) -> Result<Page, String> {
         self.app()?;
+        self.gate_nav(&url)?;
         // The active tab's page (its webview brought back if needed); none, or a new tab: the panel opens one.
         if let Ok(p) = self.page() {
             self.activity(Some(p.tab), "navigate", Some(url.to_string()));
@@ -828,6 +897,7 @@ impl<'a> Browser<'a> {
                 let raw = a["url"].as_str().ok_or("tabs new needs `url`")?;
                 let origin = self.app()?.state::<Arc<crate::Core>>().browsers.app_origin();
                 let url = agent_url(raw, origin.as_deref())?;
+                self.gate_nav(&url)?;
                 let old: Vec<u32> = self.panel().map(|p| p.tabs.iter().map(|t| t.tab).collect()).unwrap_or_default();
                 self.activity(None, "tab", Some(url.to_string()));
                 self.emit("browser-agent", json!({ "chat": self.chat, "op": "new", "url": url.as_str() }));
@@ -844,6 +914,7 @@ impl<'a> Browser<'a> {
                 if !self.panel().is_some_and(|p| p.tabs.iter().any(|t| t.tab == tab)) {
                     return Err(format!("no tab {tab}\n{}", list(self.panel())));
                 }
+                self.gate(|| Act::new(Dev::Browser, format!("Switch to tab {tab}")))?;
                 self.activity(Some(tab), "tab", None);
                 self.emit("browser-agent", json!({ "chat": self.chat, "op": "switch", "tab": tab }));
                 let start = self.panel().and_then(|p| p.tabs.iter().find(|t| t.tab == tab).map(|t| t.kind != "web")).unwrap_or(false);
@@ -862,6 +933,7 @@ impl<'a> Browser<'a> {
                 if !self.panel().is_some_and(|p| p.tabs.iter().any(|t| t.tab == tab)) {
                     return Err(format!("no tab {tab}\n{}", list(self.panel())));
                 }
+                self.gate(|| Act::new(Dev::Browser, format!("Close tab {tab}")))?;
                 self.activity(Some(tab), "tab", None);
                 self.emit("browser-agent", json!({ "chat": self.chat, "op": "close", "tab": tab }));
                 if !self.wait_sync(Duration::from_secs(5), |p| !p.tabs.iter().any(|t| t.tab == tab)) {
@@ -874,6 +946,10 @@ impl<'a> Browser<'a> {
     }
 
     fn act(&self, p: &Page, name: &str, a: &Value) -> Result<String, String> {
+        // Scrolling changes nothing; everything else passes the gate first.
+        if name != "browser_scroll" {
+            self.gate_act(p, name, a)?;
+        }
         match name {
             "browser_click" => {
                 let r = self.with_id(p, "click", a, "id")?;
