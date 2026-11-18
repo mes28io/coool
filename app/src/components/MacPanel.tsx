@@ -370,7 +370,7 @@ function Frame({
   return (
     <div className="absolute inset-0 flex items-center justify-center">
       {around ? (
-        <PanelBeam on={around.on} slot={around.slot} radius={8} style={size}>
+        <PanelBeam on={around.on} slot={around.slot} radius={10} bezel={4} style={size}>
           {frame}
         </PanelBeam>
       ) : (

@@ -8,7 +8,6 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode }
 import { useMotion } from "../lib/motion";
 import { usePresenceOf, FADE_MS, type Cursor } from "../lib/presence";
 import { glideMs } from "../lib/presenceWords";
-import { useStore } from "../store";
 import { ProviderMark } from "./primitives";
 
 /** The cursor's arrow (tip at 1.5,1.7 of a 14x18 box); the page script draws the same path. */
@@ -149,7 +148,13 @@ function AgentCursor({ c, d, box }: { c: Cursor; d: { w: number; h: number }; bo
  * change its size (`md`, `sm`, `line`, `pulse-inner`, `pulse-outside`), colours (`colorful`, `mono`, `ocean`,
  * `sunset`, …) and strength.
  */
-export const BEAM = { size: "md", colorVariant: "colorful", strength: 0.7 } as const satisfies Pick<BorderBeamProps, "size" | "colorVariant" | "strength">;
+export const BEAM = { size: "md", colorVariant: "colorful", strength: 1, brightness: 2.2, saturation: 1.6, glowSize: 1.3 } as const satisfies Pick<BorderBeamProps, "size" | "colorVariant" | "strength" | "brightness" | "saturation" | "glowSize">;
+
+/**
+ * The package draws its line at about a quarter opacity and its glow under half: right for a card on a page, too
+ * faint around a live screen. These are its own multipliers for the three layers (line, inner glow, bloom).
+ */
+const BEAM_LAYERS = { "--beam-stroke-opacity": 3.8, "--beam-inner-opacity": 2.2, "--beam-bloom-opacity": 2 } as CSSProperties;
 
 /**
  * The beam around a panel's frame: wraps the frame (its one child) and, while `on`, a light travels around its border
@@ -162,6 +167,7 @@ export function PanelBeam({
   slot = 0,
   radius,
   mark = "data-sim-driving",
+  bezel = 0,
   children,
   style,
   className,
@@ -170,15 +176,29 @@ export function PanelBeam({
   slot?: number;
   radius: number;
   mark?: string;
+  /** A dark rim this many px wide around the child (a device's bezel): the beam's line rides on it, so it reads over any screen. */
+  bezel?: number;
   children: ReactNode;
   style?: CSSProperties;
   className?: string;
 }) {
   const reduce = useMotion().reduce;
-  const theme = useStore((s) => s.theme);
   return (
-    <BorderBeam {...BEAM} active={on && !reduce} theme={theme} borderRadius={radius} className={className} style={style} {...(on ? { [mark]: true } : {})}>
-      {children}
+    // `theme="dark"` whatever coool's theme: what is under the beam is a device's screen or bezel, not the app's surface.
+    <BorderBeam
+      {...BEAM}
+      active={on && !reduce}
+      theme="dark"
+      borderRadius={radius}
+      className={className}
+      style={{ ...BEAM_LAYERS, ...style, ...(bezel ? { padding: bezel, background: "#0b0b0c", boxSizing: "border-box" } : null) }}
+      {...(on ? { [mark]: true } : {})}
+    >
+      {/* The child gets its own stacking context below the beam's layers: without it, anything inside with a z-index
+          (the screen, the cursor layer) paints over the beam and hides it. */}
+      <div className={bezel ? "relative z-0 isolate size-full overflow-hidden" : "absolute inset-0 z-0 isolate"} style={bezel ? { borderRadius: Math.max(0, radius - bezel) } : undefined}>
+        {children}
+      </div>
       {on && reduce && (
         <div className="pointer-events-none absolute inset-0 z-[4]" style={{ borderRadius: radius, boxShadow: `inset 0 0 0 2px ${tint(slot)}` }} data-presence-static aria-hidden />
       )}
