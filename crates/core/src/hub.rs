@@ -357,7 +357,7 @@ impl Hub {
     /// Start a structured chat (see [`crate::chat`]). Returns its id, stable for the process.
     pub fn start_chat(&mut self, opts: ChatOptions) -> Result<usize> {
         let id = self.chats.len();
-        let mcp = self.chat_mcp.as_ref().map(|f| f(id)).unwrap_or_default();
+        let mcp = self.chat_mcp.as_ref().map(|f| f(id, &opts.cwd)).unwrap_or_default();
         let c = Chat::start(id, opts, &self.client_name, &mcp)?;
         // Claude chats know their session id up front: remember it before the
         // transcript exists, so a crash right away still leaves it marked.

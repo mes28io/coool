@@ -31,6 +31,8 @@ import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
 import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot, TokenCount } from "./primitives";
 import { useStore } from "../store";
+import { isPilotTool, liveRun, parseOutcome, usePilot } from "../lib/pilot";
+import type { PilotOutcome } from "../lib/backend";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
 type Perm = Extract<ChatItem, { kind: "permission" }>;
@@ -605,6 +607,8 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
                   <RailItem key={t.key} first={i === 0} last={i === tools.length - 1} fresh={fresh} active={t.endTs === null} dotY={t.agent ? 20 : 14}>
                     {t.agent ? (
                       <AgentCard tool={t} chat={chat} kids={nested.get(t.id) ?? []} />
+                    ) : isPilotTool(t.name) ? (
+                      <PilotRun t={t} chat={chat.id} fresh={fresh} />
                     ) : (
                       <>
                         <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
@@ -633,6 +637,63 @@ function AgentsSummary({ tools, nested }: { tools: Tool[]; nested: Map<string, C
   return (
     <div className="ml-[34px] pb-1 pt-0.5 text-small text-faint tnum" data-agents-summary>
       {parts.join(" · ")}
+    </div>
+  );
+}
+
+const PILOT_STATUS: Record<PilotOutcome["status"], string> = { done: "done", stuck: "stuck", surprised: "surprised", out_of_budget: "out of budget" };
+const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
+
+/**
+ * A `pilot_run` call: one step with its goal, then the pilot's own steps as they happen (which decider took each,
+ * memory or the model, and how long it took), then how it ended.
+ */
+function PilotRun({ t, chat, fresh }: { t: Tool; chat: number; fresh?: boolean }) {
+  const goal = String((t.input as { goal?: unknown } | null)?.goal ?? "");
+  const target = (t.input as { target?: unknown } | null)?.target === "browser" ? "Browser" : "iPhone";
+  const live = usePilot((s) => liveRun(s.runs, chat, t.ts, goal));
+  const running = t.endTs === null;
+  const done = useMemo(() => (running ? null : parseOutcome(t.output)), [running, t.output]);
+  const o = done ?? live?.outcome ?? null;
+  const steps = o?.steps ?? [];
+  const ended = !!done || !!live?.end;
+  const ok = o?.status === "done";
+  return (
+    <div data-pilot-run={o?.status ?? "running"}>
+      <StepLine name={`Pilot · ${target}`} detail={goal} active={running} failed={t.ok === false} fresh={fresh} stamp={clockTime(t.ts)} since={t.ts} />
+      {(steps.length > 0 || ended) && (
+        <div className="mb-1 ml-[28px] mt-0.5 flex flex-col gap-[3px] border-l border-hairline pl-3">
+          {steps.map((s) => (
+            <div key={s.n} className="flex min-w-0 items-center gap-2 text-small" data-pilot-substep={s.n} data-decider={s.decider}>
+              <span className="w-[14px] shrink-0 text-right text-faint tnum">{s.n}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-mono-small text-dim" title={s.note || s.action}>
+                {s.action}
+              </span>
+              <span
+                className={cx(
+                  "inline-flex h-[18px] shrink-0 items-center rounded-[5px] px-1.5 text-micro font-medium",
+                  s.decider === "memory" ? "bg-[color-mix(in_oklab,var(--status-done)_14%,transparent)] text-fg/80" : "bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] text-dim",
+                )}
+                title={s.decider === "memory" ? "Muscle memory: a remembered step for this screen" : `Decided by ${o?.haiku || s.decider}`}
+              >
+                {s.decider}
+              </span>
+              <span className="w-[54px] shrink-0 text-right text-faint tnum" title={`perceive ${s.perceive_ms} ms · decide ${s.decide_ms} ms · act ${s.act_ms} ms · settle ${s.settle_ms} ms`}>
+                {fmtMs(s.perceive_ms + s.decide_ms + s.act_ms + s.settle_ms)}
+              </span>
+            </div>
+          ))}
+          {ended && o && (
+            <div className={cx("text-small tnum", ok ? "text-faint" : "text-needs-text")} data-pilot-status={o.status}>
+              {PILOT_STATUS[o.status] ?? o.status}
+              {o.verified && " · verified"}
+              {` · ${steps.length} ${steps.length === 1 ? "step" : "steps"} · ${fmtMs(o.wall_ms)}`}
+              {Object.entries(o.deciders).map(([k, n]) => ` · ${n} ${k}`)}
+              {!ok && o.reason && <span className="text-dim">{` — ${o.reason}`}</span>}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

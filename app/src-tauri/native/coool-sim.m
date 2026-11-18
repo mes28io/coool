@@ -172,6 +172,8 @@ static double gQuality = 0.7;
 static double gMinInterval = 1000.0 / 30;
 static double gLastSent = 0, gLastFrameAt = 0;
 static uint64_t gFrameCount = 0;   // presented frames seen (streaming or not)
+#define RECENT 64
+static double gRecent[RECENT];     // when the last RECENT frames came (a ring, on gFrameQ)
 static BOOL gPending = NO;
 
 static NSData *encodeJPEG(IOSurfaceRef surface, double maxDim, double quality) {
@@ -202,6 +204,7 @@ static void sendFrameNow(void) {
 static void frameArrived(void) {
   gFrameCount++;
   gLastFrameAt = nowMs();
+  gRecent[gFrameCount % RECENT] = gLastFrameAt;
   if (!atomic_load(&gStreaming) || gPending) return;
   double wait = gLastSent + gMinInterval - nowMs();
   gPending = YES;
@@ -445,8 +448,22 @@ static id jsonSafe(id v) {
   return [v description];
 }
 
-// Walks the frontmost app's tree breadth-first (one multiple-attribute round trip per element).
-static NSDictionary *describe(NSUInteger maxNodes, double timeoutS, NSString **err) {
+// Sends one request without waiting; `done` runs on gAXReplyQ with the reply (nil if none).
+static void axSendAsync(unsigned long long type, id translation, NSDictionary *params, void (^done)(id reply)) {
+  Class reqClass = NSClassFromString(@"AXPTranslatorRequest");
+  if (!reqClass) { done(nil); return; }
+  id req = [(Class<AXPRequest>)reqClass requestWithTranslation:translation];
+  [req setRequestType:type];
+  [req setClientType:0];
+  [req setParameters:params];
+  [gDevice sendAccessibilityRequestAsync:req completionQueue:gAXReplyQ completionHandler:^(id r) { done(r); }];
+}
+
+// Walks the frontmost app's tree breadth-first, one multiple-attribute request per element. The requests of a
+// level are all in flight at once (`serial`: one at a time, as before), so a read costs about one round trip per
+// level instead of one per element. `visibleOnly`: an element wholly off screen is listed, its subtree isn't
+// walked. `maxDepth` (>= 0) stops the walk at that depth.
+static NSDictionary *describe(NSUInteger maxNodes, double timeoutS, BOOL visibleOnly, NSInteger maxDepth, BOOL serial, NSString **err) {
   double t0 = nowMs();
   Class objClass = NSClassFromString(@"AXPTranslationObject");
   if (!objClass) { *err = @"AccessibilityPlatformTranslation unavailable"; return nil; }
@@ -455,39 +472,66 @@ static NSDictionary *describe(NSUInteger maxNodes, double timeoutS, NSString **e
   if (!root || ![root respondsToSelector:@selector(objectID)]) { *err = @"no frontmost application (accessibility not ready yet?)"; return nil; }
   NSArray *attrs = @[@21 /*frame*/, @45 /*role*/, @66 /*isRemote*/, @33 /*label*/, @53 /*value*/, @25 /*identifier*/,
                      @27 /*isEnabled*/, @30 /*isSelected*/, @28 /*isFocused*/, @42 /*placeholder*/, @8 /*children*/];
+  CGRect screen = CGRectMake(0, 0, gPoints.width, gPoints.height);
   NSMutableArray *out = [NSMutableArray array];
-  NSMutableArray *queue = [NSMutableArray arrayWithObject:@[root, @(-1), @0]];
-  NSUInteger head = 0;
-  int requests = 1;
-  while (head < queue.count && out.count < maxNodes) {
-    if ((nowMs() - t0) / 1000 > timeoutS) break;
-    NSArray *item = queue[head++];
-    id obj = item[0];
-    id r = axSend(5 /* multipleAttribute */, obj, @{@"attributes": attrs}, 1.5);
-    requests++;
-    NSDictionary *a = [[r resultData] isKindOfClass:NSDictionary.class] ? [r resultData] : nil;
-    if (!a) continue;
-    NSMutableDictionary *n = [NSMutableDictionary dictionary];
-    NSInteger index = (NSInteger)out.count;
-    n[@"parent"] = item[1];
-    n[@"depth"] = item[2];
-    NSValue *fv = a[@21];
-    CGRect f = [fv isKindOfClass:NSValue.class] ? fv.rectValue : CGRectZero;
-    n[@"frame"] = @[@(round(f.origin.x * 10) / 10), @(round(f.origin.y * 10) / 10), @(round(f.size.width * 10) / 10), @(round(f.size.height * 10) / 10)];
-    n[@"role"] = roleName(a[@45], [a[@66] boolValue]);
-    id v;
-    if ((v = jsonSafe(a[@33]))) n[@"label"] = v;
-    if ((v = jsonSafe(a[@53]))) n[@"value"] = v;
-    if ((v = jsonSafe(a[@25]))) n[@"identifier"] = v;
-    if ((v = jsonSafe(a[@42]))) n[@"placeholder"] = v;
-    if (a[@27] && ![a[@27] boolValue]) n[@"disabled"] = @YES;
-    if ([a[@30] boolValue]) n[@"selected"] = @YES;
-    if ([a[@28] boolValue]) n[@"focused"] = @YES;
-    [out addObject:n];
-    NSArray *kids = [a[@8] isKindOfClass:NSArray.class] ? a[@8] : @[];
-    for (id k in kids) [queue addObject:@[k, @(index), @([item[2] integerValue] + 1)]];
+  NSArray *level = @[@[root, @(-1), @0]];
+  int requests = 1, levels = 0;
+  BOOL late = NO;
+  while (level.count && out.count < maxNodes && !late) {
+    levels++;
+    NSUInteger n = MIN(level.count, maxNodes - out.count);
+    NSMutableArray *answers = [NSMutableArray arrayWithCapacity:n];
+    for (NSUInteger i = 0; i < n; i++) [answers addObject:[NSNull null]];
+    NSUInteger width = serial ? 1 : n;
+    for (NSUInteger from = 0; from < n && !late; from += width) {
+      double left = timeoutS - (nowMs() - t0) / 1000;
+      if (left <= 0) { late = YES; break; }
+      dispatch_group_t group = dispatch_group_create();
+      for (NSUInteger i = from; i < MIN(n, from + width); i++) {
+        dispatch_group_enter(group);
+        axSendAsync(5 /* multipleAttribute */, level[i][0], @{@"attributes": attrs}, ^(id r) {
+          id d = [r resultData];  // gAXReplyQ is serial: `answers` needs no lock
+          if ([d isKindOfClass:NSDictionary.class]) answers[i] = d;
+          dispatch_group_leave(group);
+        });
+        requests++;
+      }
+      if (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MIN(left, 2.5) * NSEC_PER_SEC))) != 0) late = YES;
+    }
+    // Answers arriving after a timeout are ignored: copy what came, on the reply queue.
+    __block NSArray *got;
+    dispatch_sync(gAXReplyQ, ^{ got = [answers copy]; });
+    NSMutableArray *next = [NSMutableArray array];
+    for (NSUInteger i = 0; i < n; i++) {
+      NSDictionary *a = [got[i] isKindOfClass:NSDictionary.class] ? got[i] : nil;
+      if (!a) continue;
+      NSArray *item = level[i];
+      NSMutableDictionary *node = [NSMutableDictionary dictionary];
+      NSInteger index = (NSInteger)out.count;
+      NSInteger depth = [item[2] integerValue];
+      node[@"parent"] = item[1];
+      node[@"depth"] = item[2];
+      NSValue *fv = a[@21];
+      CGRect f = [fv isKindOfClass:NSValue.class] ? fv.rectValue : CGRectZero;
+      node[@"frame"] = @[@(round(f.origin.x * 10) / 10), @(round(f.origin.y * 10) / 10), @(round(f.size.width * 10) / 10), @(round(f.size.height * 10) / 10)];
+      node[@"role"] = roleName(a[@45], [a[@66] boolValue]);
+      id v;
+      if ((v = jsonSafe(a[@33]))) node[@"label"] = v;
+      if ((v = jsonSafe(a[@53]))) node[@"value"] = v;
+      if ((v = jsonSafe(a[@25]))) node[@"identifier"] = v;
+      if ((v = jsonSafe(a[@42]))) node[@"placeholder"] = v;
+      if (a[@27] && ![a[@27] boolValue]) node[@"disabled"] = @YES;
+      if ([a[@30] boolValue]) node[@"selected"] = @YES;
+      if ([a[@28] boolValue]) node[@"focused"] = @YES;
+      [out addObject:node];
+      if (maxDepth >= 0 && depth >= maxDepth) continue;
+      if (visibleOnly && depth > 0 && f.size.width > 0 && f.size.height > 0 && !CGRectIntersectsRect(f, screen)) continue;
+      NSArray *kids = [a[@8] isKindOfClass:NSArray.class] ? a[@8] : @[];
+      for (id k in kids) [next addObject:@[k, @(index), @(depth + 1)]];
+    }
+    level = next;
   }
-  return @{@"nodes": out, @"requests": @(requests), @"ms": @(round(nowMs() - t0)),
+  return @{@"nodes": out, @"requests": @(requests), @"levels": @(levels), @"ms": @(round(nowMs() - t0)),
            @"screen": @{@"w": @(gPoints.width), @"h": @(gPoints.height), @"scale": @(gScale)}};
 }
 
@@ -522,15 +566,32 @@ static void handle(NSDictionary *m) {
       reply(rid, @{@"jpeg": [jpeg base64EncodedStringWithOptions:0], @"ms": @(round(nowMs() - t0))});
     });
   } else if ([cmd isEqualToString:@"idle"]) {
-    // Resolves once no frame has been presented for `quietMs` (or after `timeoutMs`).
-    double quiet = num(m, @"quietMs", 300), timeout = num(m, @"timeoutMs", 5000);
+    // Resolves once no frame has been presented for `quietMs` (or after `timeoutMs`). `firstMs`: first wait up to
+    // that long for the screen to start changing (an app may take a few hundred ms to react to a tap, and quiet
+    // before then means nothing yet). `changed`: whether any frame came. `quietFrames`: up to that many frames in the
+    // last `quietMs` still count as quiet (a caret blinking, a spinner, a cell updating: not an animation running).
+    double quiet = num(m, @"quietMs", 300), timeout = num(m, @"timeoutMs", 5000), first = num(m, @"firstMs", 0);
+    int allowed = (int)num(m, @"quietFrames", 0);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
       double t0 = nowMs();
       for (;;) {
         __block double last;
-        dispatch_sync(gFrameQ, ^{ last = gLastFrameAt; });
+        __block int recent = 0;
+        __block double since = t0;  // the first frame after t0 (the change started)
         double t = nowMs();
-        if (t - MAX(last, t0) >= quiet) return reply(rid, @{@"idle": @YES, @"ms": @(round(t - t0))});
+        dispatch_sync(gFrameQ, ^{
+          last = gLastFrameAt;
+          double earliest = 0;
+          for (int i = 0; i < RECENT; i++) {
+            if (gRecent[i] > MAX(t - quiet, t0)) recent++;
+            if (gRecent[i] > t0 && (earliest == 0 || gRecent[i] < earliest)) earliest = gRecent[i];
+          }
+          if (earliest > 0) since = earliest;
+        });
+        BOOL changed = last > t0;
+        if (!changed && t - t0 < first && t - t0 < timeout) { sleepMs(10); continue; }
+        if (t - MAX(last, t0) >= quiet || (allowed > 0 && t - since >= quiet && recent <= allowed))
+          return reply(rid, @{@"idle": @YES, @"changed": @(changed), @"ms": @(round(t - t0))});
         if (t - t0 >= timeout) return reply(rid, @{@"idle": @NO, @"ms": @(round(t - t0))});
         sleepMs(MIN(25, quiet / 4));
       }
@@ -538,7 +599,8 @@ static void handle(NSDictionary *m) {
   } else if ([cmd isEqualToString:@"describe"]) {
     dispatch_async(gAXQ, ^{
       NSString *err = nil;
-      NSDictionary *d = describe((NSUInteger)num(m, @"max", 400), num(m, @"timeoutS", 6), &err);
+      NSDictionary *d = describe((NSUInteger)num(m, @"max", 400), num(m, @"timeoutS", 6), [m[@"visibleOnly"] boolValue],
+                                 (NSInteger)num(m, @"maxDepth", -1), [m[@"serial"] boolValue], &err);
       d ? reply(rid, d) : fail(rid, err);
     });
   } else if ([cmd isEqualToString:@"tap"] || [cmd isEqualToString:@"touch"] || [cmd isEqualToString:@"swipe"] ||

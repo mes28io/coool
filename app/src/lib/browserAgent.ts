@@ -12,6 +12,7 @@ import { create } from "zustand";
 import { useStore, type BrowserTabs } from "../store";
 import { api, type BrowserActivity, type BrowserAgentRequest, type BrowserAgentTab } from "./backend";
 import { closeNative, ensureNative, nativeId, onNatives, tabKey, useBrowserState } from "./browser";
+import { useChats } from "./chat";
 import { sessionKey } from "./types";
 
 /** The panel key (as in `store.rightPanel`) of a chat's session view (the same rule as `resolveTarget`). */
@@ -31,6 +32,15 @@ function panelChat(key: string): number | null {
 
 /** The latest agent action per chat (for ~3 s it shows as "Agent is browsing"). */
 export const useBrowserAgent = create<{ byChat: Record<number, BrowserActivity & { at: number }> }>(() => ({ byChat: {} }));
+
+function clearAgentMark(chat: number) {
+  if (!useBrowserAgent.getState().byChat[chat]) return;
+  useBrowserAgent.setState((s) => {
+    const byChat = { ...s.byChat };
+    delete byChat[chat];
+    return { byChat };
+  });
+}
 
 /** The chat's latest agent action on its browser while it is recent (`ms`), else null; re-renders when it expires. */
 export function useAgentBrowsing(chat: number | null | undefined, ms = 3000): (BrowserActivity & { at: number }) | null {
@@ -134,6 +144,16 @@ export function startBrowserAgent() {
   useBrowserState.subscribe(sync);
   onNatives(sync);
   api().onBrowserAgent(handle);
-  api().onBrowserActivity((a) => useBrowserAgent.setState((s) => ({ byChat: { ...s.byChat, [a.chat]: { ...a, at: Date.now() } } })));
+  api().onBrowserActivity((a) => {
+    // `end`: the agent's run (a pilot run) is over, so the marks go off now rather than 3 s later.
+    if (a.kind === "end") clearAgentMark(a.chat);
+    else useBrowserAgent.setState((s) => ({ byChat: { ...s.byChat, [a.chat]: { ...a, at: Date.now() } } }));
+  });
+  // A turn that ended isn't acting any more: its marks go off with it (they used to linger up to 3 s after).
+  useChats.subscribe((s, prev) => {
+    for (const id of Object.keys(useBrowserAgent.getState().byChat).map(Number)) {
+      if (prev.chats[id]?.turnStart != null && s.chats[id]?.turnStart == null) clearAgentMark(id);
+    }
+  });
   sync();
 }

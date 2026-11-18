@@ -33,6 +33,8 @@ pub struct Mcp {
     tokens: Mutex<HashMap<String, usize>>,
     /// Per chat: the last screen it was shown, for id lookup and "unchanged".
     last: Mutex<HashMap<usize, (Tree, String)>>,
+    /// Per chat: its project folder (the pilot's muscle memory is per project).
+    cwds: Mutex<HashMap<usize, String>>,
 }
 
 fn random_token() -> String {
@@ -46,8 +48,9 @@ fn random_token() -> String {
 
 impl Mcp {
     /// The MCP server entry for a chat coool is starting (None until the socket is up).
-    pub fn server_for(&self, chat: usize) -> Option<coool_core::chat::McpServer> {
+    pub fn server_for(&self, chat: usize, cwd: &str) -> Option<coool_core::chat::McpServer> {
         let socket = self.socket.get()?;
+        self.cwds.lock().unwrap().insert(chat, cwd.to_string());
         let exe = std::env::current_exe().ok()?;
         let token = random_token();
         self.tokens.lock().unwrap().insert(token.clone(), chat);
@@ -70,6 +73,17 @@ impl Mcp {
 
     pub fn socket(&self) -> Option<PathBuf> {
         self.socket.get().cloned()
+    }
+
+    /// The chat's project folder, if coool started it.
+    pub fn cwd(&self, chat: usize) -> Option<String> {
+        self.cwds.lock().unwrap().get(&chat).cloned()
+    }
+
+    /// Records a screen the chat's agent (or its pilot) saw, so ids from it work for `tap` and friends.
+    pub fn remember(&self, chat: usize, tree: Tree, device: &str) {
+        let text = observe::render(&tree, device);
+        self.last.lock().unwrap().insert(chat, (tree, text));
     }
 }
 
@@ -204,7 +218,9 @@ struct Session {
 }
 
 const INSTRUCTIONS: &str = "Drives the iPhone simulator shown in this chat's coool panel; the person watches it live. \
-Start with `observe`: it lists the screen's elements as `[id] role \"label\" value=… (x,y wxh)` in points. Act by id \
+For routine multi-step navigation or form filling (on the iPhone or the Browser panel), call `pilot_run` with the goal \
+and checkable `success` conditions: coool's fast pilot does the steps and verifies them, much faster than step-by-step \
+calls. Use the single-step tools below for judgement calls, or to take over when the pilot is stuck. Start with `observe`: it lists the screen's elements as `[id] role \"label\" value=… (x,y wxh)` in points. Act by id \
 (tap / type / swipe) — every action returns the screen after it settles, so you rarely need a separate observe. Use \
 `batch` for several steps in one call, and `wait_for` instead of sleeping. Ask for a screenshot only when visuals matter.";
 
@@ -236,6 +252,11 @@ impl Session {
     }
 
     fn call(&mut self, name: &str, a: &Value) -> Result<Vec<Value>, String> {
+        // The device pilot: a whole goal on the iPhone or the Browser panel.
+        if name == "pilot_run" {
+            let text = super::pilot::call(&self.devices, self.chat, a)?;
+            return Ok(vec![json!({ "type": "text", "text": text })]);
+        }
         // The chat's Browser panel: no simulator involved.
         if name.starts_with("browser_") {
             return super::web::Browser::new(&self.devices, self.chat).call(name, a);
@@ -339,7 +360,9 @@ impl Session {
     /// After an action: wait for the screen to settle, then observe.
     fn after(&self, udid: &str, note: &str, act_ms: u128) -> Result<String, String> {
         let t = Instant::now();
-        let _ = self.helper(udid)?.call(json!({ "cmd": "idle", "quietMs": 120, "timeoutMs": 2000 }), Duration::from_secs(5));
+        // Wait for the change to start (an app can take a few hundred ms), then for the animation to end (a blinking
+        // caret or a cell updating now and then doesn't count).
+        let _ = self.helper(udid)?.call(json!({ "cmd": "idle", "quietMs": 150, "quietFrames": 2, "firstMs": 400, "timeoutMs": 2500 }), Duration::from_secs(5));
         let settle = t.elapsed().as_millis();
         let t = Instant::now();
         let screen = self.observe(udid, false, None)?;
@@ -664,11 +687,12 @@ fn describe_wait(a: &Value) -> String {
 }
 
 fn tools() -> Value {
-    let mut all = device_tools();
-    if let Value::Array(v) = &mut all {
-        v.extend(super::web::tools());
+    let mut all = vec![super::pilot::tool()];
+    if let Value::Array(v) = device_tools() {
+        all.extend(v);
     }
-    all
+    all.extend(super::web::tools());
+    Value::Array(all)
 }
 
 fn device_tools() -> Value {
@@ -762,9 +786,10 @@ mod tests {
         assert!(s.handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
         let list = s.handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
         let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-        assert_eq!(&names[..9], ["observe", "tap", "type", "swipe", "press", "batch", "wait_for", "app", "device"]);
+        assert_eq!(&names[..10], ["pilot_run", "observe", "tap", "type", "swipe", "press", "batch", "wait_for", "app", "device"]);
+        assert!(init["result"]["instructions"].as_str().unwrap().contains("pilot_run"));
         assert_eq!(
-            &names[9..],
+            &names[10..],
             [
                 "browser_observe", "browser_click", "browser_type", "browser_select", "browser_scroll", "browser_press", "browser_navigate",
                 "browser_back", "browser_forward", "browser_reload", "browser_tabs", "browser_wait_for", "browser_screenshot", "browser_batch"

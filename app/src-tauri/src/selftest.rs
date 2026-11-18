@@ -444,6 +444,19 @@ pub fn selftest_sim_delete(core: State<'_, Arc<Core>>, devices: State<'_, Arc<cr
     Ok(mine.into_iter().map(|d| d.udid).collect())
 }
 
+/// The test simulator's screen as the backend reads it (the accessibility tree, rendered as `observe` does), so a
+/// scenario can confirm what is really on screen, apart from what an agent reports.
+#[tauri::command(async)]
+pub fn selftest_sim_screen(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, udid: String) -> Result<String, String> {
+    active(&core)?;
+    let d = crate::device::simctl::device(&udid)?;
+    if d.name != SIM_NAME {
+        return Err("not the self-test's simulator".into());
+    }
+    let r = devices.helper(&udid)?.call(serde_json::json!({ "cmd": "describe", "max": 400 }), std::time::Duration::from_secs(10))?;
+    Ok(crate::device::observe::render(&crate::device::observe::parse(&r), &d.name))
+}
+
 #[derive(Serialize)]
 pub struct PopupProbe {
     label: String,

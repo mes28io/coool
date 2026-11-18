@@ -1088,6 +1088,7 @@ pub fn run() {
             selftest::selftest_close_preview,
             selftest::selftest_click,
             selftest::selftest_sim_delete,
+            selftest::selftest_sim_screen,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
@@ -1109,7 +1110,7 @@ pub fn run() {
                 None => devices.init(&handle),
             }
             let d = devices.clone();
-            c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id| d.mcp.server_for(id).into_iter().collect())));
+            c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, cwd| d.mcp.server_for(id, cwd).into_iter().collect())));
             spawn_refresher(handle.clone(), c.clone());
             motion::spawn_watch(handle.clone());
             spawn_pump(handle, c);

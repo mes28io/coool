@@ -9,12 +9,15 @@ import App from "./App";
 import { demoPage, GlyphsDemo, LedgerDemo, PlanDemo } from "./components/Demos";
 import { initBackend } from "./lib/backend";
 import { startBrowserAgent } from "./lib/browserAgent";
+import { startPilot } from "./lib/pilot";
 import { setMotionHints } from "./lib/motion";
 
 // "Reduce motion: Auto" follows the device (Low Power Mode, heat, battery) as well as the system setting.
 void initBackend().then((b) => {
   // The chat agents' browser tools (lib/browserAgent.ts).
   startBrowserAgent();
+  // The device pilot's live steps in the chat (lib/pilot.ts).
+  startPilot();
   b.onMotionHints(setMotionHints);
   void b.motionHints().then(setMotionHints);
 });
