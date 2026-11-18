@@ -261,6 +261,7 @@ impl Base<'_> {
             target: match self.goal.target {
                 Target::Iphone => "iphone",
                 Target::Browser => "browser",
+                Target::Mac => "mac",
             }
             .into(),
             app: self.goal.app.clone(),
