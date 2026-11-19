@@ -71,7 +71,16 @@ function RailButton({
         {children}
         {dot && <span className="absolute right-[8px] top-[8px] size-[7px] rounded-full ring-2 ring-panel" style={{ background: dot === "bad" ? "var(--error)" : "var(--busy)" }} />}
         {!!badge && badge > 0 && (
-          <span className="absolute right-[3px] top-[3px] flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-needs px-1 text-micro font-semibold leading-none text-needs-ink tnum">{badge}</span>
+          <span
+            className={cx(
+              "absolute left-[21px] top-[5px] flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-needs px-[3.5px] text-[9.5px] font-bold leading-none text-needs-ink tnum ring-[1.5px]",
+              // Cut out of the icon: a thin ring in the surface's own colour, so the number never sits on the bell's lines.
+              active ? "ring-raised" : "ring-panel",
+            )}
+            data-rail-badge
+          >
+            {badge > 9 ? "9+" : badge}
+          </span>
         )}
       </button>
       {tip ? (
