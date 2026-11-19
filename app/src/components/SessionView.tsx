@@ -12,7 +12,7 @@ import { answerKeysCovered } from "../lib/answerKeys";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
-import { chatModels, chatTitle, pendingPermission, useChats, type Chat } from "../lib/chat";
+import { chatModels, chatTitle, pendingPermission, useChatShell, type Chat } from "../lib/chat";
 import { displayTitle, folderName, titleWas } from "../lib/format";
 import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
 import type { Provider, Session } from "../lib/types";
@@ -31,7 +31,7 @@ import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
 import { modelLabel } from "../lib/models";
 import { useShellFocus } from "../lib/shellFocus";
-import { countRender } from "../lib/perfCount";
+import { addTime, countRender } from "../lib/perfCount";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -65,13 +65,15 @@ export function SessionView({
   onClosePane?: () => void;
 }) {
   countRender("SessionView");
+  const tBody = performance.now();
   const r = useStore(useShallow((st) => resolveTarget(target, st)));
   const running = useStore((st) => (r.pty !== null ? !!st.ptys[r.pty]?.running && !st.exited[r.pty] : false));
   const modeKey = r.session ? `s:${sessionKey(r.session)}` : target.kind === "pty" ? `p:${target.id}` : target.kind === "chat" ? `c:${target.id}` : `s:${target.key}`;
   const stored = useStore((st) => st.modes[modeKey]);
   const since = useStore((st) => (r.session ? st.since[sessionKey(r.session)] : undefined));
   const setMode = useStore((st) => st.setMode);
-  const chat = useChats((st) => (r.chat !== null ? st.chats[r.chat] : undefined));
+  // Not per streamed token: the timeline reads the live chat itself.
+  const chat = useChatShell(r.chat);
   const scanning = useStore((st) => !st.ready || st.loading);
 
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
@@ -349,6 +351,7 @@ export function SessionView({
     const k = useStore.getState().sessions.find((x) => sessionKey(x) === c.ref);
     if (k) askStop(k, k.managed, displayTitle(k), k.chat ?? null);
   };
+  addTime("SessionView.body", performance.now() - tBody);
 
   return (
     <BrowserContext.Provider value={openPage}>

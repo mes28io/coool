@@ -12,8 +12,8 @@
 //              steps: renders per batch, frame gaps, page CPU.
 // perf-soak    5 min of perf-stream style events into the long chat with the sessions view live: memory growth.
 
-import { ipcCalls as ipc, renders, timings } from "./lib/perfCount";
-import { useChats } from "./lib/chat";
+import { addTime, ipcCalls as ipc, renders, timings } from "./lib/perfCount";
+import { chatQueue, useChats } from "./lib/chat";
 import type { ChatEvent, Session } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { useStore } from "./store";
@@ -22,6 +22,7 @@ import { MotionGlobalConfig } from "motion/react";
 import { createRoot } from "react-dom/client";
 import { AnimGallery, AnimLab, LOOPS } from "./selftestAnim";
 import { setMotionPref } from "./lib/motion";
+import { setFrameGap } from "./lib/frame";
 import { glassState, setBackdrop } from "./lib/glass";
 
 export interface PerfKit {
@@ -201,11 +202,17 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
   let jsMs = 0;
   /** perf-chat: also force style and layout after each batch and time it (`layoutMs`). */
   let forceLayout = false;
+  /** perf-chat's CPU windows: batches go through the app's queue (lib/chat.ts chatQueue), as the backend's do. */
+  let viaQueue = false;
   let layoutMs = 0;
-  async function stream(secs: number, tools: number, turn: number) {
+  async function stream(secs: number, tools: number, turn: number, prompt = true) {
     const apply = async (events: ChatEvent[]) => {
+      // As the backend's batches arrive (App.tsx): queued for the shared frame.
+      if (viaQueue) return chatQueue.push(FAKE, events);
       const t = performance.now();
       useChats.getState().apply(FAKE, events);
+      // The store update itself: the reducer and every subscribed selector (React renders after, in a microtask).
+      addTime("store.set", performance.now() - t);
       await Promise.resolve();
       await Promise.resolve();
       const t1 = performance.now();
@@ -215,7 +222,8 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
         layoutMs += performance.now() - t1;
       }
     };
-    await apply([ev({ type: "user_message", id: `su${turn}`, text: sentence(12) }), ev({ type: "state", state: "working" })]);
+    // A prompt sent scrolls the chat to the bottom: `prompt` false streams a reply into a turn already going.
+    await apply(prompt ? [ev({ type: "user_message", id: `su${turn}`, text: sentence(12) }), ev({ type: "state", state: "working" })] : [ev({ type: "state", state: "working" })]);
     const end = performance.now() + secs * 1000;
     let batches = 0;
     while (performance.now() < end) {
@@ -234,6 +242,123 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
     }
     await apply([ev({ type: "turn_end", duration_ms: secs * 1000, ok: true }), ev({ type: "state", state: "idle" })]);
     return batches;
+  }
+
+  /** perf-chat at the given lengths (turns of the made-up chat). */
+  async function chatRuns(sizes: number[]) {
+    closeAllTabs();
+    await home();
+    const raf = window.requestAnimationFrame;
+    const timeline = () => document.querySelector<HTMLElement>(`[data-chat-timeline="${FAKE}"]`)!;
+    const counted = async (label: string, secs: number, turn: number, prompt = true) => {
+      let sets = 0;
+      const unsub = useChats.subscribe(() => sets++);
+      let rafs = 0;
+      window.requestAnimationFrame = (f) => (rafs++, raf(f));
+      const t0 = { ...timings };
+      jsMs = 0;
+      layoutMs = 0;
+      forceLayout = true;
+      const a = await snap();
+      const n = await stream(secs, 6, turn, prompt);
+      const b = await snap();
+      forceLayout = false;
+      window.requestAnimationFrame = raf;
+      unsub();
+      const r = diffMap(a.renders, b.renders);
+      const s = (b.t - a.t) / 1000;
+      await k.log(
+        `PERF ${label} batches=${n} store_sets_per_batch=${r1(sets / n)} js_ms_per_batch=${(jsMs / n).toFixed(2)} layout_ms_per_batch=${(layoutMs / n).toFixed(2)} raf_per_s=${r1(rafs / s)} renders_per_batch total=${r1(r.reduce((x, [, c]) => x + c, 0) / n)} ${r.map(([c, x]) => `${c}=${r1(x / n)}`).join(" ")}`,
+      );
+      await k.log(`PERF ${label} ms_per_batch ${Object.keys(timings).map((x) => `${x}=${((timings[x] - (t0[x] ?? 0)) / n).toFixed(3)}`).join(" ")}`);
+    };
+    for (const turns of sizes) {
+      const t0 = performance.now();
+      await openFakeChat(turns);
+      const openMs = performance.now() - t0;
+      await k.sleep(1500);
+      const el = timeline();
+      const label = `chat-${useChats.getState().chats[FAKE]?.items.length ?? 0}`;
+      await k.log(`PERF ${label} open_ms=${Math.round(openMs)} blocks_in_dom=${el.querySelectorAll("[data-block]").length} dom_nodes=${el.getElementsByTagName("*").length} height=${el.scrollHeight}`);
+      // A turn starting and ending (the chat's state changes): script ms, the frame after it included.
+      const flip = async (state: string) => {
+        const t = performance.now();
+        useChats.getState().apply(FAKE, [ev({ type: "state", state })]);
+        await raf2();
+        return Math.round(performance.now() - t);
+      };
+      const w = await flip("working");
+      await k.sleep(500);
+      await k.log(`PERF ${label} state_change_ms working=${w} idle=${await flip("idle")}`);
+      await k.sleep(500);
+      await counted(label, 8, turns * 10 + 1);
+      // The reader at the top while it streams: nothing should move.
+      el.scrollTop = 0;
+      await raf2();
+      await k.sleep(300);
+      const firstTop = () => {
+        const b = el.querySelector("[data-block]");
+        return b ? Math.round(b.getBoundingClientRect().top - el.getBoundingClientRect().top) : null;
+      };
+      const before = `${el.scrollTop}/${firstTop()}`;
+      await counted(`${label}-top`, 4, turns * 10 + 2, false);
+      await k.log(`PERF ${label}-top scroll_top_and_first_block before=${before} after=${el.scrollTop}/${firstTop()} blocks_in_dom=${el.querySelectorAll("[data-block]").length}`);
+      el.scrollTop = el.scrollHeight;
+      await raf2();
+      await k.sleep(1000);
+      const cpu = async (name: string, secs: number, turn: number, streaming = true) => {
+        let muts = 0;
+        const mo = new MutationObserver((r) => (muts += r.length));
+        mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+        const c = await snap();
+        viaQueue = true;
+        let n = 0;
+        if (streaming) n = await stream(secs, 0, turn);
+        else {
+          chatQueue.push(FAKE, [ev({ type: "state", state: "working" })]);
+          await k.sleep(secs * 1000);
+          chatQueue.push(FAKE, [ev({ type: "state", state: "idle" })]);
+        }
+        viaQueue = false;
+        const d = await snap();
+        mo.disconnect();
+        await report(name, c, d);
+        await k.log(`PERF ${name} batches=${n} mutations_per_s=${r1(muts / ((d.t - c.t) / 1000))}`);
+        await k.sleep(500);
+      };
+      const ps = await stats();
+      // For a native sampler (`sample <pid>`) run beside: the processes, as the window starts.
+      await k.log(`PERF ${label}-cpu-start app_pid=${ps.app?.pid} web_pid=${ps.web?.pid}`);
+      await cpu(`${label}-cpu`, 20, turns * 10 + 3);
+      if (turns === 250) {
+        // What else moves while it streams: the CSS loops paused, then Motion's JS animations made instant too;
+        // and the turn running with nothing streaming (the live row alone).
+        const style = document.createElement("style");
+        document.head.appendChild(style);
+        style.textContent = "*,*::before,*::after{animation-play-state:paused!important}";
+        await cpu(`${label}-cpu-loops-paused`, 10, turns * 10 + 4);
+        MotionGlobalConfig.skipAnimations = true;
+        await cpu(`${label}-cpu-loops-paused-motion-instant`, 10, turns * 10 + 5);
+        MotionGlobalConfig.skipAnimations = false;
+        style.remove();
+        await cpu(`${label}-working-no-stream`, 10, 0, false);
+        // The shared frame's rate (lib/frame.ts): what each painted frame costs.
+        for (const gap of [12, 100]) {
+          const was = setFrameGap(gap);
+          await cpu(`${label}-cpu-frame-gap-${gap}ms`, 10, turns * 10 + 6 + gap);
+          setFrameGap(was);
+        }
+      }
+      await k.sleep(300);
+      await measure(`${label}-idle-after`, 1000, 5000);
+      closeAllTabs();
+      useChats.setState((st) => {
+        const chats = { ...st.chats };
+        delete chats[FAKE];
+        return { chats };
+      });
+      await k.sleep(1500);
+    }
   }
 
   return {
@@ -721,63 +846,11 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
      * the view moved); then 20 s plain for CPU and wakeups (window on screen for those: PERF_OFFSCREEN=0).
      */
     async "perf-chat"() {
-      closeAllTabs();
-      await home();
-      const raf = window.requestAnimationFrame;
-      const timeline = () => document.querySelector<HTMLElement>(`[data-chat-timeline="${FAKE}"]`)!;
-      const counted = async (label: string, secs: number, turn: number) => {
-        let sets = 0;
-        const unsub = useChats.subscribe(() => sets++);
-        let rafs = 0;
-        window.requestAnimationFrame = (f) => (rafs++, raf(f));
-        const m0 = timings.markdown ?? 0;
-        jsMs = 0;
-        layoutMs = 0;
-        forceLayout = true;
-        const a = await snap();
-        const n = await stream(secs, 6, turn);
-        const b = await snap();
-        forceLayout = false;
-        window.requestAnimationFrame = raf;
-        unsub();
-        const r = diffMap(a.renders, b.renders);
-        const s = (b.t - a.t) / 1000;
-        await k.log(
-          `PERF ${label} batches=${n} store_sets_per_batch=${r1(sets / n)} js_ms_per_batch=${(jsMs / n).toFixed(2)} layout_ms_per_batch=${(layoutMs / n).toFixed(2)} markdown_ms_per_batch=${(((timings.markdown ?? 0) - m0) / n).toFixed(2)} raf_per_s=${r1(rafs / s)} renders_per_batch total=${r1(r.reduce((x, [, c]) => x + c, 0) / n)} ${r.map(([c, x]) => `${c}=${r1(x / n)}`).join(" ")}`,
-        );
-      };
-      for (const turns of [14, 60, 250]) {
-        const t0 = performance.now();
-        await openFakeChat(turns);
-        const openMs = performance.now() - t0;
-        await k.sleep(1500);
-        const el = timeline();
-        const label = `chat-${useChats.getState().chats[FAKE]?.items.length ?? 0}`;
-        await k.log(`PERF ${label} open_ms=${Math.round(openMs)} blocks_in_dom=${el.querySelectorAll("[data-block]").length} dom_nodes=${el.getElementsByTagName("*").length} height=${el.scrollHeight}`);
-        await counted(label, 8, turns * 10 + 1);
-        // The reader at the top while it streams: nothing should move.
-        el.scrollTop = 0;
-        await raf2();
-        await k.sleep(300);
-        await counted(`${label}-top`, 4, turns * 10 + 2);
-        await k.log(`PERF ${label}-top scroll_top_after=${el.scrollTop} blocks_in_dom=${el.querySelectorAll("[data-block]").length}`);
-        el.scrollTop = el.scrollHeight;
-        await raf2();
-        await k.sleep(1000);
-        const c = await snap();
-        const n = await stream(20, 0, turns * 10 + 3);
-        await report(`${label}-cpu`, c, await snap());
-        await k.log(`PERF ${label}-cpu batches=${n}`);
-        await k.sleep(300);
-        await measure(`${label}-idle-after`, 1000, 5000);
-        closeAllTabs();
-        useChats.setState((st) => {
-          const chats = { ...st.chats };
-          delete chats[FAKE];
-          return { chats };
-        });
-        await k.sleep(1500);
-      }
+      await chatRuns([14, 60, 250]);
+    },
+    /** perf-chat at 1500 items only, with its variants. */
+    async "perf-chat-long"() {
+      await chatRuns([250]);
     },
 
     /**

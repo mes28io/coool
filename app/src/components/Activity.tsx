@@ -25,6 +25,8 @@ import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
 import { TimelineSkeleton } from "./Skeletons";
 import { ArtifactCard, artifactVersions } from "./ArtifactCard";
 import { countRender } from "../lib/perfCount";
+import { sessionKey } from "../lib/types";
+import { bringNear, KeepScope, useKept, Windowed, type WindowApi } from "./Windowed";
 
 type Block =
   | { type: "prompt" | "text" | "error"; key: string; a: Activity }
@@ -156,7 +158,17 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   const initial = useRef<Set<string> | null>(null);
   if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
   const scroller = useRef<HTMLDivElement>(null);
+  const keys = useMemo(() => blocks.map((b) => b.key), [blocks]);
+  // A subagent card asked for (sidebar, header chip, Agents panel) is drawn wherever it is, and brought near.
+  const focus = useStore((st) => st.agentFocus);
+  const focusId = focus && Date.now() - focus.at < FOCUS_FRESH_MS ? focus.id : null;
+  const focusKey = useMemo(() => (focusId ? (blocks.find((b) => groupAgents.get(b.key)?.some((g) => g.id === focusId))?.key ?? null) : null), [blocks, groupAgents, focusId]);
+  const must = useMemo(() => (focusKey ? [focusKey] : NO_KEYS), [focusKey]);
+  useEffect(() => {
+    if (focusKey) bringNear(scroller.current, focusKey, stick);
+  }, [focusKey]);
   const stick = useRef(true);
+  const win = useRef<WindowApi | null>(null);
   const seenPrompt = useRef<string | null>(null);
   const lastTop = useRef(0);
   const [away, setAway] = useState(false);
@@ -188,7 +200,9 @@ export function Timeline({ session, compact, live }: { session: Session; compact
     if (stick.current) {
       setAway(false);
       setFresh(false);
-      el.scrollTo({ top: el.scrollHeight, behavior: initial.current!.size === blocks.length || reducedMotion() ? "auto" : "smooth" });
+      const smooth = initial.current!.size !== blocks.length && !reducedMotion();
+      if (smooth) win.current?.hold(700);
+      el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
     } else setFresh(true);
   }, [blocks.length, session.activity.length, thinking]);
   useEffect(() => {
@@ -227,24 +241,37 @@ export function Timeline({ session, compact, live }: { session: Session; compact
       }}
     >
       <div className={cx("mx-auto flex max-w-[700px] flex-col pb-[40px] pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
-        {blocks.map((b, i) => {
-          const last = i === blocks.length - 1;
-          const active = b.type === "steps" && busy && last && !thinking;
-          const agents = groupAgents.get(b.key) ?? NO_AGENTS;
-          return (
-            <TimelineBlock
-              key={b.key}
-              b={b}
-              fresh={!initial.current!.has(b.key)}
-              cv={!last && i < blocks.length - 6}
-              active={active}
-              latest={last || i >= blocks.length - 2}
-              agents={agents}
-              // Only a group with something running shows live time; the rest skip re-rendering as it moves.
-              live={active || agents.some((g) => !g.finished) ? lt : STILL}
-            />
-          );
-        })}
+        <KeepScope.Provider value={`session:${sessionKey(session)}`}>
+          <Windowed
+            scroller={scroller}
+            stick={stick}
+            keys={keys}
+            gap={compact ? 12 : 16}
+            must={must}
+            api={win}
+            follow={false}
+            className={cx("flex flex-col", compact ? "gap-3" : "gap-4")}
+            estimate={(i) => activityHeight(blocks[i], i >= blocks.length - 2)}
+            renderRow={(i, fresh) => {
+              const b = blocks[i];
+              const last = i === blocks.length - 1;
+              const active = b.type === "steps" && busy && last && !thinking;
+              const agents = groupAgents.get(b.key) ?? NO_AGENTS;
+              return (
+                <TimelineBlock
+                  b={b}
+                  fresh={fresh}
+                  cv={!last && i < blocks.length - 6}
+                  active={active}
+                  latest={last || i >= blocks.length - 2}
+                  agents={agents}
+                  // Only a group with something running shows live time; the rest skip re-rendering as it moves.
+                  live={active || agents.some((g) => !g.finished) ? lt : STILL}
+                />
+              );
+            }}
+          />
+        </KeepScope.Provider>
         {!busy && turn.startMs !== null && turn.endMs !== null && turn.endMs > turn.startMs && blocks[blocks.length - 1]?.type !== "prompt" && (
           <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint" data-turn-end="done" title={turn.approxStart ? "since the earliest step shown" : undefined}>
             <ICheck size={13} />
@@ -274,7 +301,10 @@ export function Timeline({ session, compact, live }: { session: Session; compact
           stick.current = true;
           setAway(false);
           setFresh(false);
-          scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: reducedMotion() ? "auto" : "smooth" });
+          // Smooth only through rows that are drawn (the last one is): from further up it is a jump.
+          const glide = !reducedMotion() && !!keys.length && !!win.current?.drawn(keys[keys.length - 1]);
+          if (glide) win.current?.hold(900);
+          scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: glide ? "smooth" : "auto" });
         }}
       />
     </div>
@@ -283,6 +313,17 @@ export function Timeline({ session, compact, live }: { session: Session; compact
 }
 
 const STILL: LiveTime = { at: 0, approx: true };
+const NO_KEYS: string[] = [];
+
+/** A block's height before it has been drawn (Windowed's estimate; measured once drawn). */
+function activityHeight(b: Block, latest: boolean): number {
+  if (b.type === "steps") return 30 + (latest || b.items.length <= 2 ? b.items.length * 30 : 0);
+  if (b.type === "artifact") return 120;
+  const t = b.a.full ?? b.a.text;
+  if (b.type === "prompt") return 70 + Math.ceil(t.length / 70) * 24;
+  if (b.type === "error") return 32;
+  return 30 + Math.ceil(t.length / 80) * 26;
+}
 
 /** One block of the timeline; memoised, so a payload re-renders only the blocks it changed (see `useBlocks`). */
 const TimelineBlock = memo(function TimelineBlock({
@@ -304,16 +345,16 @@ const TimelineBlock = memo(function TimelineBlock({
 }) {
   countRender("Activity.Block");
   return (
-    <motion.div className={cx(cv && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={blockIn}>
+    // A row arriving fades and rises in (`.row-in`, a CSS one-off on the compositor, not a script animation per frame).
+    <div className={cx(cv && "cv-auto", fresh && "row-in")}>
       {b.type === "prompt" && <PromptBlock a={b.a} />}
       {b.type === "text" && <ActivityText a={b.a} />}
       {b.type === "error" && <ErrorBlock a={b.a} />}
       {b.type === "steps" && <StepGroup items={b.items} agents={agents} active={active} latest={latest} live={live} />}
       {b.type === "artifact" && <ArtifactCard info={b.info} versions={b.versions} />}
-    </motion.div>
+    </div>
   );
 });
-const blockIn = { duration: 0.32, ease };
 
 /** Finished transcript rows drawn like the timeline, without live state (a resumed chat's history). */
 export function HistoryBlocks({ rows }: { rows: Activity[] }) {
@@ -574,7 +615,7 @@ const StepGroup = memo(function StepGroup({
   live: LiveTime;
 }) {
   countRender("Activity.StepGroup");
-  const [open, setOpen] = useState<boolean | null>(null);
+  const [open, setOpen] = useKept<boolean | null>(`steps:${items[0].key}`, null);
   const focus = useStore((st) => st.agentFocus);
   const holdsFocus = !!focus && Date.now() - focus.at < FOCUS_FRESH_MS && items.some((i) => i.a.kind === "agent" && agentOf(i.a, agents)?.id === focus.id);
   useEffect(() => {
@@ -948,14 +989,14 @@ function AgentModels({ agent }: { agent: Agent }) {
  * or the API failed) keeps the red block.
  */
 function ErrorBlock({ a }: { a: Activity }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useKept(`error:${a.ts}|${a.text.slice(0, 60)}`, false);
   const body = bodyOf(a);
   if (a.step) {
     const stopped = isStopReason(a.full ?? a.text);
     return (
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!open)}
         title={open ? undefined : body}
         className="flex w-full items-start gap-2 rounded-[8px] px-2.5 py-1 text-left text-small text-dim transition-colors duration-150 hover:bg-hover"
       >

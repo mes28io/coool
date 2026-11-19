@@ -7,7 +7,7 @@
 
 import type { PlanPhase, PlanStep, PlanStatus } from "../components/PlanCard";
 import type { ChatItem } from "./chat";
-import { shortTitle } from "./format";
+import { shortTitle } from "./format.ts";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
 

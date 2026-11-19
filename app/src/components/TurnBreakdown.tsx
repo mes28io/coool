@@ -3,7 +3,7 @@
 // The maths is lib/turnBreakdown.ts; this file only draws it.
 
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import type { Chat, ChatItem } from "../lib/chat";
 import { fmtElapsed } from "../lib/format";
 import { breakdown, KIND_LABEL, segmentText, turnItems, type Breakdown, type TurnKind, type WaterRow } from "../lib/turnBreakdown";
@@ -49,10 +49,17 @@ export function LiveTurnBar({ chat }: { chat: Chat }) {
   const now = useNow();
   const start = chat.turnStart;
   // Recomputed once a second at most (the clock's tick), and with every new item.
-  const b = useMemo(() => (start === null ? null : breakdown(turnItems(chat.items, -1), start, Math.max(start, now), true)), [chat.items, start, now]);
+  const fresh = useMemo(() => (start === null ? null : breakdown(turnItems(chat.items, -1), start, Math.max(start, now), true)), [chat.items, start, now]);
+  // The same object while its segments are (a streamed token changes none): the bar, whose segments measure their
+  // layout on every render, renders again only when they change.
+  const held = useRef<Breakdown | null>(null);
+  const b = fresh && held.current && sameBars(held.current, fresh) ? held.current : fresh;
+  held.current = b;
   if (!b || !meaningful(b)) return null;
-  return <TurnBar b={b} className="mt-1.5" />;
+  return <MemoBar b={b} className="mt-1.5" />;
 }
+
+const sameBars = (a: Breakdown, b: Breakdown) => a.running === b.running && a.total === b.total && a.segments.length === b.segments.length && a.segments.every((s, i) => s.kind === b.segments[i].kind && s.ms === b.segments[i].ms);
 
 export function TurnBar({ b, className }: { b: Breakdown; className?: string }) {
   const [hover, setHover] = useState<{ kind: TurnKind; x: number } | null>(null);
@@ -103,6 +110,8 @@ export function TurnBar({ b, className }: { b: Breakdown; className?: string }) 
     </div>
   );
 }
+
+const MemoBar = memo(TurnBar);
 
 function pick(e: React.PointerEvent<HTMLDivElement>, b: Breakdown, set: (h: { kind: TurnKind; x: number } | null) => void) {
   const r = e.currentTarget.getBoundingClientRect();

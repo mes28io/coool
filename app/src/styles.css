@@ -644,6 +644,26 @@ html.page-hidden *::after {
 .cv-auto {
 }
 
+/* A timeline row arriving (Chat.tsx, Activity.tsx): a one-off on the compositor (opacity and transform), not a
+   script animation per frame. Reduce motion: the fade only. */
+.row-in {
+  animation: row-in 320ms cubic-bezier(0.22, 0.8, 0.3, 1) both;
+}
+.reduce-motion .row-in {
+  animation-name: row-in-fade;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes row-in-fade {
+  from {
+    opacity: 0;
+  }
+}
+
 /* ---------- terminal ---------- */
 .term-host .xterm {
   height: 100%;
