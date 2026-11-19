@@ -30,6 +30,9 @@ import { deriveCheckpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
 import { isPlanTool, isSyntheticPlan, isTaskNoise, parsePlan, planForTurn } from "../lib/plan";
 import { PlanCard } from "./PlanCard";
+import { RiskTag } from "./RiskTag";
+import { LaterBar, useFolded, useQuestionLater } from "./QuestionLater";
+import { digitPick, isTyping, keyQuestion } from "../lib/questionKeys";
 import { NoteRows } from "./SteerStrip";
 import { IAlert, IChevron, ICheck, IClose, IFile, IGlobe, IMac, IPhone, IReturn, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
@@ -396,6 +399,7 @@ export function ChatTimeline({
     <div className="relative h-0 shrink-0">
       <JumpToBottom away={away} fresh={fresh} needs={needs} onClick={() => toBottom(true)} />
     </div>
+    <LaterBar chat={chat} compact={compact} />
     </div>
   );
 }
@@ -1003,7 +1007,10 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
               {who} wants to {d.lead}
             </span>
-            <span className="ml-auto rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">{item.tool}</span>
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+              {!dev && <RiskTag tool={item.tool} input={item.input} cwd={chat.cwd} />}
+              <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--dim)_11%,transparent)] px-1.5 text-small font-medium text-dim">{item.tool}</span>
+            </span>
           </div>
           <div className="px-3.5">
             <pre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90" title={d.full}>{homeShort(d.body)}</pre>
@@ -1073,18 +1080,62 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
   const edit = (i: number, f: (d: Draft) => Draft) => setDrafts((ds) => ds.map((d, j) => (j === i ? f(d) : d)));
   const submit = (a = answers) => a.every((x) => x.length > 0) && answerQuestion(chat.id, item.requestId, a);
   const open = item.answer === null && chat.running;
+  // "Later": the card folds to one line above the composer (QuestionLater.tsx); that line reopens it.
+  const folded = useFolded(chat.id, item.requestId);
+  const fold = useQuestionLater((s) => s.fold);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [focused, setFocused] = useState(false);
+  // A new question takes the keyboard only when nothing else has it (never from the composer or a field).
+  useEffect(() => {
+    if (!open || folded) return;
+    const a = document.activeElement;
+    if (!a || a === document.body) cardRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  /** What a click on option `oi` of question `i` does (a number key does the same). */
+  const pick = (i: number, oi: number) => {
+    const q = item.questions[i];
+    const o = q?.options[oi];
+    if (!o) return;
+    const on = drafts[i].picked.includes(o.label);
+    if (q.multi_select) edit(i, (x) => ({ ...x, picked: on ? x.picked.filter((p) => p !== o.label) : [...x.picked, o.label] }));
+    else if (single) submit([[o.label]]);
+    else edit(i, (x) => ({ ...x, picked: on ? [] : [o.label], other: "" }));
+  };
+  // 1–9 answer while the card has focus, never while typing (the "Or type another answer" field included).
+  const onKey = (e: React.KeyboardEvent) => {
+    if (isTyping(e.target as HTMLElement)) return;
+    const qEl = (e.target as HTMLElement).closest<HTMLElement>("[data-q]");
+    const i = keyQuestion(
+      drafts.map((d) => d.picked),
+      qEl ? Number(qEl.dataset.q) : -1,
+    );
+    const oi = digitPick(e.nativeEvent, item.questions[i]?.options.length ?? 0);
+    if (oi === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    pick(i, oi);
+  };
+  // Set aside: the line above the composer stands for it until it is reopened.
+  if (open && folded) return <div hidden data-question-folded={item.requestId} />;
 
   return (
     <AnimatePresence mode="wait" initial={false}>
       {open ? (
         <motion.div
           key="ask"
+          ref={cardRef}
+          tabIndex={-1}
+          onKeyDown={onKey}
+          onFocus={() => setFocused(true)}
+          onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setFocused(false)}
           initial={{ opacity: 0, y: 8, scale: 0.99 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, scale: 0.985, transition: { duration: 0.14 } }}
           transition={{ type: "spring", stiffness: 420, damping: 32 }}
-          className="attn-card rounded-[14px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
+          className={cx("attn-card rounded-[14px] border bg-raised shadow-card outline-none", focused ? "border-[color-mix(in_oklab,var(--status-needs)_55%,var(--border))]" : "border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))]")}
           data-question={item.requestId}
+          data-question-focused={focused || undefined}
         >
           <div className="flex items-center gap-2 px-3.5 pb-1 pt-3.5">
             <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-base font-bold text-needs-text">?</span>
@@ -1111,11 +1162,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
                             key={o.label}
                             type="button"
                             data-option={o.label}
-                            onClick={() => {
-                              if (q.multi_select) edit(i, (x) => ({ ...x, picked: on ? x.picked.filter((p) => p !== o.label) : [...x.picked, o.label] }));
-                              else if (single) submit([[o.label]]);
-                              else edit(i, (x) => ({ ...x, picked: on ? [] : [o.label], other: "" }));
-                            }}
+                            onClick={() => pick(i, oi)}
                             className={cx(
                               "group flex w-full items-start gap-2.5 rounded-[9px] border px-2.5 py-[7px] text-left transition-[border-color,background-color] duration-150",
                               on ? "border-[color-mix(in_oklab,var(--accent)_55%,var(--border))] bg-accent-soft" : "border-line hover:border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] hover:bg-hover",
@@ -1134,7 +1181,7 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
                               <span className="block text-base font-medium text-fg">{o.label}</span>
                               {o.description && o.description !== o.label && <span className="block text-small leading-[16px] text-dim">{o.description}</span>}
                             </span>
-                            {single && oi < 9 && <Kbd className="mt-[1px] opacity-0 transition-opacity duration-150 group-hover:opacity-100">{oi + 1}</Kbd>}
+                            {oi < 9 && <Kbd className={cx("mt-[1px] transition-opacity duration-150 group-hover:opacity-100", focused ? "opacity-100" : "opacity-50")}>{oi + 1}</Kbd>}
                           </button>
                         );
                       })}
@@ -1173,7 +1220,10 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
             <Button variant="ghost" onClick={() => answerQuestion(chat.id, item.requestId, null)} className="hover:text-err-text" data-decline-question>
               Decline
             </Button>
-            <span className="ml-auto text-small text-faint">{single ? "Pick one to answer" : "The turn is paused until you answer"}</span>
+            <Button variant="ghost" onClick={() => fold(chat.id, item.requestId)} title="Fold this to one line above the composer and keep reading" data-question-later-button>
+              Later
+            </Button>
+            <span className="ml-auto text-small text-faint">{focused && item.questions.some((q) => q.options.length) ? `Press 1–${Math.min(9, Math.max(...item.questions.map((q) => q.options.length)))} to ${single ? "answer" : "pick"}` : single ? "Pick one to answer" : "The turn is paused until you answer"}</span>
           </div>
         </motion.div>
       ) : (

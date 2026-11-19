@@ -666,8 +666,15 @@ export class MockChat {
       );
       return;
     }
+    // "risky": a clean-up that asks to run a command the Risky tag marks (lib/risk.ts), then a safe one.
+    if (/\brisky\b/.test(p)) {
+      await this.say("I'll clear the stale build and publish the rewritten branch.", gen);
+      await this.tool(gen, "Bash", "rm -rf dist && git push --force origin main", { command: "rm -rf dist && git push --force origin main", description: "Clear the build, force-push the rewritten history" }, 900, "Everything up-to-date", { ask: true });
+      await this.say("Done: the branch on the remote matches yours.", gen);
+      return;
+    }
     if (/\b(ask|choose|which)\b/.test(p) && !p.startsWith("/")) {
-      await this.say("Before I change anything, I need two decisions from you.", gen);
+      await this.say(/\bpick one\b/.test(p) ? "Before I change anything, one decision from you." : "Before I change anything, I need two decisions from you.", gen);
       const id = `toolu_${rid()}`;
       const questions: Question[] = [
         {
@@ -697,6 +704,8 @@ export class MockChat {
           secret: false,
         },
       ];
+      // "pick one": only the first question (one pick answers it; the number keys' demo).
+      if (/\bpick one\b/.test(p)) questions.splice(1);
       this.emit({ type: "tool_start", id, name: "AskUserQuestion", summary: questions[0].question, input: { questions }, parent_tool_id: null });
       const requestId = `perm_${rid()}`;
       this.emit({ type: "question", request_id: requestId, questions });

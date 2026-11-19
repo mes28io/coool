@@ -146,6 +146,7 @@ function TabChipBody({ tab, active, index }: { tab: Tab; active: boolean; index:
   return (
     <div
       title={`${title}${index < 9 ? `  (⌘${index + 1})` : ""}`}
+      data-tab-session={r.session ? sessionKey(r.session) : undefined}
       className={cx(
         "group relative flex h-[34px] w-full items-center gap-2 rounded-[9px] pl-2.5 pr-1 text-[13px] transition-colors duration-150",
         active ? "text-fg" : "text-dim hover:bg-hover hover:text-fg",

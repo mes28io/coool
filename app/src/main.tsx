@@ -11,6 +11,7 @@ import { initBackend } from "./lib/backend";
 import { startBrowserAgent } from "./lib/browserAgent";
 import { startPilot } from "./lib/pilot";
 import { startPresence } from "./lib/presence";
+import { startLaneLog } from "./lib/laneLog";
 import { onMotion, reducedMotion, setMotionHints } from "./lib/motion";
 import { useChats } from "./lib/chat";
 import { rememberModels } from "./lib/prefs";
@@ -23,6 +24,8 @@ void initBackend().then((b) => {
   startPilot();
   // Agents' cursors and the beam in the device panels (lib/presence.ts); the page cursors follow Reduce motion too.
   startPresence();
+  // What each session was doing and when, for Mission control's agent lanes (lib/laneLog.ts).
+  startLaneLog();
   let reduce: boolean | null = null;
   const sendMotion = () => {
     if (reduce === reducedMotion()) return;

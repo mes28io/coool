@@ -1323,6 +1323,9 @@ export function mockBackend(): Backend {
     const cq = newChat("claude", `${HOME}/code/atlas`, {}, 0);
     setTimeout(() => cq.send("Which retry approach should I choose? ask me"), 1600);
   }
+  // `?ideas=demo`: agent lanes with half an hour of history, the running-now pill, hover cards, a question card with
+  // number keys and Later, and a Risky permission request (lib/mockIdeas.ts).
+  if (location.search.includes("ideas=demo")) void import("./mockIdeas").then((m) => m.runIdeasDemo((cwd) => newChat("claude", cwd, {}, 0), `${HOME}/code/harbor`));
   if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
   if (location.search.includes("plan=chat")) void import("./mockPlan").then((m) => m.runPlanChat(newChat("claude", coool, {}, 0))); // see mockPlan.ts
   if (location.search.includes("steer=demo")) void import("./mockPlan").then((m) => m.runSteerDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts

@@ -18,6 +18,8 @@ import { Tooltips } from "./components/Tooltips";
 import { Onboarding } from "./components/onboarding/Onboarding";
 import { useOnboarding } from "./lib/onboarding";
 import { Rail } from "./components/Rail";
+import { RunningPill } from "./components/RunningPill";
+import { HoverCards } from "./components/HoverCard";
 import { SettingsPage } from "./components/SettingsPage";
 import { cx } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
@@ -254,6 +256,8 @@ export default function App() {
             </button>
             <TabBar />
           </div>
+          {/* Outside the part that steps aside, so it shows over Settings too. */}
+          <RunningPill />
         </div>
         <div className="flex min-h-0 flex-1">
           <Rail />
@@ -270,6 +274,7 @@ export default function App() {
         </div>
       </div>
       <Palette />
+      <HoverCards />
       <Sheets />
       <Tooltips />
       <Onboarding />

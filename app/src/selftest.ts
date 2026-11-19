@@ -4051,6 +4051,148 @@ const fix2: Record<string, (ctx: Ctx) => Promise<void>> = {
 };
 Object.assign(scenarios, fix2);
 
+// ---------- the five inspiration ideas (docs/research/affectui-inspiration.md "Later"), against the real CLI ----------
+//
+// `ideas-risk` (Haiku): a real Bash permission request for `rm -rf` carries the Risky tag (and its reason); a harmless
+// one (`echo … > note.txt`) carries none. Both are denied / allowed by hand, nothing answers for the person.
+// `ideas-question` (Haiku): a real AskUserQuestion card numbers its options; "2" typed in the composer is text, not an
+// answer; Later folds it to the line above the composer; the line reopens it focused, and "2" answers it.
+// `ideas-live` (Haiku): while a real chat waits on a permission, the title bar's running-now pill counts it (from a
+// tab and over Settings) and lists it; Mission control's lanes draw its turn with the wait; a sidebar row's hover card
+// shows after a rest and goes on a key press.
+
+/** A pointer resting on `el` (the hover card listens on the window for moves, as a real mouse sends them). */
+function restOn(el: HTMLElement) {
+  const r = el.getBoundingClientRect();
+  el.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, clientX: r.left + 40, clientY: r.top + r.height / 2, pointerType: "mouse" }));
+  el.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: r.left + 40, clientY: r.top + r.height / 2, pointerType: "mouse" }));
+}
+
+const ideas: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async "ideas-risk"(ctx) {
+    let id = 0;
+    await step("ideas-risk: rm -rf asks, and the card carries Risky with its reason", async () => {
+      id = await startClaude(ctx, "Use the Bash tool to run exactly this command and nothing else: rm -rf ./old-cache . Then reply with one word.");
+      const card = await waitFor("the approval card", () => $("[data-approval]"), 90_000);
+      const tag = card.querySelector<HTMLElement>("[data-risk]");
+      await shot("ideas-risk-card");
+      if (!tag) throw new Fail(`no Risky tag on: ${textOf(card).slice(0, 120)}`);
+      if (!/Risky/.test(textOf(tag))) throw new Fail(`tag reads ${textOf(tag)}`);
+      if ($("[data-approval] [data-safe]") || /\bsafe\b/i.test(textOf(card))) throw new Fail("a card says safe");
+      const n = turnEnds(id).length;
+      button("Deny", card)!.click();
+      await nextTurn(id, n);
+      return `tag: "${tag.dataset.risk}"; denied`;
+    });
+    await step("ideas-risk: a harmless write in the chat's folder carries no tag", async () => {
+      const n = turnEnds(id).length;
+      await say("Use the Bash tool to run exactly: echo ok > note.txt . Then reply with one word.");
+      const card = await waitFor("the approval card", () => $("[data-approval]"), 90_000);
+      const tagged = !!card.querySelector("[data-risk]");
+      await shot("ideas-risk-none");
+      button("Allow once", card)?.click();
+      await nextTurn(id, n);
+      if (tagged) throw new Fail(`tagged: ${textOf(card).slice(0, 120)}`);
+      return "no tag; allowed once";
+    });
+  },
+
+  async "ideas-question"(ctx) {
+    let id = 0;
+    await step("ideas-question: options are numbered; a 2 typed in the composer is text, not an answer", async () => {
+      id = await startClaude(ctx, "Use the AskUserQuestion tool exactly once to ask me which colour I prefer, with the options Red, Blue and Green (single choice). After I answer, reply with only the colour I picked.");
+      const card = await waitFor("the question card", () => $("[data-question]"), 90_000);
+      const nums = [...card.querySelectorAll("[data-option] kbd")].map((k) => textOf(k));
+      if (nums.join(",") !== "1,2,3") throw new Fail(`numbers: ${nums.join(",")}`);
+      const ta = composer();
+      ta.focus();
+      key("2", ta);
+      await sleep(400);
+      if (!chat(id)?.pendingQuestion) throw new Fail("a 2 in the composer answered the question");
+      await shot("ideas-question");
+      return `numbered ${nums.join(",")}; composer key ignored`;
+    });
+    await step("ideas-question: Later folds it above the composer; the line reopens it; 2 answers Blue", async () => {
+      const card = $("[data-question]")!;
+      card.querySelector<HTMLElement>("[data-question-later-button]")!.click();
+      const bar = await waitFor("the folded line", () => $("[data-question-later]"), 5_000);
+      if ($("[data-question]")) throw new Fail("the card is still in the timeline");
+      await shot("ideas-question-later");
+      const line = textOf(bar);
+      bar.click();
+      const again = await waitFor("the card, focused", () => (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>("[data-question]") ?? null, 5_000);
+      await shot("ideas-question-reopened");
+      const n = turnEnds(id).length;
+      key("2", again);
+      await nextTurn(id, n);
+      const t = lastText(id);
+      if (!/blue/i.test(t?.text ?? "")) throw new Fail(`reply: ${t?.text?.slice(0, 60)}`);
+      return `line "${line}"; reply ${t!.text.trim().slice(0, 20)}`;
+    });
+  },
+
+  async "ideas-live"(ctx) {
+    let id = 0;
+    await step("ideas-live: the pill counts a chat waiting on a permission, from a tab and over Settings", async () => {
+      id = await startClaude(ctx, "Use the Bash tool to run exactly: echo hello > hello.txt . Then reply with one word.");
+      await waitFor("the approval card", () => $("[data-approval]"), 90_000);
+      const pill = await waitFor("the running-now pill", () => $("[data-running-pill]"), 10_000);
+      if (!/need/.test(textOf(pill))) throw new Fail(`pill reads ${textOf(pill)}`);
+      pill.querySelector("button")!.click();
+      const row = await waitFor("its row in the list", () => $("[data-running-row]"), 3_000);
+      await shot("ideas-pill-popover");
+      key("Escape", document.body);
+      await sleep(300);
+      useStore.getState().openSettings("general");
+      await sleep(600);
+      const over = $("[data-running-pill]");
+      await shot("ideas-pill-settings");
+      useStore.getState().closeSettings();
+      if (!over) throw new Fail("no pill over Settings");
+      return `pill "${textOf(pill)}"; row "${textOf(row).slice(0, 60)}"`;
+    });
+    await step("ideas-live: Mission control's lanes draw the turn with its wait", async () => {
+      const s = await waitFor("the chat's session", () => sessionOf(id), 30_000);
+      home();
+      await sleep(600);
+      onTab((s.project || s.cwd).split("/").pop() ?? "");
+      const lane = await waitFor("its lane", () => $(`[data-mc-lane="${CSS.escape(sessionKey(s))}"]`), 10_000);
+      lane.scrollIntoView({ block: "center" });
+      await sleep(500);
+      await shot("ideas-lanes-waiting");
+      const blocks = lane.dataset.laneBlocks ?? "";
+      if (!/working\+wait/.test(blocks)) throw new Fail(`blocks: ${blocks}`);
+      const n = turnEnds(id).length;
+      useStore.getState().open({ kind: "session", key: sessionKey(s) });
+      const card = await waitFor("the approval card", () => $("[data-approval]"), 10_000);
+      button("Allow once", card)!.click();
+      await nextTurn(id, n);
+      home();
+      await sleep(5_600); // the lanes move every 5 s
+      const done = $(`[data-mc-lane="${CSS.escape(sessionKey(s))}"]`)?.dataset.laneBlocks ?? "";
+      await shot("ideas-lanes-done");
+      if (!/^done\+wait|,done\+wait/.test(done)) throw new Fail(`after the turn: ${done}`);
+      return `waiting: ${blocks}; after: ${done}`;
+    });
+    await step("ideas-live: a sidebar row's hover card shows after a rest and goes on a key", async () => {
+      const s = sessionOf(id)!;
+      const row = await waitFor("its sidebar row", () => $(`[data-session-row="${CSS.escape(sessionKey(s))}"]`), 5_000);
+      restOn(row);
+      const card = await waitFor("the hover card", () => $("[data-hover-card]"), 2_000);
+      const tipShown = $all("[role=tooltip]").filter((t) => !t.hasAttribute("data-hover-card")).length;
+      await shot("ideas-hover-card");
+      const text = textOf(card);
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true }));
+      await sleep(250);
+      if ($("[data-hover-card]")) throw new Fail("still up after a key");
+      if (tipShown) throw new Fail("the row's tooltip showed with the card");
+      if (!/echo hello/.test(text)) throw new Fail(`card: ${text}`);
+      return text.slice(0, 120);
+    });
+  },
+};
+Object.assign(scenarios, ideas);
+
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.
 let started = false;

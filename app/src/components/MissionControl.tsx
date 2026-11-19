@@ -21,6 +21,7 @@ import { turnTotals } from "../lib/turn";
 import type { ChatInfo, PtyInfo, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { useStore, type Since } from "../store";
+import { AgentLanes } from "./AgentLanes";
 import { AwayStrip } from "./Away";
 import { ChangeLedger } from "./ChangeLedger";
 import { CommitTrail, type Committing } from "./CommitTrail";
@@ -372,6 +373,7 @@ function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Att
         <ChangeLedger changes={changes} sources={sources} onOpen={openChange} overlaps={found} onOpenSession={openEdit} onOpenBoth={openBoth} className={showTrail ? "@[900px]:col-start-1 @[900px]:row-start-2" : "@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1"} />
         {showTrail && <CommitTrail trail={trail} loading={!entry} committing={committingRow} className="@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1" />}
       </div>
+      <AgentLanes sessions={p.sessions} att={att} />
     </motion.section>
   );
 }
