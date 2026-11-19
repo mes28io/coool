@@ -5,6 +5,7 @@
 import { motion } from "motion/react";
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cx, ease } from "./primitives";
+import { Shimmer } from "./Shimmer";
 
 import { reducedMotion } from "../lib/motion";
 export { reducedMotion };
@@ -21,8 +22,8 @@ export const DOT = "color-mix(in oklab, var(--faint) 60%, var(--border))";
 /**
  * Text that arrives with a soft left-to-right sweep (~420ms). The text is ONE text node for its whole life
  * (never per-character spans, which change kerning and advances), and the sweep is a mask on its wrapper, so
- * glyph positions are identical before, during and after. `inner` is for text that carries its own
- * `background-clip: text` treatment (the shimmer): it must sit inside the masked wrapper, not outside it.
+ * glyph positions are identical before, during and after. `inner` makes the text a Shimmer (its class and style),
+ * inside the masked wrapper so the sweep reveals the shimmer too.
  */
 export function Reveal({ text, fresh, inner }: { text: string; fresh?: boolean; inner?: { className?: string; style?: CSSProperties } }) {
   const [on, setOn] = useState(() => !!fresh && text.length > 0 && !reducedMotion());
@@ -31,7 +32,17 @@ export function Reveal({ text, fresh, inner }: { text: string; fresh?: boolean; 
     const t = setTimeout(() => setOn(false), 520);
     return () => clearTimeout(t);
   }, [on]);
-  return <span className={on ? "rv-sweep" : undefined}>{inner ? <span className={inner.className} style={inner.style}>{text}</span> : text}</span>;
+  return (
+    <span className={on ? "rv-sweep" : undefined}>
+      {inner ? (
+        <Shimmer className={inner.className?.replace(/\bshimmer\b/, "").trim()} style={inner.style}>
+          {text}
+        </Shimmer>
+      ) : (
+        text
+      )}
+    </span>
+  );
 }
 
 const Ready = createContext<{ current: boolean }>({ current: true });

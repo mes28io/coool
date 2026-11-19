@@ -168,9 +168,16 @@
     radial-gradient(31% 40% at 83% 21%, rgb(224 58 62 / 0.22), transparent 72%),
     radial-gradient(35% 43% at 17% 81%, rgb(0 157 220 / 0.26), transparent 74%);
 }
+/* Each layer is drawn at a third of its size and scaled up 3x as the first transform (the same picture: soft blobs lose
+   nothing at a third of the pixels). At full size (150 % of the window) WebKit tiles the layer, and a tiled layer's
+   animation is serviced on the main thread every display frame (~260 app wakeups and ~40 ms CPU a second in the app
+   and the page each); at a third it is one Core Animation layer (~3 wakeups) and ~75 MB lighter (docs/PERF.md). */
 .backdrop-layer {
   position: absolute;
-  inset: -25%;
+  left: 25%;
+  top: 25%;
+  width: 50%;
+  height: 50%;
   will-change: transform;
   animation: backdrop-drift-a 38s ease-in-out infinite alternate;
 }
@@ -183,18 +190,18 @@
 }
 @keyframes backdrop-drift-a {
   from {
-    transform: translate3d(-6%, 3%, 0) rotate(4deg) scale(1.04);
+    transform: scale(3) translate3d(-6%, 3%, 0) rotate(4deg) scale(1.04);
   }
   to {
-    transform: translate3d(5%, -4%, 0) rotate(-3deg) scale(1);
+    transform: scale(3) translate3d(5%, -4%, 0) rotate(-3deg) scale(1);
   }
 }
 @keyframes backdrop-drift-b {
   from {
-    transform: translate3d(5%, -3%, 0) rotate(-4deg) scale(1);
+    transform: scale(3) translate3d(5%, -3%, 0) rotate(-4deg) scale(1);
   }
   to {
-    transform: translate3d(-6%, 4%, 0) rotate(3deg) scale(1.05);
+    transform: scale(3) translate3d(-6%, 4%, 0) rotate(3deg) scale(1.05);
   }
 }
 
@@ -365,35 +372,62 @@ html.no-transitions *::after {
 
 /* ---------- motion primitives ---------- */
 
-/* Looping activity animations are stepped: ~12 updates a second, whatever the screen's refresh rate. They still read
-   as motion, but WebKit restyles and repaints a few times a second instead of every frame (a paint property like
-   background-position, or anything inside an SVG, is never composited). One-off transitions stay smooth.
+/* Looping animations run on the compositor: only `transform` and `opacity`, on an HTML element or an <svg> element
+   (never inside an SVG), with linear or cubic timing, never `steps()`. WebKit hands those to Core Animation, and
+   neither the page nor the app wakes for them. Any other running loop (a stepped one included: Core Animation has no
+   steps, so WebKit falls back to the main thread) makes WebKit service the animation every display frame: measured,
+   six stepped spinners cost ~280 app wakeups and ~25 ms CPU a second against ~35 and ~3 for six linear ones
+   (docs/PERF.md, `perf-anim-lab`). A stepped look is written as keyframes: holds joined by 0.01 % ramps.
    Reduced motion is one class on <html>, `reduce-motion` (lib/motion.ts: the Settings choice, the system setting,
    Low Power Mode...), and `[data-anim-static]` marks Home and the sidebar, where activity shows static. */
 
-/* Shimmer sweep for "thinking" text and the active step. */
+/* Shimmer for "thinking" text and the active step (components/Shimmer.tsx): the text in the base colour, and over it
+   the same text in the highlight colour seen through a soft band (a mask). The band slides across (transform) while
+   the copy inside it slides back by the same amount, so the copy stays on the text: two compositor animations,
+   no repaint. The highlight's peak travels from -25 % to 200 % of the text's width in 2.1 s, its ramps 37.5 % of the
+   width each side: the stops and speed of the background-clip gradient it replaces (250 % wide, 100 % to -50 %). */
 .shimmer {
-  background-image: linear-gradient(
-    100deg,
-    var(--shimmer-base, var(--dim)) 0%,
-    var(--shimmer-base, var(--dim)) 35%,
-    var(--shimmer-hi, var(--text)) 50%,
-    var(--shimmer-base, var(--dim)) 65%,
-    var(--shimmer-base, var(--dim)) 100%
-  );
-  background-size: 250% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  /* 26 steps per 2.1 s (~12/s). */
-  animation: shimmer 2.1s steps(26) infinite;
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  color: var(--shimmer-base, var(--dim));
 }
-@keyframes shimmer {
-  0% {
-    background-position: 100% 0;
+.shimmer-band,
+.shimmer-hi {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.shimmer-band {
+  -webkit-mask-image: linear-gradient(90deg, transparent 12.5%, #000 50%, transparent 87.5%);
+  mask-image: linear-gradient(90deg, transparent 12.5%, #000 50%, transparent 87.5%);
+  animation: shimmer-band 2.1s linear infinite;
+}
+.shimmer-hi {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--shimmer-hi, var(--text));
+  animation: shimmer-hi 2.1s linear infinite;
+}
+@keyframes shimmer-band {
+  from {
+    transform: translateX(-75%);
   }
-  100% {
-    background-position: -50% 0;
+  to {
+    transform: translateX(150%);
+  }
+}
+@keyframes shimmer-hi {
+  from {
+    transform: translateX(75%);
+  }
+  to {
+    transform: translateX(-150%);
   }
 }
 
@@ -415,8 +449,7 @@ html.no-transitions *::after {
     transparent 100%
   );
   transform: translateX(-100%);
-  /* 28 steps per 2.4 s (~12/s). */
-  animation: sweep 2.4s steps(28) infinite;
+  animation: sweep 2.4s linear infinite;
   pointer-events: none;
 }
 @keyframes sweep {
@@ -426,8 +459,7 @@ html.no-transitions *::after {
 }
 
 .breathe {
-  /* 10 steps per half (~11/s). */
-  animation: breathe 1.8s steps(10) infinite;
+  animation: breathe 1.8s linear infinite;
 }
 @keyframes breathe {
   0%,
@@ -442,10 +474,9 @@ html.no-transitions *::after {
 .spin {
   animation: spin 0.9s linear infinite;
 }
-/* Working session: a spinning ring (StatusDot). A composited rotate of the whole svg, stepped (~20 updates/s, smooth
-   enough for a ring); Reduce motion holds it still. */
+/* Working session: a spinning ring (StatusDot), a compositor rotate of the whole svg; Reduce motion holds it still. */
 .work-spin {
-  animation: spin 1s steps(20) infinite;
+  animation: spin 1s linear infinite;
 }
 .reduce-motion .work-spin {
   animation: none;
@@ -526,7 +557,8 @@ html.no-transitions *::after {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  /* A paint per update (conic gradient): 54 steps per 4.5 s (~12/s). */
+  /* Not on the compositor (a conic gradient repaints): WebKit services it every display frame, and stepped it at
+     least repaints only ~12 times a second. It runs only while a request waits for the person (docs/PERF.md). */
   animation: attn-spin 4.5s steps(54) infinite;
   pointer-events: none;
   z-index: -1;
@@ -564,10 +596,16 @@ html.no-transitions *::after {
   vertical-align: -2px;
   border-radius: 2px;
   background: var(--accent);
-  animation: caret 1.05s steps(1) infinite;
+  animation: caret 1.05s linear infinite;
 }
+/* On for the first half, off for the second (was steps(1)): a hard switch the compositor can run. */
 @keyframes caret {
-  50% {
+  0%,
+  49.99% {
+    opacity: 1;
+  }
+  50%,
+  100% {
     opacity: 0;
   }
 }
@@ -575,8 +613,7 @@ html.no-transitions *::after {
 /* Skeleton placeholders: a slow, soft opacity pulse (staggered per block via animation-delay). */
 .skel {
   background: color-mix(in oklab, var(--text) 8%, transparent);
-  /* 14 steps per half (~12/s). */
-  animation: skel 2.4s steps(14) infinite both;
+  animation: skel 2.4s linear infinite both;
 }
 @keyframes skel {
   0%,
@@ -631,9 +668,11 @@ html.page-hidden *::after {
    its shimmer, no sweeping bars. Status dots are unaffected (only "needs you" moves). */
 [data-anim-static] .shimmer,
 .reduce-motion .shimmer {
-  animation: none;
   color: var(--shimmer-hi, var(--text));
-  background: none;
+}
+[data-anim-static] .shimmer-band,
+.reduce-motion .shimmer-band {
+  display: none;
 }
 [data-anim-static] .sweep::after,
 [data-anim-static] .seg-run::after,
@@ -725,16 +764,17 @@ html.page-hidden *::after {
   vertical-align: -2px;
   border-radius: 2px;
   background: var(--accent);
-  animation: caret 1.05s steps(1) infinite;
+  animation: caret 1.05s linear infinite;
 }
 .md-live.text-small > p:last-child::after {
   height: 11px;
   width: 5px;
 }
+/* !important: the caret rules above are more specific than these (the caret used to blink under Reduce motion). */
 .reduce-motion .md-live > *::after,
 .reduce-motion .md-live li::after {
-  animation: none;
-  opacity: 0.7;
+  animation: none !important;
+  opacity: 0.7 !important;
 }
 
 /* Agents panel: segmented step bar (active = running blue with a slow moving highlight, failed = hatched red). */
@@ -750,8 +790,8 @@ html.page-hidden *::after {
   width: 55%;
   background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.6), transparent);
   transform: translateX(-57%);
-  /* A moving layer (transform), not a moving background: 30 steps per 2.6 s (~12/s). */
-  animation: seg-run 2.6s steps(30) infinite;
+  /* A moving layer (transform), not a moving background. */
+  animation: seg-run 2.6s linear infinite;
 }
 @keyframes seg-run {
   to {
@@ -765,8 +805,11 @@ html.page-hidden *::after {
 /* The trailing dots of a thinking label (ThinkingDots): one by one, a brief hold, restart. */
 .think-dots > span[aria-hidden] {
   opacity: 0;
-  /* Two steps per keyframe interval: each dot fades in two beats (~7 updates/s). */
-  animation: 1.4s steps(2) infinite both;
+  /* Longhands: a shorthand without a name is minified to `animation: none` (the dots never showed). */
+  animation-duration: 1.4s;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-fill-mode: both;
 }
 .think-dots > span:nth-child(2) {
   animation-name: think-dot-1;
@@ -829,8 +872,22 @@ html.page-hidden *::after {
   will-change: transform;
 }
 
-/* Queued-note dot (SteerStrip): no ping when motion is reduced. */
-.reduce-motion .animate-ping {
+/* A new chat's provider mark sways gently (Chat.tsx Welcome): a compositor rotate, still under Reduce motion. */
+.welcome-sway {
+  animation: welcome-sway 6s ease-in-out infinite;
+}
+@keyframes welcome-sway {
+  50% {
+    transform: rotate(8deg);
+  }
+}
+.reduce-motion .welcome-sway {
+  animation: none;
+}
+
+/* Queued-note dot (SteerStrip): no ping when motion is reduced; loading icons (animate-spin) hold still. */
+.reduce-motion .animate-ping,
+.reduce-motion .animate-spin {
   animation: none;
 }
 

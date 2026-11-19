@@ -1,37 +1,43 @@
-/* MoodGlyph motion (see MoodGlyph.tsx). Every element's resting style is the glyph's first frame:
-   `data-live="false"`, a static scope and reduced motion simply drop the animation. Units inside the SVG are grid
-   units (CSS px in the 16-unit viewBox). Loops are 1.2-2.4 s, stepped, transform/opacity/dash only. */
+/* MoodGlyph motion (see MoodGlyph.tsx). A glyph is a box of stacked <svg> layers, each the whole 16 grid; a moving
+   part is a layer of its own and only the layer element animates, transform or opacity, linear between keyframes:
+   WebKit hands such an animation to Core Animation and neither the page nor the app wakes for it. Nothing inside an
+   SVG animates (stroke-dashoffset or a <g> transform would be repainted on the main thread every display frame).
+   Distances are percentages of the box: one grid unit is 6.25 %. Every layer's resting style is the glyph's first
+   frame: `data-live="false"`, a static scope and reduced motion simply drop the animation. */
 
-.mg * {
-  transform-box: view-box;
+/* In the components layer, so a utility class given to the glyph (absolute, block...) wins. */
+@layer components {
+  .mg {
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+  }
 }
-/* After the shorthands below (higher specificity): every loop repeats, stepped. The timing function applies per
-   keyframe interval, so 5 steps per interval comes to ~8-12 updates a second for these 1.2-2.4 s loops: they read as
-   motion, while the SVG (never composited in WebKit) repaints a few times a second instead of every frame. */
-.mg [class] {
-  animation-iteration-count: infinite;
-  animation-fill-mode: both;
-  animation-timing-function: steps(5);
+.mg-l,
+.mg-write-win {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
 }
-/* One interval for the whole loop: as many steps as ~12/s. */
-.mg .mg-other {
-  animation-timing-function: steps(28);
-}
-.mg .mg-search,
-.mg .mg-read-page {
-  animation-timing-function: steps(9);
-}
-.mg .mg-dim {
-  opacity: 0.6;
+.mg-l {
+  overflow: hidden;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform-origin: 50% 50%;
 }
 
 /* think: the bubble's three dots light in turn (equal dim weight when still). */
 .mg-think-dot {
   opacity: 0.55;
+  animation: mg-think-dot 1.8s linear infinite both;
 }
-.mg-think-dot-0 { animation: mg-think-dot 1.8s; }
-.mg-think-dot-1 { animation: mg-think-dot 1.8s 0.3s; }
-.mg-think-dot-2 { animation: mg-think-dot 1.8s 0.6s; }
+.mg-think-dot-1 { animation-delay: 0.3s; }
+.mg-think-dot-2 { animation-delay: 0.6s; }
 @keyframes mg-think-dot {
   0%, 60%, 100% { opacity: 0.35; }
   25% { opacity: 1; }
@@ -40,12 +46,12 @@
 /* plan: ticks replace the dots one row at a time, then the list resets. */
 .mg-plan-tick { opacity: 0; }
 .mg-plan-dot { opacity: 0.4; }
-.mg-plan-tick-0 { opacity: 1; animation: mg-tick-0 2.4s; }
-.mg-plan-dot-0 { opacity: 0; animation: mg-dot-0 2.4s; }
-.mg-plan-tick-1 { animation: mg-tick-1 2.4s; }
-.mg-plan-dot-1 { animation: mg-dot-1 2.4s; }
-.mg-plan-tick-2 { animation: mg-tick-2 2.4s; }
-.mg-plan-dot-2 { animation: mg-dot-2 2.4s; }
+.mg-plan-tick-0 { opacity: 1; animation: mg-tick-0 2.4s linear infinite both; }
+.mg-plan-dot-0 { opacity: 0; animation: mg-dot-0 2.4s linear infinite both; }
+.mg-plan-tick-1 { animation: mg-tick-1 2.4s linear infinite both; }
+.mg-plan-dot-1 { animation: mg-dot-1 2.4s linear infinite both; }
+.mg-plan-tick-2 { animation: mg-tick-2 2.4s linear infinite both; }
+.mg-plan-dot-2 { animation: mg-dot-2 2.4s linear infinite both; }
 @keyframes mg-tick-0 {
   0%, 82% { opacity: 1; }
   92%, 100% { opacity: 0; }
@@ -77,18 +83,17 @@
 
 /* search: the lens sweeps a small loop. */
 .mg-search {
-  animation: mg-sweep 2.4s;
+  animation: mg-sweep 2.4s linear infinite both;
 }
 @keyframes mg-sweep {
   0%, 100% { transform: translate(0, 0); }
-  30% { transform: translate(-1.1px, 0.7px); }
-  65% { transform: translate(0.9px, -0.6px); }
+  30% { transform: translate(-6.875%, 4.375%); }
+  65% { transform: translate(5.625%, -3.75%); }
 }
 
 /* read: a page turns over the spine (1 -> -1 on x), then rests on the left page under it. */
 .mg-read-page {
-  transform-origin: 8px 8px;
-  animation: mg-page 2.4s;
+  animation: mg-page 2.4s linear infinite both;
 }
 @keyframes mg-page {
   0%, 30% { transform: scaleX(1); opacity: 1; }
@@ -96,31 +101,40 @@
   63%, 100% { transform: scaleX(-1); opacity: 0; }
 }
 
-/* write: the pencil draws the line under it left to right; the line fades and the pencil goes back. */
+/* write: the pencil draws the line under it left to right; the line fades and the pencil goes back. The line shows
+   through a window whose right edge moves (the window slides, the line inside slides back the same distance): at
+   -46.875 % the edge is past the line's end cap (8.5 units), at -90.625 % before its start cap (1.5). */
+.mg-write-win {
+  overflow: hidden;
+  animation: mg-win 2.4s linear infinite both;
+}
 .mg-write-line {
-  stroke-dasharray: 1 3;
-  stroke-dashoffset: 0;
-  animation: mg-line 2.4s;
+  animation: mg-win-line 2.4s linear infinite both;
 }
 .mg-write-pen {
-  animation: mg-pen 2.4s;
+  animation: mg-pen 2.4s linear infinite both;
 }
-@keyframes mg-line {
-  0%, 8% { stroke-dashoffset: 0; opacity: 1; }
-  20% { stroke-dashoffset: 0; opacity: 0; }
-  21%, 28% { stroke-dashoffset: 1; opacity: 0; }
-  30% { stroke-dashoffset: 1; opacity: 1; }
-  78%, 100% { stroke-dashoffset: 0; opacity: 1; }
+@keyframes mg-win {
+  0%, 8% { transform: translateX(-46.875%); opacity: 1; }
+  20% { transform: translateX(-46.875%); opacity: 0; }
+  21%, 28% { transform: translateX(-90.625%); opacity: 0; }
+  30% { transform: translateX(-90.625%); opacity: 1; }
+  78%, 100% { transform: translateX(-46.875%); opacity: 1; }
+}
+@keyframes mg-win-line {
+  0%, 20% { transform: translateX(46.875%); }
+  21%, 30% { transform: translateX(90.625%); }
+  78%, 100% { transform: translateX(46.875%); }
 }
 @keyframes mg-pen {
   0%, 8% { transform: translate(0, 0); }
-  28% { transform: translate(-5px, 0); }
+  28% { transform: translate(-31.25%, 0); }
   78%, 100% { transform: translate(0, 0); }
 }
 
 /* run: the cursor after the prompt blinks (softly). */
 .mg-run-cursor {
-  animation: mg-blink 1.2s;
+  animation: mg-blink 1.2s linear infinite both;
 }
 @keyframes mg-blink {
   0%, 45% { opacity: 1; }
@@ -128,30 +142,44 @@
   100% { opacity: 1; }
 }
 
-/* delegate: a bead runs down the upper branch, then the lower one. */
-.mg-bead {
-  stroke-width: 2.25;
-  stroke-dasharray: 0.001 2;
-  stroke-dashoffset: 0;
-  opacity: 0;
-}
-.mg-bead-0 { animation: mg-bead-0 2.4s; }
-.mg-bead-1 { animation: mg-bead-1 2.4s; }
+/* delegate: a bead runs down the upper branch, then the lower one. Its path is the branch's curve, sampled at equal
+   lengths (the dash offset it used to be moved by length too). */
+.mg-bead { opacity: 0; }
+.mg-bead-0 { animation: mg-bead-0 2.4s linear infinite both; }
+.mg-bead-1 { animation: mg-bead-1 2.4s linear infinite both; }
 @keyframes mg-bead-0 {
-  0% { stroke-dashoffset: 0; opacity: 0; }
+  0% { transform: translate(0%, 0%); opacity: 0; }
+  4% { transform: translate(4.48%, -0.68%); }
   6% { opacity: 1; }
+  8% { transform: translate(8.53%, -2.76%); }
+  12% { transform: translate(11.88%, -5.87%); }
+  16% { transform: translate(14.67%, -9.48%); }
+  20% { transform: translate(17.19%, -13.28%); }
+  24% { transform: translate(19.71%, -17.08%); }
+  28% { transform: translate(22.5%, -20.69%); }
+  32% { transform: translate(25.85%, -23.8%); }
   34% { opacity: 1; }
-  40%, 100% { stroke-dashoffset: -1; opacity: 0; }
+  36% { transform: translate(29.89%, -25.88%); }
+  40%, 100% { transform: translate(34.38%, -26.56%); opacity: 0; }
 }
 @keyframes mg-bead-1 {
-  0%, 46% { stroke-dashoffset: 0; opacity: 0; }
+  0%, 46% { transform: translate(0%, 0%); opacity: 0; }
+  50% { transform: translate(4.48%, 0.68%); }
   52% { opacity: 1; }
+  54% { transform: translate(8.53%, 2.76%); }
+  58% { transform: translate(11.88%, 5.87%); }
+  62% { transform: translate(14.67%, 9.48%); }
+  66% { transform: translate(17.19%, 13.28%); }
+  70% { transform: translate(19.71%, 17.08%); }
+  74% { transform: translate(22.5%, 20.69%); }
+  78% { transform: translate(25.85%, 23.8%); }
   80% { opacity: 1; }
-  86%, 100% { stroke-dashoffset: -1; opacity: 0; }
+  82% { transform: translate(29.89%, 25.88%); }
+  86%, 100% { transform: translate(34.38%, 26.56%); opacity: 0; }
 }
 
 /* start: the ring of points fills one by one, holds, and empties. */
-.mg-ring { opacity: 0.3; animation: mg-ring 2.4s; }
+.mg-ring { opacity: 0.3; animation: mg-ring 2.4s linear infinite both; }
 .mg-ring-0 { opacity: 1; animation-name: mg-ring-first; }
 .mg-ring-1 { animation-name: mg-ring-1; }
 .mg-ring-2 { animation-name: mg-ring-2; }
@@ -170,30 +198,26 @@
 @keyframes mg-ring-7 { 0%, 56% { opacity: 0.3; } 61%, 84% { opacity: 1; } 94%, 100% { opacity: 0.3; } }
 
 /* compact: the chevrons press in on the line, which firms up, and ease back. */
-.mg-compact-top { animation: mg-press-top 2s; }
-.mg-compact-bot { animation: mg-press-bot 2s; }
-.mg-compact-mid { animation: mg-press-mid 2s; }
+.mg-compact-top { animation: mg-press-top 2s linear infinite both; }
+.mg-compact-bot { animation: mg-press-bot 2s linear infinite both; }
+.mg-compact-mid { animation: mg-press-mid 2s linear infinite both; }
 @keyframes mg-press-top {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(1.25px); }
+  50% { transform: translateY(7.8125%); }
 }
 @keyframes mg-press-bot {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-1.25px); }
+  50% { transform: translateY(-7.8125%); }
 }
 @keyframes mg-press-mid {
   0%, 100% { opacity: 1; transform: scaleX(1); }
   50% { opacity: 0.55; transform: scaleX(0.8); }
 }
-.mg-compact-mid { transform-origin: 8px 8px; }
 
 /* other: three points on a slow orbit. */
 .mg-other {
-  transform-origin: 8px 8px;
-  animation: mg-orbit 2.4s linear;
+  animation: mg-orbit 2.4s linear infinite both;
 }
-.mg-other .mg-o2 { opacity: 0.7; }
-.mg-other .mg-o3 { opacity: 0.45; }
 @keyframes mg-orbit {
   to { transform: rotate(360deg); }
 }
@@ -221,9 +245,7 @@
 /* globe (the browser button, while a page loads): meridians turn from the right edge across to the left, three a third
    of a turn apart, so the globe reads as spinning; the equator and outline stay put. */
 .mg-meridian {
-  transform-origin: 8px 8px;
-  animation: mg-meridian 3s;
-  animation-timing-function: steps(3);
+  animation: mg-meridian 3s linear infinite both;
 }
 .mg-meridian-1 { animation-delay: -1s; }
 .mg-meridian-2 { animation-delay: -2s; }

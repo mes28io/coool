@@ -15,9 +15,11 @@ HERE=$(cd "$(dirname "$0")" && pwd -P)
 BIN=${COOOL_BIN:-${CARGO_TARGET_DIR:-target}/debug/coool}
 mkdir -p "$OUT/logs" "$OUT/shots" "$OUT/bin"
 # A copy with a name of its own: WebKit keeps an unbundled binary's web data under ~/Library/WebKit/<name>
-# (remove ~/Library/WebKit/coool-perf and ~/Library/Caches/coool-perf when done).
-cp "$BIN" "$OUT/bin/coool-perf"
-BIN="$OUT/bin/coool-perf"
+# (remove ~/Library/WebKit/<name> and ~/Library/Caches/<name> when done). PERF_NAME: another name, so two runs
+# (two agents) never share a web data store; default coool-perf.
+NAME=${PERF_NAME:-coool-perf}
+cp "$BIN" "$OUT/bin/$NAME"
+BIN="$OUT/bin/$NAME"
 LOG="$OUT/logs/$(date +%Y%m%d-%H%M%S)-$(echo "$SC" | tr ',' '+')-k$K.log"
 RP=""
 if [ "$K" -gt 0 ]; then
