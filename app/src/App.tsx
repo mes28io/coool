@@ -14,6 +14,7 @@ import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
 import { IAlert, IClose, ISidebar } from "./components/icons";
 import { Sheets } from "./components/Sheets";
+import { Tooltips } from "./components/Tooltips";
 import { Rail } from "./components/Rail";
 import { SettingsPage } from "./components/SettingsPage";
 import { cx } from "./components/primitives";
@@ -266,6 +267,7 @@ export default function App() {
       </div>
       <Palette />
       <Sheets />
+      <Tooltips />
       <Toasts />
     </MotionConfig>
   );
