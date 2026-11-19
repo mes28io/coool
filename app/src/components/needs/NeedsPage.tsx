@@ -126,7 +126,7 @@ export function NeedsPage() {
       <div className="flex min-w-0 flex-1 flex-col @[760px]:flex-row">
         {/* The list */}
         <div className="flex max-h-[42%] shrink-0 flex-col border-b border-hairline @[760px]:max-h-none @[760px]:w-[320px] @[760px]:border-b-0 @[760px]:border-r">
-          <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center px-2">
+          <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center px-2" data-needs-head>
             <button
               type="button"
               onClick={close}
@@ -137,10 +137,11 @@ export function NeedsPage() {
               <IBack size={16} />
               Back to app
             </button>
-          </div>
-          <div className="flex items-baseline gap-2 px-4 pb-2 pt-1">
-            <h2 className="text-title font-semibold tracking-[-0.01em] text-fg">Needs you</h2>
-            {list.length > 0 && <span className="text-small text-dim tnum">{list.length === 1 ? "1 waiting" : `${list.length} waiting`}</span>}
+            {/* The page's name on the same row, at its right end. */}
+            <div className="ml-auto flex min-w-0 items-baseline gap-2 pl-2 pr-2">
+              <h2 className="truncate text-base font-semibold text-fg">Needs you</h2>
+              {list.length > 0 && <span className="shrink-0 text-small text-dim tnum">{list.length}</span>}
+            </div>
           </div>
           <div ref={listRef} role="listbox" aria-label="Waiting on you" tabIndex={list.length ? -1 : 0} className="scroll min-h-0 flex-1 px-2 pb-3 outline-none" data-needs-list>
             <AnimatePresence initial={false}>
