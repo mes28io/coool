@@ -15,6 +15,8 @@ import { Palette } from "./components/Palette";
 import { IAlert, IClose, ISidebar } from "./components/icons";
 import { Sheets } from "./components/Sheets";
 import { Tooltips } from "./components/Tooltips";
+import { Onboarding } from "./components/onboarding/Onboarding";
+import { useOnboarding } from "./lib/onboarding";
 import { Rail } from "./components/Rail";
 import { SettingsPage } from "./components/SettingsPage";
 import { cx } from "./components/primitives";
@@ -206,6 +208,8 @@ export default function App() {
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const setSystemTheme = useStore((s) => s.setSystemTheme);
   const settingsOpen = useStore((s) => s.settings !== null);
+  // The title bar's own controls also step aside under the onboarding (it lets this bar show through above it).
+  const barHidden = useOnboarding((s) => s.open) || settingsOpen;
   useShortcuts();
   useBackendEvents();
   useMarkSeen();
@@ -238,7 +242,7 @@ export default function App() {
         {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}
         <div data-tauri-drag-region className="flex h-[44px] shrink-0 items-center pl-[84px] pr-2">
           {/* The app's own controls step aside (kept mounted) while the Settings page is up. */}
-          <div data-tauri-drag-region className={cx("flex h-full min-w-0 flex-1 items-center", settingsOpen && "invisible")} inert={settingsOpen} aria-hidden={settingsOpen || undefined}>
+          <div data-tauri-drag-region className={cx("flex h-full min-w-0 flex-1 items-center", barHidden && "invisible")} inert={barHidden} aria-hidden={barHidden || undefined}>
             <button
               type="button"
               title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
@@ -268,6 +272,7 @@ export default function App() {
       <Palette />
       <Sheets />
       <Tooltips />
+      <Onboarding />
       <Toasts />
     </MotionConfig>
   );

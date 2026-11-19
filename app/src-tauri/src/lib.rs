@@ -991,6 +991,23 @@ fn prefs_set(core: State<'_, Arc<Core>>, prefs: AppPrefs) -> Res<()> {
     settings::save(core.selftest.as_ref(), &s).map_err(err)
 }
 
+/// Whether the first-run onboarding was already finished or dismissed. A self-test sees it as done unless its
+/// scenarios are the onboarding ones, so it never covers another scenario's window.
+#[tauri::command(async)]
+fn onboarding_seen(core: State<'_, Arc<Core>>) -> bool {
+    if core.selftest.as_ref().is_some_and(|t| !t.wants_onboarding()) {
+        return true;
+    }
+    settings::load(core.selftest.as_ref()).onboarded
+}
+
+#[tauri::command(async)]
+fn onboarding_set_seen(core: State<'_, Arc<Core>>, seen: bool) -> Res<()> {
+    let mut s = settings::load(core.selftest.as_ref());
+    s.onboarded = seen;
+    settings::save(core.selftest.as_ref(), &s).map_err(err)
+}
+
 #[tauri::command]
 fn power_status(core: State<'_, Arc<Core>>) -> power::PowerStatus {
     core.power.lock().unwrap().status()
@@ -1169,6 +1186,9 @@ mod settings {
         /// The app files and folders open in (`apps::KNOWN` id, or "system").
         #[serde(default = "system")]
         pub open_with: String,
+        /// The first-run onboarding was finished or dismissed (APP_SPEC "Onboarding").
+        #[serde(default)]
+        pub onboarded: bool,
     }
 
     fn system() -> String {
@@ -1181,7 +1201,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, notify: Default::default(), open_with: system() }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, notify: Default::default(), open_with: system(), onboarded: false }
         }
     }
 
@@ -1485,6 +1505,8 @@ pub fn run() {
             apps_installed,
             open_path,
             open_system_settings,
+            onboarding_seen,
+            onboarding_set_seen,
             cli_status,
             connections,
             open_config_file,

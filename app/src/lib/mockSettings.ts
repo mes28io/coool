@@ -1,5 +1,7 @@
 // The Settings page's mock (`pnpm dev`): every SettingsBackend call, with state that lasts for the page's life.
-// `?cli=broken` shows Codex installed but failing to start; `?notify=denied` a denied notification permission.
+// `?cli=broken` shows Codex installed but failing to start; `?notify=denied` a denied notification permission
+// (`allowed` / `unavailable` the others); `?login=enabled|approval|not_found|unavailable` the login item's states;
+// `?onboarding=1` shows the first-run onboarding (otherwise the mock counts it as seen, so other demos never see it).
 
 import type { AppPrefs, Connections, InstalledApp, LoginStatus, NotifyPermission, SettingsBackend, StorageStatus, Worktrees } from "./settingsTypes";
 
@@ -110,8 +112,13 @@ function worktrees(project: string): Worktrees {
 export function mockSettings(sim: { shutdown(udid: string): Promise<void> }): SettingsBackend {
   let prefs = loadPrefs();
   const q = typeof location !== "undefined" ? location.search : "";
-  let perm: NotifyPermission = { status: q.includes("notify=denied") ? "denied" : "not_determined" };
-  let login: LoginStatus = { status: "not_registered" };
+  const knob = (k: string) => new RegExp(`[?&]${k}=([\\w-]+)`).exec(q)?.[1] ?? "";
+  const NO_BUNDLE = "This build of coool has no app bundle, so macOS won't show its notifications.";
+  let perm: NotifyPermission =
+    knob("notify") === "denied" ? { status: "denied" } : knob("notify") === "allowed" ? { status: "authorized" } : knob("notify") === "unavailable" ? { status: "unavailable", reason: NO_BUNDLE } : { status: "not_determined" };
+  const loginKnob: Record<string, LoginStatus> = { enabled: { status: "enabled" }, approval: { status: "requires_approval" }, not_found: { status: "not_found" }, unavailable: { status: "unavailable", reason: "Login items are macOS only for now." } };
+  let login: LoginStatus = loginKnob[knob("login")] ?? { status: "not_registered" };
+  let onboarded = knob("onboarding") !== "1";
   const removed = new Set<string>();
   const storage: StorageStatus = {
     items: [
@@ -165,6 +172,13 @@ export function mockSettings(sim: { shutdown(udid: string): Promise<void> }): Se
     },
     async openPath() {},
     async openSystemSettings() {},
+    async onboardingSeen() {
+      await wait(40);
+      return onboarded;
+    },
+    async onboardingSetSeen(seen) {
+      onboarded = seen;
+    },
     async cliStatus() {
       await wait(700);
       const broken = q.includes("cli=broken");

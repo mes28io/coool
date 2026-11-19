@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, isNotAvailable, isTauri } from "../../lib/backend";
 import type { InsightsStatus } from "../../lib/types";
 import { useStore } from "../../store";
+import { openOnboarding } from "../../lib/onboarding";
 import { IAlert, ICheck } from "../icons";
 import { Button, cx } from "../primitives";
 import { UsageBlock, useUsageProviders } from "../Usage";
@@ -155,6 +156,17 @@ export function About() {
         control={
           <Button variant="outline" className="h-[30px] px-2.5 text-small" onClick={() => open("providers")}>
             Providers
+          </Button>
+        }
+      />
+      <Row
+        attr="onboarding"
+        label="Onboarding"
+        desc="The first-run steps: a project folder, notifications, open at login."
+        k="onboarding welcome setup first run intro"
+        control={
+          <Button variant="outline" className="h-[30px] px-2.5 text-small" onClick={openOnboarding} data-onboarding-again>
+            Show onboarding again
           </Button>
         }
       />

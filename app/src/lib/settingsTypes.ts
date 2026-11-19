@@ -156,6 +156,9 @@ export interface SettingsBackend {
   /** Opens a file or folder with the app chosen in General. */
   openPath(path: string): Promise<void>;
   openSystemSettings(pane: "notifications" | "login"): Promise<void>;
+  /** The first-run onboarding was finished or dismissed (kept in settings.json; components/onboarding/). */
+  onboardingSeen(): Promise<boolean>;
+  onboardingSetSeen(seen: boolean): Promise<void>;
   cliStatus(): Promise<CliStatus[]>;
   connections(project: string | null): Promise<Connections>;
   openConfigFile(path: string, project: string | null): Promise<void>;

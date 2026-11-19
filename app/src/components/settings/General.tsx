@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../../lib/backend";
 import { setChatDefault, updateAppPrefs, useAppPrefs, useChatDefaults, useInstalledApps, useSeenModels } from "../../lib/prefs";
-import type { LoginStatus, NotifyPermission, PowerStatus } from "../../lib/settingsTypes";
+import type { PowerStatus } from "../../lib/settingsTypes";
+import { loginText, notifyText, useLoginItem, useNotifyPermission } from "../../lib/systemPerms";
 import type { Provider } from "../../lib/types";
 import { useStore } from "../../store";
 import { PERMISSION_MODES } from "../ChatComposer";
@@ -86,13 +87,7 @@ export function General() {
   const hiddenAutomation = useStore((s) => s.hiddenAutomation);
   const [err, setErr] = useState<string | null>(null);
   const power = usePower(!!prefs?.prevent_sleep);
-  const [login, setLogin] = useState<LoginStatus | null>(null);
-  useEffect(() => {
-    api()
-      .loginStatus()
-      .then(setLogin)
-      .catch(() => setLogin({ status: "unavailable", reason: "Not in this build of coool." }));
-  }, []);
+  const { login, on: loginOn, blocked: loginBlocked, set: setLoginItem, err: loginErr } = useLoginItem();
   const save = (patch: Parameters<typeof updateAppPrefs>[0]) => {
     setErr(null);
     void updateAppPrefs(patch).catch((e) => setErr(errText(e)));
@@ -106,7 +101,6 @@ export function General() {
       : power?.held
         ? `Keeping this Mac awake now: ${power.working === 1 ? "1 agent is" : `${power.working} agents are`} working.`
         : "Not holding anything now: no agent is working.";
-  const loginOn = login?.status === "enabled" || login?.status === "requires_approval";
 
   return (
     <>
@@ -153,15 +147,7 @@ export function General() {
         <Row
           attr="login"
           label="Open coool at login"
-          desc={
-            login?.status === "requires_approval"
-              ? "macOS is waiting for you to allow it in System Settings > General > Login Items."
-              : login?.status === "unavailable"
-                ? (login.reason ?? "Not available in this build.")
-                : login?.status === "not_found"
-                  ? "macOS doesn't know this build as an app (a development build has no app bundle), so it can't open it at login."
-                : "Starts coool when you log in to this Mac. Listed in System Settings > General > Login Items."
-          }
+          desc={loginText(login)}
           k="startup launch login items"
           control={
             <>
@@ -173,13 +159,10 @@ export function General() {
               <Switch
                 label="Open coool at login"
                 on={loginOn}
-                disabled={!login || login.status === "unavailable" || login.status === "not_found"}
+                disabled={loginBlocked}
                 onChange={(v) => {
                   setErr(null);
-                  void api()
-                    .loginSet(v)
-                    .then(setLogin)
-                    .catch((e) => setErr(errText(e)));
+                  void setLoginItem(v);
                 }}
               />
             </>
@@ -204,7 +187,7 @@ export function General() {
       </Group>
       {unavailable && <p className="px-1 pt-3 text-small text-faint">This build of coool can’t save these options yet.</p>}
       <div className="px-1 pt-2">
-        <ErrorLine>{err}</ErrorLine>
+        <ErrorLine>{err ?? loginErr}</ErrorLine>
       </div>
     </>
   );
@@ -212,42 +195,16 @@ export function General() {
 
 // ---------- Notifications ----------
 
-const PERM_TEXT: Record<NotifyPermission["status"], string> = {
-  authorized: "Allowed. macOS shows coool’s notifications.",
-  provisional: "Delivered quietly to Notification Center.",
-  denied: "Turned off for coool in System Settings.",
-  not_determined: "macOS hasn’t asked yet. Allow once and coool can notify you.",
-  unavailable: "Not available.",
-};
-
 export function Notifications() {
   const [prefs] = useAppPrefs();
-  const [perm, setPerm] = useState<NotifyPermission | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Read again when the window regains focus (coming back from System Settings).
+  const { perm, busy, err: askErr, ask: askPerm, allowed } = useNotifyPermission();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => {
-    const read = () =>
-      api()
-        .notifyPermission()
-        .then(setPerm)
-        .catch(() => setPerm({ status: "unavailable", reason: "Not in this build of coool." }));
-    read();
-    // Coming back from System Settings: read it again.
-    window.addEventListener("focus", read);
-    return () => window.removeEventListener("focus", read);
-  }, []);
   const n = prefs?.notify;
   const set = (patch: Partial<NonNullable<typeof n>>) => n && void updateAppPrefs({ notify: { ...n, ...patch } }).catch((e) => setMsg({ ok: false, text: errText(e) }));
-  const allowed = perm?.status === "authorized" || perm?.status === "provisional";
-  const ask = async () => {
-    setBusy(true);
+  const ask = () => {
     setMsg(null);
-    try {
-      setPerm(await api().notifyRequest());
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e) });
-    }
-    setBusy(false);
+    return askPerm();
   };
   const test = async () => {
     setMsg(null);
@@ -269,7 +226,7 @@ export function Notifications() {
           desc={
             <span className="flex items-center gap-1.5" data-notify-permission={perm?.status ?? ""}>
               {allowed ? <ICheck size={13} className="shrink-0 text-accent-text" /> : perm?.status === "denied" ? <IAlert size={13} className="shrink-0 text-busy-text" /> : null}
-              {perm ? (perm.status === "unavailable" ? (perm.reason ?? PERM_TEXT.unavailable) : PERM_TEXT[perm.status]) : "…"}
+              {perm ? notifyText(perm) : "…"}
             </span>
           }
           control={
@@ -289,6 +246,7 @@ export function Notifications() {
           }
         >
           {msg && <div className={msg.ok ? "text-small text-dim" : "text-small text-err-text"}>{msg.text}</div>}
+          {!msg && askErr && <div className="text-small text-err-text">{askErr}</div>}
         </Row>
       </Group>
       <Group label="Notify me when an agent">

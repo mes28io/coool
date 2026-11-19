@@ -519,6 +519,8 @@ async function tauriBackend(): Promise<Backend> {
     appsInstalled: () => soft("apps_installed"),
     openPath: (path) => soft("open_path", { path }),
     openSystemSettings: (pane) => soft("open_system_settings", { pane }),
+    onboardingSeen: () => soft("onboarding_seen"),
+    onboardingSetSeen: (seen) => soft("onboarding_set_seen", { seen }),
     cliStatus: () => soft("cli_status"),
     connections: (project) => soft("connections", { project }),
     openConfigFile: (path, project) => soft("open_config_file", { path, project }),
