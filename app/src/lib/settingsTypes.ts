@@ -7,6 +7,19 @@ export interface NotifyPrefs {
   failed: boolean;
   sound: boolean;
   only_unfocused: boolean;
+  /** Different sound per kind (off: the system's notification sound). */
+  custom_sounds: boolean;
+  /** "none" | "coool:<name>" | "system:<name>" */
+  sound_needs: string;
+  sound_finished: string;
+  sound_failed: string;
+}
+
+/** The sounds the pickers offer (notify_sounds). `bundled`: system notifications are possible in this build. */
+export interface NotifySounds {
+  coool: string[];
+  system: string[];
+  bundled: boolean;
 }
 
 /** The General and Notifications options the backend applies (settings.json). */
@@ -28,7 +41,7 @@ export interface PowerStatus {
 }
 
 export interface NotifyPermission {
-  status: "authorized" | "denied" | "not_determined" | "provisional" | "unavailable";
+  status: "authorized" | "denied" | "not_determined" | "provisional" | "asking" | "unavailable";
   reason?: string | null;
 }
 
@@ -150,6 +163,9 @@ export interface SettingsBackend {
   /** The system's one-time prompt; afterwards only System Settings changes it. */
   notifyRequest(): Promise<NotifyPermission>;
   notifyTest(): Promise<void>;
+  notifySounds(): Promise<NotifySounds>;
+  /** Plays a sound id in the app ("coool:rise", "system:Glass"); returns what it did. */
+  notifySoundPreview(id: string): Promise<string>;
   loginStatus(): Promise<LoginStatus>;
   loginSet(enabled: boolean): Promise<LoginStatus>;
   appsInstalled(): Promise<InstalledApp[]>;

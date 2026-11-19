@@ -338,6 +338,11 @@ fn chrono_like_now() -> String {
     format!("{}.{:03}", ms / 1000, ms % 1000)
 }
 
+/// No screen captures: `COOOL_SELFTEST_NOSHOTS=1`, or any run inside an app bundle.
+fn no_shots() -> bool {
+    std::env::var("COOOL_SELFTEST_NOSHOTS").is_ok_and(|v| v == "1") || crate::notify::bundled()
+}
+
 fn active(core: &Core) -> Result<&SelfTest, String> {
     core.selftest.as_ref().ok_or_else(|| "self-test mode is off".to_string())
 }
@@ -457,6 +462,11 @@ fn web_pids(_wk: *mut std::ffi::c_void) -> (Option<i32>, Option<i32>) {
 #[tauri::command(async)]
 pub fn selftest_shot(app: AppHandle, core: State<'_, Arc<Core>>, name: String, window: Option<String>) -> Result<String, String> {
     let t = active(&core)?;
+    // A bundled build (the `coool selftest` app) never captures the screen: each new ad-hoc signature would make
+    // macOS ask the person for Screen Recording again. `COOOL_SELFTEST_NOSHOTS=1` turns shots off for any run.
+    if no_shots() {
+        return Err("screenshots are off in this run".into());
+    }
     let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' }).collect();
     // The main window, one of the in-app browser's pop-ups, or an artifact preview window.
     let label = window.filter(|l| l.starts_with(crate::browser::POPUP_PREFIX) || l.starts_with(crate::artifact::PREVIEW_PREFIX)).unwrap_or_else(|| "main".into());

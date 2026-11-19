@@ -14,6 +14,7 @@ export const NOTIFY_TEXT: Record<NotifyPermission["status"], string> = {
   provisional: "Delivered quietly to Notification Center.",
   denied: "Turned off for coool in System Settings.",
   not_determined: "macOS hasn’t asked yet. Allow once and coool can notify you.",
+  asking: "macOS is asking: choose Allow in its notification at the top right of the screen (or in Notification Center).",
   unavailable: "Not available.",
 };
 
@@ -39,12 +40,27 @@ export function useNotifyPermission() {
       window.removeEventListener("focus", read);
     };
   }, []);
+  // While macOS's prompt waits for the person, follow it (it can be answered from Notification Center at any time).
+  const asking = perm?.status === "asking";
+  useEffect(() => {
+    if (!asking) return;
+    const t = setInterval(() => {
+      api()
+        .notifyPermission()
+        .then(setPerm)
+        .catch(() => {});
+    }, 2000);
+    return () => clearInterval(t);
+  }, [asking]);
   /** The system's one-time prompt (only while macOS hasn't asked). */
   const ask = useCallback(async () => {
     setBusy(true);
     setErr(null);
     try {
-      setPerm(await api().notifyRequest());
+      const p = await api().notifyRequest();
+      setPerm(p);
+      // macOS refused to show its prompt: say why (the status stays the real one, and the button stays).
+      if (p.reason && p.status !== "unavailable") setErr(`macOS didn’t ask: ${p.reason}.`);
     } catch (e) {
       setErr(errText(e));
     }

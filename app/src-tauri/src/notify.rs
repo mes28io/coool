@@ -44,15 +44,98 @@ pub struct Prefs {
     pub sound: bool,
     #[serde(default = "yes")]
     pub only_unfocused: bool,
+    /// "Different sound per kind" (off by default: the system's notification sound, as before).
+    #[serde(default)]
+    pub custom_sounds: bool,
+    /// The sound for each kind when `custom_sounds` is on: "none", "coool:<name>" (see [`COOOL_SOUNDS`]) or
+    /// "system:<name>" (an alert sound in /System/Library/Sounds).
+    #[serde(default = "sound_needs")]
+    pub sound_needs: String,
+    #[serde(default = "sound_finished")]
+    pub sound_finished: String,
+    #[serde(default = "sound_failed")]
+    pub sound_failed: String,
 }
 
 fn yes() -> bool {
     true
 }
+fn sound_needs() -> String {
+    "coool:rise".into()
+}
+fn sound_finished() -> String {
+    "coool:tap".into()
+}
+fn sound_failed() -> String {
+    "coool:knock".into()
+}
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { needs_you: true, finished: false, failed: true, sound: true, only_unfocused: true }
+        Prefs { needs_you: true, finished: false, failed: true, sound: true, only_unfocused: true, custom_sounds: false, sound_needs: sound_needs(), sound_finished: sound_finished(), sound_failed: sound_failed() }
+    }
+}
+
+/// coool's own sounds (app/scripts/sounds/make-sounds.py, shipped as `coool-<name>.wav` in the app's Resources).
+pub const COOOL_SOUNDS: [&str; 7] = ["rise", "tap", "glass", "knock", "marimba", "chirp", "ticks"];
+
+/// What a notification sounds like.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Sound {
+    Off,
+    /// The system's notification sound (the setting's "different sounds" switch is off).
+    Default,
+    Coool(&'static str),
+    System(String),
+}
+
+/// A sound id from the settings; anything unknown is the system default.
+pub fn parse_sound(id: &str) -> Sound {
+    if id == "none" {
+        return Sound::Off;
+    }
+    if let Some(n) = id.strip_prefix("coool:") {
+        return COOOL_SOUNDS.iter().find(|s| **s == n).map(|s| Sound::Coool(s)).unwrap_or(Sound::Default);
+    }
+    if let Some(n) = id.strip_prefix("system:")
+        && !n.is_empty()
+        && n.chars().all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_')
+    {
+        return Sound::System(n.to_string());
+    }
+    Sound::Default
+}
+
+/// The sound a notification of `kind` gets with these settings.
+pub fn sound_for(kind: Kind, p: &Prefs) -> Sound {
+    if !p.sound {
+        return Sound::Off;
+    }
+    if !p.custom_sounds {
+        return Sound::Default;
+    }
+    parse_sound(match kind {
+        Kind::NeedsYou => &p.sound_needs,
+        Kind::Finished => &p.sound_finished,
+        Kind::Failed => &p.sound_failed,
+    })
+}
+
+/// Sounds closer together than this are one: several agents finishing at once make one sound.
+pub const BURST: Duration = Duration::from_millis(1500);
+
+/// The burst limit: at most one sound per [`BURST`].
+#[derive(Default)]
+pub struct Burst(Mutex<Option<Instant>>);
+
+impl Burst {
+    pub fn allow(&self, now: Instant) -> bool {
+        let mut last = self.0.lock().unwrap();
+        if last.is_some_and(|t| now.saturating_duration_since(t) < BURST) {
+            return false;
+        }
+        *last = Some(now);
+        true
     }
 }
 
@@ -95,11 +178,51 @@ pub struct Notifier {
     pub prefs: Mutex<Prefs>,
     focused: std::sync::atomic::AtomicBool,
     stopped: Mutex<HashMap<usize, Instant>>,
+    burst: Burst,
+    /// A self-test run makes no sound (unless `COOOL_SELFTEST_SOUNDS=1`): plays are logged instead.
+    muted: std::sync::atomic::AtomicBool,
 }
 
 impl Notifier {
     pub fn new(prefs: Prefs) -> Self {
-        Notifier { prefs: Mutex::new(prefs), focused: std::sync::atomic::AtomicBool::new(false), stopped: Mutex::default() }
+        Notifier { prefs: Mutex::new(prefs), ..Default::default() }
+    }
+
+    pub fn set_muted(&self, m: bool) {
+        self.muted.store(m, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The sound for a cue of `kind` now: none when its sound is off, during a muted self-test, or within a burst.
+    fn sound_now(&self, kind: Kind) -> Sound {
+        let s = sound_for(kind, &self.prefs.lock().unwrap());
+        if s == Sound::Off {
+            return s;
+        }
+        if !self.burst.allow(Instant::now()) {
+            log(&format!("sound {s:?}: skipped (burst)"));
+            return Sound::Off;
+        }
+        if self.muted() {
+            log(&format!("sound {s:?}: muted (self-test)"));
+            return Sound::Off;
+        }
+        s
+    }
+
+    /// While coool is in front and "only when coool isn't in front" keeps the banner back: the kind whose sound
+    /// plays in the app instead (only with the per-kind sounds on, so the switch decides as it does for banners).
+    fn in_front_cue(&self, id: usize, ev: &ChatEventKind) -> Option<Kind> {
+        let (kind, _) = kind_of(ev)?;
+        if kind == Kind::Failed && self.stopped.lock().unwrap().get(&id).is_some_and(|t| t.elapsed() < STOP_GRACE) {
+            return None;
+        }
+        let p = self.prefs.lock().unwrap();
+        let focused = self.focused.load(std::sync::atomic::Ordering::Relaxed);
+        (should(kind, &p, false) && p.only_unfocused && focused && p.custom_sounds).then_some(kind)
     }
 
     pub fn set_focused(&self, f: bool) {
@@ -135,13 +258,20 @@ impl Notifier {
     /// (`claude:<id>`) once the app knows it.
     pub fn on_event(&self, id: usize, title: &str, session: Option<&str>, ev: &ChatEventKind) {
         if let Some((kind, t, b)) = self.decide(id, title, ev) {
-            let sound = self.prefs.lock().unwrap().sound;
+            let sound = self.sound_now(kind);
             let target = Target::of(kind, id, session, ev);
             std::thread::spawn(move || {
-                if let Err(e) = post(&t, &b, sound, &target) {
+                if let Err(e) = post(&t, &b, &sound, &target) {
                     log(&format!("post failed: {e}"));
                 }
             });
+        } else if let Some(kind) = self.in_front_cue(id, ev) {
+            // No banner while the person looks at coool: the same sound, in the app.
+            let s = self.sound_now(kind);
+            if s != Sound::Off && s != Sound::Default {
+                log(&format!("play in front {s:?}"));
+                play(&s);
+            }
         }
     }
 }
@@ -276,20 +406,30 @@ fn bring_forward(app: &tauri::AppHandle) {
 }
 
 
+/// A permission request is waiting for the person (its completion handler hasn't run yet).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+static ASKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The status to show. While macOS's prompt is up (an alert at the top right, then in Notification Center until the
+/// person picks), macOS already reports the app as denied (seen on macOS 27): that is "asking", not a refusal.
+pub fn shown_status(system: &'static str, asking: bool) -> &'static str {
+    if asking && (system == "denied" || system == "not_determined") { "asking" } else { system }
+}
+
 /// Where the system's notification permission stands for coool.
 #[derive(Clone, Debug, Serialize)]
 pub struct Permission {
-    /// "authorized" | "denied" | "not_determined" | "provisional" | "unavailable"
+    /// "authorized" | "denied" | "not_determined" | "provisional" | "asking" (macOS shows its prompt) | "unavailable"
     pub status: String,
     /// Why when unavailable or the request failed.
     pub reason: Option<String>,
 }
 
-pub use sys::{Delivered, delivered, install_delegate, permission, post, remove_all, request, simulate_click};
+pub use sys::{Delivered, bundled, delivered, install_delegate, permission, play, post, remove_all, request, simulate_click, system_sounds};
 
 #[cfg(target_os = "macos")]
 mod sys {
-    use super::{INFO_KEY, Permission, Target, clicked, log};
+    use super::{INFO_KEY, Permission, Sound, Target, clicked, log};
     use block2::{DynBlock, RcBlock};
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject};
@@ -394,12 +534,15 @@ mod sys {
         c.getNotificationSettingsWithCompletionHandler(&block);
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(s) => Permission {
-                status: match s {
-                    UNAuthorizationStatus::Authorized | UNAuthorizationStatus::Ephemeral => "authorized",
-                    UNAuthorizationStatus::Denied => "denied",
-                    UNAuthorizationStatus::Provisional => "provisional",
-                    _ => "not_determined",
-                }
+                status: super::shown_status(
+                    match s {
+                        UNAuthorizationStatus::Authorized | UNAuthorizationStatus::Ephemeral => "authorized",
+                        UNAuthorizationStatus::Denied => "denied",
+                        UNAuthorizationStatus::Provisional => "provisional",
+                        _ => "not_determined",
+                    },
+                    super::ASKING.load(std::sync::atomic::Ordering::Relaxed),
+                )
                 .into(),
                 reason: None,
             },
@@ -416,26 +559,100 @@ mod sys {
         };
         let (tx, rx) = mpsc::channel();
         let block = RcBlock::new(move |ok: Bool, e: *mut NSError| {
+            super::ASKING.store(false, std::sync::atomic::Ordering::Relaxed);
             let _ = tx.send((ok.as_bool(), err_text(e)));
         });
+        super::ASKING.store(true, std::sync::atomic::Ordering::Relaxed);
         log("asking for permission");
         c.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound, &block);
         let r = rx.recv_timeout(Duration::from_secs(120));
         log(&format!("permission answer: {r:?}"));
         match r {
-            Ok((_, Some(e))) => Permission { status: "unavailable".into(), reason: Some(e) },
+            // macOS refused to ask (e.g. "Notifications are not allowed for this application" for an app it can't
+            // validate, like one run from a temporary folder): the status is still the real one, with the reason.
+            Ok((_, Some(e))) => Permission { reason: Some(e), ..permission() },
             _ => permission(),
         }
     }
 
-    pub fn post(title: &str, body: &str, sound: bool, target: &Target) -> Result<(), String> {
+    /// Running from an app bundle (only then does macOS deliver its notifications).
+    pub fn bundled() -> bool {
+        NSBundle::mainBundle().bundleIdentifier().is_some()
+    }
+
+    /// Where coool's own sound `name` is: the app's Resources, or (a build without a bundle) the source tree.
+    pub fn sound_file(name: &str) -> Option<std::path::PathBuf> {
+        let file = format!("coool-{name}.wav");
+        let in_bundle = NSBundle::mainBundle().resourcePath().map(|r| std::path::PathBuf::from(r.to_string()).join(&file));
+        let in_tree = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sounds").join(&file);
+        in_bundle.filter(|p| p.is_file()).or_else(|| in_tree.is_file().then_some(in_tree))
+    }
+
+    thread_local! {
+        /// The last few sounds playing (an NSSound stops when released).
+        static PLAYING: std::cell::RefCell<Vec<Retained<AnyObject>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn play_now(s: &Sound) {
+        let Some(cls) = AnyClass::get(c"NSSound") else { return };
+        let snd: Option<Retained<AnyObject>> = match s {
+            Sound::Coool(n) => sound_file(n).and_then(|p| {
+                let path = NSString::from_str(&p.to_string_lossy());
+                let a: objc2::rc::Allocated<AnyObject> = unsafe { msg_send![cls, alloc] };
+                let r: Option<Retained<AnyObject>> = unsafe { msg_send![a, initWithContentsOfFile: &*path, byReference: Bool::YES] };
+                r
+            }),
+            Sound::System(n) => unsafe { msg_send![cls, soundNamed: &*NSString::from_str(n)] },
+            _ => None,
+        };
+        let Some(snd) = snd else {
+            log(&format!("play {s:?}: no such sound"));
+            return;
+        };
+        let ok: Bool = unsafe { msg_send![&*snd, play] };
+        log(&format!("played {s:?}: {}", ok.as_bool()));
+        PLAYING.with(|p| {
+            let mut p = p.borrow_mut();
+            p.push(snd);
+            if p.len() > 4 {
+                p.remove(0);
+            }
+        });
+    }
+
+    /// Plays a sound in the app (AppKit's NSSound, on the main thread).
+    pub fn play(s: &Sound) {
+        let s = s.clone();
+        match super::APP.get() {
+            Some(app) => {
+                let _ = app.run_on_main_thread(move || play_now(&s));
+            }
+            None => play_now(&s),
+        }
+    }
+
+    /// The alert sounds macOS ships (/System/Library/Sounds), by name.
+    pub fn system_sounds() -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir("/System/Library/Sounds")
+            .map(|d| d.filter_map(|e| e.ok()).filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned())).collect())
+            .unwrap_or_default();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    pub fn post(title: &str, body: &str, sound: &Sound, target: &Target) -> Result<(), String> {
         let c = center()?;
         let content = UNMutableNotificationContent::new();
         content.setTitle(&NSString::from_str(title));
         content.setBody(&NSString::from_str(body));
         content.setThreadIdentifier(&NSString::from_str("coool.agents"));
-        if sound {
-            content.setSound(Some(&UNNotificationSound::defaultSound()));
+        match sound {
+            Sound::Off => {}
+            Sound::Default => content.setSound(Some(&UNNotificationSound::defaultSound())),
+            // A named sound: a file in the app's Resources (coool's own), or the system's alert sound by name.
+            Sound::Coool(n) => content.setSound(Some(&UNNotificationSound::soundNamed(&NSString::from_str(&format!("coool-{n}.wav"))))),
+            Sound::System(n) => content.setSound(Some(&UNNotificationSound::soundNamed(&NSString::from_str(&format!("{n}.aiff"))))),
         }
         let json = serde_json::to_string(target).map_err(|e| e.to_string())?;
         let info = NSDictionary::<NSString, NSString>::from_slices(&[&*NSString::from_str(INFO_KEY)], &[&*NSString::from_str(&json)]);
@@ -520,7 +737,7 @@ mod sys {
 
 #[cfg(not(target_os = "macos"))]
 mod sys {
-    use super::{Permission, Target, clicked};
+    use super::{Permission, Sound, Target, clicked};
     #[derive(serde::Serialize)]
     pub struct Delivered {
         pub id: String,
@@ -534,7 +751,17 @@ mod sys {
     pub fn request() -> Permission {
         permission()
     }
-    pub fn post(_t: &str, _b: &str, _s: bool, _target: &Target) -> Result<(), String> {
+    pub fn bundled() -> bool {
+        false
+    }
+    pub fn sound_file(_name: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+    pub fn play(_s: &Sound) {}
+    pub fn system_sounds() -> Vec<String> {
+        Vec::new()
+    }
+    pub fn post(_t: &str, _b: &str, _s: &Sound, _target: &Target) -> Result<(), String> {
         Err("Notifications are macOS only for now.".into())
     }
     pub fn delivered() -> Result<Vec<Delivered>, String> {
@@ -620,6 +847,65 @@ mod tests {
         assert_eq!(route_of(None, "default", me).kind, "app");
         assert_eq!(route_of(Some("{not json"), "default", me).kind, "app");
         assert_eq!(route_of(Some(&serde_json::to_string(&Target::test()).unwrap()), "default", me).kind, "test");
+    }
+
+    #[test]
+    fn sounds_per_kind() {
+        // Settings files from before: the system sound, as before (the per-kind switch is off).
+        let old: Prefs = serde_json::from_str(r#"{"needs_you":true,"finished":false,"failed":true,"sound":true,"only_unfocused":true}"#).unwrap();
+        assert!(!old.custom_sounds);
+        assert_eq!(sound_for(Kind::NeedsYou, &old), Sound::Default);
+        assert_eq!(sound_for(Kind::NeedsYou, &Prefs { sound: false, ..old.clone() }), Sound::Off);
+        let on = Prefs { custom_sounds: true, ..old.clone() };
+        assert_eq!(sound_for(Kind::NeedsYou, &on), Sound::Coool("rise"));
+        assert_eq!(sound_for(Kind::Finished, &on), Sound::Coool("tap"));
+        assert_eq!(sound_for(Kind::Failed, &on), Sound::Coool("knock"));
+        assert_eq!(sound_for(Kind::Finished, &Prefs { sound_finished: "system:Glass".into(), ..on.clone() }), Sound::System("Glass".into()));
+        assert_eq!(sound_for(Kind::Finished, &Prefs { sound_finished: "none".into(), ..on.clone() }), Sound::Off);
+        // The master switch still wins.
+        assert_eq!(sound_for(Kind::NeedsYou, &Prefs { sound: false, ..on }), Sound::Off);
+        // Unknown or unsafe ids: the system default.
+        assert_eq!(parse_sound("coool:nope"), Sound::Default);
+        assert_eq!(parse_sound("system:../../etc/x"), Sound::Default);
+        assert_eq!(parse_sound("garbage"), Sound::Default);
+    }
+
+    #[test]
+    fn a_burst_makes_one_sound() {
+        let b = Burst::default();
+        let t = Instant::now();
+        assert!(b.allow(t));
+        assert!(!b.allow(t + Duration::from_millis(200)), "a second agent finishing together");
+        assert!(!b.allow(t + Duration::from_millis(1400)));
+        assert!(b.allow(t + Duration::from_millis(1600)), "a later one sounds again");
+    }
+
+    #[test]
+    fn in_front_the_sound_plays_in_the_app_only_with_per_kind_sounds() {
+        let ev = ChatEventKind::TurnEnd { duration_ms: 1, ok: true };
+        let n = Notifier::new(Prefs { finished: true, ..Prefs::default() });
+        n.set_focused(true);
+        assert_eq!(n.decide(1, "a", &ev), None, "no banner while in front");
+        assert_eq!(n.in_front_cue(1, &ev), None, "the system sound is the switch's off state: nothing in the app");
+        *n.prefs.lock().unwrap() = Prefs { finished: true, custom_sounds: true, ..Prefs::default() };
+        assert_eq!(n.in_front_cue(1, &ev), Some(Kind::Finished));
+        *n.prefs.lock().unwrap() = Prefs { finished: false, custom_sounds: true, ..Prefs::default() };
+        assert_eq!(n.in_front_cue(1, &ev), None, "never for a kind that is off");
+        n.set_focused(false);
+        *n.prefs.lock().unwrap() = Prefs { finished: true, custom_sounds: true, ..Prefs::default() };
+        assert_eq!(n.in_front_cue(1, &ev), None, "not in front: the notification carries it");
+        assert!(n.decide(1, "a", &ev).is_some());
+        // A muted self-test: no sound at all.
+        n.set_muted(true);
+        assert_eq!(n.sound_now(Kind::Finished), Sound::Off);
+    }
+
+    #[test]
+    fn a_prompt_on_screen_is_asking_not_denied() {
+        assert_eq!(shown_status("denied", true), "asking");
+        assert_eq!(shown_status("not_determined", true), "asking");
+        assert_eq!(shown_status("authorized", true), "authorized");
+        assert_eq!(shown_status("denied", false), "denied");
     }
 
     #[test]

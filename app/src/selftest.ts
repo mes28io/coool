@@ -5301,14 +5301,14 @@ const notifyScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         const t0 = Date.now();
         while (Date.now() - t0 < 600_000) {
           const p = (await notifyState()).permission.status;
-          if (p !== "not_determined") {
+          if (p !== "not_determined" && p !== "asking") {
             perm = p;
             seen.push(`changed to ${p} after ${Math.round((Date.now() - t0) / 1000)} s`);
             break;
           }
           await sleep(3_000);
         }
-        if (perm === "not_determined") seen.push("no answer in 10 min");
+        if (perm === "not_determined" || perm === "asking") seen.push(`no answer in 10 min (still ${perm})`);
         await log(`PROMPT-RESULT ${perm}`);
         return seen.join("; ");
       });
@@ -5322,6 +5322,21 @@ const notifyScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (want && !button(want)) throw new Fail(`no "${want}" for ${perm}`);
       return `${perm}: "${textOf(settingRow("notify-permission")).slice(0, 160)}", button ${want}`;
     });
+    if (perm === "denied") {
+      // Only the person can change it now (System Settings > Notifications > coool selftest): wait up to 10 min.
+      await step("notify-bundle: denied: wait up to 10 min for the person to allow it in System Settings", async () => {
+        await log(`WAITING-FOR-SETTINGS ${new Date().toISOString()}`);
+        const t0 = Date.now();
+        while (Date.now() - t0 < 600_000 && perm === "denied") {
+          await sleep(3_000);
+          perm = (await notifyState()).permission.status;
+        }
+        window.dispatchEvent(new Event("focus"));
+        await sleep(1_500);
+        await log(`SETTINGS-RESULT ${perm}`);
+        return `${perm} after ${Math.round((Date.now() - t0) / 1000)} s; row "${textOf(settingRow("notify-permission")).slice(0, 120)}"`;
+      });
+    }
     if (perm !== "authorized" && perm !== "provisional") return;
     let chatId = -1;
     await step("notify-bundle: Send a test, a needs-you and a finished notification are delivered with their targets", async () => {
@@ -5379,6 +5394,79 @@ const notifyScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const left = deliveredOf(await notifyState());
       if (left.length) throw new Fail(`still delivered: ${left.length}`);
       return "none delivered";
+    });
+  },
+
+  /** What the bundled test app does when macOS launches it by itself (a notification click, the login item): the
+   * bundle's own environment (LSEnvironment) names this scenario, so such a launch stays in its throwaway folder and
+   * records what launched it. */
+  async "notify-launch"() {
+    await step("notify-launch: launched by macOS; what the delegate got and where the page went", async () => {
+      await sleep(15_000);
+      const s = await notifyState();
+      return `permission ${s.permission.status}; log ${s.log.join(" | ").slice(0, 600)}; tab ${JSON.stringify(tabTargets())}; needs page ${useStore.getState().needsPage}`;
+    });
+  },
+
+  /** Settings > Notifications sounds (no model): the switch, the pickers' lists, a choice that persists (checked again
+   * by `notify-sounds-restart` on a second launch), and the preview's play call (logged: a self-test plays nothing). */
+  async "notify-sounds"() {
+    const st = () => useStore.getState();
+    const open = async () => {
+      st().openSettings("notifications");
+      await waitFor("the settings page", () => $("[data-settings-page]"), 5_000);
+      await sleep(600);
+    };
+    await step("notify-sounds: the switch shows a picker per kind, listing None, coool's sounds and the system's", async () => {
+      await open();
+      const sw = switchIn(settingRow("notify-custom-sounds"));
+      if (!sw) throw new Fail("no per-kind switch");
+      if (sw.getAttribute("aria-checked") !== "false") throw new Fail("on by default");
+      sw.click();
+      const row = await waitFor("the Needs you picker", () => settingRow("notify-sound-needs"), 5_000);
+      for (const a of ["notify-sound-finished", "notify-sound-failed"]) if (!settingRow(a)) throw new Fail(`no ${a}`);
+      (row.querySelector("[aria-haspopup=listbox]") as HTMLElement).click();
+      const list = await waitFor("its list", () => $("[role=listbox][aria-label='Needs you sound']"), 3_000);
+      const names = [...list.querySelectorAll("[role=option]")].map((o) => textOf(o.querySelector("span span")));
+      press("Escape");
+      await sleep(200);
+      const sys = names.filter((n) => n.startsWith("System: "));
+      if (names[0] !== "None" || !names.some((n) => n.startsWith("Rise")) || !names.some((n) => n.startsWith("Tap")) || sys.length < 5) throw new Fail(`list: ${names.join(", ")}`);
+      return `${names.length} choices: ${names.slice(0, 9).join(", ")} … ${sys.length} system sounds; row "${textOf(row).slice(0, 120)}"`;
+    });
+    await step("notify-sounds: choosing System: Glass for Finished saves it with the backend prefs", async () => {
+      const row = settingRow("notify-sound-finished")!;
+      (row.querySelector("[aria-haspopup=listbox]") as HTMLElement).click();
+      const list = await waitFor("its list", () => $("[role=listbox][aria-label='Finished sound']"), 3_000);
+      const glass = [...list.querySelectorAll("[role=option]")].find((o) => textOf(o).startsWith("System: Glass")) as HTMLElement | undefined;
+      if (!glass) throw new Fail("no System: Glass");
+      glass.click();
+      let p = await api().prefsGet();
+      for (let i = 0; i < 20 && p.notify.sound_finished !== "system:Glass"; i++) {
+        await sleep(200);
+        p = await api().prefsGet();
+      }
+      if (p.notify.sound_finished !== "system:Glass" || !p.notify.custom_sounds) throw new Fail(JSON.stringify(p.notify));
+      return JSON.stringify(p.notify);
+    });
+    await step("notify-sounds: the preview button calls play (logged, muted in a self-test)", async () => {
+      ($('[data-sound-preview="notify-sound-needs"]') as HTMLElement).click();
+      ($('[data-sound-preview="notify-sound-finished"]') as HTMLElement).click();
+      await sleep(800);
+      const log = (await notifyState()).log.filter((l) => l.startsWith("preview"));
+      if (!log.some((l) => l.startsWith("preview coool:rise")) || !log.some((l) => l.startsWith("preview system:Glass"))) throw new Fail(log.join(" | ") || "no play call");
+      const sounds = (await api().notifySounds()) as { bundled: boolean };
+      return `${log.join(" | ")}; bundled ${sounds.bundled}; row "${textOf(settingRow("notify-sound-needs")).slice(0, 140)}"`;
+    });
+  },
+
+  async "notify-sounds-restart"() {
+    await step("notify-sounds-restart: the choice survived a restart", async () => {
+      const p = await api().prefsGet();
+      useStore.getState().openSettings("notifications");
+      const row = await waitFor("the Finished picker", () => settingRow("notify-sound-finished"), 5_000);
+      if (p.notify.sound_finished !== "system:Glass" || !textOf(row).includes("System: Glass")) throw new Fail(`${JSON.stringify(p.notify)}; row "${textOf(row)}"`);
+      return `row "${textOf(row).slice(0, 100)}"`;
     });
   },
 

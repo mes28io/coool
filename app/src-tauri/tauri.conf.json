@@ -33,6 +33,15 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "sounds/coool-rise.wav": "coool-rise.wav",
+      "sounds/coool-tap.wav": "coool-tap.wav",
+      "sounds/coool-glass.wav": "coool-glass.wav",
+      "sounds/coool-knock.wav": "coool-knock.wav",
+      "sounds/coool-marimba.wav": "coool-marimba.wav",
+      "sounds/coool-chirp.wav": "coool-chirp.wav",
+      "sounds/coool-ticks.wav": "coool-ticks.wav"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
