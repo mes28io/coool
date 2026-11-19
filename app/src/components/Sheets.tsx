@@ -3,6 +3,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { newChat } from "../lib/actions";
 import { api } from "../lib/backend";
 import { folderName, homeShort, projectOf } from "../lib/format";
+import { modelLabel } from "../lib/models";
+import { getChatDefaults, getDefaultCli } from "../lib/prefs";
+import { modeWords, startProvider } from "../lib/startModes";
 import { estimateSize } from "../lib/termlite";
 import type { Provider } from "../lib/types";
 import { useStore, type Sheet } from "../store";
@@ -63,6 +66,13 @@ function Field({ label, children, aside }: { label: string; children: ReactNode;
 const inputCls =
   "w-full rounded-[10px] border border-line bg-bg px-3 text-base outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
 
+/** "Opus · Ask me before each change": what a new chat on `p` starts with (Settings > General), or null for the CLI's own. */
+function startsWith(p: Provider): string | null {
+  const d = getChatDefaults()[p];
+  const parts = [d.model ? modelLabel(d.model) : null, modeWords(p, d.mode)].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: string; initialProvider?: Provider; close: () => void }) {
   const sessions = useStore((s) => s.sessions);
   const env = useStore((s) => s.env);
@@ -72,7 +82,10 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
     for (const s of sessions) if (projectOf(s) && !seen.includes(projectOf(s))) seen.push(projectOf(s));
     return seen.slice(0, 6);
   }, [sessions]);
-  const [provider, setProvider] = useState<Provider>(initialProvider ?? sessions.find((s) => projectOf(s) === initialCwd)?.provider ?? "claude");
+  const [provider, setProvider] = useState<Provider>(() =>
+    startProvider(initialProvider, getDefaultCli(), sessions.find((s) => projectOf(s) === initialCwd)?.provider, env ? { claude: !!env.claude, codex: !!env.codex } : null),
+  );
+  const starts = startsWith(provider);
   const [cwd, setCwd] = useState(initialCwd ? homeShort(initialCwd) : recents[0] ? homeShort(recents[0]) : "");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
@@ -144,6 +157,11 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
               );
             })}
           </div>
+          {starts && !terminal && (
+            <div className="px-0.5 text-small text-faint" data-new-starts={starts}>
+              Starts on {starts}. Change it in the chat, or for every new chat in Settings &gt; General.
+            </div>
+          )}
         </Field>
         <Field label="Folder">
           <div className="flex gap-2">

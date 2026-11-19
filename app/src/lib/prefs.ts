@@ -56,13 +56,42 @@ let ignored = false;
 const NONE: ChatDefaults = { claude: { model: null, mode: null }, codex: { model: null, mode: null } };
 /** The defaults new chats start with (none during a self-test, see `ignoreChatDefaults`). */
 export const getChatDefaults = () => (ignored ? NONE : chatDefaults.get());
-/** The self-test's chats start as its steps say, whatever the person chose. */
-export const ignoreChatDefaults = () => (ignored = true);
+/** The self-test's chats start as its steps say, whatever the person chose (`false`: a scenario that tests the defaults). */
+export const ignoreChatDefaults = (on = true) => (ignored = on);
 export const useChatDefaults = chatDefaults.use;
+export const chatDefaultsNow = chatDefaults.get;
 export function setChatDefault(p: Provider, patch: Partial<ChatDefaults[Provider]>) {
   const cur = chatDefaults.get();
   chatDefaults.set({ ...cur, [p]: { ...cur[p], ...patch } });
 }
+/** Puts back a whole set of defaults (the onboarding's Skip). */
+export const restoreChatDefaults = (d: ChatDefaults) => chatDefaults.set(d);
+
+/** Which CLI a new session starts with when nothing else says (the onboarding, Settings > General); null: not chosen. */
+const CLI_KEY = "coool.defaultCli";
+const defaultCli = store<Provider | null>(
+  () => {
+    try {
+      const v = localStorage.getItem(CLI_KEY);
+      return v === "claude" || v === "codex" ? v : null;
+    } catch {
+      return null;
+    }
+  },
+  (v) => {
+    try {
+      if (v) localStorage.setItem(CLI_KEY, v);
+      else localStorage.removeItem(CLI_KEY);
+    } catch {
+      /* private mode: lasts for this window */
+    }
+  },
+);
+/** The chosen CLI for new sessions (none during a self-test, like the other defaults). */
+export const getDefaultCli = () => (ignored ? null : defaultCli.get());
+export const defaultCliNow = defaultCli.get;
+export const useDefaultCli = defaultCli.use;
+export const setDefaultCli = defaultCli.set;
 
 /** Models a provider's chats reported (`ready.models`), remembered so the default can be picked before a chat runs. */
 const SEEN_KEY = "coool.seenModels";
@@ -107,6 +136,7 @@ const textSize = store<TextSize>(
 applyText(textSize.get());
 export const useTextSize = textSize.use;
 export const setTextSize = textSize.set;
+export const textSizeNow = textSize.get;
 
 // ---------- backend-applied ----------
 
