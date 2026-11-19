@@ -146,23 +146,56 @@
 }
 /* coool's backdrop (components/Backdrop.tsx): a quiet wash of the six rainbow colours (green, yellow, orange, red,
    purple, blue) as large soft blobs on a neutral base, in rainbow order around the window, so each glass region
-   carries a hint of colour and none of them shouts. Drawn once (no animation: ~0 CPU). Only the glass regions show
-   it; the sheet and device screens stay opaque above it. */
+   carries a hint of colour and none of them shouts. Two layers (every other colour on each), each half as big again
+   as the window, drift slowly against each other: only their `transform` moves (the gradients are painted once), so
+   the drift stays on the compositor. It rests under reduce motion and while the window is hidden or not in front.
+   Only the glass regions show it; the sheet and device screens stay opaque above it. */
 :root[data-theme="dark"] {
-  --backdrop: radial-gradient(46% 60% at 0% 0%, rgb(97 187 70 / 0.34), transparent 72%),
-    radial-gradient(40% 55% at 34% 0%, rgb(253 184 39 / 0.26), transparent 72%),
-    radial-gradient(40% 55% at 68% 0%, rgb(245 130 31 / 0.26), transparent 72%),
-    radial-gradient(46% 60% at 100% 6%, rgb(224 58 62 / 0.3), transparent 72%),
-    radial-gradient(50% 62% at 100% 78%, rgb(150 61 151 / 0.3), transparent 74%),
-    radial-gradient(52% 64% at 0% 96%, rgb(0 157 220 / 0.32), transparent 74%), #18181b;
+  --backdrop-base: #18181b;
+  --backdrop-a: radial-gradient(31% 40% at 17% 17%, rgb(97 187 70 / 0.34), transparent 72%),
+    radial-gradient(27% 37% at 62% 17%, rgb(245 130 31 / 0.26), transparent 72%),
+    radial-gradient(33% 41% at 83% 69%, rgb(150 61 151 / 0.3), transparent 74%);
+  --backdrop-b: radial-gradient(27% 37% at 39% 17%, rgb(253 184 39 / 0.26), transparent 72%),
+    radial-gradient(31% 40% at 83% 21%, rgb(224 58 62 / 0.3), transparent 72%),
+    radial-gradient(35% 43% at 17% 81%, rgb(0 157 220 / 0.32), transparent 74%);
 }
 :root[data-theme="light"] {
-  --backdrop: radial-gradient(46% 60% at 0% 0%, rgb(97 187 70 / 0.3), transparent 72%),
-    radial-gradient(40% 55% at 34% 0%, rgb(253 184 39 / 0.28), transparent 72%),
-    radial-gradient(40% 55% at 68% 0%, rgb(245 130 31 / 0.24), transparent 72%),
-    radial-gradient(46% 60% at 100% 6%, rgb(224 58 62 / 0.22), transparent 72%),
-    radial-gradient(50% 62% at 100% 78%, rgb(150 61 151 / 0.22), transparent 74%),
-    radial-gradient(52% 64% at 0% 96%, rgb(0 157 220 / 0.26), transparent 74%), #f5f4f1;
+  --backdrop-base: #f5f4f1;
+  --backdrop-a: radial-gradient(31% 40% at 17% 17%, rgb(97 187 70 / 0.3), transparent 72%),
+    radial-gradient(27% 37% at 62% 17%, rgb(245 130 31 / 0.24), transparent 72%),
+    radial-gradient(33% 41% at 83% 69%, rgb(150 61 151 / 0.22), transparent 74%);
+  --backdrop-b: radial-gradient(27% 37% at 39% 17%, rgb(253 184 39 / 0.28), transparent 72%),
+    radial-gradient(31% 40% at 83% 21%, rgb(224 58 62 / 0.22), transparent 72%),
+    radial-gradient(35% 43% at 17% 81%, rgb(0 157 220 / 0.26), transparent 74%);
+}
+.backdrop-layer {
+  position: absolute;
+  inset: -25%;
+  will-change: transform;
+  animation: backdrop-drift-a 38s ease-in-out infinite alternate;
+}
+.backdrop-layer + .backdrop-layer {
+  animation: backdrop-drift-b 53s ease-in-out infinite alternate;
+}
+[data-backdrop-rest] .backdrop-layer,
+.reduce-motion .backdrop-layer {
+  animation-play-state: paused;
+}
+@keyframes backdrop-drift-a {
+  from {
+    transform: translate3d(-6%, 3%, 0) rotate(4deg) scale(1.04);
+  }
+  to {
+    transform: translate3d(5%, -4%, 0) rotate(-3deg) scale(1);
+  }
+}
+@keyframes backdrop-drift-b {
+  from {
+    transform: translate3d(5%, -3%, 0) rotate(-4deg) scale(1);
+  }
+  to {
+    transform: translate3d(-6%, 4%, 0) rotate(3deg) scale(1.05);
+  }
 }
 
 @theme inline {
