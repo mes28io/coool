@@ -10,7 +10,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const KEY = "coool.mock.prefs";
 
 function loadPrefs(): AppPrefs {
-  const d: AppPrefs = { confirm_quit: true, prevent_sleep: false, notify: { needs_you: true, finished: false, failed: true, sound: true, only_unfocused: true }, open_with: "system" };
+  const d: AppPrefs = { confirm_quit: true, prevent_sleep: false, notify: { needs_you: true, finished: false, failed: true, sound: true, only_unfocused: true, custom_sounds: false, sound_needs: "coool:rise", sound_finished: "coool:tap", sound_failed: "coool:knock" }, open_with: "system" };
   try {
     const v = JSON.parse(localStorage.getItem(KEY) || "null");
     return v ? { ...d, ...v, notify: { ...d.notify, ...v.notify } } : d;
@@ -157,6 +157,12 @@ export function mockSettings(sim: { shutdown(udid: string): Promise<void> }): Se
     async notifyTest() {
       await wait(200);
       if (perm.status !== "authorized") throw new Error("Notifications are off for coool in System Settings.");
+    },
+    async notifySounds() {
+      return { coool: ["rise", "tap", "glass", "knock", "marimba", "chirp", "ticks"], system: ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"], bundled: false };
+    },
+    async notifySoundPreview(id) {
+      return `mock: ${id}`;
     },
     async loginStatus() {
       return { ...login };

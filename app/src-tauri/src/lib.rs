@@ -61,6 +61,8 @@ struct ChatStream {
     exit_sent: bool,
     /// "Claude in atlas": how its notifications name it.
     title: String,
+    /// Its session key (`claude:<session id>`) once the refresh knows it: what a notification click opens.
+    key: Option<String>,
 }
 
 struct Core {
@@ -398,6 +400,13 @@ impl Core {
                     {
                         c.title = n.title.clone();
                     }
+                    // And a click on one opens this session (the key the page uses, lib/types.ts `sessionKey`).
+                    if let Some(c) = s.chat.and_then(|id| chats.get_mut(&id))
+                        && c.key.is_none()
+                        && !s.id.is_empty()
+                    {
+                        c.key = Some(format!("{}:{}", s.provider.label(), s.id));
+                    }
                 }
             }
             ins.tick(&sessions);
@@ -670,7 +679,7 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
         let mut hub = core.hub.lock().unwrap();
         let id = hub.start_chat(opts).map_err(|e| format!("couldn't start {}: {e:#}", provider.label()))?;
         let handle = hub.chat(id).expect("just started").handle();
-        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd) });
+        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd), key: None });
         core.pump_waker.kick();
         id
     };
@@ -1061,8 +1070,47 @@ fn notify_request() -> notify::Permission {
 /// "Send a test notification".
 #[tauri::command(async)]
 fn notify_test(core: State<'_, Arc<Core>>) -> Res<()> {
-    let sound = core.notifier.prefs.lock().unwrap().sound;
-    notify::post("coool", "Notifications are on. An agent that needs you will show up like this.", sound)
+    // It sounds like a "needs you" notification would.
+    let sound = if core.notifier.muted() { notify::Sound::Off } else { notify::sound_for(notify::Kind::NeedsYou, &core.notifier.prefs.lock().unwrap()) };
+    notify::post("coool", "Notifications are on. An agent that needs you will show up like this.", &sound, &notify::Target::test())
+}
+
+/// Settings > Notifications > the sound pickers: coool's own sounds, the system's alert sounds, and whether system
+/// notifications are possible in this build (an app bundle).
+#[derive(Serialize)]
+struct NotifySounds {
+    coool: Vec<&'static str>,
+    system: Vec<String>,
+    bundled: bool,
+}
+
+#[tauri::command(async)]
+fn notify_sounds() -> NotifySounds {
+    NotifySounds { coool: notify::COOOL_SOUNDS.to_vec(), system: notify::system_sounds(), bundled: notify::bundled() }
+}
+
+/// A picker's preview button: plays sound `id` ("coool:rise", "system:Glass") in the app. A self-test logs it
+/// instead of playing (unless `COOOL_SELFTEST_SOUNDS=1`). Returns what it did.
+#[tauri::command(async)]
+fn notify_sound_preview(core: State<'_, Arc<Core>>, id: String) -> Res<String> {
+    let s = notify::parse_sound(&id);
+    if matches!(s, notify::Sound::Off | notify::Sound::Default) {
+        return Ok("nothing to play".into());
+    }
+    if core.notifier.muted() {
+        notify::log(&format!("preview {id}: muted (self-test)"));
+        return Ok("muted".into());
+    }
+    notify::log(&format!("preview {id}"));
+    notify::play(&s);
+    Ok("played".into())
+}
+
+/// The notification click waiting for the page (once), after a `notify-open` ping or at boot (a click that
+/// launched coool). See notify.rs.
+#[tauri::command]
+fn notify_take() -> Option<notify::Route> {
+    notify::take()
 }
 
 #[tauri::command(async)]
@@ -1323,7 +1371,7 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                         continue;
                     }
                     for e in &events {
-                        core.notifier.on_event(id, &c.title, &e.kind);
+                        core.notifier.on_event(id, &c.title, c.key.as_deref(), &e.kind);
                         match e.kind {
                             ChatEventKind::Exited { .. } => {
                                 c.exit_sent = true;
@@ -1504,6 +1552,11 @@ pub fn run() {
             w.focus = false;
         }
     }
+    // Notification clicks (notify.rs): the delegate goes in before the app finishes launching, so a click that
+    // launched coool is still delivered (kept until the page takes it).
+    notify::install_delegate();
+    // A self-test makes no sound unless asked (`COOOL_SELFTEST_SOUNDS=1`, the bundled sound check).
+    core.notifier.set_muted(core.selftest.is_some() && std::env::var("COOOL_SELFTEST_SOUNDS").map_or(true, |v| v != "1"));
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(!quiet);
@@ -1564,6 +1617,9 @@ pub fn run() {
             notify_permission,
             notify_request,
             notify_test,
+            notify_take,
+            notify_sounds,
+            notify_sound_preview,
             login_status,
             login_set,
             apps_installed,
@@ -1644,6 +1700,9 @@ pub fn run() {
             selftest::selftest_mac_tool,
             selftest::selftest_vm_helper,
             selftest::selftest_device_tool,
+            selftest::selftest_notify,
+            selftest::selftest_notify_click,
+            selftest::selftest_notify_post,
         ])
         .setup(move |app| {
             perf::boot_mark("setup");
@@ -1655,6 +1714,7 @@ pub fn run() {
             if let Some(t) = &c.selftest {
                 t.prepare_window(&handle);
             }
+            notify::attach(&handle, quiet);
             // The iPhone panel's devices and the `coool-device` MCP server each chat coool starts gets.
             let devices = app.state::<Arc<device::Devices>>().inner().clone();
             match &c.selftest {

@@ -9,6 +9,8 @@ import { cx, ease, ProviderMark } from "./primitives";
 import { useNeedsYou } from "./needs/useNeedsYou";
 import { resetText, toneColor, usageHighest, usageTone, useUsageProviders } from "./Usage";
 import { countRender } from "../lib/perfCount";
+import { useNotifyClicks } from "../lib/notifyRoute";
+import { sessionKey } from "../lib/types";
 
 /**
  * One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. `tip` replaces the
@@ -197,6 +199,8 @@ function UsagePill({ items, index }: { items: UsageItem[]; index: number }) {
 /** Sessions that are blocked on the person: the badge counts them, the Needs you page (components/needs/) lists them. */
 function NeedsYou() {
   const list = useNeedsYou();
+  // A click on a macOS notification opens this page (or the chat) through the same list (lib/notifyRoute.ts).
+  useNotifyClicks(list.map((n) => sessionKey(n.s)));
   const on = useStore((s) => s.needsPage);
   const openNeeds = useStore((s) => s.openNeeds);
   const closeNeeds = useStore((s) => s.closeNeeds);

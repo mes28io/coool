@@ -338,6 +338,11 @@ fn chrono_like_now() -> String {
     format!("{}.{:03}", ms / 1000, ms % 1000)
 }
 
+/// No screen captures: `COOOL_SELFTEST_NOSHOTS=1`, or any run inside an app bundle.
+fn no_shots() -> bool {
+    std::env::var("COOOL_SELFTEST_NOSHOTS").is_ok_and(|v| v == "1") || crate::notify::bundled()
+}
+
 fn active(core: &Core) -> Result<&SelfTest, String> {
     core.selftest.as_ref().ok_or_else(|| "self-test mode is off".to_string())
 }
@@ -457,6 +462,11 @@ fn web_pids(_wk: *mut std::ffi::c_void) -> (Option<i32>, Option<i32>) {
 #[tauri::command(async)]
 pub fn selftest_shot(app: AppHandle, core: State<'_, Arc<Core>>, name: String, window: Option<String>) -> Result<String, String> {
     let t = active(&core)?;
+    // A bundled build (the `coool selftest` app) never captures the screen: each new ad-hoc signature would make
+    // macOS ask the person for Screen Recording again. `COOOL_SELFTEST_NOSHOTS=1` turns shots off for any run.
+    if no_shots() {
+        return Err("screenshots are off in this run".into());
+    }
     let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' }).collect();
     // The main window, one of the in-app browser's pop-ups, or an artifact preview window.
     let label = window.filter(|l| l.starts_with(crate::browser::POPUP_PREFIX) || l.starts_with(crate::artifact::PREVIEW_PREFIX)).unwrap_or_else(|| "main".into());
@@ -614,6 +624,10 @@ pub fn selftest_window(app: AppHandle, core: State<'_, Arc<Core>>, action: Strin
         ("fullscreen", _) => w.set_always_on_top(false).and_then(|_| w.set_fullscreen(true)),
         ("windowed", m) => w.set_fullscreen(false).and_then(|_| w.set_always_on_top(matches!(m, WindowMode::Front | WindowMode::Quiet))),
         ("hide", _) => w.hide(),
+        // As the person would leave it: minimised to the Dock, or the whole app hidden (⌘H).
+        ("minimize", _) => w.minimize(),
+        #[cfg(target_os = "macos")]
+        ("app-hide", _) => app.hide(),
         ("show", WindowMode::Front) => w.show().and_then(|_| w.set_always_on_top(true)).and_then(|_| w.set_focus()),
         ("show", m) => {
             let r = w.show();
@@ -1262,6 +1276,51 @@ pub fn selftest_device_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<c
     active(&core)?;
     let out = crate::device::mcp::call_tool(devices.inner(), chat, &name, &args)?;
     Ok(out.iter().filter_map(|v| v["text"].as_str()).collect::<Vec<_>>().join("\n"))
+}
+
+/// Notifications as macOS has them for this build (notify.rs): the permission, what is in Notification Center (each
+/// with the target it carries), the delegate's log, and this process's id (a target's `pid`).
+#[derive(Serialize)]
+pub struct NotifyState {
+    pid: u32,
+    permission: crate::notify::Permission,
+    delivered: Result<Vec<crate::notify::Delivered>, String>,
+    log: Vec<String>,
+}
+
+#[tauri::command(async)]
+pub fn selftest_notify(core: State<'_, Arc<Core>>) -> Result<NotifyState, String> {
+    active(&core)?;
+    Ok(NotifyState { pid: std::process::id(), permission: crate::notify::permission(), delivered: crate::notify::delivered(), log: crate::notify::log_lines() })
+}
+
+/// What a notification click does, without a hand on the mouse. `id`: a delivered notification of this build, whose
+/// response goes to the center's delegate the way macOS sends a real click. `info`: a target's JSON, straight to the
+/// click handler (a build without a bundle has no notification center). Returns how the click was delivered.
+#[tauri::command(async)]
+pub fn selftest_notify_click(core: State<'_, Arc<Core>>, id: Option<String>, info: Option<String>) -> Result<String, String> {
+    active(&core)?;
+    crate::notify::simulate_click(id.as_deref(), info.as_deref())
+}
+
+/// Posts a notification through the notifier's own path for chat `chat` (its title and session key as the pump has
+/// them): `kind` "needs" (a permission request, `request` its id) or "finished" (a turn end). The window counts as not
+/// in front for it. Clears every delivered and pending notification of this build when `kind` is "clear".
+#[tauri::command(async)]
+pub fn selftest_notify_post(core: State<'_, Arc<Core>>, chat: Option<usize>, kind: String, request: Option<String>) -> Result<(), String> {
+    active(&core)?;
+    use coool_core::chat::ChatEventKind;
+    let ev = match kind.as_str() {
+        "clear" => return crate::notify::remove_all(),
+        "needs" => ChatEventKind::PermissionRequest { request_id: request.unwrap_or_else(|| "selftest".into()), tool: "Bash".into(), summary: "echo selftest".into(), input: serde_json::Value::Null, remember: vec![] },
+        "finished" => ChatEventKind::TurnEnd { duration_ms: 1500, ok: true },
+        _ => return Err("kind: needs | finished | clear".into()),
+    };
+    let chat = chat.ok_or("no chat")?;
+    let (title, key) = core.chats.lock().unwrap().get(&chat).map(|c| (c.title.clone(), c.key.clone())).ok_or("no such chat")?;
+    core.notifier.set_focused(false);
+    core.notifier.on_event(chat, &title, key.as_deref(), &ev);
+    Ok(())
 }
 
 #[cfg(test)]

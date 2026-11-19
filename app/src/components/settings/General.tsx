@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../../lib/backend";
 import { setChatDefault, updateAppPrefs, useAppPrefs, useChatDefaults, useInstalledApps, useSeenModels } from "../../lib/prefs";
-import type { PowerStatus } from "../../lib/settingsTypes";
+import type { NotifySounds, PowerStatus } from "../../lib/settingsTypes";
 import { loginText, notifyText, useLoginItem, useNotifyPermission } from "../../lib/systemPerms";
 import type { Provider } from "../../lib/types";
 import { useStore } from "../../store";
 import { PERMISSION_MODES } from "../ChatComposer";
-import { IAlert, ICheck } from "../icons";
+import { IAlert, ICheck, IPlay } from "../icons";
 import { Button, ProviderMark } from "../primitives";
 import { ErrorLine, errText, Group, Note, Row, Select, Switch, type Option } from "./ui";
 
@@ -195,6 +195,70 @@ export function General() {
 
 // ---------- Notifications ----------
 
+/** coool's own sounds (app/scripts/sounds/make-sounds.py): what each sounds like. */
+const COOOL_SOUND_TEXT: Record<string, [string, string]> = {
+  rise: ["Rise", "A soft two-note rise"],
+  tap: ["Tap", "One low tap"],
+  glass: ["Glass", "A glassy ping"],
+  knock: ["Knock", "A wooden knock"],
+  marimba: ["Marimba", "A soft marimba note"],
+  chirp: ["Chirp", "A tiny synth chirp"],
+  ticks: ["Ticks", "A subtle double tick"],
+};
+
+let soundsCache: Promise<NotifySounds> | null = null;
+function useSounds(): NotifySounds | null {
+  const [s, setS] = useState<NotifySounds | null>(null);
+  useEffect(() => {
+    let live = true;
+    soundsCache ??= api()
+      .notifySounds()
+      .catch(() => ({ coool: Object.keys(COOOL_SOUND_TEXT), system: [], bundled: false }));
+    void soundsCache.then((v) => live && setS(v));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return s;
+}
+
+/** One kind's sound: a picker (None, coool's sounds, the system's alert sounds) and a preview button. */
+function SoundRow({ attr, label, value, onChange }: { attr: string; label: string; value: string; onChange: (v: string) => void }) {
+  const sounds = useSounds();
+  const [msg, setMsg] = useState<string | null>(null);
+  const opts: Option<string>[] = [
+    { value: "none", label: "None" },
+    ...(sounds?.coool ?? Object.keys(COOOL_SOUND_TEXT)).map((id) => ({ value: `coool:${id}`, label: COOOL_SOUND_TEXT[id]?.[0] ?? id, hint: `coool · ${COOOL_SOUND_TEXT[id]?.[1] ?? ""}` })),
+    ...(sounds?.system ?? []).map((id) => ({ value: `system:${id}`, label: `System: ${id}`, hint: "macOS alert sound" })),
+  ];
+  if (!opts.some((o) => o.value === value)) opts.push({ value, label: value });
+  const preview = () => {
+    setMsg(null);
+    api()
+      .notifySoundPreview(value)
+      .then((r) => r === "muted" && setMsg("Muted during a self-test."))
+      .catch((e) => setMsg(errText(e)));
+  };
+  return (
+    <Row
+      attr={attr}
+      label={label}
+      desc={sounds && !sounds.bundled ? "This build has no app bundle, so macOS shows no notifications; the sound still plays here." : undefined}
+      k="sound sounds chime tone preview play"
+      control={
+        <span className="flex items-center gap-1.5">
+          <Button variant="ghost" className="h-[30px] w-[30px] px-0" disabled={value === "none"} onClick={preview} aria-label={`Play ${label.toLowerCase()}`} title="Play it" data-sound-preview={attr}>
+            <IPlay size={13} />
+          </Button>
+          <Select label={label} value={value} options={opts} width={260} onChange={onChange} />
+        </span>
+      }
+    >
+      {msg && <div className="text-small text-dim">{msg}</div>}
+    </Row>
+  );
+}
+
 export function Notifications() {
   const [prefs] = useAppPrefs();
   // Read again when the window regains focus (coming back from System Settings).
@@ -255,7 +319,21 @@ export function Notifications() {
         <Row attr="notify-failed" label="Fails" desc="A turn ends in an error, or the CLI exits with one. Not when you stopped it." k="error crash" control={<Switch label="Fails" on={!!n?.failed} disabled={off} onChange={(v) => set({ failed: v })} />} />
       </Group>
       <Group label="How" footer={!allowed && perm ? "These apply once macOS allows coool’s notifications." : undefined}>
-        <Row attr="notify-sound" label="Play a sound" desc="The system notification sound." k="sound audio" control={<Switch label="Play a sound" on={!!n?.sound} disabled={off} onChange={(v) => set({ sound: v })} />} />
+        <Row attr="notify-sound" label="Play a sound" desc={n?.custom_sounds ? "The sound chosen for each kind below." : "The system notification sound."} k="sound audio" control={<Switch label="Play a sound" on={!!n?.sound} disabled={off} onChange={(v) => set({ sound: v })} />} />
+        <Row
+          attr="notify-custom-sounds"
+          label="A different sound for each"
+          desc="Tell a request from a finished turn without looking. Plays in coool too while it’s in front."
+          k="sound sounds custom chime tone different per kind"
+          control={<Switch label="A different sound for each" on={!!n?.custom_sounds} disabled={off || !n?.sound} onChange={(v) => set({ custom_sounds: v })} />}
+        />
+        {n?.sound && n.custom_sounds && (
+          <>
+            <SoundRow attr="notify-sound-needs" label="Needs you sound" value={n.sound_needs} onChange={(v) => set({ sound_needs: v })} />
+            <SoundRow attr="notify-sound-finished" label="Finished sound" value={n.sound_finished} onChange={(v) => set({ sound_finished: v })} />
+            <SoundRow attr="notify-sound-failed" label="Failed sound" value={n.sound_failed} onChange={(v) => set({ sound_failed: v })} />
+          </>
+        )}
         <Row
           attr="notify-unfocused"
           label="Only when coool isn’t in front"

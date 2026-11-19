@@ -532,6 +532,8 @@ async function tauriBackend(): Promise<Backend> {
     notifyPermission: () => soft("notify_permission"),
     notifyRequest: () => soft("notify_request"),
     notifyTest: () => soft("notify_test"),
+    notifySounds: () => soft("notify_sounds"),
+    notifySoundPreview: (id: string) => soft("notify_sound_preview", { id }),
     loginStatus: () => soft("login_status"),
     loginSet: (enabled) => soft("login_set", { enabled }),
     appsInstalled: () => soft("apps_installed"),

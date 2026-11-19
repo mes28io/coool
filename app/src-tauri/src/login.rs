@@ -11,11 +11,14 @@ pub struct LoginStatus {
     pub reason: Option<String>,
 }
 
-/// `SMAppServiceStatus` to the UI's words.
-pub fn status_name(s: isize) -> &'static str {
+/// `SMAppServiceStatus` to the UI's words. `bundled`: running from an app bundle. macOS reports the main app's
+/// service as "not found" until it was registered once (seen on macOS 27 with a real bundle), so for a bundle that
+/// means "off", and the switch can turn it on; only a bare binary is really unknown to macOS.
+pub fn status_name(s: isize, bundled: bool) -> &'static str {
     match s {
         1 => "enabled",
         2 => "requires_approval",
+        3 if bundled => "not_registered",
         3 => "not_found",
         _ => "not_registered",
     }
@@ -44,7 +47,7 @@ mod sys {
         match service() {
             Ok(s) => {
                 let n: isize = unsafe { msg_send![&*s, status] };
-                LoginStatus { status: status_name(n).into(), reason: None }
+                LoginStatus { status: status_name(n, crate::notify::bundled()).into(), reason: None }
             }
             Err(r) => LoginStatus { status: "unavailable".into(), reason: Some(r) },
         }
@@ -75,10 +78,11 @@ mod tests {
 
     #[test]
     fn status_names() {
-        assert_eq!(status_name(0), "not_registered");
-        assert_eq!(status_name(1), "enabled");
-        assert_eq!(status_name(2), "requires_approval");
-        assert_eq!(status_name(3), "not_found");
+        assert_eq!(status_name(0, true), "not_registered");
+        assert_eq!(status_name(1, true), "enabled");
+        assert_eq!(status_name(2, true), "requires_approval");
+        assert_eq!(status_name(3, false), "not_found");
+        assert_eq!(status_name(3, true), "not_registered", "a bundle never registered yet");
     }
 
     /// Reading the status never registers anything (safe on the person's Mac).
