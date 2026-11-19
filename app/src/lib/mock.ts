@@ -3,6 +3,7 @@
 // statuses flip, steps arrive, subagents run, and coool-run sessions get a
 // fake terminal stream. Also the demo for coool.sh.
 
+import { mockExplain, runWhyDemo } from "./mockWhy";
 import { NotAvailable, type Backend, type ChatBatch, type PtyChunk } from "./backend";
 import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
 import { MockChat, mockModels, type ChatHost } from "./mockChat";
@@ -943,6 +944,9 @@ export function mockBackend(): Backend {
   }
   // `?needs=demo`: a session in a terminal outside coool, blocked on its own permission prompt (the Needs you page's
   // "outside coool" item: what the transcript knows, no answer buttons).
+  // `?why=demo`: a terminal wait that doesn't name its command (the transcript's words only, no AI read).
+  if (typeof location !== "undefined" && location.search.includes("why=demo"))
+    add(session({ provider: "claude", id: "termwait2", cwd: pixel, title: "File the crash as an issue", status: "idle", pid: 40_731, waiting_for: "permission to use the Linear tool (create issue)", tokens: tok(9_000, 1_400, 18_000), activity: history("pixel", ["File the shader crash as a Linear issue with the stack trace"], now - 50_000, 1, 4), updated: now - 50_000 }), "pixel", 98);
   if (typeof location !== "undefined" && location.search.includes("needs=demo"))
     add(session({ provider: "claude", id: "termwait1", cwd: pixel, title: "Clear the shader cache", status: "idle", pid: 40_720, waiting_for: "permission to run `rm -rf target/shader-cache`", tokens: tok(14_000, 2_100, 30_000), activity: history("pixel", ["Clear the shader cache, then rebuild the pipeline"], now - 70_000, 1, 6), updated: now - 70_000 }), "pixel", 99);
   add(session({ provider: "codex", id: "lightjob1", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the garden probe", status: "idle", pid: 40611, waiting_for: "Allow Bash: blender -b garden.blend -f 1", tokens: tok(9_000, 1_300, 22_000), activity: history("p3d", ["Bake the garden probe"], now - 90_000, 1, 5), updated: now - 20_000 }), "pixel", 5);
@@ -1336,6 +1340,8 @@ export function mockBackend(): Backend {
     const cp = newChat("claude", `${HOME}/code/notes-ios`, {}, 0);
     setTimeout(() => cp.send("Plan the retry change first (plan mode)"), 2200);
   }
+  // `?why=demo`: requests that show each state of "What this does and why" (lib/mockWhy.ts).
+  if (location.search.includes("why=demo")) runWhyDemo((cwd) => newChat("claude", cwd, {}, 0), HOME);
   // `?ideas=demo`: agent lanes with half an hour of history, the running-now pill, hover cards, a question card with
   // number keys and Later, and a Risky permission request (lib/mockIdeas.ts).
   if (location.search.includes("ideas=demo")) void import("./mockIdeas").then((m) => m.runIdeasDemo((cwd) => newChat("claude", cwd, {}, 0), `${HOME}/code/harbor`));
@@ -1898,6 +1904,7 @@ export function mockBackend(): Backend {
       saveInsights();
       emitSessions();
     },
+    explainRequest: (req) => mockExplain(req, insights.enabled && insights.has_key),
     async pilotLogStatus() {
       return { ...pilotLog };
     },

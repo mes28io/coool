@@ -30,6 +30,7 @@ import { deriveCheckpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
 import { isPlanTool, isSyntheticPlan, isTaskNoise, parsePlan, planForTurn } from "../lib/plan";
 import { PlanCard } from "./PlanCard";
+import { PermExplain, RedactedPre } from "./Explain";
 import { RiskTag } from "./RiskTag";
 import { LaterBar, useFolded, useQuestionLater } from "./QuestionLater";
 import { digitPick, isTyping, keyQuestion } from "../lib/questionKeys";
@@ -1125,8 +1126,9 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
             </span>
           </div>
           <div className="px-3.5">
-            <pre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90" title={d.full}>{homeShort(d.body)}</pre>
-            {d.note && <div className="mt-1.5 text-small text-dim">{d.note}</div>}
+            <RedactedPre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90" title={d.full} text={homeShort(d.body)} />
+            {/* What it does and why (components/Explain.tsx): its own description, then the AI read when on. */}
+            {dev ? d.note && <div className="mt-1.5 text-small text-dim">{d.note}</div> : <PermExplain perm={item} chat={chat} variant="compact" />}
           </div>
           <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-2.5">
             <Button variant="primary" onClick={() => answerPermission(chat.id, item.requestId, "allow")} title="Allow this once (⌘↵)" data-allow-once>

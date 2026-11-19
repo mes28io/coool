@@ -197,6 +197,10 @@ impl SelfTest {
         }
     }
 
+    pub(crate) fn log_line(&self, line: &str) {
+        self.log(line);
+    }
+
     fn log(&self, line: &str) {
         let stamp = chrono_like_now();
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.log) {

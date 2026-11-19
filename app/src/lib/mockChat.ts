@@ -10,6 +10,7 @@
 //   "ask" / "choose" / "which"        -> a question card (AskUserQuestion), then a reply using the answer
 // Slash commands that only work in the TUI emit `notice` with needs_terminal.
 
+import { whyScript } from "./mockWhy";
 import type { Activity, Agent, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, Session, SlashCommand, Tokens } from "./types";
 
 type DistOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
@@ -670,6 +671,14 @@ export class MockChat {
         gen,
         { think: "The user is asking a conceptual question. No tools needed; answer from what I read earlier." },
       );
+      return;
+    }
+    // `?why=demo` (lib/mockWhy.ts): a few steps, then one command that asks, for "What this does and why".
+    const why = whyScript(prompt);
+    if (why) {
+      for (const st of why.steps) await this.tool(gen, st.name, st.summary, st.input, 500, st.output);
+      await this.say(why.said, gen);
+      if (await this.tool(gen, "Bash", why.command, { command: why.command, description: why.description }, 700, why.output, { ask: true })) await this.say(why.after, gen);
       return;
     }
     // "risky": a clean-up that asks to run a command the Risky tag marks (lib/risk.ts), then a safe one.

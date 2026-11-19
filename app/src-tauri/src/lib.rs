@@ -28,6 +28,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use coool_core::chat::{ChatEvent, ChatEventKind, ChatHandle, ChatOptions, ChatState};
 use coool_core::hub::Hub;
+use coool_core::explain;
 use coool_core::insights::{self, Insight, Insights};
 use coool_core::model::{Provider, Session};
 use coool_core::wire::Sent;
@@ -73,6 +74,8 @@ struct Core {
     streams: Mutex<HashMap<usize, Stream>>,
     chats: Mutex<HashMap<usize, ChatStream>>,
     insights: Mutex<Insights>,
+    /// The AI reads of permission requests, by request id (CHAT_SPEC "What this does and why").
+    reads: Mutex<explain::Reads>,
     /// CHAT_SPEC "Session titles": the shown title of every session, and the names the person gave.
     titles: Mutex<coool_core::titles::Titles>,
     /// CHAT_SPEC "Plan usage".
@@ -820,6 +823,28 @@ fn insights_set_enabled(core: State<'_, Arc<Core>>, enabled: bool) -> Res<()> {
     Ok(())
 }
 
+/// The AI read of one permission request (CHAT_SPEC "What this does and why"): cached by request id; the insights
+/// switch, key and hourly cap. Blocks this command's thread (at most ~20 s), never the UI or the answer buttons.
+#[tauri::command(async)]
+fn explain_request(core: State<'_, Arc<Core>>, req: explain::Request) -> explain::Reply {
+    if let Some(r) = core.reads.lock().unwrap().get(&req.id) {
+        return r;
+    }
+    let slot = core.insights.lock().unwrap().take_slot();
+    let r = match slot {
+        insights::Slot::Off => explain::Reply::Off { has_key: insights::api_key().is_some() },
+        insights::Slot::NoKey => explain::Reply::Off { has_key: false },
+        insights::Slot::Limited => explain::Reply::Limited,
+        insights::Slot::Go(key) => explain::run(&key, &req),
+    };
+    let mut reads = core.reads.lock().unwrap();
+    reads.put(&req.id, r.clone());
+    if let (Some(t), explain::Reply::Done { usd, ms, .. }) = (&core.selftest, &r) {
+        t.log_line(&format!("explain: AI read {} in {ms} ms, ${usd:.5} (this run: {} reads, ${:.5})", req.id, reads.calls, reads.usd));
+    }
+    r
+}
+
 /// Settings sheet: show sessions started by other tools and agents (APP_SPEC "Who started it").
 #[tauri::command(async)]
 fn set_show_automation(core: State<'_, Arc<Core>>, enabled: bool) -> Res<()> {
@@ -1444,6 +1469,7 @@ pub fn run() {
         streams: Mutex::new(HashMap::new()),
         chats: Mutex::new(HashMap::new()),
         insights: Mutex::new(ins),
+        reads: Mutex::new(explain::Reads::default()),
         // A self-test keeps its names in its throwaway folder, never in the person's file.
         titles: Mutex::new(coool_core::titles::Titles::at(match &selftest {
             Some(t) => Some(t.titles_path()),
@@ -1517,6 +1543,7 @@ pub fn run() {
             insights_set_key,
             insights_clear_key,
             insights_set_enabled,
+            explain_request,
             rename_session,
             set_show_automation,
             pilot_log_status,

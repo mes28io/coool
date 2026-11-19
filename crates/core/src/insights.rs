@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MODEL: &str = "claude-haiku-5-5";
+pub(crate) const MODEL: &str = "claude-haiku-5-5";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2026-10-21";
 const MAX_TOKENS: u32 = 300;
@@ -345,8 +345,13 @@ pub fn summarize(key: &str, s: &Session) -> Result<Insight> {
 }
 
 fn call_api(key: &str, body: &str) -> Result<(u16, String)> {
+    call_api_within(key, body, Duration::from_secs(30))
+}
+
+/// One POST to the Messages API, giving up after `timeout` (also used by [`crate::explain`]).
+pub(crate) fn call_api_within(key: &str, body: &str, timeout: Duration) -> Result<(u16, String)> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(30)))
+        .timeout_global(Some(timeout))
         .http_status_as_error(false)
         .build()
         .into();
@@ -362,7 +367,7 @@ fn call_api(key: &str, body: &str) -> Result<(u16, String)> {
     Ok((status, text))
 }
 
-fn redact(msg: &str, key: &str) -> String {
+pub(crate) fn redact(msg: &str, key: &str) -> String {
     if key.is_empty() { msg.to_string() } else { msg.replace(key, "[redacted]") }
 }
 
@@ -405,6 +410,18 @@ fn global_allows(in_flight: usize, requests_last_hour: usize) -> bool {
 }
 
 type Done = (SessionKey, u64, Result<Insight, String>);
+
+/// What [`Insights::take_slot`] allows.
+pub enum Slot {
+    /// AI insights is off in Settings.
+    Off,
+    /// On, but no key is stored.
+    NoKey,
+    /// The hourly cap is reached.
+    Limited,
+    /// Go, with this key (never logged).
+    Go(String),
+}
 
 pub struct Insights {
     enabled: bool,
@@ -463,6 +480,24 @@ impl Insights {
                 let _ = tx.send((k, fp, r));
             });
         }
+    }
+
+    /// A request outside the per-session scheduler (the "AI read" of a permission request, [`crate::explain`]):
+    /// the same switch, key and hourly cap as insights. Counts against the cap when it returns `Go`.
+    pub fn take_slot(&mut self) -> Slot {
+        let now = now_ms();
+        if !self.enabled {
+            return Slot::Off;
+        }
+        let Some(key) = self.ensure_key(now) else { return Slot::NoKey };
+        while self.recent.front().is_some_and(|t| now.saturating_sub(*t) >= HOUR_MS) {
+            self.recent.pop_front();
+        }
+        if self.recent.len() >= HOURLY_CAP {
+            return Slot::Limited;
+        }
+        self.recent.push_back(now);
+        Slot::Go(key)
     }
 
     pub fn get(&self, provider: Provider, session_id: &str) -> Option<&Insight> {

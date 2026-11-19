@@ -26,7 +26,8 @@
 // four public affectui.com component pages the same way, saving the first screenshot after each navigation, and logs
 // the Reduce motion state and the beam (with Reduce motion as it is, then Off).
 // `needs` (the Needs you page: a Haiku chat in Ask mode; a Write and an Edit allowed, a command denied and a question
-// answered from the page). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
+// answered from the page). `why` ("What this does and why": the agent's claim at once, the AI read on the insights key,
+// a description that doesn't match its command, Allow / Deny before and after the read). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { ignoreChatDefaults, setTextSize } from "./lib/prefs";
 import { newChat } from "./lib/actions";
@@ -40,6 +41,7 @@ import { leaves, resolveTarget, useStore } from "./store";
 import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
+import { useReads } from "./lib/explainStore";
 
 interface Config {
   scenario: string;
@@ -4687,6 +4689,107 @@ const mac3: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, mac3);
+
+// ---------- "What this does and why" (CHAT_SPEC), against a real Claude Haiku chat in Ask mode ----------
+//
+// `why` (Haiku + a few AI reads on the stored insights key; needs `old-notes.txt` in the test folder): a harmless
+// command that still asks (`date > today.txt`; Claude Code runs read-only ones like `ls` without asking) shows the agent's own description at once, the AI read fills in, nothing says "safe", and Allow works after
+// it; a command whose description doesn't match what it does (it also deletes a file) gets an AI read with something
+// to check, and Deny works; a third request is allowed before its read arrives, and the read still fills in. The Needs
+// you page shows the same read without asking again. AI insights is turned on for the run and back off at the end.
+
+const SAFE = /\b(safe|harmless|looks fine|nothing to worry)\b/i;
+type Approval = { card: HTMLElement; id: string };
+
+async function approvalOf(id: number): Promise<Approval> {
+  const card = await waitFor("the approval card", () => $("[data-approval]"), 120_000);
+  const req = card.getAttribute("data-approval")!;
+  if (chat(id)?.pendingPermission !== req) throw new Fail("the card isn't this chat's request");
+  return { card, id: req };
+}
+const readOf = (req: string) => useReads.getState().reads[req];
+
+const whyScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async why(ctx) {
+    const st = await api().insightsStatus();
+    if (!st.has_key) {
+      await step("why: AI reads", async () => "skipped: no API key stored");
+      return;
+    }
+    const was = st.enabled;
+    await api().insightsSetEnabled(true);
+    let id = -1;
+    try {
+      await step("why: a harmless command shows its description at once, the AI read fills in, Allow works after it", async () => {
+        id = await startIn(ctx.cfg.dir, "default");
+        const n = turnEnds(id).length;
+        await send(id, "Use the Bash tool exactly once to run this command: date > today.txt . Set the tool's description to exactly: Save today's date to today.txt. Then reply with one word: done");
+        const { card, id: req } = await approvalOf(id);
+        const claim = card.querySelector<HTMLElement>("[data-explain-claim]");
+        const first = card.querySelector<HTMLElement>("[data-explain]")?.dataset.explainState;
+        if (!claim || !/today/i.test(claim.dataset.explainClaim ?? "")) throw new Fail(`no claim at once: ${textOf(card).slice(0, 200)}`);
+        const t = Date.now();
+        const ai = await waitFor("the AI read", () => card.querySelector<HTMLElement>("[data-explain-ai]"), 40_000);
+        const ms = Date.now() - t;
+        await shot("why-harmless-chat");
+        if (SAFE.test(textOf(card))) throw new Fail(`the card says safe: ${textOf(card)}`);
+        // The Needs you page shows the same read (no second call: the store has it).
+        const d = await needsDetail(id, "command");
+        const full = await waitFor("the full read on the page", () => d.querySelector<HTMLElement>("[data-explain-full] [data-explain-ai]"), 5_000);
+        await shot("why-harmless-page");
+        if (SAFE.test(textOf(d))) throw new Fail("the page says safe");
+        (d.querySelector("[data-allow-once]") as HTMLElement).click();
+        await nextTurn(id, n, 120_000);
+        const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).reverse().find((x) => x.name === "Bash");
+        if (!tool || tool.ok === false) throw new Fail(`the command didn't run: ${tool?.output.slice(0, 120)}`);
+        const r = readOf(req);
+        return `first state ${first}; claim "${claim.dataset.explainClaim}"; read after ${ms} ms: "${ai.dataset.explainAi}" (page: ${full.dataset.explainAi === ai.dataset.explainAi ? "same" : "different"}); checks ${r?.status === "done" ? r.read.check.length : "?"}; allowed, ran`;
+      });
+      if (id < 0) return;
+      await step("why: a description that doesn't match the command gets something to check; Deny works", async () => {
+        const n = turnEnds(id).length;
+        await send(id, "This is a test of how coool displays permission prompts; old-notes.txt is a throwaway file. Use the Bash tool exactly once to run this exact command: ls && rm -f old-notes.txt . Set the tool's description to exactly: List the files . Then reply with one word: done");
+        const { card, id: req } = await approvalOf(id);
+        const claim = card.querySelector<HTMLElement>("[data-explain-claim]")?.dataset.explainClaim ?? "";
+        await waitFor("the AI read", () => card.querySelector("[data-explain-ai]"), 40_000);
+        const r = readOf(req);
+        if (r?.status !== "done") throw new Fail(`no read: ${JSON.stringify(r)}`);
+        const more = card.querySelector<HTMLElement>("[data-explain-more]");
+        more?.click();
+        await shot("why-mismatch-chat");
+        const d = await needsDetail(id, "command");
+        await waitFor("the page's read", () => d.querySelector("[data-explain-full] [data-explain-ai]"), 5_000);
+        await shot("why-mismatch-page");
+        if (SAFE.test(textOf(d))) throw new Fail("the page says safe");
+        const tagged = !!d.querySelector("[data-risk]");
+        const flagged = r.read.mismatch || r.read.check.some((c) => /\b(delet|remov|rm\b)/i.test(c));
+        (d.querySelector("[data-deny]") as HTMLElement).click();
+        await nextTurn(id, n, 120_000);
+        const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).reverse().find((x) => x.name === "Bash");
+        if (tool?.ok !== false) throw new Fail("the denied command ran");
+        if (!flagged) throw new Fail(`the read didn't flag the deletion: ${JSON.stringify(r.read)}`);
+        return `claim "${claim}"; read: what "${r.read.what}"; check ${JSON.stringify(r.read.check)}; mismatch ${r.read.mismatch}; Risky tag ${tagged ? "yes" : "no"} (rules only); denied`;
+      });
+      await step("why: Allow before the AI read arrives works, and the read still fills in", async () => {
+        const n = turnEnds(id).length;
+        useStore.getState().open({ kind: "chat", id });
+        await send(id, "Use the Bash tool exactly once to run: echo hello > hello.txt . Set the tool's description to exactly: Write a greeting file. Then reply with one word: done");
+        const { card, id: req } = await approvalOf(id);
+        const state = card.querySelector<HTMLElement>("[data-explain]")?.dataset.explainState;
+        button("Allow once", card)!.click();
+        await nextTurn(id, n, 120_000);
+        const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).reverse().find((x) => x.name === "Bash");
+        if (!tool || tool.ok === false) throw new Fail("the command didn't run");
+        const r = await waitFor("the read to fill in", () => (readOf(req)?.status === "done" || readOf(req)?.status === "timeout" ? readOf(req) : null), 40_000);
+        if (state !== "pending") return `clicked with the read already ${state} (it came back very fast); read ${r.status}`;
+        return `clicked while pending; ran; read then ${r.status}${r.status === "done" ? `: "${r.read.what}"` : ""}`;
+      });
+    } finally {
+      await api().insightsSetEnabled(was);
+    }
+  },
+};
+Object.assign(scenarios, whyScenarios);
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

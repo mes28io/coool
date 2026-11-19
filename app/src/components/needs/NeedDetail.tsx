@@ -21,6 +21,7 @@ import { editPairs, InlineDiff } from "../InlineDiff";
 import { Markdown } from "../Markdown";
 import { Age, Card, CardHeader, Node } from "../MissionCard";
 import { Button, cx, Kbd, PathText, ProviderMark } from "../primitives";
+import { Explain, PermExplain, RedactedPre, terminalSource } from "../Explain";
 import { RiskTag } from "../RiskTag";
 import { KindIcon } from "./KindIcon";
 import type { Need } from "./need";
@@ -103,7 +104,8 @@ function Request({ n }: { n: Need }) {
     <section className="rounded-[14px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised p-3.5 shadow-card" data-needs-outside={kind}>
       {/* The command a terminal wait names shows whole below, not twice. */}
       <p className="selectable text-base text-fg"><Prose text={upper(cmd ? `${(n.detail || n.a.needs || "").replace(/`[^`]+`/, "").trim()}:` : n.detail || n.a.needs || "")} /></p>
-      {cmd && <pre className="selectable mt-2.5 whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90">{cmd}</pre>}
+      {cmd && <RedactedPre className="selectable mt-2.5 whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90" text={cmd} />}
+      {kind === "terminal" && <TerminalExplain n={n} command={cmd} />}
       {kind === "insight" && (
         <div className="mt-2 flex items-center gap-1.5 text-small text-faint">
           <ISpark size={12} /> AI insight
@@ -148,6 +150,12 @@ function Permission({ n }: { n: Need }) {
         </div>
         <Payload n={n} />
         {d.note && n.kind !== "command" && <p className="mt-2 text-base text-dim" data-needs-note>{d.note}</p>}
+        {/* What this does and why (components/Explain.tsx): the agent's own words, then the AI read when on. */}
+        {n.kind !== "device" && (
+          <div className="mt-3">
+            <PermExplain perm={perm} chat={chat} project={projectOf(n.s) || null} variant="full" />
+          </div>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-3">
         <Button variant="primary" onClick={() => answerPermission(chat.id, perm.requestId, "allow")} title="Allow this once (⌘↵)" data-allow-once>
@@ -189,15 +197,8 @@ function Payload({ n }: { n: Need }) {
   if (n.kind === "command")
     return (
       <>
-        <pre className={cx(pre, "max-h-[50vh] overflow-auto")} data-needs-command>
-          {s("command") || perm.summary}
-        </pre>
-        {s("description") && (
-          <p className="mt-2 text-base text-dim" data-needs-description>
-            <span className="text-faint">Its description: </span>
-            {s("description")}
-          </p>
-        )}
+        {/* Its description shows under "What this does and why", as the agent's own words. */}
+        <RedactedPre className={cx(pre, "max-h-[50vh] overflow-auto")} data-needs-command text={s("command") || perm.summary} />
       </>
     );
   if (n.kind === "write") {
@@ -216,7 +217,7 @@ function Payload({ n }: { n: Need }) {
   if (n.kind === "fetch")
     return (
       <>
-        <pre className={pre}>{s("url")}</pre>
+        <RedactedPre className={pre} text={s("url")} />
         {s("prompt") && (
           <p className="mt-2 text-base text-dim">
             <span className="text-faint">What it looks for: </span>
@@ -235,6 +236,19 @@ function Payload({ n }: { n: Need }) {
       <p className="mb-2 text-base text-fg">{permDetail(perm, cwd).body}</p>
       <pre className={cx(pre, "max-h-[40vh] overflow-auto break-words")}>{json === "{}" ? perm.summary || "(no input)" : json}</pre>
     </>
+  );
+}
+
+/** A terminal wait: what the transcript gives, and the AI read when the wait names its command. */
+function TerminalExplain({ n, command }: { n: Need; command: string | null }) {
+  const ctx = useContext(n);
+  const cwd = n.s.cwd;
+  const project = projectOf(n.s) || null;
+  const src = useMemo(() => terminalSource({ key: n.key, command, cwd, project, ctx, who: n.who }), [n.key, command, cwd, project, ctx, n.who]);
+  return (
+    <div className="mt-3">
+      <Explain src={src} variant="full" />
+    </div>
   );
 }
 
