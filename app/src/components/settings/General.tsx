@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../lib/backend";
-import { setChatDefault, updateAppPrefs, useAppPrefs, useChatDefaults, useInstalledApps, useSeenModels } from "../../lib/prefs";
+import { setChatDefault, setDefaultCli, updateAppPrefs, useAppPrefs, useChatDefaults, useDefaultCli, useInstalledApps, useSeenModels } from "../../lib/prefs";
 import type { NotifySounds, PowerStatus } from "../../lib/settingsTypes";
 import { loginText, notifyText, useLoginItem, useNotifyPermission } from "../../lib/systemPerms";
 import type { Provider } from "../../lib/types";
@@ -13,7 +13,8 @@ import { BUILD_KINDS } from "../onboarding/BuildStep";
 import { Button, cx, ProviderMark } from "../primitives";
 import { ErrorLine, errText, Group, Note, Row, Select, Switch, type Option } from "./ui";
 
-const DEFAULT = "__default__";
+/** The "CLI default" choice in a Select (stored as null). */
+export const DEFAULT = "__default__";
 
 /** Claude Code's `--model` aliases always work; the rest are what chats reported. */
 const CLAUDE_ALIASES: Option<string>[] = [
@@ -22,16 +23,25 @@ const CLAUDE_ALIASES: Option<string>[] = [
   { value: "haiku", label: "Haiku (latest)", hint: "--model haiku" },
 ];
 
-function ChatDefaultsRows({ provider }: { provider: Provider }) {
-  const d = useChatDefaults()[provider];
-  const seen = useSeenModels()[provider];
-  const name = provider === "claude" ? "Claude Code" : "Codex";
+/**
+ * The models a new chat can start on (Settings > General and the onboarding): the CLI's own default, Claude Code's
+ * aliases, then what chats reported (`ready.models`), plus the current choice if it is none of those.
+ */
+export function modelChoices(provider: Provider, seen: { id: string; label: string }[], current: string | null): Option<string>[] {
   const models: Option<string>[] = [
     { value: DEFAULT, label: "CLI default", hint: provider === "claude" ? "Whatever claude picks (your /model choice)" : "What ~/.codex/config.toml says" },
     ...(provider === "claude" ? CLAUDE_ALIASES : []),
     ...seen.filter((m) => !CLAUDE_ALIASES.some((a) => a.value === m.id)).map((m) => ({ value: m.id, label: m.label, hint: m.id })),
   ];
-  if (d.model && !models.some((m) => m.value === d.model)) models.push({ value: d.model, label: d.model });
+  if (current && !models.some((m) => m.value === current)) models.push({ value: current, label: current });
+  return models;
+}
+
+function ChatDefaultsRows({ provider }: { provider: Provider }) {
+  const d = useChatDefaults()[provider];
+  const seen = useSeenModels()[provider];
+  const name = provider === "claude" ? "Claude Code" : "Codex";
+  const models = modelChoices(provider, seen, d.model);
   const modes: Option<string>[] = [{ value: DEFAULT, label: "CLI default", hint: "The CLI's own setting" }, ...(PERMISSION_MODES[provider] ?? []).map((m) => ({ value: m.id, label: m.label, hint: m.description }))];
   return (
     <>
@@ -82,6 +92,7 @@ function usePower(on: boolean) {
 
 export function General() {
   const [prefs, , unavailable] = useAppPrefs();
+  const defaultCli = useDefaultCli();
   const apps = useInstalledApps();
   const showAutomation = useStore((s) => s.showAutomation);
   const setShowAutomation = useStore((s) => s.setShowAutomation);
@@ -106,6 +117,25 @@ export function General() {
   return (
     <>
       <Group label="New chats" footer="Applies to chats you start from now on. A resumed session keeps the model and mode it had.">
+        <Row
+          attr="default-cli"
+          label="Start new sessions with"
+          k="default cli agent provider claude code codex new session"
+          desc="The agent the New session sheet picks first. Not chosen: the agent the folder last used, else Claude Code."
+          control={
+            <Select<"auto" | Provider>
+              label="Start new sessions with"
+              value={defaultCli ?? "auto"}
+              width={260}
+              options={[
+                { value: "auto", label: "Not chosen", hint: "The folder’s last agent, else Claude Code" },
+                { value: "claude", label: "Claude Code" },
+                { value: "codex", label: "Codex" },
+              ]}
+              onChange={(v) => setDefaultCli(v === "auto" ? null : v)}
+            />
+          }
+        />
         <ChatDefaultsRows provider="claude" />
         <ChatDefaultsRows provider="codex" />
       </Group>

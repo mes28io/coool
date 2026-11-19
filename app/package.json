@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "lint": "oxlint src",
-    "test": "node --test src/lib/shortcuts.test.ts src/lib/presenceWords.test.ts src/lib/titles.test.ts src/lib/treemap.test.ts src/lib/glassHoles.test.ts src/lib/away.test.ts src/lib/toolNames.test.ts src/lib/turnBreakdown.test.ts src/lib/agentFill.test.ts src/lib/mission.test.ts src/lib/macKeys.test.ts src/lib/shellTitle.test.ts src/lib/tipPlace.test.ts src/lib/risk.test.ts src/lib/lanes.test.ts src/lib/questionKeys.test.ts src/lib/hoverRest.test.ts src/lib/needs.test.ts src/lib/mdSplit.test.ts src/lib/turn.test.ts src/lib/explain.test.ts src/lib/animRules.test.ts src/lib/notifyRoute.test.ts src/lib/patch.test.ts",
+    "test": "node --test src/lib/shortcuts.test.ts src/lib/presenceWords.test.ts src/lib/titles.test.ts src/lib/treemap.test.ts src/lib/glassHoles.test.ts src/lib/away.test.ts src/lib/toolNames.test.ts src/lib/turnBreakdown.test.ts src/lib/agentFill.test.ts src/lib/mission.test.ts src/lib/macKeys.test.ts src/lib/shellTitle.test.ts src/lib/tipPlace.test.ts src/lib/risk.test.ts src/lib/lanes.test.ts src/lib/questionKeys.test.ts src/lib/hoverRest.test.ts src/lib/needs.test.ts src/lib/mdSplit.test.ts src/lib/turn.test.ts src/lib/explain.test.ts src/lib/animRules.test.ts src/lib/notifyRoute.test.ts src/lib/patch.test.ts src/lib/startModes.test.ts",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "fonts": "node scripts/fetch-fonts.mjs --force",
