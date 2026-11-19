@@ -43,6 +43,7 @@ import { leaves, resolveTarget, useStore } from "./store";
 import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
+import { windowScenarios } from "./selftestWindow";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
 import { voiceScenarios } from "./selftestVoice";
@@ -4801,6 +4802,13 @@ Object.assign(scenarios, fix2);
 Object.assign(
   scenarios,
   Object.fromEntries(Object.entries(perfScenarios({ invoke: (c, a) => invoke(c, a), log, sleep, waitFor, shot: (n, s) => shot(n, undefined, s) })).map(([n, f]) => [n, () => f()])),
+);
+
+// `chat-window` (selftestWindow.ts): the long-timeline window on a made-up chat and a long transcript session; no
+// model calls, so it runs on the synthetic perf home too.
+Object.assign(
+  scenarios,
+  Object.fromEntries(Object.entries(windowScenarios({ step, sleep, waitFor, invoke: (c, a) => invoke(c, a), shot: (n) => shot(n), fail: (m) => new Fail(m) })).map(([n, f]) => [n, () => f()])),
 );
 
 // ---------- the five inspiration ideas (docs/research/affectui-inspiration.md "Later"), against the real CLI ----------

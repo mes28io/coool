@@ -72,6 +72,8 @@ export function Windowed({
   const [, setTick] = useState(0);
   const ro = useRef<ResizeObserver | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  /** scrollTop when the anchor was last taken or kept. */
+  const seenTop = useRef(0);
   const keysRef = useRef(keys);
   keysRef.current = keys;
   const est = useRef(estimate);
@@ -121,17 +123,22 @@ export function Windowed({
       if (Math.abs(el.scrollTop - max) > 1) el.scrollTop = max;
       return;
     }
+    // Scrolled since the anchor was taken (a jump, a scrollIntoView; its scroll event not handled yet): that is
+    // where the reader is now, not a shift to undo.
+    if (Math.abs(el.scrollTop - seenTop.current) > 0.5) return save();
     const a = anchor.current;
     const node = a && els.current.get(a.key);
     if (!a || !node) return;
     const d = node.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
     if (Math.abs(d) >= 0.5) el.scrollTop += d;
+    seenTop.current = el.scrollTop;
   };
 
   /** The anchor: the first drawn row that starts inside the viewport, else the one covering its top. */
   const save = () => {
     const el = scroller.current;
     if (!el || !box.current) return;
+    seenTop.current = el.scrollTop;
     const sr = el.getBoundingClientRect();
     const ks = keysRef.current;
     let cover: { key: string; top: number } | null = null;
