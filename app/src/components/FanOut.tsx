@@ -6,7 +6,7 @@ import { motion } from "motion/react";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentCardData } from "../lib/agentCards";
-import { fmtTokens } from "../lib/format";
+import { fmtTokens, shellTitle } from "../lib/format";
 import { cellCounts, cellState, type CellState } from "../lib/mission";
 import { useMotion } from "../lib/motion";
 import { modelLabel } from "../lib/models";
@@ -51,7 +51,7 @@ export function FanOut({ cards, shells, onOpen }: { cards: AgentCardData[]; shel
       since: c.startedAt,
       card: c,
     })),
-    ...shells.map((s) => ({ id: `sh${s.pid}`, state: "running" as const, title: s.description || s.command, sub: "Background shell", step: s.tail?.[s.tail.length - 1] ?? s.command, tokens: 0, since: s.started })),
+    ...shells.map((s) => ({ id: `sh${s.pid}`, state: "running" as const, title: s.description || shellTitle(s.command), sub: "Background shell", step: s.tail?.[s.tail.length - 1] ?? s.command, tokens: 0, since: s.started })),
   ];
   const counts = cellCounts(cells.map((c) => c.state));
   const finished = counts.done + counts.failed + counts.stopped;

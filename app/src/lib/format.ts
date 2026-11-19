@@ -177,6 +177,31 @@ export function shortDetail(detail: string): string {
 
 
 /**
+ * A background shell's name when the agent gave it no description: the command without its leading variable
+ * assignments, with long paths cut to their file name and a wait loop named for what it waits on.
+ * `F=/private/tmp/x/run.log; until grep -q done "$F"; do sleep 5; done` -> "Waiting until grep -q done run.log".
+ */
+export function shellTitle(command: string): string {
+  let c = command.trim();
+  const vars = new Map<string, string>();
+  for (;;) {
+    const m = /^(?:export\s+)?([A-Za-z_]\w*)=("[^"]*"|'[^']*'|[^\s;&|]*)\s*(?:;|&&)?\s*/.exec(c);
+    // An assignment that is the whole command, or a prefix of one word (`A=1 cmd`), is left alone.
+    if (!m || m[0].length >= c.length) break;
+    vars.set(m[1], m[2].replace(/^["']|["']$/g, ""));
+    c = c.slice(m[0].length);
+  }
+  const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
+  c = c
+    .replace(/"?\$\{?([A-Za-z_]\w*)\}?"?/g, (all, name: string) => (vars.has(name) ? base(vars.get(name)!) : all))
+    .replace(/(?:~|\.{0,2})?\/(?:[^\s/"';|&]+\/){2,}([^\s/"';|&]+)/g, "$1")
+    .replace(/\s+/g, " ");
+  const wait = /^(until|while)\s+(.+?)\s*;\s*do\b/.exec(c);
+  if (wait) return `Waiting ${wait[1]} ${wait[2].replace(/^\[\s*(.*?)\s*\]$/, "$1")}`;
+  return c || command.trim();
+}
+
+/**
  * A word for "the model is thinking", in the spirit of the CLIs' own spinners. One word per
  * thinking stretch: pass something stable for that stretch (its start time, the session's
  * last update) so the word does not change while it lasts.
