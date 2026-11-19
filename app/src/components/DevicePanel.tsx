@@ -237,7 +237,9 @@ function Frame({
   const s = Math.max(0, Math.min((box.w - PAD * 2) / d.w, (box.h - PAD * 2) / d.h));
   const w = d.w * s;
   const h = d.h * s;
-  const radius = w * 0.06;
+  // The screen's corners as the device has them: a tall, all-screen iPhone's display corner is about an eighth of its
+  // width; a device with square display corners (an older iPhone, an iPad) gets a small one.
+  const radius = d.h / d.w > 1.9 ? w * 0.125 : w * 0.03;
   const frame = (
     <div
       {...rest}
@@ -254,7 +256,7 @@ function Frame({
   return (
     <div className="absolute inset-0 flex items-center justify-center">
       {around ? (
-        <PanelBeam on={around.on} slot={around.slot} radius={radius} bezel={7} style={size}>
+        <PanelBeam on={around.on} slot={around.slot} radius={radius} style={size}>
           {frame}
         </PanelBeam>
       ) : (
