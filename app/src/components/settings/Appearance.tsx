@@ -1,7 +1,7 @@
 // Settings > Appearance and Settings > Keyboard shortcuts.
 
 import { useState } from "react";
-import { setGlassPref, useGlass } from "../../lib/glass";
+import { setBackdrop, setGlassPref, useGlass, type Backdrop } from "../../lib/glass";
 import { motionHints, setMotionPref, systemReduceMotion, useMotion, type MotionPref } from "../../lib/motion";
 import { setTextSize, useTextSize, type TextSize } from "../../lib/prefs";
 import { searchShortcuts, type ShortcutGroup } from "../../lib/shortcuts";
@@ -62,6 +62,29 @@ export function Appearance() {
           }
           k="glass frosted vibrancy blur transparency transparent"
           control={<Switch label="Translucent window" on={glass.pref} disabled={!glass.supported} onChange={setGlassPref} />}
+        />
+        <Row
+          attr="window-backdrop"
+          label="Window backdrop"
+          desc={
+            glass.reduceTransparency
+              ? "Off while macOS Reduce transparency is on (Accessibility > Display)."
+              : glass.backdrop === "colours"
+                ? "coool’s own soft colours behind the title bar, icon rail and device panels, under the same tint."
+                : "The title bar, icon rail and device panels show what is behind the window (with the translucent window on)."
+          }
+          k="backdrop colours colors background wallpaper gradient glass tint"
+          control={
+            <Segmented<Backdrop>
+              size="sm"
+              value={glass.backdrop}
+              onChange={setBackdrop}
+              options={[
+                { value: "desktop", label: "Desktop" },
+                { value: "colours", label: "Colours" },
+              ]}
+            />
+          }
         />
         <Row
           attr="text-size"

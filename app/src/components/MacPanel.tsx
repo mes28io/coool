@@ -6,7 +6,7 @@
 // while one drives (components/Presence.tsx). The Mac is shared, so two chats can show two cursors at once.
 
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, MAC_NETWORK_TRUTH, type MacInput, type MacNetworkMode, type MacStatus } from "../lib/backend";
 import { macKeyCode } from "../lib/macKeys";
 import { simTarget, usePresenceOf } from "../lib/presence";
@@ -456,6 +456,7 @@ function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w
   const [d, setD] = useState(initial);
   const [attachErr, setAttachErr] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const lost = useEffectEvent(onLost);
   const [shown, setShown] = useState(false);
   const [focused, setFocused] = useState(false);
 
@@ -507,7 +508,7 @@ function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w
         (e) => {
           if (dead) return;
           setAttachErr(msg(e));
-          if (GONE.test(msg(e))) onLost();
+          if (GONE.test(msg(e))) lost();
         },
       );
     return () => {

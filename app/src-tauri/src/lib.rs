@@ -1563,6 +1563,7 @@ pub fn run() {
             selftest::selftest_vm,
             selftest::selftest_mac_tool,
             selftest::selftest_vm_helper,
+            selftest::selftest_device_tool,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;

@@ -10,6 +10,7 @@ import { useMotion } from "./lib/motion";
 import { matchShortcut } from "./lib/shortcuts";
 import { syncWindow } from "./lib/boot";
 import { glassActive, useGlassHoles } from "./lib/glass";
+import { Backdrop } from "./components/Backdrop";
 import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
 import { IAlert, IClose, ISidebar } from "./components/icons";
@@ -232,6 +233,8 @@ export default function App() {
 
   return (
     <MotionConfig reducedMotion={reduceMotion ? "always" : "never"}>
+      {/* coool's colour backdrop, under everything (Settings > Appearance > Window backdrop: Colours). */}
+      <Backdrop />
       {/* The window chrome (title bar and icon rail): frosted glass when Settings > Appearance > Translucent window is on. */}
       <div className="flex h-full w-full flex-col bg-chrome">
         {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}

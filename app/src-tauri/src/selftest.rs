@@ -21,7 +21,9 @@
 //! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
 //!   frosted glass shows what is behind it (the `glass` scenario).
 //! - `COOOL_SELFTEST_WINDOW`: `quiet` (on top, never focused, no Dock icon) or `back` (never focused, behind the
-//!   person's windows: checks that need no picture of the window, like `mac-cycles` and `mac-idle`).
+//!   person's windows and off screen: checks that need no picture of the window, like `mac-cycles` and `mac-idle`)
+//!   or `behind` (never focused, on screen but behind the person's windows: window-only shots of the glass with a
+//!   window of the test's own just behind it).
 //!
 //! A run kept apart from the person's own data sets `HOME` to a throwaway folder too (the CLIs' `~/.claude` and
 //! `~/.codex`, coool's app data), with `COOOL_VM_DIR` pointing at the one sandbox Mac when a scenario uses it.
@@ -102,7 +104,8 @@ impl SelfTest {
 
     /// A fixed size, so screenshots are comparable. `COOOL_SELFTEST_WINDOW`: unset, on top and focused (as before);
     /// `quiet`, on top but never focused (no Dock icon, never the active app: the person's typing stays theirs);
-    /// `back`, never focused and behind the person's windows (checks that need no picture of the window).
+    /// `back`, never focused, behind the person's windows and off screen (checks that need no picture of the window);
+    /// `behind`, the same but on screen (window-only shots of the glass, with a window of the test's own behind it).
     pub fn prepare_window(&self, app: &AppHandle) {
         let mode = std::env::var("COOOL_SELFTEST_WINDOW").unwrap_or_default();
         let quiet = self.quiet_window();
@@ -111,12 +114,16 @@ impl SelfTest {
         if let Some(w) = app.get_window("main") {
             let _ = w.set_size(tauri::LogicalSize::new(1440.0, 900.0));
             let _ = w.center();
-            let _ = w.set_always_on_top(mode != "back");
+            let _ = w.set_always_on_top(mode == "quiet");
             if !quiet {
                 let _ = w.set_focus();
             }
-            #[cfg(target_os = "macos")]
             if mode == "back" {
+                // Off every screen as well as behind: nothing of it shows (the checks read the DOM and the Mac).
+                let _ = w.set_position(tauri::LogicalPosition::new(-20000.0, -20000.0));
+            }
+            #[cfg(target_os = "macos")]
+            if mode == "back" || mode == "behind" {
                 order_back(&w);
             }
         }
@@ -124,7 +131,7 @@ impl SelfTest {
 
     /// The window must never take focus (`COOOL_SELFTEST_WINDOW` quiet or back).
     pub fn quiet_window(&self) -> bool {
-        matches!(std::env::var("COOOL_SELFTEST_WINDOW").as_deref(), Ok("quiet" | "back"))
+        matches!(std::env::var("COOOL_SELFTEST_WINDOW").as_deref(), Ok("quiet" | "back" | "behind"))
     }
 
     fn log(&self, line: &str) {
@@ -947,4 +954,13 @@ pub fn selftest_vm_helper(core: State<'_, Arc<Core>>, devices: State<'_, Arc<cra
         }
         a => Err(format!("unknown action {a}")),
     }
+}
+
+/// Any `coool-device` tool (the iPhone's `tap`, `observe`, …) called for `chat` as its agent calls it over MCP: the
+/// text of its result. The `beam-video` scenario drives the iPhone this way, without a model.
+#[tauri::command(async)]
+pub fn selftest_device_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize, name: String, args: serde_json::Value) -> Result<String, String> {
+    active(&core)?;
+    let out = crate::device::mcp::call_tool(devices.inner(), chat, &name, &args)?;
+    Ok(out.iter().filter_map(|v| v["text"].as_str()).collect::<Vec<_>>().join("\n"))
 }

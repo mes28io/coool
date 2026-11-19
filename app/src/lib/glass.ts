@@ -7,6 +7,11 @@
 // hides), so the page never goes see-through over an opaque window. Off when the setting is off, when macOS "Reduce
 // transparency" is on (checked again whenever the window comes forward), and outside the desktop app.
 //
+// "Window backdrop" (Settings > Appearance, next to it): Desktop (the blur of what is behind the window, above) or
+// Colours, coool's own field of soft colour (components/Backdrop.tsx) under the same tint, so the chrome and the device
+// panels show colour even over a plain desktop. Colours needs no native view: it works with the glass off and in the
+// browser mock, and falls back like the glass under "Reduce transparency". Shown: `data-backdrop="colours"` on <html>.
+//
 // The device panels sit inside the opaque main sheet, so the sheet's background is its own layer with holes cut
 // where those panels are (`useGlassHoles`): the content above it is never masked, and the holes follow the panels
 // as they open, resize, move with a split or switch tabs.
@@ -16,6 +21,9 @@ import { isTauri } from "./backend";
 import { holeMask, holeRects } from "./glassHoles";
 
 const KEY = "coool.glass";
+const BACKDROP_KEY = "coool.backdrop";
+
+export type Backdrop = "desktop" | "colours";
 
 export interface GlassState {
   /** The person's choice (Settings > Appearance). */
@@ -26,6 +34,8 @@ export interface GlassState {
   reduceTransparency: boolean;
   /** This build can show it (the macOS app; not the browser mock). */
   supported: boolean;
+  /** Settings > Appearance > Window backdrop. */
+  backdrop: Backdrop;
 }
 
 function loadPref(): boolean {
@@ -36,20 +46,50 @@ function loadPref(): boolean {
   }
 }
 
-let state: GlassState = { pref: loadPref(), active: false, reduceTransparency: false, supported: isTauri };
+function loadBackdrop(): Backdrop {
+  try {
+    return localStorage.getItem(BACKDROP_KEY) === "colours" ? "colours" : "desktop";
+  } catch {
+    return "desktop";
+  }
+}
+
+let state: GlassState = { pref: loadPref(), active: false, reduceTransparency: false, supported: isTauri, backdrop: loadBackdrop() };
 const subs = new Set<() => void>();
 let theme: "dark" | "light" = typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark";
 let seq = 0;
 
 function set(next: Partial<GlassState>) {
   const s = { ...state, ...next };
-  if (s.pref === state.pref && s.active === state.active && s.reduceTransparency === state.reduceTransparency && s.supported === state.supported) return;
+  if (s.pref === state.pref && s.active === state.active && s.reduceTransparency === state.reduceTransparency && s.supported === state.supported && s.backdrop === state.backdrop) return;
   state = s;
+  backdropCss();
   subs.forEach((f) => f());
 }
 
 export const glassState = () => state;
 export const glassActive = () => state.active;
+/** coool's own colour field shows: chosen, and macOS doesn't ask for less transparency. */
+export const backdropShown = (s: GlassState = state) => s.backdrop === "colours" && !s.reduceTransparency;
+/** The glass regions are see-through now: over the desktop's blur, or over coool's backdrop. */
+export const translucent = (s: GlassState = state) => s.active || backdropShown(s);
+
+function backdropCss() {
+  if (typeof document === "undefined") return;
+  if (backdropShown()) document.documentElement.dataset.backdrop = "colours";
+  else delete document.documentElement.dataset.backdrop;
+}
+backdropCss();
+
+export function setBackdrop(b: Backdrop) {
+  try {
+    if (b === "colours") localStorage.setItem(BACKDROP_KEY, b);
+    else localStorage.removeItem(BACKDROP_KEY);
+  } catch {
+    /* private mode: lasts for this window */
+  }
+  set({ backdrop: b });
+}
 export function useGlass(): GlassState {
   return useSyncExternalStore(
     (f) => (subs.add(f), () => subs.delete(f)),
@@ -168,7 +208,7 @@ export function useGlassHoles(bg: HTMLElement | null) {
     };
     const measure = () => {
       raf = 0;
-      const rects = state.active ? holeRects(bg.getBoundingClientRect(), holes) : [];
+      const rects = translucent() ? holeRects(bg.getBoundingClientRect(), holes) : [];
       const key = rects.map((r) => r.map((n) => n.toFixed(2)).join(",")).join(";");
       if (key !== last) {
         last = key;

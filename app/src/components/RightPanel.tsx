@@ -3,7 +3,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useRef, useState, type ReactNode } from "react";
-import { useGlass, useGlassHole } from "../lib/glass";
+import { translucent, useGlass, useGlassHole } from "../lib/glass";
 import type { RightPanelKind } from "../store";
 import { cx, spring } from "./primitives";
 import { reducedMotion } from "./StepRail";
@@ -40,7 +40,7 @@ export function RightPanel({
   const open = which !== null;
   const w = width(kind);
   const fade = { duration: reducedMotion() ? 0 : 0.2 };
-  const glass = useGlass().active && GLASS.has(kind);
+  const glass = translucent(useGlass()) && GLASS.has(kind);
   const [aside, setAside] = useState<HTMLElement | null>(null);
   useGlassHole(aside, glass);
   return (

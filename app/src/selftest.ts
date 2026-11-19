@@ -4058,6 +4058,94 @@ const mac3: Record<string, (ctx: Ctx) => Promise<void>> = {
     });
   },
   /**
+   * Clips for a screen recording of the beam: an agent's tools (called as its agent calls them, no model) drive the
+   * iPhone, the Mac and the Browser panel for 11 s each, dark theme, then the Browser again in light; Reduce motion
+   * Off. Each clip starts with a `CLIP <name> <seconds>` log line a recorder outside the app watches for. The Browser
+   * opens `COOOL_SELFTEST_SITE` + form.html (a local page with an invented order form).
+   */
+  async "beam-video"(ctx) {
+    const keep = (localStorage.getItem("coool.motion") as MotionPref | null) ?? "auto";
+    setMotionPref("off");
+    const st = () => useStore.getState();
+    let udid = "";
+    const until = async (ms: number, f: (i: number) => Promise<unknown>) => {
+      const end = Date.now() + ms;
+      for (let i = 0; Date.now() < end; i++) await f(i).catch((e) => log(`WARN beam-video step: ${e}`));
+    };
+    const clip = async (name: string, ms: number, drive: (end: number) => Promise<void>) => {
+      await log(`CLIP ${name} ${Math.round(ms / 1000) + 1}`);
+      await sleep(900);
+      await drive(ms);
+    };
+    try {
+      st().setThemePref("dark");
+      const { id, key } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions");
+      const dev = (name: string, args: Record<string, unknown> = {}) => invoke("selftest_device_tool", { chat: id, name, args }) as Promise<string>;
+      await step("beam-video: the iPhone, dark", async () => {
+        udid = await api().simEnsureDevice();
+        await api().simBoot(udid);
+        st().setDevice(key, udid);
+        st().setRightPanel(key, "device");
+        await waitFor("the booted iPhone", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 120_000);
+        await dev("app", { action: "launch", bundle_id: "com.apple.Preferences" });
+        await sleep(2500);
+        await clip("iphone-dark", 11_000, (ms) =>
+          until(ms, async (i) => {
+            await dev("swipe", { scroll: i % 2 ? "up" : "down", amount: 0.5, observe: false });
+            await sleep(400);
+          }),
+        );
+      });
+      await step("beam-video: the Mac, dark", async () => {
+        await api().macBoot();
+        await macSh("killall TextEdit 2>/dev/null; sleep 0.5; defaults write com.apple.TextEdit NSShowAppCentricOpenPanelInsteadOfUntitledFile -bool false; defaults write com.apple.TextEdit RichText -bool false; open -a TextEdit; sleep 2; echo ok");
+        st().setRightPanel(key, "mac");
+        await waitFor("the running Mac", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 90_000);
+        await sleep(2000);
+        const screen = await macTool(id, "mac_observe", { menus: false });
+        const area = /\[(\w+)\] textarea/.exec(screen)?.[1];
+        const words = ["The morning train was late again.", "Coffee helps.", "We meet at ten in the blue room.", "Bring the notes."];
+        await clip("mac-dark", 11_000, (ms) =>
+          until(ms, async (i) => {
+            await macTool(id, "mac_type", { text: words[i % words.length] + " ", ...(area ? { into: area, replace: false } : {}), observe: false });
+            await sleep(300);
+          }),
+        );
+        await macSh("killall TextEdit 2>/dev/null; echo ok").catch(() => "");
+      });
+      const site = ctx.cfg.site ?? "";
+      for (const theme of ["dark", "light"] as const) {
+        await step(`beam-video: the Browser panel, ${theme}`, async () => {
+          st().setThemePref(theme);
+          await sleep(800);
+          const page = await browserTool(id, "browser_navigate", { url: `${site}form.html` });
+          await waitFor("the page", () => $("[data-browser-native]"), 20_000);
+          await sleep(2500);
+          const name = idOf(page.text, "textbox", "Name");
+          const city = idOf(page.text, "textbox", "City");
+          const fill = [
+            [name, "Ada Brightwater"],
+            [city, "Lisbon"],
+            [name, "Milo Fernsby"],
+            [city, "Oslo"],
+          ] as const;
+          await clip(`browser-${theme}`, 11_000, (ms) =>
+            until(ms, async (i) => {
+              const [field, text] = fill[i % fill.length];
+              await browserTool(id, "browser_type", { id: field, text, observe: false });
+              await sleep(300);
+            }),
+          );
+        });
+      }
+      st().setRightPanel(key, "closed");
+    } finally {
+      setMotionPref(keep);
+      await api().macShutdown().catch(() => null);
+      if (udid) await invoke("selftest_sim_delete").catch(() => null);
+    }
+  },
+  /**
    * The beam around the Browser panel's page while an agent drives it (the `browser_*` tools called as the agent
    * calls them), Reduce motion Off, in both themes: four shots through the beam's loop, as `beam-shots` takes them
    * around the iPhone and the Mac.
@@ -4096,12 +4184,13 @@ const mac3: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
   /**
    * Frosted glass with a running iPhone (a simulator the test makes and deletes) and a running Mac in the right
-   * panel: glass on and off, light and dark, one shot each. Run with `COOOL_SELFTEST_SHOTS_ONSCREEN=1` and something
-   * colourful behind the window, so the shots show what the glass lets through (the chrome and the right sidebar)
-   * and what it must not (the device screens).
+   * panel: glass on, glass off, and coool's colour backdrop (Window backdrop: Colours, glass on), light and dark, one
+   * shot each. Run with `COOOL_SELFTEST_SHOTS_ONSCREEN=1`, `COOOL_GLASS_ACTIVE=1` (the window is never focused) and
+   * something colourful behind the window, so the shots show what the glass lets through (the chrome and the right
+   * sidebar) and what it must not (the device screens). Logs the tint over the chrome as the page computes it.
    */
   async "glass-running"(ctx) {
-    const { setGlassPref } = await import("./lib/glass");
+    const { setGlassPref, setBackdrop } = await import("./lib/glass");
     const keepTheme = useStore.getState().themePref;
     let udid = "";
     try {
@@ -4114,32 +4203,89 @@ const mac3: Record<string, (ctx: Ctx) => Promise<void>> = {
       });
       for (const dev of ["device", "mac"] as const) {
         await step(`glass-running: the ${dev === "device" ? "iPhone" : "Mac"} panel, glass on/off, light/dark`, async () => {
+          if (dev === "device") useStore.getState().setDevice(key, udid);
           useStore.getState().setRightPanel(key, dev);
           if (dev === "device") await waitFor("the booted iPhone", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 90_000);
           else await waitFor("the running Mac", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 90_000);
           await sleep(2500);
           const notes: string[] = [];
-          for (const glass of [true, false]) {
-            setGlassPref(glass);
+          for (const mode of ["on", "off", "colours"] as const) {
+            setGlassPref(mode !== "off");
+            setBackdrop(mode === "colours" ? "colours" : "desktop");
             for (const t of ["light", "dark"] as const) {
               useStore.getState().setThemePref(t);
               await sleep(1200);
               const screen = $(dev === "device" ? `[data-sim-screen="${udid}"]` : "[data-mac-screen]");
-              notes.push(`${glass ? "on" : "off"}/${t}: data-glass=${document.documentElement.dataset.glass} screen bg ${screen ? getComputedStyle(screen).backgroundColor : "?"}`);
-              await shot(`glassrun-${dev === "device" ? "iphone" : "mac"}-${glass ? "on" : "off"}-${t}`, undefined, 600);
+              const chrome = getComputedStyle(document.querySelector("#root .bg-chrome") ?? document.body).backgroundColor;
+              notes.push(`${mode}/${t}: glass=${document.documentElement.dataset.glass ?? "-"} backdrop=${document.documentElement.dataset.backdrop ?? "-"} chrome ${chrome} screen bg ${screen ? getComputedStyle(screen).backgroundColor : "?"}`);
+              await shot(`glassrun-${dev === "device" ? "iphone" : "mac"}-${mode}-${t}`, undefined, 600);
+              if (mode === "on") {
+                // Before: the tint as it was (dark 50 / 56 %, light 36 / 44 %), for a before / after pair.
+                const r = document.documentElement.style;
+                const [c, sg] = t === "dark" ? ["rgb(23 23 23 / 0.5)", "rgb(23 23 23 / 0.56)"] : ["rgb(249 249 249 / 0.36)", "rgb(249 249 249 / 0.44)"];
+                r.setProperty("--chrome", c);
+                r.setProperty("--side-glass", sg);
+                await shot(`glassrun-${dev === "device" ? "iphone" : "mac"}-before-${t}`, undefined, 600);
+                r.removeProperty("--chrome");
+                r.removeProperty("--side-glass");
+              }
             }
           }
           setGlassPref(true);
+          setBackdrop("desktop");
           return notes.join("; ");
         });
       }
+      await step("glass-running: the window left alone 15 s with each backdrop (CPU sampled from outside: IDLE lines)", async () => {
+        useStore.getState().setThemePref("dark");
+        useStore.getState().setRightPanel(key, "closed");
+        for (const b of ["desktop", "colours"] as const) {
+          setBackdrop(b);
+          await sleep(2000);
+          await log(`IDLE ${b} start`);
+          await sleep(15_000);
+          await log(`IDLE ${b} end`);
+        }
+        setBackdrop("desktop");
+      });
       useStore.getState().setRightPanel(key, "closed");
     } finally {
       setGlassPref(true);
+      setBackdrop("desktop");
       useStore.getState().setThemePref(keepTheme);
       await api().macShutdown().catch(() => null);
       if (udid) await invoke("selftest_sim_delete").catch(() => null);
     }
+  },
+  /** The glass over a chat with the Browser panel (example.com), no device booted: on, before (the old tint), off, colours. */
+  async "glass-peek"(ctx) {
+    const { setGlassPref, setBackdrop } = await import("./lib/glass");
+    const { key } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions");
+    useStore.getState().openBrowser(key, { kind: "web", url: "https://example.com" });
+    await sleep(3000);
+    await step("glass-peek: glass on / before / off / colours, light and dark", async () => {
+      const notes: string[] = [];
+      for (const t of ["light", "dark"] as const) {
+        useStore.getState().setThemePref(t);
+        for (const mode of ["on", "before", "off", "colours"] as const) {
+          setGlassPref(mode !== "off");
+          setBackdrop(mode === "colours" ? "colours" : "desktop");
+          const r = document.documentElement.style;
+          if (mode === "before") {
+            r.setProperty("--chrome", t === "dark" ? "rgb(23 23 23 / 0.5)" : "rgb(249 249 249 / 0.36)");
+            r.setProperty("--side-glass", t === "dark" ? "rgb(23 23 23 / 0.56)" : "rgb(249 249 249 / 0.44)");
+          }
+          await sleep(1500);
+          notes.push(`${mode}/${t}: glass=${document.documentElement.dataset.glass ?? "-"} backdrop=${document.documentElement.dataset.backdrop ?? "-"} chrome ${getComputedStyle(document.querySelector("#root .bg-chrome") ?? document.body).backgroundColor}`);
+          await shot(`glasspeek-${mode}-${t}`, undefined, 300);
+          r.removeProperty("--chrome");
+          r.removeProperty("--side-glass");
+        }
+      }
+      setGlassPref(true);
+      setBackdrop("desktop");
+      return notes.join("; ");
+    });
   },
   /** The Mac booted and used, left alone for 10 minutes, then used again. */
   async "mac-idle"(ctx) {

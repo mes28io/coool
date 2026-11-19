@@ -230,6 +230,11 @@ struct Session {
     chat: usize,
 }
 
+/// One `coool-device` tool called for `chat` as its agent calls it over MCP (the self-test drives panels this way).
+pub fn call_tool(devices: &Arc<Devices>, chat: usize, name: &str, args: &Value) -> Result<Vec<Value>, String> {
+    Session { devices: devices.clone(), chat }.call(name, args)
+}
+
 const INSTRUCTIONS: &str = "Drives the iPhone simulator shown in this chat's coool panel; the person watches it live. \
 For routine multi-step navigation or form filling (on the iPhone or the Browser panel), call `pilot_run` with the goal \
 and checkable `success` conditions: coool's fast pilot does the steps and verifies them, much faster than step-by-step \
