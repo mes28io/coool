@@ -14,6 +14,7 @@ import type { ContextKind, ContextMap, ContextPart, Provider } from "../lib/type
 import { MoodGlyph } from "./MoodGlyph";
 import { ICaret, ICheck } from "./icons";
 import { cx, ease, Popover } from "./primitives";
+import { countRender } from "../lib/perfCount";
 
 /** Five hue families plus neutral (styles.css `--ctx-*`): setup is neutral, memory and skills violet, files and images blue, the conversation rose, tool output orange, a summary green. */
 const KIND: Record<ContextKind, { tint: string; what: string }> = {
@@ -102,6 +103,7 @@ export function ContextMapCard({
   agents: ContextAgent[];
   compacting?: boolean;
 }) {
+  countRender("ContextMap");
   const [agentId, setAgentId] = useState<string | null>(null);
   const agent = agentId ? agents.find((a) => a.id === agentId) : undefined;
   useEffect(() => {

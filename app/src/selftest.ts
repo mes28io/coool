@@ -39,6 +39,7 @@ import { decideMotion, setMotionPref, type MotionHints, type MotionPref } from "
 import { leaves, resolveTarget, useStore } from "./store";
 import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
+import { perfScenarios } from "./selftestPerf";
 
 interface Config {
   scenario: string;
@@ -4153,6 +4154,11 @@ const fix2: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, fix2);
+// `perf-*` (selftestPerf.ts): numbers for docs/PERF.md, not pass/fail; not in `all`.
+Object.assign(
+  scenarios,
+  Object.fromEntries(Object.entries(perfScenarios({ invoke: (c, a) => invoke(c, a), log, sleep, waitFor })).map(([n, f]) => [n, () => f()])),
+);
 
 // ---------- the five inspiration ideas (docs/research/affectui-inspiration.md "Later"), against the real CLI ----------
 //
@@ -4699,7 +4705,8 @@ export async function maybeRunSelfTest() {
   await log(`START ${names.join(",")} in ${cfg.dir}`);
   await waitFor("the first sessions payload", () => useStore.getState().ready, 30_000).catch(() => {});
   await sleep(1500);
-  await shot("start");
+  // The perf scenarios take no screenshots (and the window must not be disturbed before they measure).
+  if (!names.every((n) => n.startsWith("perf-"))) await shot("start");
   const ctx: Ctx = { cfg, main: null, question: null };
   for (const n of names) {
     const f = scenarios[n] ?? (/^inspo-\d+$/.test(n) ? (c: Ctx) => inspo(c, n) : undefined);

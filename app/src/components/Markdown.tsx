@@ -1,5 +1,6 @@
 // One markdown renderer for all assistant prose (react-markdown + remark-gfm, no raw HTML).
-// Tolerates incomplete markdown while streaming (see `streamSafe`), memoized per message.
+// Tolerates incomplete markdown while streaming (see `streamSafe`), memoized per message; while it streams, its
+// finished blocks are parsed once each and only the block being written is parsed again (lib/mdSplit.ts).
 
 import { Children, isValidElement, memo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -7,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { useOpenPage, webUrl } from "../lib/browser";
 import { ICheck, IFile } from "./icons";
 import { cx } from "./primitives";
+import { splitSettled } from "../lib/mdSplit";
 
 const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
@@ -30,7 +32,9 @@ export function streamSafe(src: string): string {
     return t.replace(/\n+$/, "\n");
   }
 
-  const cut = t.lastIndexOf("\n\n") + 2;
+  // The last paragraph (all of it when there is no blank line: `lastIndexOf` is -1 then, not a cut after one character).
+  const at = t.lastIndexOf("\n\n");
+  const cut = at < 0 ? 0 : at + 2;
   const head = t.slice(0, cut);
   let tail = t.slice(cut);
   // Dangling markers are dropped (not escaped) so raw symbols never flash; once the closer
@@ -160,12 +164,30 @@ const components: Components = {
 
 /** Assistant prose as markdown. `streaming`: the text is still arriving. */
 export const Markdown = memo(function Markdown({ text, streaming, className }: { text: string; streaming?: boolean; className?: string }) {
-  const src = streaming ? streamSafe(text) : text;
+  if (streaming) {
+    // Each piece renders its elements straight into the same div, so the DOM is what one parse would give.
+    const parts = splitSettled(text);
+    const tail = parts.pop() ?? "";
+    return (
+      <div className={cx("md selectable md-live", className)}>
+        {parts.map((t, i) => (
+          <Piece key={i} text={t} />
+        ))}
+        <Piece key={parts.length} text={streamSafe(tail)} />
+      </div>
+    );
+  }
   return (
-    <div className={cx("md selectable", streaming && "md-live", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {src}
-      </ReactMarkdown>
+    <div className={cx("md selectable", className)}>
+      <Piece text={text} />
     </div>
+  );
+});
+
+const Piece = memo(function Piece({ text }: { text: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      {text}
+    </ReactMarkdown>
   );
 });

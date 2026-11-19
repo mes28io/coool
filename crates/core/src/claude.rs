@@ -41,6 +41,11 @@ struct ParseState {
     /// Newest real conversation event, epoch ms (see [`event_ms`]).
     #[serde(default)]
     last_event: Option<u64>,
+    /// A turn is open (an event since the last `turn_duration`), and when it began.
+    #[serde(default)]
+    turn_open: bool,
+    #[serde(default)]
+    turn_start: Option<u64>,
     /// Naming facts (see [`crate::titles`]).
     #[serde(default)]
     titles: crate::titles::Facts,
@@ -87,7 +92,7 @@ impl Parsed {
             model: self.model.clone(),
             last_prompt: self.last_prompt.clone(),
             current: self.current.clone(),
-            tokens: Tokens { turn_output: self.p.turn_out, ..self.tokens.clone() },
+            tokens: Tokens { turn_output: self.p.turn_out, turn_start: self.p.turn_start, ..self.tokens.clone() },
             activity: Arc::new(self.activity.clone()),
             models,
             origin: self.p.entrypoint.as_ref().map(|e| crate::origin::claude(Some(e), self.p.human)),
@@ -512,6 +517,12 @@ fn parse_line(
     let ts = v["timestamp"].as_str().map(short_time).unwrap_or_default();
     if let Some(t) = event_ms(&v) {
         st.last_event = st.last_event.max(Some(t));
+        if v["type"] == "system" {
+            st.turn_open = false;
+        } else if !st.turn_open {
+            st.turn_open = true;
+            st.turn_start = Some(t);
+        }
     }
     if st.entrypoint.is_none()
         && let Some(e) = v["entrypoint"].as_str()
@@ -1027,6 +1038,32 @@ mod tests {
             p.line(l);
         }
         p.view().last_event
+    }
+
+    /// A turn started by a background task's notification (no prompt): its start is the notification, not the
+    /// prompt of a turn that ended hours before (a live timer showed "9h 54m" counting from that prompt).
+    #[test]
+    fn turn_start_is_the_first_event_after_the_last_turn_end() {
+        let prompt = r#"{"type":"user","timestamp":"2026-11-15T03:00:00Z","message":{"content":"run the long job"}}"#;
+        let note = r#"{"type":"user","timestamp":"2026-11-15T13:00:00Z","message":{"content":"<task-notification>job done</task-notification>"}}"#;
+        let mut p = Parsed::default();
+        for l in [prompt, REPLY, TURN_END] {
+            p.line(l);
+        }
+        assert_eq!(p.view().tokens.turn_start, parse_rfc3339_ms("2026-11-15T03:00:00Z"));
+        for l in [note, REPLY] {
+            p.line(l);
+        }
+        let v = p.view();
+        assert_eq!(v.tokens.turn_start, parse_rfc3339_ms("2026-11-15T13:00:00Z"));
+        // The notification is not a prompt: the newest prompt is still the old one.
+        assert_eq!(v.activity.iter().filter(|a| a.kind == ActivityKind::Prompt).count(), 1);
+        // Metadata never starts a turn.
+        let mut q = Parsed::default();
+        for l in [prompt, TURN_END].into_iter().chain(NOISE.lines()) {
+            q.line(l);
+        }
+        assert_eq!(q.view().tokens.turn_start, parse_rfc3339_ms("2026-11-15T03:00:00Z"));
     }
 
     #[test]

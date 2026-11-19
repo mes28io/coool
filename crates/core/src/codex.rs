@@ -485,6 +485,7 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
         (Some("event_msg"), Some("task_started")) => {
             st.in_turn = true;
             s.tokens.turn_output = 0;
+            s.tokens.turn_start = v["timestamp"].as_str().and_then(parse_rfc3339_ms).or(s.tokens.turn_start);
             s.current = Some("thinking…".into());
         }
         (Some("event_msg"), Some("task_complete")) | (Some("event_msg"), Some("turn_aborted")) => {
@@ -663,6 +664,7 @@ mod tests {
 {"timestamp":"2026-11-14T08:00:02Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls -la\"}"}}
 "#);
         assert!(st.in_turn);
+        assert_eq!(s.tokens.turn_start, parse_rfc3339_ms("2026-11-14T08:00:00Z"));
         assert_eq!(s.current.as_deref(), Some("exec_command · ls -la"));
         assert_eq!(s.last_prompt.as_deref(), Some("do the thing"));
         let (st, s) = run(r#"

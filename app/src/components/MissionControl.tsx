@@ -30,6 +30,7 @@ import { AutoTag, Button, cx, ease, Kbd, PathText, ProviderMark, softSpring, Sta
 import { resumeInto } from "./SessionView";
 import { RecentSkeleton, Skel } from "./Skeletons";
 import { Wordmark } from "./Wordmark";
+import { countRender } from "../lib/perfCount";
 
 interface Project {
   path: string;
@@ -40,6 +41,7 @@ interface Project {
 }
 
 export function MissionControl() {
+  countRender("MissionControl");
   const sessions = useStore((s) => s.sessions);
   const pending = useStore((s) => s.pending);
   const ptys = useStore((s) => s.ptys);
@@ -237,6 +239,7 @@ function TabDot({ tone }: { tone: "needs" | "busy" | "idle" }) {
 // ---------- a project ----------
 
 function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Attention>; stagger: boolean }) {
+  countRender("MC.ProjectSection");
   const open = useStore((st) => st.open);
   const focusAgent = useStore((st) => st.focusAgent);
   const reduce = useMotion().reduce;
@@ -355,6 +358,7 @@ type RowProps = { s: Session; att: Attention; first: boolean };
 const sameRow = (a: RowProps, b: RowProps) => a.s === b.s && a.first === b.first && sameAttention(a.att, b.att);
 
 const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
+  countRender("MC.SessionRow");
   const open = useStore((st) => st.open);
   const focusAgent = useStore((st) => st.focusAgent);
   const unseen = useUnseen(s);

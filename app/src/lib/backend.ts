@@ -5,6 +5,7 @@ import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sess
 import type { ChatEvent, ChatOptions, ContextMap, Environment, GitTrail, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
 import type { MotionHints } from "./motion";
 import type { SettingsBackend } from "./settingsTypes";
+import { countIpc } from "./perfCount";
 
 export interface PtyChunk {
   id: number;
@@ -392,7 +393,13 @@ export function b64ToBytes(b64: string): Uint8Array {
 }
 
 async function tauriBackend(): Promise<Backend> {
-  const { invoke, Channel } = await import("@tauri-apps/api/core");
+  const core = await import("@tauri-apps/api/core");
+  const { Channel } = core;
+  // Counted for the self-test's perf scenarios (lib/perfCount.ts).
+  const invoke: typeof core.invoke = (cmd, args, opts) => {
+    countIpc(cmd);
+    return core.invoke(cmd, args, opts);
+  };
   const { listen } = await import("@tauri-apps/api/event");
 
   // Tauri's listen() is async; hand back a sync unlisten that also works if

@@ -144,6 +144,11 @@ pub struct Tokens {
     /// Output tokens of the current (or latest) turn: since its last prompt. 0 when unknown.
     #[serde(default)]
     pub turn_output: u64,
+    /// Epoch ms the current (or latest) turn began: the first conversation event after the previous turn ended
+    /// (Claude: `system` / `turn_duration`; Codex: `task_started`). A turn need not start with a prompt (a
+    /// background task's notification starts one), so this is what a live timer counts from. None when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_start: Option<u64>,
     /// The most recent response's context plus its output: what Claude Code
     /// shows as a subagent's `↓ N tokens`. 0 when unknown.
     #[serde(default)]

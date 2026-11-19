@@ -1,3 +1,5 @@
+import { markOnce } from "./lib/perfCount";
+markOnce("coool-js");
 import "./lib/boot";
 import "./lib/animPause";
 import { StrictMode } from "react";
@@ -50,6 +52,7 @@ Promise.all([
   document.fonts.load('13px "Pally"').catch(() => {}),
   document.fonts.load('13px "Geist"').catch(() => {}),
 ]).then(() => {
+  markOnce("coool-render");
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       {demoPage() === "ledger" ? <LedgerDemo /> : demoPage() === "plan" ? <PlanDemo /> : demoPage() === "glyphs" ? <GlyphsDemo /> : <App />}

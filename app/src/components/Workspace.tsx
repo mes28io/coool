@@ -12,8 +12,10 @@ import { IClose, ISearch, ISplitDown, ISplitRight } from "./icons";
 import { MissionControl } from "./MissionControl";
 import { cx, ease, IconButton, Kbd, ProviderMark, spring, StatusDot } from "./primitives";
 import { SessionView } from "./SessionView";
+import { countRender } from "../lib/perfCount";
 
 export function Workspace() {
+  countRender("Workspace");
   const tabs = useStore((s) => s.tabs);
   const activeTab = useStore((s) => s.activeTab);
   const tab = tabs.find((t) => t.id === activeTab) ?? null;
@@ -40,6 +42,7 @@ export function Workspace() {
 
 /** Rendered in the window title bar (see App.tsx). */
 export function TabBar() {
+  countRender("TabBar");
   const tabs = useStore((s) => s.tabs);
   const activeTab = useStore((s) => s.activeTab);
   const reorder = useStore((s) => s.reorder);

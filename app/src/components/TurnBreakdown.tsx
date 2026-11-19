@@ -11,6 +11,7 @@ import { useNow } from "../lib/clock";
 import { IChevron, toolIcon } from "./icons";
 import { cx, ease } from "./primitives";
 import { reducedMotion } from "./StepRail";
+import { countRender } from "../lib/perfCount";
 
 const mix = (v: string, n: number) => `color-mix(in oklab, var(${v}) ${n}%, transparent)`;
 /** Neutral tints; only waiting for the person has a status colour. */
@@ -44,6 +45,7 @@ export function useTurnBreakdown(chat: Chat, item: Extract<ChatItem, { kind: "tu
 
 /** The bar alone, growing while the turn runs (under the live row). */
 export function LiveTurnBar({ chat }: { chat: Chat }) {
+  countRender("LiveTurnBar");
   const now = useNow();
   const start = chat.turnStart;
   // Recomputed once a second at most (the clock's tick), and with every new item.

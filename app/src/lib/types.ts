@@ -73,6 +73,8 @@ export interface Tokens {
   context: number;
   /** Output tokens of the current (or latest) turn; absent/0 when unknown. */
   turn_output?: number;
+  /** Epoch ms the current (or latest) turn began, when the transcript says (a turn need not start with a prompt). */
+  turn_start?: number | null;
   /** The latest response's context plus its output: Claude Code's `↓ N tokens` for a subagent. */
   total?: number;
 }

@@ -18,6 +18,7 @@ mod glass;
 mod login;
 mod motion;
 mod notify;
+mod perf;
 mod power;
 mod prefs;
 mod selftest;
@@ -427,6 +428,7 @@ impl Core {
     /// (`sessions`), afterwards only changed sessions (`sessions-delta`).
     /// Returns whether the initial load is still running.
     fn publish(&self, app: &AppHandle) -> bool {
+        perf::bump(&perf::REFRESHES, 1);
         let t0 = Instant::now();
         let (sessions, rest) = self.collect();
         let collected = t0.elapsed();
@@ -444,6 +446,12 @@ impl Core {
         let built = t1.elapsed();
         let (t2, bytes) = (Instant::now(), u.payload.len());
         let _ = app.emit_str(u.event, u.payload);
+        perf::bump(&perf::PUBLISHES, 1);
+        perf::bump(&perf::PUBLISH_BYTES, bytes as u64);
+        perf::mark_once(&perf::FIRST_PUBLISH_MS);
+        if !loading {
+            perf::mark_once(&perf::LOADED_MS);
+        }
         if let Some(t) = &self.trace {
             t.emit(seq, u.event, collected, built, t2.elapsed(), bytes, &u.changed, &self.published.lock().unwrap());
         }
@@ -917,6 +925,7 @@ struct Environment {
 /// `coool_core::gitlog`). Errors (not a repository, git missing) come back as text.
 #[tauri::command(async)]
 fn git_trail(path: String) -> Result<coool_core::gitlog::GitTrail, String> {
+    perf::bump(&perf::GIT_TRAILS, 1);
     coool_core::gitlog::trail(std::path::Path::new(&path)).map_err(|e| format!("{e:#}"))
 }
 
@@ -925,6 +934,7 @@ fn git_trail(path: String) -> Result<coool_core::gitlog::GitTrail, String> {
 /// incrementally from where the last call stopped (see `coool_core::context`).
 #[tauri::command(async)]
 fn context_map(core: State<'_, Arc<Core>>, provider: Provider, session_id: String, agent_id: Option<String>, cwd: Option<String>) -> Res<coool_core::context::ContextMap> {
+    perf::bump(&perf::CONTEXT_MAPS, 1);
     let path = core.hub.lock().unwrap().transcript_path(provider, &session_id, agent_id.as_deref()).ok_or("this session's transcript isn't known yet")?;
     Ok(core.contexts.lock().unwrap().map(&path, provider, cwd.as_deref().unwrap_or("")))
 }
@@ -1302,6 +1312,8 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                     batches.push(ChatBatch { id, events });
                 }
             }
+            perf::bump(&perf::CHAT_BATCHES, batches.len() as u64);
+            perf::bump(&perf::PTY_CHUNKS, out.len() as u64);
             for b in batches {
                 let _ = app.emit("chat-event", b);
             }
@@ -1398,7 +1410,9 @@ pub const DEVICE_MCP_FLAG: &str = device::mcp::PROXY_FLAG;
 pub fn run() {
     // A Finder-launched app gets a minimal PATH; adopt the login shell's so
     // `claude` / `codex` resolve. Must happen before any thread starts.
+    perf::boot_mark("run");
     env::adopt_login_path();
+    perf::boot_mark("path");
 
     let selftest = selftest::SelfTest::from_env();
     let quiet = selftest.as_ref().is_some_and(|t| t.quiet_window());
@@ -1406,7 +1420,12 @@ pub fn run() {
     device::pilot::dataset::set_enabled(prefs.pilot_log);
     let mut ins = Insights::new();
     ins.set_enabled(prefs.insights);
-    let mut hub = Hub::new(Duration::from_secs(24 * 3600));
+    let window = Duration::from_secs(24 * 3600);
+    // A self-test parses into a cache of its own (so `perf-boot` can time a cold and a warm start), never coool's real one.
+    let mut hub = match &selftest {
+        Some(t) => Hub::with_cache(window, Some(t.dir().join(".coool-cache"))),
+        None => Hub::new(window),
+    };
     if let Some(t) = &selftest {
         // Test chats are not the person's: remembered only inside the throwaway
         // folder (so the test still sees them), and Codex threads carry a test name.
@@ -1444,10 +1463,21 @@ pub fn run() {
         contexts: Mutex::default(),
     });
 
+    perf::boot_mark("core");
     let devices = Arc::new(device::Devices::default());
 
-    // A self-test window that must not take the person's focus (`COOOL_SELFTEST_WINDOW`, see selftest.rs): never
-    // the active app, from launch on.
+    // A self-test gets a web data store of its own, and a window that must not take the person's focus
+    // (`COOOL_SELFTEST_WINDOW`, `COOOL_SELFTEST_OFFSCREEN`, see selftest.rs) is never the active app, from launch on.
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    if let Some(t) = &core.selftest {
+        t.adjust_config(context.config_mut());
+    }
+    if quiet {
+        for w in context.config_mut().app.windows.iter_mut() {
+            w.focus = false;
+        }
+    }
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(!quiet);
@@ -1526,6 +1556,7 @@ pub fn run() {
             selftest::selftest_log,
             selftest::selftest_shot,
             selftest::selftest_window,
+            selftest::selftest_perf_stats,
             selftest::selftest_request_quit,
             trace::trace_sessions,
             motion::motion_hints,
@@ -1588,6 +1619,7 @@ pub fn run() {
             selftest::selftest_device_tool,
         ])
         .setup(move |app| {
+            perf::boot_mark("setup");
             app.set_menu(build_menu(app.handle())?)?;
             let handle = app.handle().clone();
             let c = app.state::<Arc<Core>>().inner().clone();
@@ -1616,6 +1648,7 @@ pub fn run() {
             spawn_refresher(handle.clone(), c.clone());
             motion::spawn_watch(handle.clone());
             spawn_pump(handle, c);
+            perf::boot_mark("setup-done");
             Ok(())
         })
         .on_menu_event(|app, ev| {
@@ -1647,22 +1680,13 @@ pub fn run() {
                 }
             }
         })
-        .build({
-            #[allow(unused_mut)]
-            let mut ctx = tauri::generate_context!();
-            // Its window opens without taking focus too.
-            if quiet {
-                for w in ctx.config_mut().app.windows.iter_mut() {
-                    w.focus = false;
-                }
-            }
-            ctx
-        })
+        .build(context)
         .expect("error while building coool");
     #[cfg(target_os = "macos")]
     if quiet {
         app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     }
+    perf::boot_mark("built");
 
     app.run(move |handle, ev| match ev {
         RunEvent::ExitRequested { code, api, .. } => {

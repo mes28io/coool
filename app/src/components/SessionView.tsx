@@ -30,6 +30,7 @@ import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
 import { modelLabel } from "../lib/models";
 import { useShellFocus } from "../lib/shellFocus";
+import { countRender } from "../lib/perfCount";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -62,6 +63,7 @@ export function SessionView({
   compact: boolean;
   onClosePane?: () => void;
 }) {
+  countRender("SessionView");
   const r = useStore(useShallow((st) => resolveTarget(target, st)));
   const running = useStore((st) => (r.pty !== null ? !!st.ptys[r.pty]?.running && !st.exited[r.pty] : false));
   const modeKey = r.session ? `s:${sessionKey(r.session)}` : target.kind === "pty" ? `p:${target.id}` : target.kind === "chat" ? `c:${target.id}` : `s:${target.key}`;

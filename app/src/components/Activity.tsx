@@ -23,6 +23,7 @@ import { modelLabel } from "../lib/models";
 import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
 import { TimelineSkeleton } from "./Skeletons";
 import { ArtifactCard, artifactVersions } from "./ArtifactCard";
+import { countRender } from "../lib/perfCount";
 
 type Block =
   | { type: "prompt" | "text" | "error"; key: string; a: Activity }
@@ -148,6 +149,7 @@ export const liveTime = (since: Since | undefined, fallback: number, activity?: 
 };
 
 export function Timeline({ session, compact, live }: { session: Session; compact?: boolean; live?: LiveTime }) {
+  countRender("Activity.Timeline");
   const blocks = useBlocks(session.activity);
   const groupAgents = useGroupAgents(blocks, session.agents);
   const initial = useRef<Set<string> | null>(null);
@@ -208,6 +210,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
     <div
       ref={scroller}
       className="scroll min-h-0 flex-1"
+      data-activity-timeline
       onScroll={(e) => {
         const el = e.currentTarget;
         const at = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -298,6 +301,7 @@ const TimelineBlock = memo(function TimelineBlock({
   agents: Agent[];
   live: LiveTime;
 }) {
+  countRender("Activity.Block");
   return (
     <motion.div className={cx(cv && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={blockIn}>
       {b.type === "prompt" && <PromptBlock a={b.a} />}
@@ -570,6 +574,7 @@ const StepGroup = memo(function StepGroup({
   latest: boolean;
   live: LiveTime;
 }) {
+  countRender("Activity.StepGroup");
   const [open, setOpen] = useState<boolean | null>(null);
   const focus = useStore((st) => st.agentFocus);
   const holdsFocus = !!focus && Date.now() - focus.at < FOCUS_FRESH_MS && items.some((i) => i.a.kind === "agent" && agentOf(i.a, agents)?.id === focus.id);

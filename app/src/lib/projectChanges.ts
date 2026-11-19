@@ -32,6 +32,19 @@ export function authorLabel(e: Pick<OverlapEdit, "session" | "agent">, sources: 
 /** A subagent's rows carry `g:<agent id>` as their step. */
 export const agentOf = (c: Change) => (c.step.startsWith("g:") ? c.step.slice(2) : null);
 
+// One session's rows, kept while its activity (or chat items) is the same array: a payload about one session
+// recomputes that session's rows, not every row of the project. Redone after a minute anyway, since rows of
+// entries without a usable time are stamped with the time they were read.
+const rowsMemo = new WeakMap<object, { key: string; at: number; rows: Change[] }>();
+function rowsOf(list: object, key: string, f: () => Change[]): Change[] {
+  const m = rowsMemo.get(list);
+  const now = Date.now();
+  if (m && m.key === key && now - m.at < 60_000) return m.rows;
+  const rows = f();
+  rowsMemo.set(list, { key, at: now, rows });
+  return rows;
+}
+
 /** Every change in the project's sessions (live, or ended within the window), newest first, before the ledger's rules. */
 export function useProjectChanges(path: string, branch: string | null): { changes: Change[]; sources: Record<string, ChangeSource>; people: Record<string, OverlapSession> } {
   const feeding = useStore(
@@ -51,12 +64,14 @@ export function useProjectChanges(path: string, branch: string | null): { change
       people[key] = { live: s.status !== "ended", tree: treeOf(s.cwd, path) };
       // Paths are judged against the project (an agent's worktree inside it maps back to the project's files).
       const its = items[i];
+      const memoKey = `${key}\u0001${path}\u0001${branch}`;
       if (its && its.length) {
-        lists.push(changesFromChat(key, its as ItemLike[], path, branch));
+        lists.push(rowsOf(its, memoKey, () => changesFromChat(key, its as ItemLike[], path, branch)));
         return;
       }
-      lists.push(changesFromActivity(key, s.activity, path, branch));
-      for (const a of s.agents) lists.push(changesFromActivity(key, a.activity, path, branch).map((c) => ({ ...c, id: `${c.id}@${a.id}`, step: `g:${a.id}` })));
+      lists.push(rowsOf(s.activity, memoKey, () => changesFromActivity(key, s.activity, path, branch)));
+      for (const a of s.agents)
+        lists.push(rowsOf(a.activity, `${memoKey}\u0001${a.id}`, () => changesFromActivity(key, a.activity, path, branch).map((c) => ({ ...c, id: `${c.id}@${a.id}`, step: `g:${a.id}` }))));
     });
     return { changes: mergeChanges(lists, Infinity), sources, people };
   }, [feeding, items, path, branch]);

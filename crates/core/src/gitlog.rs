@@ -2,13 +2,31 @@
 //! (APP_SPEC "Mission control"): the current branch, its recent commits along
 //! the first-parent line, and for each merge the commits it brought in (the
 //! side branch, drawn as a curve). Read-only: only `log`, `rev-parse`,
-//! `symbolic-ref` and `status` run, always with `--no-optional-locks` so not
-//! even the index is refreshed. Nothing here can write to a repository.
+//! `symbolic-ref`, `status` and `for-each-ref` run, always with
+//! `--no-optional-locks` so not even the index is refreshed. Nothing here can
+//! write to a repository.
+//!
+//! Mission control asks every 15 s per project. The history part (one `git log`,
+//! plus one per merge in it) is reused while HEAD and every ref are where they
+//! were, so a quiet repository costs two processes a poll (`status`,
+//! `for-each-ref`) instead of five to seventeen.
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+/// `git` processes started so far (the self-test's perf scenarios read it).
+pub static SPAWNS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    /// This thread's `git` processes (tests run in parallel; the global count mixes them).
+    static MINE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 /// Mainline commits returned.
 pub const MAINLINE: usize = 12;
@@ -79,13 +97,16 @@ const RS: char = '\x1e';
 const LOG_FORMAT: &str = "--format=%x1e%H%x1f%h%x1f%P%x1f%at%x1f%an%x1f%D%x1f%s";
 
 /// The only subcommands this module runs. Anything else is a bug and is refused.
-const READ_ONLY: &[&str] = &["log", "rev-parse", "symbolic-ref", "status"];
+const READ_ONLY: &[&str] = &["log", "rev-parse", "symbolic-ref", "status", "for-each-ref"];
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let Some(sub) = args.first() else { bail!("no git subcommand") };
     if !READ_ONLY.contains(sub) {
         bail!("git {sub} is not a read-only command");
     }
+    SPAWNS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    MINE.with(|m| m.set(m.get() + 1));
     let out = Command::new("git")
         .arg("--no-optional-locks")
         .args(["-c", "core.quotepath=off", "-c", "log.showSignature=false", "-c", "color.ui=never"])
@@ -201,11 +222,68 @@ fn count_status(out: &str) -> u32 {
     out.lines().filter(|l| l.len() > 3).count() as u32
 }
 
-/// The trail for the repository containing `dir`.
+/// What `git status --porcelain=v2 --branch` says: (branch, head, changed paths).
+fn parse_status_v2(out: &str) -> (Option<String>, Option<String>, u32) {
+    let (mut branch, mut head, mut n) = (None, None, 0);
+    for l in out.lines() {
+        if let Some(h) = l.strip_prefix("# branch.head ") {
+            branch = Some(h.trim().to_string()).filter(|b| !b.is_empty() && b != "(detached)");
+        } else if let Some(o) = l.strip_prefix("# branch.oid ") {
+            head = Some(o.trim().to_string()).filter(|o| !o.is_empty() && o != "(initial)");
+        } else if !l.starts_with('#') && l.len() > 2 {
+            n += 1;
+        }
+    }
+    (branch, head, n)
+}
+
+/// The last history read per folder: its repository root, the refs it was read at, and what it found.
+struct Known {
+    root: String,
+    refs: String,
+    commits: Vec<TrailCommit>,
+    more: bool,
+}
+
+fn known() -> &'static Mutex<HashMap<PathBuf, Known>> {
+    static K: OnceLock<Mutex<HashMap<PathBuf, Known>>> = OnceLock::new();
+    K.get_or_init(Default::default)
+}
+
+/// The trail for the repository containing `dir`. Steady state: `status` (branch, head, uncommitted) and
+/// `for-each-ref`; the history is read again only when HEAD or a ref moved.
 pub fn trail(dir: &Path) -> Result<GitTrail> {
     if !dir.is_dir() {
         bail!("{} is not a folder", dir.display());
     }
+    // `--no-ahead-behind`: the upstream comparison can walk many commits and nothing here shows it.
+    let Ok(st) = git(dir, &["status", "--porcelain=v2", "--branch", "--no-ahead-behind", "--untracked-files=normal"]) else {
+        // Not a repository, or a git without v2 status: the full read says which (and works with an old git).
+        return trail_uncached(dir);
+    };
+    let (branch, head, uncommitted) = parse_status_v2(&st);
+    let Some(h) = head.clone() else {
+        // No commits yet: nothing to cache.
+        return trail_uncached(dir);
+    };
+    let refs = format!("{h}\n{}", git(dir, &["for-each-ref", "--format=%(objectname) %(refname)"]).unwrap_or_default());
+    if let Some(k) = known().lock().unwrap().get(dir).filter(|k| k.refs == refs) {
+        return Ok(GitTrail { root: k.root.clone(), branch, head, commits: k.commits.clone(), more: k.more, uncommitted: Some(uncommitted) });
+    }
+    let t = trail_uncached(dir)?;
+    // A ref that moved between the two reads makes the next poll read again (the key no longer matches).
+    if t.head.as_deref() == Some(h.as_str()) {
+        let mut k = known().lock().unwrap();
+        if k.len() > 64 {
+            k.clear();
+        }
+        k.insert(dir.to_path_buf(), Known { root: t.root.clone(), refs, commits: t.commits.clone(), more: t.more });
+    }
+    Ok(t)
+}
+
+/// Everything read afresh.
+fn trail_uncached(dir: &Path) -> Result<GitTrail> {
     let root = git(dir, &["rev-parse", "--show-toplevel"])?.trim().to_string();
     let branch = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let head = git(dir, &["rev-parse", "-q", "--verify", "HEAD"]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -313,6 +391,36 @@ mod tests {
     fn counts_status_lines() {
         assert_eq!(count_status(" M src/a.rs\n?? new.txt\nA  b.rs\n"), 3);
         assert_eq!(count_status(""), 0);
+    }
+
+    #[test]
+    fn reads_status_v2() {
+        let out = "# branch.oid 1234567890abcdef\n# branch.head main\n# branch.upstream origin/main\n1 .M N... 100644 100644 100644 a b src/a.rs\n2 R. N... 100644 100644 100644 a b R100 new.rs\told.rs\n? new.txt\n";
+        assert_eq!(parse_status_v2(out), (Some("main".into()), Some("1234567890abcdef".into()), 3));
+        assert_eq!(parse_status_v2("# branch.oid (initial)\n# branch.head main\n"), (Some("main".into()), None, 0));
+        assert_eq!(parse_status_v2("# branch.oid abc\n# branch.head (detached)\n").0, None);
+    }
+
+    /// The second read of an unchanged repository reuses the history: same trail, two processes.
+    #[test]
+    fn reuses_history_while_refs_stay() {
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Ok(a) = trail(here) else { return }; // not a git checkout
+        let before = MINE.with(|m| m.get());
+        let b = trail(here).unwrap();
+        let spawned = MINE.with(|m| m.get()) - before;
+        // Unless a ref moved in between (someone committed): then it reads again.
+        if a.head == b.head && a.commits == b.commits {
+            assert_eq!(spawned, 2);
+        }
+        assert_eq!(a.root, b.root);
+        assert_eq!(a.branch, b.branch);
+        let fresh = trail_uncached(here).unwrap();
+        if fresh.head == b.head {
+            assert_eq!(fresh.commits, b.commits);
+            assert_eq!(fresh.more, b.more);
+            assert_eq!(fresh.branch, b.branch);
+        }
     }
 
     #[test]

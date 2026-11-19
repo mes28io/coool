@@ -6,6 +6,7 @@ import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Sna
 import { sessionKey } from "./lib/types";
 import { api, isTauri } from "./lib/backend";
 import type { Away } from "./lib/away";
+import { markOnce } from "./lib/perfCount";
 
 export type Target = { kind: "session"; key: string } | { kind: "pty"; id: number } | { kind: "chat"; id: number };
 export type Leaf = { type: "leaf"; id: string; target: Target | null };
@@ -662,6 +663,8 @@ export const useStore = create<State>((set, get) => ({
 
   setSnapshot(snap) {
     const st = get();
+    markOnce("coool-ready");
+    if (!snap.loading) markOnce("coool-loaded");
     const ptyOwner = { ...st.ptyOwner };
     const sessionPty = { ...st.sessionPty };
     for (const s of snap.sessions) {
