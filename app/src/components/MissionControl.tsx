@@ -492,7 +492,7 @@ const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
         <Age ms={live ? since.at : s.updated} title={live ? "On this step for" : "Last active"} className={live ? "text-dim" : undefined} />
       </button>
       {showFan && (
-        <div className="pb-3 pr-3.5" style={{ paddingLeft: TEXT_X }}>
+        <div className="px-3.5 pb-3">
           <FanOut
             cards={batch}
             shells={shells}
