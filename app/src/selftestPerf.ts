@@ -511,6 +511,23 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
         await k.sleep(5000);
         window.requestAnimationFrame = raf;
         const calls = [...by].sort((x, y) => y[1] - x[1]);
+        // What else moves: one-off animations and transitions seen running (sampled every 100 ms for 3 s), and DOM
+        // mutations a second.
+        const seen = new Map<string, number>();
+        let muts = 0;
+        const mo = new MutationObserver((r) => (muts += r.length));
+        mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+        for (let i = 0; i < 30; i++) {
+          for (const a of document.getAnimations()) {
+            if (a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity) continue;
+            const t = (a.effect as KeyframeEffect | null)?.target as Element | null;
+            const key = `${(a as CSSTransition).transitionProperty ?? (a as CSSAnimation).animationName ?? "waapi"}@${t?.tagName.toLowerCase() ?? "?"}.${(t?.getAttribute("class") ?? "").split(" ").slice(0, 2).join(".")}`;
+            seen.set(key, (seen.get(key) ?? 0) + 1);
+          }
+          await k.sleep(100);
+        }
+        mo.disconnect();
+        await k.log(`PERF anim-${where} mutations_per_s=${r1(muts / 3)} finite_running_samples ${[...seen].sort((x, y) => y[1] - x[1]).slice(0, 8).map(([s, n]) => `${s}=${n}`).join(" ")}`);
         await k.log(`PERF anim-${where} raf_per_s=${r1(calls.reduce((n, [, x]) => n + x, 0) / 5)} ${calls.slice(0, 6).map(([s, n]) => `${s}=${n}`).join(" ")}`);
         style.textContent = "";
         await measure(`anim-${where}-as-is`, 2_000, 20_000);

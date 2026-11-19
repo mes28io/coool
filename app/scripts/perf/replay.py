@@ -66,10 +66,12 @@ def main():
         i = 0
         while not stop and time.time() < end:
             for f, lines, sid in outs:
-                if i < len(lines):
-                    line = lines[i].replace(lines[i][lines[i].find('"sessionId":"') + 13:].split('"', 1)[0], sid, 1) if '"sessionId":"' in lines[i] else lines[i]
-                    f.write(line + "\n")
-                    f.flush()
+                # From the top again at the end: a run of any length keeps every session writing (a long scenario
+                # used to measure its last minutes with the sessions busy but silent).
+                src = lines[i % len(lines)]
+                line = src.replace(src[src.find('"sessionId":"') + 13:].split('"', 1)[0], sid, 1) if '"sessionId":"' in src else src
+                f.write(line + "\n")
+                f.flush()
             i += 1
             time.sleep(1.0 / a.rate)
     finally:
