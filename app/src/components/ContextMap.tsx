@@ -155,7 +155,7 @@ export function ContextMapCard({
   const known = w.source !== "assumed";
   const pct = used / w.tokens;
   return (
-    <div className="rounded-[12px] border border-hairline bg-raised" data-context-map>
+    <div className="rounded-[14px] border border-hairline bg-bg shadow-card" data-context-map>
       <div className="flex items-center gap-2 px-3.5 pt-3">
         <span className="font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Context</span>
         {agents.length > 0 && <AgentPicker agents={agents} value={agentId} onChange={setAgentId} />}
