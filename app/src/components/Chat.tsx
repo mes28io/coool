@@ -38,6 +38,7 @@ import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot
 import { useStore } from "../store";
 import { isPilotTool, liveRun, parseOutcome, usePilot } from "../lib/pilot";
 import type { PilotOutcome } from "../lib/backend";
+import { countRender } from "../lib/perfCount";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
 type Perm = Extract<ChatItem, { kind: "permission" }>;
@@ -46,7 +47,8 @@ type Ask = Extract<ChatItem, { kind: "question" }>;
 /** The tool behind a question or plan-approval card; the card stands for it, so it isn't listed as a step. */
 const QUESTION_TOOLS = /^(AskUserQuestion|request_user_input|ExitPlanMode)$/;
 type Block =
-  | { type: "item"; key: string; item: ChatItem }
+  /** `span`: for a turn's end, the items of its turn (what "where the time went" reads). */
+  | { type: "item"; key: string; item: ChatItem; span?: ChatItem[] }
   | { type: "steps"; key: string; tools: Tool[] }
   /** An artifact's newest publish; earlier publishes of the same page fold into it. */
   | { type: "artifact"; key: string; info: ArtifactInfo; versions: number }
@@ -71,6 +73,7 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
   }
   const pages = artifactVersions(items, (it) => (it.kind === "tool" && !it.parent ? it.artifact : undefined));
   let turnNo = 0;
+  let turnFrom = 0;
   // Artifact cards wait for the end of their turn (its "worked for" row, or the next prompt), so they read as the
   // turn's result, after the reply that talks about them.
   let held: Block[] = [];
@@ -110,11 +113,106 @@ function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string
       else blocks.push({ type: "steps", key: it.key, tools: [it] });
     } else if (it.kind === "thinking" && !it.text.trim() && it.endTs !== null) {
       // Empty, finished reasoning (provider hides it): nothing to show.
+    } else if (it.kind === "turn") {
+      blocks.push({ type: "item", key: it.key, item: it, span: items.slice(turnFrom, idx + 1) });
     } else blocks.push({ type: "item", key: it.key, item: it });
+    if (it.kind === "turn") turnFrom = idx + 1;
   }
   flush();
   return { blocks, children };
 }
+
+const sameList = <T,>(a: readonly T[], b: readonly T[]) => a === b || (a.length === b.length && a.every((x, i) => x === b[i]));
+
+function sameBlock(a: Block, b: Block): boolean {
+  if (a.key !== b.key) return false;
+  switch (a.type) {
+    case "item":
+      return b.type === "item" && a.item === b.item && sameList(a.span ?? NO_KIDS, b.span ?? NO_KIDS);
+    case "steps":
+      return b.type === "steps" && sameList(a.tools, b.tools);
+    case "artifact":
+      return b.type === "artifact" && a.info === b.info && a.versions === b.versions;
+    case "plan":
+      return b.type === "plan" && a.prompt === b.prompt && sameList(a.calls, b.calls) && a.end?.ts === b.end?.ts && a.end?.ok === b.end?.ok;
+  }
+}
+
+/** `buildBlocks`, with each block that is the same as last time kept as the same object (so ChatBlock can skip it). */
+function useStableBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string, ChatItem[]> } {
+  const prev = useRef(new Map<string, Block>());
+  return useMemo(() => {
+    const built = buildBlocks(items);
+    const blocks = built.blocks.map((b) => {
+      const old = prev.current.get(b.key);
+      return old && sameBlock(old, b) ? old : b;
+    });
+    prev.current = new Map(blocks.map((b) => [b.key, b]));
+    return { blocks, children: built.children };
+  }, [items]);
+}
+
+/** The chat's own fields the block views read (besides their items): when one changes, every block renders again. */
+function chatSig(c: Chat): string {
+  return [c.id, c.provider, c.cwd, c.model, c.running, c.state, c.permissionMode, c.pendingPermission, c.pendingQuestion, c.turnStart].join("\u0001");
+}
+
+const NO_KIDS: ChatItem[] = [];
+
+interface BlockProps {
+  b: Block;
+  chat: Chat;
+  /** chatSig(chat), and the chat's notes and subagent usage (compared by identity). */
+  sig: string;
+  notes: Chat["notes"];
+  agents: Chat["agents"];
+  nested: Map<string, ChatItem[]>;
+  fresh: boolean;
+  cv: boolean;
+  latest: boolean;
+  isLast: boolean;
+  onOpenTerminal: () => void;
+  onResume?: () => void;
+}
+
+/**
+ * Whether a block can keep what it drew: its own items are the same objects, and nothing it reads from the chat
+ * changed. A streamed token changes only the newest block, so a long chat re-renders one or two blocks per batch
+ * instead of all of them (and finished turns don't recompute their breakdown).
+ */
+function sameBlockView(p: BlockProps, n: BlockProps): boolean {
+  if (p.b !== n.b || p.sig !== n.sig || p.notes !== n.notes || p.agents !== n.agents) return false;
+  if (p.fresh !== n.fresh || p.cv !== n.cv || p.latest !== n.latest || p.isLast !== n.isLast || !p.onResume !== !n.onResume) return false;
+  if (p.chat.items === n.chat.items) return true;
+  const b = n.b;
+  if (b.type === "item") {
+    // Cards that look elsewhere in the chat: always drawn again.
+    if (b.item.kind === "permission" || b.item.kind === "question") return false;
+    // A turn's end reads its whole turn (where the time went): the same block means the same `span`.
+    return true;
+  }
+  if (b.type === "steps") {
+    // Subagent cards show their own steps (children of the agent's tool call).
+    for (const t of b.tools) if (t.agent && !sameList(p.nested.get(t.id) ?? NO_KIDS, n.nested.get(t.id) ?? NO_KIDS)) return false;
+  }
+  return true;
+}
+
+const ChatBlock = memo(function ChatBlock({ b, chat, nested, fresh, cv, latest, onOpenTerminal, onResume }: BlockProps) {
+  return (
+    <motion.div data-block={b.key} className={cx(cv && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={{ duration: 0.32, ease }}>
+      {b.type === "plan" ? (
+        <PlanBlock b={b} chat={chat} />
+      ) : b.type === "steps" ? (
+        <ChatSteps tools={b.tools} chat={chat} nested={nested} latest={latest} />
+      ) : b.type === "artifact" ? (
+        <ArtifactCard info={b.info} versions={b.versions} />
+      ) : (
+        <ItemView item={b.item} chat={chat} onOpenTerminal={onOpenTerminal} onResume={onResume} />
+      )}
+    </motion.div>
+  );
+}, sameBlockView);
 
 export function ChatTimeline({
   chat,
@@ -129,7 +227,13 @@ export function ChatTimeline({
   onSuggest: (t: string) => void;
   onResume?: () => void;
 }) {
-  const { blocks, children } = useMemo(() => buildBlocks(chat.items), [chat.items]);
+  countRender("ChatTimeline");
+  const { blocks, children } = useStableBlocks(chat.items);
+  // Stable callbacks for the memoised blocks (the latest ones are called).
+  const cbs = useRef({ onOpenTerminal, onResume });
+  cbs.current = { onOpenTerminal, onResume };
+  const [openTerminal, resume] = useMemo(() => [() => cbs.current.onOpenTerminal(), () => cbs.current.onResume?.()], []);
+  const sig = chatSig(chat);
   // "While you were away": the card goes before the first block with anything after the person left.
   const gone = useChatAway(chat);
   const awayAt = gone ? blocks.findIndex((b) => blockAfter(b, gone.away.left)) : -1;
@@ -360,26 +464,32 @@ export function ChatTimeline({
           </div>
         )}
         {chat.ready && blocks.length === 0 && !earlier?.length && <Welcome chat={chat} onSuggest={onSuggest} />}
-        {blocks.map((b, i) => {
+        {blocks.flatMap((b, i) => {
           const fresh = !initial.current!.has(b.key);
           const isLast = i === blocks.length - 1;
           const card = i === awayAt && gone && (
             <AwayCard key="away" chatKey={gone.key} sum={gone.sum} folded={!!gone.away.folded} canRetry={chat.running && chat.state === "idle"} onRetry={onSuggest} onJump={jump} />
           );
-          return [
-            card,
-            <motion.div key={b.key} data-block={b.key} className={cx(!isLast && i < blocks.length - 8 && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={{ duration: 0.32, ease }}>
-              {b.type === "plan" ? (
-                <PlanBlock b={b} chat={chat} />
-              ) : b.type === "steps" ? (
-                <ChatSteps tools={b.tools} chat={chat} nested={children} latest={isLast || i >= blocks.length - 2} />
-              ) : b.type === "artifact" ? (
-                <ArtifactCard info={b.info} versions={b.versions} />
-              ) : (
-                <ItemView item={b.item} chat={chat} onOpenTerminal={onOpenTerminal} onResume={isLast ? onResume : undefined} />
-              )}
-            </motion.div>,
-          ];
+          // One flat list of keyed children: nested arrays would be matched by position, so dropping the oldest
+          // block (a chat past its item cap) would shift every pair and remount the whole timeline.
+          const view = (
+            <ChatBlock
+              key={b.key}
+              b={b}
+              chat={chat}
+              sig={sig}
+              notes={chat.notes}
+              agents={chat.agents}
+              nested={children}
+              fresh={fresh}
+              cv={!isLast && i < blocks.length - 8}
+              latest={isLast || i >= blocks.length - 2}
+              isLast={isLast}
+              onOpenTerminal={openTerminal}
+              onResume={isLast && onResume ? resume : undefined}
+            />
+          );
+          return card ? [card, view] : [view];
         })}
         <AnimatePresence>
           {showRow && (
@@ -444,6 +554,7 @@ function PlanApproval({ item, chat }: { item: Perm; chat: Chat }) {
 }
 
 function ItemView({ item, chat, onOpenTerminal, onResume }: { item: ChatItem; chat: Chat; onOpenTerminal: () => void; onResume?: () => void }) {
+  countRender("Chat.ItemView");
   switch (item.kind) {
     case "prompt":
       return <PromptBubble text={item.text} stamp={clockTime(item.ts)} />;
@@ -596,6 +707,7 @@ function toolSummary(t: Tool, cwd: string): string {
 }
 
 const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { tools: Tool[]; chat: Chat; nested: Map<string, ChatItem[]>; latest: boolean }) {
+  countRender("Chat.Steps");
   const [open, setOpen] = useState<boolean | null>(null);
   const active = tools.some((t) => t.endTs === null);
   const focus = useStore((st) => st.agentFocus);

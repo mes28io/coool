@@ -20,6 +20,7 @@ import { SidebarSkeleton } from "./Skeletons";
 import { NeedsView } from "./LeftPanels";
 import { reducedMotion } from "./StepRail";
 import { AnimateScope } from "../lib/motion";
+import { countRender, markOnce } from "../lib/perfCount";
 
 export interface Project {
   cwd: string;
@@ -167,6 +168,7 @@ const REST = 5;
 const PAGE = 10;
 
 export function Sidebar() {
+  countRender("Sidebar");
   const { projects, digest } = useProjects();
   const width = useStore((s) => s.sidebarWidth);
   const open = useStore((s) => s.sidebarOpen);
@@ -178,6 +180,9 @@ export function Sidebar() {
   const [dragging, setDragging] = useState(false);
   const shownProjects = useStableOrder(projects, (p) => p.cwd, hover);
   const selected = useSelectedKey();
+  useEffect(() => {
+    if (projects.length) markOnce("coool-sidebar");
+  }, [projects.length]);
 
   // Arrow keys move through the rows (every row is a real button).
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -370,6 +375,7 @@ function Summary({ p }: { p: Project }) {
 type Item = { key: string; el: ReactNode };
 
 const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }: { p: Project; selected: string | null; digest: ChatDigest; frozen: boolean }) {
+  countRender("Sidebar.ProjectGroup");
   const live = useStableOrder(p.live, sessionKey, frozen);
   const collapsed = useStore((s) => !!s.collapsed[p.cwd]);
   const revealed = useStore((s) => s.revealed[p.cwd] ?? 0);
@@ -648,6 +654,7 @@ const sameRow = (a: SessionRowProps, b: SessionRowProps) =>
   a.s === b.s && a.selected === b.selected && a.auto === b.auto && a.nested === b.nested && a.nest === b.nest && sameAttention(a.att, b.att);
 
 const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, nest }: SessionRowProps) {
+  countRender("Sidebar.SessionRow");
   const open = useStore((st) => st.open);
   const setKidsOpen = useStore((st) => st.setKidsOpen);
   // The age (shown on hover) re-renders the row only when its text changes, not every second.

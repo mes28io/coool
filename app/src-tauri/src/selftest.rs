@@ -20,6 +20,16 @@
 //!   `http://127.0.0.1:8741/`, serving the pages that scenario names).
 //! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
 //!   frosted glass shows what is behind it (the `glass` scenario).
+//! - `COOOL_SELFTEST_OFFSCREEN=1`: keep the test out of sight: the window is fully transparent and lets every click
+//!   through (macOS moves a window placed off screen back onto a display, so it is also placed as far out as macOS
+//!   allows), never takes focus, coool doesn't activate at launch and has no Dock icon; WebKit is told not to treat
+//!   the window as hidden, so the page renders as it would in front (the `perf-*` scenarios run this way).
+//!   Screenshots of it come out blank.
+//!
+//! Every self-test asks WebKit for a web data store of its own (localStorage and the rest). An unbundled binary
+//! gets WebKit's per-executable store whatever it asks (`~/Library/WebKit/<binary name>`), so run a copy with a
+//! name of its own, and with `HOME` pointing at a throwaway folder so the session data it lists is not the
+//! person's either (app/scripts/perf/run.sh does both).
 //!
 //! Settings (the insights and "runs by other tools" toggles) and the list of
 //! sessions coool started are kept in the folder too, never in the real ones;
@@ -95,15 +105,53 @@ impl SelfTest {
         self.dir.join(".coool-selftest-titles.json")
     }
 
-    /// A fixed size, on top, so screenshots are comparable and unobstructed.
+    /// A fixed size, on top, so screenshots are comparable and unobstructed (off screen, unfocused, with
+    /// `COOOL_SELFTEST_OFFSCREEN=1`).
     pub fn prepare_window(&self, app: &AppHandle) {
         // `get_window`, not `get_webview_window`: once the in-app browser adds a child webview, `main` is a window
         // with several webviews and no longer counts as a webview window.
         if let Some(w) = app.get_window("main") {
             let _ = w.set_size(tauri::LogicalSize::new(1440.0, 900.0));
+            if offscreen() {
+                #[cfg(target_os = "macos")]
+                let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                if let Ok(ns) = w.ns_window() {
+                    invisible(ns);
+                }
+                // A window nobody can see makes the app a candidate for App Nap (timers coalesced, a page's
+                // setTimeout at ~1 Hz): hold it off for the run, so the numbers are those of a window in front.
+                #[cfg(target_os = "macos")]
+                {
+                    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+                    let token = NSProcessInfo::processInfo().beginActivityWithOptions_reason(NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical, &NSString::from_str("coool self-test"));
+                    std::mem::forget(token);
+                }
+                let _ = w.set_position(OFFSCREEN);
+                if let Some(v) = app.get_webview("main") {
+                    let _ = v.with_webview(|pw| keep_visible(pw.inner()));
+                }
+                // Created hidden (see `adjust_config`): shown only now that nobody can see it.
+                let _ = w.show();
+                return;
+            }
             let _ = w.center();
             let _ = w.set_always_on_top(true);
             let _ = w.set_focus();
+        }
+    }
+
+    /// Tauri config changes for a self-test run: its own web data store, and the window off screen when asked.
+    pub fn adjust_config(&self, c: &mut tauri::Config) {
+        for w in c.app.windows.iter_mut() {
+            w.data_store_identifier = Some(*b"coool-selftest!!");
+            if offscreen() {
+                w.visible = false;
+                w.focus = false;
+                w.center = false;
+                w.always_on_top = false;
+                w.x = Some(OFFSCREEN.x);
+                w.y = Some(OFFSCREEN.y);
+            }
         }
     }
 
@@ -115,6 +163,66 @@ impl SelfTest {
         eprintln!("[selftest] {line}");
     }
 }
+
+/// Where the window goes with `COOOL_SELFTEST_OFFSCREEN=1`: far left of every display.
+const OFFSCREEN: tauri::LogicalPosition<f64> = tauri::LogicalPosition { x: -30000.0, y: 200.0 };
+
+/// `COOOL_SELFTEST_OFFSCREEN=1` (and a build where the self-test can run at all).
+pub fn offscreen() -> bool {
+    cfg!(debug_assertions) && std::env::var("COOOL_SELFTEST_OFFSCREEN").is_ok_and(|v| v == "1")
+}
+
+/// WebKit takes an occluded or off-screen window as hidden (page visibility, throttled timers and animations);
+/// a self-test out of sight must render as if in front.
+#[cfg(target_os = "macos")]
+fn keep_visible(wk: *mut std::ffi::c_void) {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    if wk.is_null() {
+        return;
+    }
+    // SAFETY: the live WKWebView on the main thread; the private setter is checked with respondsToSelector: and takes
+    // one BOOL. objc_msgSend is called through function pointers of the exact signatures.
+    unsafe {
+        let sel = sel_registerName(c"_setWindowOcclusionDetectionEnabled:".as_ptr());
+        let responds: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> bool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        if responds(wk, sel_registerName(c"respondsToSelector:".as_ptr()), sel) {
+            let set: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            set(wk, sel, false);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keep_visible(_wk: *mut std::ffi::c_void) {}
+
+/// Fully transparent, no shadow, clicks pass through: the window renders but shows nothing.
+#[cfg(target_os = "macos")]
+fn invisible(ns: *mut std::ffi::c_void) {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    if ns.is_null() {
+        return;
+    }
+    // SAFETY: the live NSWindow on the main thread (setup runs there); public setters taking a CGFloat / BOOL,
+    // called through function pointers of the exact signatures.
+    unsafe {
+        let f: unsafe extern "C" fn(*mut c_void, *mut c_void, f64) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        f(ns, sel_registerName(c"setAlphaValue:".as_ptr()), 0.0);
+        let b: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        b(ns, sel_registerName(c"setIgnoresMouseEvents:".as_ptr()), true);
+        b(ns, sel_registerName(c"setHasShadow:".as_ptr()), false);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn invisible(_ns: *mut std::ffi::c_void) {}
 
 fn chrono_like_now() -> String {
     let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
@@ -136,6 +244,100 @@ pub fn selftest_config(core: State<'_, Arc<Core>>) -> Option<Config> {
 pub fn selftest_log(core: State<'_, Arc<Core>>, line: String) -> Result<(), String> {
     active(&core)?.log(&line);
     Ok(())
+}
+
+/// Counters and resource use for the `perf-*` scenarios (see `crate::perf`).
+#[derive(Serialize)]
+pub struct PerfStats {
+    now_ms: u64,
+    /// When this process started, epoch ms.
+    process_start_ms: u64,
+    first_publish_ms: u64,
+    loaded_ms: u64,
+    app: Option<crate::perf::ProcStats>,
+    /// The main webview's WebKit content process, and the GPU process (when WebKit says which).
+    web: Option<crate::perf::ProcStats>,
+    gpu: Option<crate::perf::ProcStats>,
+    refreshes: u64,
+    publishes: u64,
+    publish_bytes: u64,
+    chat_batches: u64,
+    pty_chunks: u64,
+    git_trails: u64,
+    git_spawns: u64,
+    context_maps: u64,
+    /// Start-up points (see `crate::perf::boot_mark`): name, epoch ms.
+    boot: Vec<(&'static str, u64)>,
+}
+
+#[tauri::command(async)]
+pub fn selftest_perf_stats(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<PerfStats, String> {
+    use crate::perf::*;
+    use std::sync::atomic::Ordering::Relaxed;
+    active(&core)?;
+    let me = std::process::id();
+    let (mut web, mut gpu) = (None, None);
+    if let Some(w) = app.get_webview("main") {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = w.with_webview(move |pw| {
+            let _ = tx.send(web_pids(pw.inner()));
+        });
+        if let Ok((a, b)) = rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            web = a.and_then(proc_stats);
+            gpu = b.and_then(proc_stats);
+        }
+    }
+    Ok(PerfStats {
+        now_ms: now_ms(),
+        process_start_ms: coool_core::util::process_start_ms(me).unwrap_or(0),
+        first_publish_ms: FIRST_PUBLISH_MS.load(Relaxed),
+        loaded_ms: LOADED_MS.load(Relaxed),
+        app: proc_stats(me as i32),
+        web,
+        gpu,
+        refreshes: REFRESHES.load(Relaxed),
+        publishes: PUBLISHES.load(Relaxed),
+        publish_bytes: PUBLISH_BYTES.load(Relaxed),
+        chat_batches: CHAT_BATCHES.load(Relaxed),
+        pty_chunks: PTY_CHUNKS.load(Relaxed),
+        git_trails: GIT_TRAILS.load(Relaxed),
+        git_spawns: coool_core::gitlog::SPAWNS.load(Relaxed),
+        context_maps: CONTEXT_MAPS.load(Relaxed),
+        boot: BOOT.lock().map(|b| b.clone()).unwrap_or_default(),
+    })
+}
+
+/// The WKWebView's content and GPU process ids (private WebKit properties, checked before use).
+#[cfg(target_os = "macos")]
+fn web_pids(wk: *mut std::ffi::c_void) -> (Option<i32>, Option<i32>) {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    if wk.is_null() {
+        return (None, None);
+    }
+    let get = |name: &std::ffi::CStr| -> Option<i32> {
+        // SAFETY: the live WKWebView, on the main thread (with_webview runs there). The selector is checked with
+        // `respondsToSelector:` first; both getters take no arguments and return a pid_t. objc_msgSend is called
+        // through a function pointer of the exact signature.
+        unsafe {
+            let sel = sel_registerName(name.as_ptr());
+            let responds: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> bool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            if !responds(wk, sel_registerName(c"respondsToSelector:".as_ptr()), sel) {
+                return None;
+            }
+            let f: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            Some(f(wk, sel)).filter(|p| *p > 0)
+        }
+    };
+    (get(c"_webProcessIdentifier"), get(c"_gpuProcessIdentifier"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn web_pids(_wk: *mut std::ffi::c_void) -> (Option<i32>, Option<i32>) {
+    (None, None)
 }
 
 /// Screenshot of the app window alone into `<shots>/real-<name>.png`.
@@ -272,6 +474,9 @@ pub fn selftest_window(app: AppHandle, core: State<'_, Arc<Core>>, action: Strin
     active(&core)?;
     let w = app.get_window("main").ok_or("no window")?;
     let r = match action.as_str() {
+        // Out of sight: never in front, never focused.
+        "focus" if offscreen() => Ok(()),
+        "show" if offscreen() => w.show(),
         "focus" => w.set_focus(),
         "fullscreen" => w.set_always_on_top(false).and_then(|_| w.set_fullscreen(true)),
         "windowed" => w.set_fullscreen(false).and_then(|_| w.set_always_on_top(true)),

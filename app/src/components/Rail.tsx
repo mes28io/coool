@@ -8,6 +8,7 @@ import { IBell, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./i
 import { cx, ease, ProviderMark } from "./primitives";
 import { useNeedsYou } from "./LeftPanels";
 import { resetText, toneColor, usageHighest, usageTone, useUsageProviders } from "./Usage";
+import { countRender } from "../lib/perfCount";
 
 /**
  * One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. `tip` replaces the
@@ -301,6 +302,7 @@ function UsageRing({ size, outer, inner, focus }: { size: number; outer: UsageWi
 }
 
 export function Rail() {
+  countRender("Rail");
   const activeTab = useStore((s) => s.activeTab);
   const activate = useStore((s) => s.activate);
   const setPalette = useStore((s) => s.setPalette);
