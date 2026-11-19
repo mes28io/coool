@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>coool</title>
+  <rect x="50" y="50" width="924" height="924" rx="210" fill="#111113"/>
+  <defs><mask id="o" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <g fill="none" stroke="#fff" stroke-width="68">
+      <circle cx="247" cy="512" r="91"/><circle cx="512" cy="512" r="91"/><circle cx="777" cy="512" r="91"/>
+    </g></mask></defs>
+  <g mask="url(#o)">
+    <rect x="0" y="387.00" width="1024" height="42.17" fill="#61BB46"/>
+    <rect x="0" y="428.67" width="1024" height="42.17" fill="#FDB827"/>
+    <rect x="0" y="470.33" width="1024" height="42.17" fill="#F5821F"/>
+    <rect x="0" y="512.00" width="1024" height="42.17" fill="#E03A3E"/>
+    <rect x="0" y="553.67" width="1024" height="42.17" fill="#963D97"/>
+    <rect x="0" y="595.33" width="1024" height="42.17" fill="#009DDC"/>
+  </g>
+</svg>
