@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>coool</title>
+  <rect x="50" y="50" width="924" height="924" rx="210" fill="#ffffff"/>
+  <defs><mask id="g" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round"><circle cx="246" cy="512" r="74.0" stroke-width="68"/><circle cx="474" cy="512" r="74.0" stroke-width="68"/><circle cx="702" cy="512" r="74.0" stroke-width="68"/><path d="M860 440 V584" stroke-width="72"/></g></mask></defs>
+  <g mask="url(#g)"><rect x="0" y="404.0" width="1024" height="36.6" fill="#61BB46"/><rect x="0" y="440.0" width="1024" height="36.6" fill="#FDB827"/><rect x="0" y="476.0" width="1024" height="36.6" fill="#F5821F"/><rect x="0" y="512.0" width="1024" height="36.6" fill="#E03A3E"/><rect x="0" y="548.0" width="1024" height="36.6" fill="#963D97"/><rect x="0" y="584.0" width="1024" height="36.6" fill="#009DDC"/></g>
+</svg>
