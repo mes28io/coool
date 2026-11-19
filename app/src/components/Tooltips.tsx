@@ -72,7 +72,8 @@ export function Tooltips() {
     let above: HTMLElement[] = [];
 
     const show = () => {
-      if (!host || !host.isConnected) return;
+      // `data-no-tip` can arrive while it rests (a session row's hover card takes over, HoverCard.tsx).
+      if (!host || !host.isConnected || host.closest("[data-no-tip]")) return;
       const text = take(host);
       if (!text) return;
       const r = host.getBoundingClientRect();

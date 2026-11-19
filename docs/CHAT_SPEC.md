@@ -108,6 +108,17 @@ Question = { id: string, header: string, question: string,
 - Claude wire format (observed with Claude Code 2.1.325): the question arrives as `can_use_tool` for `AskUserQuestion`; the answer is `{"behavior":"allow","updatedInput":{...input, "answers": {"<question text>": "<answer>"}}}`, where several picks are joined with `", "` and a typed answer is passed as is. The model then sees `"<question>"="<answer>"`. A decline is `{"behavior":"deny","message":"The user declined to answer."}`.
 - Codex wire format (`codex app-server generate-ts`, experimental in 0.145): the response is `{"answers": {"<question id>": {"answers": [..]}}}`; a decline is an empty `answers` map.
 - The UI shows a question card in the timeline (same design language as the approval card), the session counts as "Needs you", and the tool step for the question itself is not listed separately.
+- Number keys: each option shows its number (1–9). While the card has focus (a click on it, Tab, or a new card arriving when nothing else has focus), a plain 1–9 picks that option, exactly like a click: it answers a single single-choice question, toggles an option of a multi-select one, and picks for the question holding focus (else the first unanswered one) when there are several. Never while typing: keys in the composer, the "Or type another answer" field or any input stay text, and ⌘/Ctrl/Alt digits are left to the app's shortcuts. The card's hint reads "Press 1–N to answer" while it has focus (`lib/questionKeys.ts`, tested).
+- Later: the card's "Later" folds it to one line just above the composer ("Claude has a question · <first question>", `components/QuestionLater.tsx`), so the person can keep reading; the turn stays paused and the session still counts as Needs you. Clicking the line reopens the card in the timeline, scrolled into view and focused (so a number key answers at once). Which questions are set aside is UI state only, never persisted; answering, declining or the turn ending removes the line.
+
+### Risky tag (approval cards)
+
+The approval card can carry a small red "Risky" tag next to the tool name, with the reason on hover, from a fixed rule set (`lib/risk.ts`, `riskOf(tool, input, cwd) -> { risky: true, reason } | null`, tested in `risk.test.ts`; `components/RiskTag.tsx` draws it and is meant for reuse, e.g. the Needs-you page):
+
+- a command (Claude's Bash, Codex's shell, `bash -lc "…"` unwrapped) that deletes recursively and forcibly (`rm -rf` in any spelling), force-pushes (`--force`, `-f`, `--force-with-lease`, `+branch`, `--mirror`), deletes a remote branch, runs `git reset --hard` or `git clean -f…`, pipes a network script into a shell (`curl … | sh`, `sh -c "$(curl …)"`, `bash <(curl …)`), uses `sudo` / `doas` anywhere in a chain, or deploys / publishes (vercel, netlify, fly, firebase, wrangler, kubectl / helm changes, terraform / pulumi apply or destroy, npm / pnpm / yarn / cargo / gem publish, docker push, `git push heroku`, gcloud / aws / az deploys, `aws s3 sync … s3://`, supabase pushes, `gh release create`, app store releases);
+- a file write (Write, Edit, MultiEdit, NotebookEdit, Codex's apply_patch) outside the chat's folder. The system temp folders (`/tmp`, `/private/tmp`, `/var/folders`) don't count, and with no known folder the rule says nothing.
+
+Only "Risky" is ever shown, never "safe" (no tag means only that no rule matched). There is no countdown and no default answer: coool never answers a request for the person. coool's own device requests (`coool_device`) carry no tag.
 
 ### Steering
 
