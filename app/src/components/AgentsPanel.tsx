@@ -61,7 +61,8 @@ export function AgentsBody({
           {countsText(cards, shells.length)}
         </span>
       </div>
-      <div className="scroll min-h-0 flex-1 px-3 pb-3" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
+      {/* The scrollbar's reserved gutter (10px, styles.css `.scroll`) is part of the right margin: 2 + 10 = the left's 12. */}
+      <div className="scroll min-h-0 flex-1 pb-3 pl-3 pr-[2px]" onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
         <AnimatePresence initial={false}>
           {rest.map((c) => (
             <motion.div

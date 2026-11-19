@@ -239,7 +239,8 @@ export function ModelsPanelBody({
       <div className="flex h-[44px] shrink-0 items-center pl-4 pr-2">
         <span className="text-base font-semibold text-fg">Models</span>
       </div>
-      <div className="scroll flex min-h-0 flex-1 flex-col gap-2 px-3 pb-3">
+      {/* The scrollbar's reserved gutter (10px, styles.css `.scroll`) is part of the right margin: 2 + 10 = the left's 12. */}
+      <div className="scroll flex min-h-0 flex-1 flex-col gap-2 pb-3 pl-3 pr-[2px]">
         <div className="flex items-center gap-3 rounded-[12px] border border-hairline bg-raised px-3.5 py-3">
           <ContextRing context={context} model={current} window={reported} size={28} />
           <div className="min-w-0">
