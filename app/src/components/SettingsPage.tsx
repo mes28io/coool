@@ -29,7 +29,7 @@ const META: Record<SettingsSection, { label: string; icon: ReactNode; desc: stri
   connections: { label: "Connections", icon: <IPlug size={16} />, desc: "MCP servers, hooks and plugins your CLIs are set up with.", body: () => <Connections /> },
   storage: { label: "Storage", icon: <IDisk size={16} />, desc: "What coool keeps on this Mac, and what you can clear.", body: () => <Storage /> },
   usage: { label: "Usage", icon: <IGauge size={16} />, desc: "How much of your Claude and Codex plan limits is used, and when each window resets.", body: () => <UsageSection /> },
-  insights: { label: "AI insights", icon: <ISpark size={16} />, desc: "Live headlines and “Needs you” reasons, written by a small model on your own API key.", body: () => <Insights /> },
+  insights: { label: "Assist", icon: <ISpark size={16} />, desc: "Live headlines and “Needs you” reasons, written by a small model on your own API key.", body: () => <Insights /> },
   about: { label: "About", icon: <IInfo size={16} />, desc: "This build of coool.", body: () => <About /> },
 };
 

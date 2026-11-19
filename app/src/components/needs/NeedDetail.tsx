@@ -100,7 +100,7 @@ function Request({ n }: { n: Need }) {
           : "This session runs in a terminal outside coool, so coool can't answer for it. Answer the prompt where it runs."
       : kind === "job"
         ? "A run it started (listed under it) is blocked. Open it to see what it waits on."
-        : "An AI insight read this from the transcript; it isn't a request coool can answer. Open the session to check.";
+        : "coool read this from the transcript; it isn't a request coool can answer. Open the session to check.";
   return (
     <section className="rounded-[14px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised p-3.5 shadow-card" data-needs-outside={kind}>
       {/* The command a terminal wait names shows whole below, not twice. */}
@@ -109,7 +109,7 @@ function Request({ n }: { n: Need }) {
       {kind === "terminal" && <TerminalExplain n={n} command={cmd} />}
       {kind === "insight" && (
         <div className="mt-2 flex items-center gap-1.5 text-small text-faint">
-          <ISpark size={12} /> AI insight
+          <ISpark size={12} /> Noticed
         </div>
       )}
       <p className="mt-2.5 text-small text-dim">{where}</p>
@@ -151,7 +151,7 @@ function Permission({ n }: { n: Need }) {
         </div>
         <Payload n={n} />
         {d.note && n.kind !== "command" && <p className="mt-2 text-base text-dim" data-needs-note>{d.note}</p>}
-        {/* What this does and why (components/Explain.tsx): the agent's own words, then the AI read when on. */}
+        {/* What this does and why (components/Explain.tsx): the agent's own words, then the second read when on. */}
         {n.kind !== "device" && (
           <div className="mt-3">
             <PermExplain perm={perm} chat={chat} project={projectOf(n.s) || null} variant="full" />
@@ -250,7 +250,7 @@ function Payload({ n }: { n: Need }) {
   );
 }
 
-/** A terminal wait: what the transcript gives, and the AI read when the wait names its command. */
+/** A terminal wait: what the transcript gives, and the second read when the wait names its command. */
 function TerminalExplain({ n, command }: { n: Need; command: string | null }) {
   const ctx = useContext(n);
   const cwd = n.s.cwd;

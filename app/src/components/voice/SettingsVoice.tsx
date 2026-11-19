@@ -138,10 +138,10 @@ export function VoiceSettings() {
         <Row attr="voice-typed" label="Check what I type too" desc="Suggestions on typed text in the composer, not only dictated text." k="typed grammarly" control={<Switch label="Check what I type too" on={p.fixTyped} onChange={(v) => setVoicePrefs({ fixTyped: v })} />} />
         <Row
           attr="voice-ai"
-          label="AI polish"
-          desc="With AI insights on, a small model suggests fixes for dictated text it thinks was misheard. Only that text and your words list are sent; fixes from memory never ask it."
+          label="Proofread dictation"
+          desc="With Assist on, a small model suggests fixes for dictated text it thinks was misheard. Only that text and your words list are sent; fixes from memory never ask it."
           k="ai haiku polish insights"
-          control={<Switch label="AI polish" on={p.aiPolish} onChange={(v) => setVoicePrefs({ aiPolish: v })} />}
+          control={<Switch label="Proofread dictation" on={p.aiPolish} onChange={(v) => setVoicePrefs({ aiPolish: v })} />}
         />
       </Group>
 

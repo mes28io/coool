@@ -1,7 +1,7 @@
 // The "Risky" tag on a permission request (lib/risk.ts): shown only when a fixed rule matches, with the reason on
 // hover. There is no "safe" tag, no countdown and no default answer: the person decides, as on every request. The
 // rules are a short fixed list, so the tooltip says so: a request without the tag still deserves a read. The tag
-// never comes from the AI read (components/Explain.tsx keeps the two apart).
+// never comes from the second read (components/Explain.tsx keeps the two apart).
 
 import { useMemo } from "react";
 import { riskOf } from "../lib/risk";

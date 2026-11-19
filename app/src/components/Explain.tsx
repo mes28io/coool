@@ -1,7 +1,7 @@
 // "What this does and why" on a permission request (CHAT_SPEC "What this does and why"): the agent's own claim, shown
-// at once (its description, its last words or reasoning, its plan), and the independent "AI read" (lib/explain.ts,
-// lib/explainStore.ts) when AI insights is on, filling in when it arrives. Then "What to check": the Risky rule's reason
-// (lib/risk.ts) and what the AI read adds, each marked with where it came from. Never "safe", never a countdown, never
+// at once (its description, its last words or reasoning, its plan), and the independent "Second read" (lib/explain.ts,
+// lib/explainStore.ts) when Assist is on, filling in when it arrives. Then "What to check": the Risky rule's reason
+// (lib/risk.ts) and what the second read adds, each marked with where it came from. Never "safe", never a countdown, never
 // a default answer: the Allow / Deny buttons beside it work the same before, during and after a read.
 //
 // `full`: the Needs you page, under the payload. `compact`: the chat's approval card, one or two lines, "More" opens it.
@@ -70,7 +70,7 @@ function useRead(src: ExplainSource): ReadState | null {
   return r;
 }
 
-const aiTitle = (model: string) => `AI read by ${modelLabel(model)} (${model}): an independent reading of the request and the steps before it, made by coool's AI insights. It can be wrong; read the request itself.`;
+const aiTitle = (model: string) => `Second read by ${modelLabel(model)} (${model}): an independent reading of the request and the steps before it, made by coool's Assist. It can be wrong; read the request itself.`;
 
 export function Explain({ src, variant }: { src: ExplainSource; variant: "full" | "compact" }) {
   const r = useRead(src);
@@ -82,7 +82,7 @@ export function Explain({ src, variant }: { src: ExplainSource; variant: "full" 
   const read = r?.status === "done" ? r.read : null;
   const checks = checkItems(rule, read);
   const state = r?.status ?? (src.readable ? "pending" : "none");
-  // The "turn on the AI read" hint: only when it's off, the first few requests.
+  // The "turn on the second read" hint: only when it's off, the first few requests.
   // (`offHint` counts each request id once, so reading it during render is stable.)
   const [dropped, setDropped] = useState(false);
   const off = r?.status === "off";
@@ -158,7 +158,7 @@ function AiTag({ model }: { model?: string }) {
   return (
     <span className="inline-flex shrink-0 items-center gap-1 rounded-[6px] bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] px-1.5 text-small font-medium text-accent-text" title={aiTitle(model ?? "claude-haiku-5-5")} data-explain-ai-tag>
       <ISpark size={11} />
-      AI read
+      Second read
     </span>
   );
 }
@@ -195,7 +195,7 @@ function AiBlock({ r, read, readable }: { r: ReadState | null; read: AiRead | nu
     return (
       <div className="flex items-center gap-2 border-t border-hairline pt-2.5 text-small text-faint" data-explain-ai-missing={r.status} title={r.status === "error" ? r.message : undefined}>
         <ISpark size={11} />
-        {r.status === "timeout" ? "The AI read didn't come back in time." : r.status === "limited" ? "No AI read: the hourly limit of AI insights is reached." : "The AI read isn't available right now."}
+        {r.status === "timeout" ? "The second read didn't come back in time." : r.status === "limited" ? "No second read: the hourly limit of Assist is reached." : "The second read isn't available right now."}
       </div>
     );
   return null;
@@ -213,7 +213,7 @@ function Checks({ checks }: { checks: CheckItem[] }) {
             {c.text}
           </span>
           <span className="mt-px shrink-0 text-small text-faint" title={c.from === "rule" ? "From coool's fixed Risky rules (a short list: a request without a match still deserves a read)" : aiTitle("claude-haiku-5-5")}>
-            {c.from === "rule" ? "Risky rule" : "AI read"}
+            {c.from === "rule" ? "Risky rule" : "Second read"}
           </span>
         </div>
       ))}
@@ -226,9 +226,9 @@ function OffHint({ onClose }: { onClose: () => void }) {
     <div className="flex items-center gap-2 text-small text-faint" data-explain-hint>
       <ISpark size={11} className="shrink-0" />
       <span className="min-w-0">
-        An independent AI read of each request is available with{" "}
+        An independent second read of each request is available with{" "}
         <button type="button" className="text-dim underline decoration-line underline-offset-2 hover:text-fg" onClick={() => useStore.getState().openSettings("insights")} data-explain-hint-open>
-          AI insights in Settings
+          Assist in Settings
         </button>
         .
       </span>
@@ -277,7 +277,7 @@ function Compact({ src, claim, r, read, checks, hint, dropHint }: Props) {
       {src.readable && (!r || r.status === "pending") && (
         <div className="flex items-center gap-1.5 text-faint" data-explain-ai-pending>
           <ISpark size={11} />
-          <span className="animate-pulse">AI read…</span>
+          <span className="animate-pulse">Second read…</span>
         </div>
       )}
       {open && read && (

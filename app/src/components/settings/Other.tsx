@@ -1,4 +1,4 @@
-// Settings > AI insights, Usage and About.
+// Settings > Assist, Usage and About.
 
 import { useEffect, useState } from "react";
 import { api, isNotAvailable, isTauri } from "../../lib/backend";
@@ -13,7 +13,7 @@ import { Group, Note, Row, Switch } from "./ui";
 const inputCls =
   "h-[32px] w-full min-w-0 rounded-[8px] border border-line bg-bg px-2.5 font-mono text-mono-small outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
 
-// ---------- AI insights ----------
+// ---------- Assist ----------
 
 export function Insights() {
   const [st, setSt] = useState<InsightsStatus | null>(null);
@@ -55,9 +55,9 @@ export function Insights() {
     <Group>
       <Row
         attr="insights"
-        label="AI insights"
+        label="Assist"
         desc="A one-line headline for each live session, and a “Needs you” flag with the reason when an agent is blocked on you."
-        control={<Switch label="AI insights" on={!!st?.enabled} disabled={!st || !avail} onChange={(v) => void run(() => api().insightsSetEnabled(v), { enabled: v })} />}
+        control={<Switch label="Assist" on={!!st?.enabled} disabled={!st || !avail} onChange={(v) => void run(() => api().insightsSetEnabled(v), { enabled: v })} />}
       >
         <Note>
           Uses <span className="font-medium text-fg/85">your own Anthropic API key</span>, billed to you, never your Claude Code or Codex login. A small model (Claude Haiku 5.5) runs only for live sessions whose activity changed, at most once per
