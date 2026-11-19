@@ -1769,7 +1769,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       });
       const { strong, block, cells } = got;
       const txt = block.textContent ?? "";
-      if (txt.includes("**") || txt.includes("|---|")) throw new Fail(`literal markdown left: "${txt.slice(0, 80)}"`);
+      if (txt.includes("**") || txt.includes("|---|")) throw new Fail(`literal markdown left: "${txt.slice(0, 80)}"; reply ${JSON.stringify(lastText(id)?.text)}; html ${JSON.stringify(block.innerHTML.slice(0, 400))}`);
       await shot("markdown");
       return `strong "${strong.textContent}", table ${cells} cells, pre present, no ** or |---|`;
     });

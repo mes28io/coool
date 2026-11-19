@@ -45,7 +45,7 @@ import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot
 import { useStore } from "../store";
 import { isPilotTool, liveRun, parseOutcome, usePilot } from "../lib/pilot";
 import type { PilotOutcome } from "../lib/backend";
-import { addTime, countRender } from "../lib/perfCount";
+import { countRender } from "../lib/perfCount";
 import { voiceRef } from "./voice/VoiceHost";
 import { nextFrame } from "../lib/frame";
 import { bringNear, KeepScope, useKept, Windowed, type WindowApi } from "./Windowed";
@@ -139,12 +139,9 @@ export function ChatTimeline({
   onResume?: () => void;
 }) {
   countRender("ChatTimeline");
-  const tBody = performance.now();
   // The live chat: the pane above passes one that holds still while a reply streams (lib/chat.ts useChatShell).
   const chat = useChats((s) => s.chats[given.id]) ?? given;
-  let tq = performance.now();
   const { blocks, children } = useStableBlocks(chat.items);
-  addTime("ct.blocks", performance.now() - tq);
   // Stable callbacks for the memoised blocks (the latest ones are called).
   const cbs = useRef({ onOpenTerminal, onResume });
   cbs.current = { onOpenTerminal, onResume };
@@ -211,7 +208,6 @@ export function ChatTimeline({
   // Checkpoints card (one per turn), shown from two checkpoints on.
   // The same object while nothing in it changed (a streamed token changes none of it): the card skips re-rendering.
   const cpsHeld = useRef<{ items: ChatItem[]; live: boolean; cps: Checkpoints } | null>(null);
-  tq = performance.now();
   const cps = useMemo(() => {
     const h = cpsHeld.current;
     const live = chat.running && chat.state !== "idle";
@@ -226,7 +222,6 @@ export function ChatTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.items, chat.running, chat.state]);
   const showCps = cps.list.length >= 2;
-  addTime("ct.cps", performance.now() - tq);
   // Scroll the timeline to a turn's prompt (below the pinned card) and flash it.
   const jumpRef = useRef<(key: string) => void>(() => {});
   const [jumpTo, openFiles] = useMemo(() => [(k: string) => jumpRef.current(k), (k: string) => openChanges(chat.id, k)], [chat.id]);
@@ -398,7 +393,6 @@ export function ChatTimeline({
     }
     return t;
   }, [chat.items, chat.turnStart, chat.lastTs]);
-  addTime("ChatTimeline.body", performance.now() - tBody);
 
   return (
     <div className="flex h-full flex-col">

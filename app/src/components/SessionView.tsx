@@ -31,7 +31,7 @@ import { SessionSkeleton, Skel } from "./Skeletons";
 import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
 import { modelLabel } from "../lib/models";
 import { useShellFocus } from "../lib/shellFocus";
-import { addTime, countRender } from "../lib/perfCount";
+import { countRender } from "../lib/perfCount";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -65,7 +65,6 @@ export function SessionView({
   onClosePane?: () => void;
 }) {
   countRender("SessionView");
-  const tBody = performance.now();
   const r = useStore(useShallow((st) => resolveTarget(target, st)));
   const running = useStore((st) => (r.pty !== null ? !!st.ptys[r.pty]?.running && !st.exited[r.pty] : false));
   const modeKey = r.session ? `s:${sessionKey(r.session)}` : target.kind === "pty" ? `p:${target.id}` : target.kind === "chat" ? `c:${target.id}` : `s:${target.key}`;
@@ -351,7 +350,6 @@ export function SessionView({
     const k = useStore.getState().sessions.find((x) => sessionKey(x) === c.ref);
     if (k) askStop(k, k.managed, displayTitle(k), k.chat ?? null);
   };
-  addTime("SessionView.body", performance.now() - tBody);
 
   return (
     <BrowserContext.Provider value={openPage}>

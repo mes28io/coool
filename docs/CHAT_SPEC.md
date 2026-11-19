@@ -234,6 +234,37 @@ Checking it: `cargo run --release -p coool-core --example context_print -- [--ki
 
 The composer is a voice target (APP_SPEC "Voice"): hold Right ⌥ (or ⌥Space hands-free, or the mic chip) to dictate; the listening strip sits at the top of the composer card, the text is inserted at the caret through the textarea's own undo history, and nothing is sent unless "Send when I release" is on (then it goes through the same `send` as Enter, so steering, slash commands and the pending-request guard apply). The fixer's underlines are a mirror layer behind the textarea (no contenteditable); Tab accepts a suggestion only while the slash menu is closed; Esc while listening cancels the dictation and never interrupts the turn. On send, the composer hands the sent text to voice's learning (`noteSent`), which compares it with what was dictated; nothing else about sending changes.
 
+### Long timelines
+
+Both timelines (a chat's, `components/Chat.tsx`, and a transcript session's, `components/Activity.tsx`) draw only the
+rows near the view (`components/Windowed.tsx`): the rows within about a screen (at least 900 px) above and below what
+is shown are in the DOM, the rest are two spacers whose heights come from each row's measured height, cached per row
+key (an estimate by row kind until a row has been drawn once). A chat at its 1,500-item cap has ~670 rows and ~15-30
+drawn; a streamed batch costs the same at 120 items as at 1,500.
+
+- **What is read stays put.** WebKit has no CSS scroll anchoring, so the timeline keeps its own anchor: the first drawn
+  row that starts inside the view. After every render and every measured change (a row drawn for the first time, a
+  step group opening, the cap dropping the oldest rows, older history loading, a pane resize, a card folding above),
+  the view moves by however far that row moved. A scroll made by something else (a jump, a card's own
+  `scrollIntoView`) is taken as the new place, never undone.
+- **Pinned to the bottom** (within 80 px, as before): the drawn rows are the last ones and the view follows the bottom
+  as they grow. Scrolled up, new output never moves the view and the jump button says "New" (from the chat's items
+  changing, not from the column's height, which drawing rows changes too).
+- **Always drawn, wherever they are:** the request waiting for an answer (approval or question card), a subagent card
+  asked for (`focusAgent`: sidebar, header chip, Agents panel, Mission control), an unread away card. Each sits in place
+  between spacers, so it can be scrolled to like any element.
+- **Jumps:** a checkpoint, an away-card row or an asked-for subagent card more than a screen from the view is drawn
+  first, then jumped to (no glide over rows that aren't drawn); within the drawn rows it glides as before. The jump
+  button glides when the bottom rows are drawn, else jumps. The Later line's card, far away, is jumped to as well.
+- **State a row keeps when it is dropped and drawn again** (`useKept`, per timeline, for the app run): a step group's
+  open/closed choice, a tool's opened output, a reasoning block, a long notice, a turn's waterfall. Subagent cards keep
+  theirs as before (`lib/cardFold.ts`). A row drawn again never plays its entrance; a row that arrived while outside
+  the drawn window doesn't either.
+- **Selection and copy** work across the drawn rows (a screen above and below the view); text further away is not in
+  the DOM, so a selection can't reach it, and a WebKit find (there is no ⌘F in chats) only sees drawn rows.
+- Row entrances are a CSS one-off (`.row-in`: 320 ms fade and 10 px rise, the fade only under Reduce motion), not a
+  script animation per frame.
+
 ### Tool rows
 
 One function names every tool call on every surface (`app/src/lib/toolNames.ts`, `toolRow` / `toolRowFromText`): the chat's step rows and group chips, subagent and Jobs cards, Mission control's "doing now" line and fan-out hover, the Needs-you list and `chatNeeds` (the sidebar and tab "Approve …" line), the read-only Activity timeline and its live row.
@@ -278,7 +309,7 @@ Events: `chat-event` `{ id: number, events: ChatEvent[] }` (batched, emitted whe
 
 `sessions` payload gains `chats: [{id, provider, cwd, session_id, model, state, running, permission_mode, pid}]`.
 
-Batches are pumped every ~16ms from a handle that never takes the Hub lock, so streamed text is live regardless of the 1s session refresh. The UI replays every chat in `sessions.chats` once (`chat_replay`) and rebuilds it from the replay plus any live events with a higher `seq`, so a reload loses nothing.
+Batches are pumped every ~16ms from a handle that never takes the Hub lock, so streamed text is live regardless of the 1s session refresh. The page applies them in one shared frame (`lib/frame.ts`, `chatQueue` in `lib/chat.ts`), about 30 a second, together with the reveal of the text being written and rising token counts: one store update and one render for everything that arrived since the last (while the window is hidden, a 120 ms timer stands in for frames). The pane around the timeline (header, composer, panels) reads the chat through `useChatShell`, which holds still while only the reply being written grows; the timeline reads the live chat. The UI replays every chat in `sessions.chats` once (`chat_replay`) and rebuilds it from the replay plus any live events with a higher `seq`, so a reload loses nothing.
 
 ## AI insights (optional, off by default)
 

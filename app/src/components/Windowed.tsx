@@ -242,7 +242,6 @@ export function Windowed({
   };
 
   // ---------- what to draw ----------
-  const tw = performance.now();
   const n = keys.length;
   const now = performance.now();
   let set: string[];
@@ -298,7 +297,6 @@ export function Windowed({
   }
   if (prev < n) out.push(<div key={`pad:${prev}`} aria-hidden data-vpad style={{ height: pad(prev, n) }} />);
 
-  addTime("windowed.render", performance.now() - tw);
   // After every commit: what was drawn, the scroll kept, waiting callers answered.
   useLayoutEffect(() => {
     const te = performance.now();
