@@ -21,11 +21,11 @@ export const MAC_UDID = "mac";
 const DEFAULT_DIMS = { w: 1280, h: 800 };
 const PAD = 12;
 /** What installing takes (shown before it starts). */
-const DOWNLOAD_GB = 16;
-const NEEDS_GB = 40;
+export const DOWNLOAD_GB = 16;
+export const NEEDS_GB = 40;
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const pct = (f?: number) => (f == null ? null : Math.max(0, Math.min(100, Math.round(f * 100))));
-const gb = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(b >= 1e11 ? 0 : 1)} GB` : `${Math.max(0, Math.round(b / 1e6))} MB`);
+export const gb = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(b >= 1e11 ? 0 : 1)} GB` : `${Math.max(0, Math.round(b / 1e6))} MB`);
 
 export function macStateLabel(s: Pick<MacStatus, "state" | "progress" | "step">): string {
   const p = pct(s.progress?.fraction);

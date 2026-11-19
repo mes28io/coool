@@ -9,7 +9,8 @@ import type { Provider } from "../../lib/types";
 import { useStore } from "../../store";
 import { PERMISSION_MODES } from "../ChatComposer";
 import { IAlert, ICheck, IPlay } from "../icons";
-import { Button, ProviderMark } from "../primitives";
+import { BUILD_KINDS } from "../onboarding/BuildStep";
+import { Button, cx, ProviderMark } from "../primitives";
 import { ErrorLine, errText, Group, Note, Row, Select, Switch, type Option } from "./ui";
 
 const DEFAULT = "__default__";
@@ -107,6 +108,32 @@ export function General() {
       <Group label="New chats" footer="Applies to chats you start from now on. A resumed session keeps the model and mode it had.">
         <ChatDefaultsRows provider="claude" />
         <ChatDefaultsRows provider="codex" />
+      </Group>
+
+      <Group label="Your work" footer="Asked in the onboarding. Changing it installs nothing: the iPhone and the sandbox Mac are set up from their panels.">
+        <Row attr="building" label="I’m building" k="building mobile ios web desktop mac backend cli onboarding devices" desc="Pick any that apply.">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="I’m building">
+            {BUILD_KINDS.map((b) => {
+              const on = !!prefs?.building?.includes(b.id);
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  aria-pressed={on}
+                  disabled={off}
+                  data-building={b.id}
+                  onClick={() => save({ building: on ? (prefs?.building ?? []).filter((x) => x !== b.id) : [...(prefs?.building ?? []), b.id] })}
+                  className={cx(
+                    "h-[28px] rounded-[8px] border px-2.5 text-small transition-colors duration-150 disabled:opacity-50",
+                    on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
+                  )}
+                >
+                  {b.label}
+                </button>
+              );
+            })}
+          </div>
+        </Row>
       </Group>
 
       <Group label="Files and folders">

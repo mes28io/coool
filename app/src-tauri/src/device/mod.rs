@@ -321,14 +321,30 @@ pub struct SimList {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
     devices: Vec<simctl::SimDevice>,
+    /// While coool's own device doesn't exist yet: the iOS runtime setting it up would use ("iOS 27.0"), or, as
+    /// `noRuntime`, why it can't (no iOS simulator runtime in Xcode). Neither once the device exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime: Option<String>,
+    #[serde(rename = "noRuntime", skip_serializing_if = "Option::is_none")]
+    no_runtime: Option<String>,
 }
 
 #[tauri::command(async)]
 pub fn sim_devices() -> Res<SimList> {
     if let Some(reason) = simctl::unavailable() {
-        return Ok(SimList { available: false, reason: Some(reason), devices: Vec::new() });
+        return Ok(SimList { available: false, reason: Some(reason), devices: Vec::new(), runtime: None, no_runtime: None });
     }
-    Ok(SimList { available: true, reason: None, devices: simctl::devices()? })
+    let devices = simctl::devices()?;
+    // Only before the first set-up (the onboarding and the panel's empty state ask): one more simctl call.
+    let (runtime, no_runtime) = if devices.iter().any(|d| d.name == simctl::own_name()) {
+        (None, None)
+    } else {
+        match simctl::setup_runtime() {
+            Ok(r) => (Some(r), None),
+            Err(e) => (None, Some(e)),
+        }
+    };
+    Ok(SimList { available: true, reason: None, devices, runtime, no_runtime })
 }
 
 #[tauri::command(async)]

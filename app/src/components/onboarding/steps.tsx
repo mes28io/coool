@@ -5,6 +5,7 @@
 
 import { isMac } from "../../lib/backend";
 import { folderName } from "../../lib/format";
+import { BuildStep, commitBuild } from "./BuildStep";
 import { DoneStep, finish } from "./DoneStep";
 import { FolderStep } from "./FolderStep";
 import { LoginStep } from "./LoginStep";
@@ -18,6 +19,13 @@ export const STEPS: StepDef[] = [
     lead: "Pick a project folder. coool runs Claude Code or Codex there, signed in with your own account.",
     component: FolderStep,
     onSkip: (c) => c.setDraft({ cwd: null }),
+  },
+  {
+    id: "build",
+    title: "What are you building?",
+    lead: "Pick any that apply. coool sets up the devices your agents will need, and nothing you don’t tick.",
+    component: BuildStep,
+    onNext: commitBuild,
   },
   {
     id: "notifications",

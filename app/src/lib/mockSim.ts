@@ -77,11 +77,16 @@ export const emitMockSimActivity = (a: SimActivity) => {
   for (const cb of activity) cb(a);
 };
 
+/** `?xcode=none` (no Xcode), `noruntime` (Xcode without an iOS runtime), `ok` (ready, coool's device not made yet). */
+const xcodeKnob = () => (typeof location !== "undefined" ? /[?&]xcode=(\w+)/.exec(location.search)?.[1] : undefined) ?? "";
+
 export function mockSim(): Sim {
-  const devices: SimDevice[] = [
-    { udid: "MOCK-COOOL-1", name: "coool iPhone", state: "Shutdown", runtime: "iOS 27.0", deviceType: "iPhone 18 Pro", coool: true },
-    { udid: "MOCK-USER-1", name: "iPhone 18 Pro", state: "Shutdown", runtime: "iOS 27.0", deviceType: "iPhone 18 Pro", coool: false },
-  ];
+  const own: SimDevice = { udid: "MOCK-COOOL-1", name: "coool iPhone", state: "Shutdown", runtime: "iOS 27.0", deviceType: "iPhone 18 Pro", coool: true };
+  const xcode = xcodeKnob();
+  const devices: SimDevice[] =
+    xcode === "none" || xcode === "noruntime"
+      ? []
+      : [...(xcode === "ok" ? [] : [own]), { udid: "MOCK-USER-1", name: "iPhone 18 Pro", state: "Shutdown", runtime: "iOS 27.0", deviceType: "iPhone 18 Pro", coool: false }];
   const state = new Set<(s: { udid: string; state: string }) => void>();
   const streams = new Map<number, { udid: string; timers: ReturnType<typeof setInterval>[]; onFrame: (b: ArrayBuffer) => void; repaint: () => void }>();
   const touches = new Map<string, { x: number; y: number } | null>();
@@ -96,10 +101,15 @@ export function mockSim(): Sim {
   return {
     async simDevices() {
       await wait(120);
-      return { available: true, devices: devices.map((d) => ({ ...d })) };
+      if (xcode === "none") return { available: false, reason: "Install Xcode (with an iOS simulator runtime) to use the iPhone panel.", devices: [] };
+      const list = { available: true, devices: devices.map((d) => ({ ...d })) };
+      if (devices.some((d) => d.coool)) return list;
+      return xcode === "noruntime" ? { ...list, noRuntime: "No iOS simulator runtime is installed (Xcode > Settings > Components)." } : { ...list, runtime: "iOS 27.0" };
     },
     async simEnsureDevice() {
       await wait(400);
+      if (xcode === "none" || xcode === "noruntime") throw new Error("No iOS simulator runtime is installed (Xcode > Settings > Components).");
+      if (!devices.some((d) => d.coool)) devices.unshift({ ...own });
       return devices.find((d) => d.coool)!.udid;
     },
     async simBoot(udid) {

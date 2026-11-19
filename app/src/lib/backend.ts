@@ -266,6 +266,9 @@ export interface SimList {
   available: boolean;
   reason?: string;
   devices: SimDevice[];
+  /** Before coool's own device exists: the iOS runtime setting it up would use ("iOS 27.0"), or why there is none. */
+  runtime?: string;
+  noRuntime?: string;
 }
 export type SimInput =
   | { kind: "touch"; phase: "down" | "move" | "up"; x: number; y: number }

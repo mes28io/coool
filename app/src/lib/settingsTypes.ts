@@ -29,7 +29,12 @@ export interface AppPrefs {
   notify: NotifyPrefs;
   /** An `InstalledApp.id`, or "system". */
   open_with: string;
+  /** What the person builds (the onboarding's "What are you building?", Settings > General). Older backends: absent. */
+  building?: Building[];
 }
+
+/** The onboarding's answer: each kind suggests a device panel (components/onboarding/BuildStep.tsx). */
+export type Building = "mobile" | "web" | "desktop" | "other";
 
 export interface PowerStatus {
   enabled: boolean;
