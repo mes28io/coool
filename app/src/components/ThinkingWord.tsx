@@ -55,8 +55,7 @@ export function ThinkingWord({
   const shimmerStyle = { ["--shimmer-hi" as string]: tone?.hi ?? "var(--text)", ...(tone?.base ? { ["--shimmer-base" as string]: tone.base } : {}) } as CSSProperties;
   return (
     <span className={cx("inline-block whitespace-nowrap", className)}>
-      {/* A new word replaces the old one outright (never both on screen), then sweeps in. No opacity animation on a wrapper here:
-          the shimmer paints the text through background-clip, and a composited child layer would hide it. */}
+      {/* A new word replaces the old one outright (never both on screen), then sweeps in. */}
       <Reveal key={word} text={word} fresh={word !== first.current} inner={live ? { className: "shimmer", style: shimmerStyle } : undefined} />
     </span>
   );

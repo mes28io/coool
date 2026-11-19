@@ -18,9 +18,11 @@ import type { ChatEvent, Session } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { useStore } from "./store";
 import { createElement } from "react";
+import { MotionGlobalConfig } from "motion/react";
 import { createRoot } from "react-dom/client";
 import { AnimGallery, AnimLab, LOOPS } from "./selftestAnim";
 import { setMotionPref } from "./lib/motion";
+import { glassState, setBackdrop } from "./lib/glass";
 
 export interface PerfKit {
   shot: (name: string, settle?: number) => Promise<unknown>;
@@ -99,6 +101,15 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
     const a = await snap();
     await k.sleep(measureMs);
     await report(name, a, await snap());
+    // Frames the display delivers in half a second (after the window, so it doesn't count): ~30 on a 60 Hz screen,
+    // ~60 at 120 Hz; far fewer means the display wasn't servicing the window and frame-driven numbers mean little.
+    let n = 0;
+    const end = performance.now() + 500;
+    await new Promise<void>((done) => {
+      const tick = () => (++n, performance.now() < end ? requestAnimationFrame(tick) : done());
+      requestAnimationFrame(tick);
+    });
+    await k.log(`PERF ${name} display_fps=${n * 2}`);
   }
 
   /** Frame gaps (ms between animation frames) while `f` runs. */
@@ -391,6 +402,72 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
     },
 
     /**
+     * The "Colours" window backdrop (Backdrop.tsx): Home with it off, on but resting (this window is never in front),
+     * and drifting as in front (its pause lifted by a style), 20 s each.
+     */
+    async "perf-backdrop"() {
+      closeAllTabs();
+      await home();
+      const was = glassState().backdrop;
+      const style = document.createElement("style");
+      document.head.appendChild(style);
+      const variants: [string, "desktop" | "colours", string][] = [
+        ["off", "desktop", ""],
+        ["resting", "colours", ""],
+        ["drifting", "colours", "[data-backdrop-rest] .backdrop-layer { animation-play-state: running !important; }"],
+        ["off-again", "desktop", ""],
+      ];
+      for (const [name, b, css] of variants) {
+        setBackdrop(b);
+        style.textContent = css;
+        await k.sleep(1500);
+        const c = census();
+        await k.log(`PERF backdrop-${name} layers=${document.querySelectorAll(".backdrop-layer").length} running=${c.n} ${c.line}`);
+        await measure(`backdrop-${name}`, 3_000, 20_000);
+      }
+      style.remove();
+      setBackdrop(was);
+    },
+
+    /**
+     * Why the drifting backdrop costs what it costs: the same drift (pause lifted) with its layers built differently.
+     * `sN`: each layer 1/N of its size, the scale put back as the first transform (the same picture, painted at 1/N).
+     */
+    async "perf-backdrop-lab"() {
+      closeAllTabs();
+      await home();
+      const was = glassState().backdrop;
+      setBackdrop("colours");
+      const style = document.createElement("style");
+      document.head.appendChild(style);
+      const run = "[data-backdrop-rest] .backdrop-layer { animation-play-state: running !important; }";
+      const kf = (s: number) => `
+        @keyframes lab-bd-a { from { transform: scale(${s}) translate3d(-6%, 3%, 0) rotate(4deg) scale(1.04); } to { transform: scale(${s}) translate3d(5%, -4%, 0) rotate(-3deg) scale(1); } }
+        @keyframes lab-bd-b { from { transform: scale(${s}) translate3d(5%, -3%, 0) rotate(-4deg) scale(1); } to { transform: scale(${s}) translate3d(-6%, 4%, 0) rotate(3deg) scale(1.05); } }
+        .backdrop-layer { inset: auto !important; left: calc(50% - 75% / ${s}) !important; top: calc(50% - 75% / ${s}) !important; width: calc(150% / ${s}) !important; height: calc(150% / ${s}) !important; animation-name: lab-bd-a !important; }
+        .backdrop-layer + .backdrop-layer { animation-name: lab-bd-b !important; }`;
+      const variants: [string, string][] = [
+        ["as-is", run],
+        ["no-will-change", `${run} .backdrop-layer { will-change: auto !important; }`],
+        ["s1", run + kf(1)],
+        ["s1.5", run + kf(1.5)],
+        ["s3", run + kf(3)],
+        ["s6", run + kf(6)],
+        ["s3-no-will-change", `${run}${kf(3)} .backdrop-layer { will-change: auto !important; }`],
+      ];
+      for (const [name, css] of variants) {
+        style.textContent = css;
+        await k.sleep(1500);
+        const r = document.querySelector(".backdrop-layer")?.getBoundingClientRect();
+        await k.log(`PERF bdlab-${name} layer=${Math.round(r?.width ?? 0)}x${Math.round(r?.height ?? 0)} running=${census().n}`);
+        await measure(`bdlab-${name}`, 3_000, 15_000);
+        await k.shot(`bdlab-${name}`, 0);
+      }
+      style.remove();
+      setBackdrop(was);
+    },
+
+    /**
      * The loops of each screen with live sessions, one at a time: Home, then the busiest live session. On each, the
      * running loops by name (`document.getAnimations()`), then 20 s as is, with all paused, and with each name paused.
      */
@@ -403,10 +480,26 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
         await k.sleep(4000);
         const c = census();
         await k.log(`PERF anim-${where} running=${c.n} ${c.line}`);
+        // Frames asked for from script (Motion's JS animations, measuring loops): rAF calls a second, by caller.
+        const raf = window.requestAnimationFrame;
+        const by = new Map<string, number>();
+        window.requestAnimationFrame = (f) => {
+          const at = (new Error().stack ?? "").split("\n")[1]?.replace(/^.*\//, "") ?? "?";
+          by.set(at, (by.get(at) ?? 0) + 1);
+          return raf(f);
+        };
+        await k.sleep(5000);
+        window.requestAnimationFrame = raf;
+        const calls = [...by].sort((x, y) => y[1] - x[1]);
+        await k.log(`PERF anim-${where} raf_per_s=${r1(calls.reduce((n, [, x]) => n + x, 0) / 5)} ${calls.slice(0, 6).map(([s, n]) => `${s}=${n}`).join(" ")}`);
         style.textContent = "";
         await measure(`anim-${where}-as-is`, 2_000, 20_000);
         style.textContent = "*,*::before,*::after{animation-play-state:paused!important}";
         await measure(`anim-${where}-all-paused`, 2_000, 20_000);
+        // And Motion's JS-driven animations (springs, rolling numbers, row entrances) made instant as well.
+        MotionGlobalConfig.skipAnimations = true;
+        await measure(`anim-${where}-paused-and-motion-instant`, 2_000, 20_000);
+        MotionGlobalConfig.skipAnimations = false;
         style.textContent = "";
         // Each running name paused alone (CSSAnimation.pause(), re-applied every second for rows that re-render).
         const names = [...new Set(document.getAnimations().filter((a) => a.playState === "running" && a.effect?.getComputedTiming().iterations === Infinity).map((a) => (a as CSSAnimation).animationName))];
