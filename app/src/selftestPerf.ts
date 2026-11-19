@@ -12,7 +12,7 @@
 //              steps: renders per batch, frame gaps, page CPU.
 // perf-soak    5 min of perf-stream style events into the long chat with the sessions view live: memory growth.
 
-import { ipcCalls as ipc, renders } from "./lib/perfCount";
+import { ipcCalls as ipc, renders, timings } from "./lib/perfCount";
 import { useChats } from "./lib/chat";
 import type { ChatEvent, Session } from "./lib/types";
 import { sessionKey } from "./lib/types";
@@ -199,13 +199,21 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
   /** Streams a reply: one batch every ~16 ms (like the backend's pump), `secs` long; then `tools` tool steps. */
   /** Main-thread ms spent applying batches and rendering what they changed (React flushes in a microtask). */
   let jsMs = 0;
+  /** perf-chat: also force style and layout after each batch and time it (`layoutMs`). */
+  let forceLayout = false;
+  let layoutMs = 0;
   async function stream(secs: number, tools: number, turn: number) {
     const apply = async (events: ChatEvent[]) => {
       const t = performance.now();
       useChats.getState().apply(FAKE, events);
       await Promise.resolve();
       await Promise.resolve();
-      jsMs += performance.now() - t;
+      const t1 = performance.now();
+      jsMs += t1 - t;
+      if (forceLayout) {
+        void document.querySelector<HTMLElement>(`[data-chat-timeline="${FAKE}"]`)?.scrollHeight;
+        layoutMs += performance.now() - t1;
+      }
     };
     await apply([ev({ type: "user_message", id: `su${turn}`, text: sentence(12) }), ev({ type: "state", state: "working" })]);
     const end = performance.now() + secs * 1000;
@@ -704,6 +712,127 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
       }
       await report("soak", a, await snap());
       closeAllTabs();
+    },
+
+    /**
+     * Streaming into an open coool chat at three lengths (~120, ~540, 1500 items): per batch, the store updates,
+     * main-thread ms (store + React), style and layout ms (forced after each batch and timed), Markdown parse ms,
+     * renders by component, animation frames asked for; the same with the reader scrolled to the top (and whether
+     * the view moved); then 20 s plain for CPU and wakeups (window on screen for those: PERF_OFFSCREEN=0).
+     */
+    async "perf-chat"() {
+      closeAllTabs();
+      await home();
+      const raf = window.requestAnimationFrame;
+      const timeline = () => document.querySelector<HTMLElement>(`[data-chat-timeline="${FAKE}"]`)!;
+      const counted = async (label: string, secs: number, turn: number) => {
+        let sets = 0;
+        const unsub = useChats.subscribe(() => sets++);
+        let rafs = 0;
+        window.requestAnimationFrame = (f) => (rafs++, raf(f));
+        const m0 = timings.markdown ?? 0;
+        jsMs = 0;
+        layoutMs = 0;
+        forceLayout = true;
+        const a = await snap();
+        const n = await stream(secs, 6, turn);
+        const b = await snap();
+        forceLayout = false;
+        window.requestAnimationFrame = raf;
+        unsub();
+        const r = diffMap(a.renders, b.renders);
+        const s = (b.t - a.t) / 1000;
+        await k.log(
+          `PERF ${label} batches=${n} store_sets_per_batch=${r1(sets / n)} js_ms_per_batch=${(jsMs / n).toFixed(2)} layout_ms_per_batch=${(layoutMs / n).toFixed(2)} markdown_ms_per_batch=${(((timings.markdown ?? 0) - m0) / n).toFixed(2)} raf_per_s=${r1(rafs / s)} renders_per_batch total=${r1(r.reduce((x, [, c]) => x + c, 0) / n)} ${r.map(([c, x]) => `${c}=${r1(x / n)}`).join(" ")}`,
+        );
+      };
+      for (const turns of [14, 60, 250]) {
+        const t0 = performance.now();
+        await openFakeChat(turns);
+        const openMs = performance.now() - t0;
+        await k.sleep(1500);
+        const el = timeline();
+        const label = `chat-${useChats.getState().chats[FAKE]?.items.length ?? 0}`;
+        await k.log(`PERF ${label} open_ms=${Math.round(openMs)} blocks_in_dom=${el.querySelectorAll("[data-block]").length} dom_nodes=${el.getElementsByTagName("*").length} height=${el.scrollHeight}`);
+        await counted(label, 8, turns * 10 + 1);
+        // The reader at the top while it streams: nothing should move.
+        el.scrollTop = 0;
+        await raf2();
+        await k.sleep(300);
+        await counted(`${label}-top`, 4, turns * 10 + 2);
+        await k.log(`PERF ${label}-top scroll_top_after=${el.scrollTop} blocks_in_dom=${el.querySelectorAll("[data-block]").length}`);
+        el.scrollTop = el.scrollHeight;
+        await raf2();
+        await k.sleep(1000);
+        const c = await snap();
+        const n = await stream(20, 0, turns * 10 + 3);
+        await report(`${label}-cpu`, c, await snap());
+        await k.log(`PERF ${label}-cpu batches=${n}`);
+        await k.sleep(300);
+        await measure(`${label}-idle-after`, 1000, 5000);
+        closeAllTabs();
+        useChats.setState((st) => {
+          const chats = { ...st.chats };
+          delete chats[FAKE];
+          return { chats };
+        });
+        await k.sleep(1500);
+      }
+    },
+
+    /**
+     * A busy session open (replayed transcripts writing: run with live sessions, e.g. `perf-busy 1`), and Home, 20 s
+     * each: CPU and wakeups, sessions payloads, store updates, renders, animation frames by caller; then the session
+     * with Motion's JS animations made instant (what they cost).
+     */
+    async "perf-busy"() {
+      closeAllTabs();
+      await home();
+      const raf = window.requestAnimationFrame;
+      const watch = async (label: string) => {
+        let sets = 0;
+        const unsub = useStore.subscribe(() => sets++);
+        const by = new Map<string, number>();
+        window.requestAnimationFrame = (f) => {
+          const at = (new Error().stack ?? "").split("\n")[1]?.replace(/^.*\//, "") ?? "?";
+          by.set(at, (by.get(at) ?? 0) + 1);
+          return raf(f);
+        };
+        let muts = 0;
+        const mo = new MutationObserver((r) => (muts += r.length));
+        mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+        const m0 = timings.markdown ?? 0;
+        const a = await snap();
+        await k.sleep(20_000);
+        const b = await snap();
+        mo.disconnect();
+        window.requestAnimationFrame = raf;
+        unsub();
+        await report(label, a, b);
+        const s = (b.t - a.t) / 1000;
+        const calls = [...by].sort((x, y) => y[1] - x[1]);
+        await k.log(
+          `PERF ${label} store_sets_per_s=${r1(sets / s)} mutations_per_s=${r1(muts / s)} markdown_ms_per_s=${r1(((timings.markdown ?? 0) - m0) / s)} raf_per_s=${r1(calls.reduce((n, [, x]) => n + x, 0) / s)} ${calls.slice(0, 6).map(([c, n]) => `${c}=${r1(n / s)}`).join(" ")}`,
+        );
+        await k.log(`PERF ${label} running_loops=${census().line}`);
+      };
+      await k.sleep(4000);
+      await watch("busy-home");
+      const busy = [...useStore.getState().sessions].filter((s) => s.status === "busy").sort((x, y) => y.updated - x.updated)[0];
+      if (!busy) {
+        await k.log("PERF busy no busy session (run with live sessions)");
+        return;
+      }
+      openSession(busy);
+      await k.sleep(4000);
+      const el = document.querySelector<HTMLElement>("[data-main] [data-activity-timeline]");
+      await k.log(`PERF busy-session activity=${actCount(busy)} dom_nodes=${el?.getElementsByTagName("*").length ?? -1}`);
+      await watch("busy-session");
+      MotionGlobalConfig.skipAnimations = true;
+      await watch("busy-session-motion-instant");
+      MotionGlobalConfig.skipAnimations = false;
+      closeAllTabs();
+      await home();
     },
   };
 }

@@ -623,6 +623,7 @@ function useReveal(text: string, streaming: boolean): number {
 }
 
 const AssistantText = memo(function AssistantText({ text, streaming, small }: { text: string; streaming: boolean; small?: boolean }) {
+  countRender("Chat.AssistantText");
   const n = useReveal(text, streaming);
   const typing = streaming || n < text.length;
   return <Markdown text={text.slice(0, n)} streaming={typing} className={small ? "text-small text-dim" : "text-prose text-fg/90"} />;

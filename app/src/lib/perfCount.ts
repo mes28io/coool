@@ -24,3 +24,10 @@ export function markOnce(name: string) {
     performance.mark(name);
   } catch {}
 }
+
+/** Main-thread ms spent in a few hot functions (Markdown parses), by name; read by the perf scenarios. */
+export const timings: Record<string, number> = {};
+
+export function addTime(name: string, ms: number) {
+  timings[name] = (timings[name] ?? 0) + ms;
+}
