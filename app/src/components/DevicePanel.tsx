@@ -13,6 +13,22 @@ import { PanelBeam, PresenceLayer } from "./Presence";
 import { Button, cx, IconButton, Popover } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
+/**
+ * A device's display corner radius as a share of its width, from the screen's size in points (Apple's own display
+ * radii: 62 pt on the 402 and 440 pt wide Pro screens, 55 on 393 and 430, 47.33 on 390, 53.33 on 428, 44 on the
+ * 375 x 812 screens, 41.5 on 414 x 896). A tall screen we don't know gets the usual share; a screen with square
+ * corners (home-button iPhones) a hint of one; an iPad its 18 pt.
+ */
+const CORNERS: Record<string, number> = { "402x874": 62, "440x956": 62, "393x852": 55, "430x932": 55, "390x844": 47.33, "428x926": 53.33, "375x812": 44, "414x896": 41.5, "420x912": 62 };
+export function screenCorner(d: { w: number; h: number }): number {
+  const known = CORNERS[`${d.w}x${d.h}`];
+  if (known) return known / d.w;
+  const tall = d.h / d.w;
+  if (tall > 1.9) return 0.14;
+  if (tall < 1.5) return 18 / d.w;
+  return 0.012;
+}
+
 /** Each device's screen size in points, as its last `simAttach` reported it (placeholders keep the same shape). */
 const dims = new Map<string, { w: number; h: number }>();
 const DEFAULT_DIMS = { w: 402, h: 874 };
@@ -237,9 +253,7 @@ function Frame({
   const s = Math.max(0, Math.min((box.w - PAD * 2) / d.w, (box.h - PAD * 2) / d.h));
   const w = d.w * s;
   const h = d.h * s;
-  // The screen's corners as the device has them: a tall, all-screen iPhone's display corner is about an eighth of its
-  // width; a device with square display corners (an older iPhone, an iPad) gets a small one.
-  const radius = d.h / d.w > 1.9 ? w * 0.125 : w * 0.03;
+  const radius = w * screenCorner(d);
   const frame = (
     <div
       {...rest}

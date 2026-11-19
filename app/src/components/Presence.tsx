@@ -201,7 +201,7 @@ const BEAM_SECONDS = 5;
  * The package's three layers a little stronger than stock, enough to read over a live screen without shouting (stock
  * is tuned for a card on a flat page).
  */
-const SCREEN_LAYERS = { "--beam-stroke-opacity": 1.8, "--beam-inner-opacity": 1.35, "--beam-bloom-opacity": 1.15 } as CSSProperties;
+const SCREEN_LAYERS = { "--beam-stroke-opacity": 3, "--beam-inner-opacity": 2, "--beam-bloom-opacity": 1.7 } as CSSProperties;
 
 export function PanelBeam({
   on,
@@ -228,7 +228,11 @@ export function PanelBeam({
   style?: CSSProperties;
   className?: string;
 }) {
-  const reduce = useMotion().reduce;
+  // The beam is the one sign that an agent is driving this screen, so it keeps moving when coool's Auto setting has
+  // reduced motion for the machine's sake (busy at launch, low power): agents working is exactly when the Mac is
+  // busy. It holds still only when the person asked for that: Reduce motion On, or macOS's own setting.
+  const motion = useMotion();
+  const reduce = motion.reduce && (motion.pref === "on" || motion.reason === "macOS Reduce motion");
   const theme = useStore((st) => st.theme);
   return (
     <div

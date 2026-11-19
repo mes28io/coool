@@ -419,7 +419,7 @@ function Frame({
       {...rest}
       ref={ref}
       className={cx(
-        "relative size-full overflow-hidden rounded-[8px] bg-black outline-none ring-1 ring-inset transition-shadow duration-150",
+        "relative size-full overflow-hidden rounded-[12px] bg-black outline-none ring-1 ring-inset transition-shadow duration-150",
         focused ? "ring-[1.5px] ring-[color-mix(in_oklab,var(--dim)_70%,transparent)]" : "ring-hairline",
       )}
     >
@@ -430,7 +430,7 @@ function Frame({
   return (
     <div className="absolute inset-0 flex items-center justify-center">
       {around ? (
-        <PanelBeam on={around.on} slot={around.slot} radius={8} style={size}>
+        <PanelBeam on={around.on} slot={around.slot} radius={12} style={size}>
           {frame}
         </PanelBeam>
       ) : (
