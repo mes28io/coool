@@ -19,6 +19,11 @@ import { useInfoRequest } from "../lib/infoRequest";
 import { flushLocal, steer } from "../lib/steer";
 import { SteerStrip } from "./SteerStrip";
 import { Chip, ContextRing, cx, ease, Kbd, Popover } from "./primitives";
+import { noteSent } from "../lib/voice/controller";
+import { FixCount, FixLayer, FixOffer, fixKey } from "./voice/FixLayer";
+import { VoiceButton } from "./voice/VoiceButton";
+import { useVoiceField } from "./voice/VoiceHost";
+import { VoiceStrip } from "./voice/VoiceStrip";
 
 type Native = "model" | "clear" | "context" | "status" | "usage" | "mode" | "changes";
 /** Handled here and never sent (CHAT_SPEC "Slash commands"). `only`: for one provider. */
@@ -122,6 +127,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const list = useRef<HTMLDivElement>(null);
   const working = chat.running && chat.state !== "idle";
   const disabled = !chat.running;
+  // Voice (APP_SPEC "Voice"): this textarea is a dictation target; "send when I release" sends through `send`.
+  const sendRef = useRef<() => void>(() => {});
+  const voiceId = useVoiceField(ta, { inline: true, send: () => sendRef.current() });
 
   useLayoutEffect(() => {
     const el = ta.current;
@@ -215,13 +223,16 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     // While a turn runs, plain text steers it (a slash command still goes to the CLI as before).
     if (working && !t.startsWith("/")) {
       if (chat.pendingPermission || chat.pendingQuestion) return;
+      noteSent(voiceId, t);
       setText("");
       void steer(chat, t, now);
       return;
     }
+    noteSent(voiceId, t);
     setText("");
     void chatCall(chat.id, () => api().chatSend(chat.id, t));
   };
+  sendRef.current = () => send();
 
   const pick = (it: MenuItem, run: boolean) => {
     if (it.native) return runNative(it.native);
@@ -235,6 +246,8 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     const el = e.currentTarget;
+    // Tab accepts the fixer's suggestion at (or after) the caret, when there is one and the slash menu is closed.
+    if (!menuOpen && fixKey(e, voiceId)) return;
     if (menuOpen && matches.length) {
       if (e.key === "ArrowDown") return e.preventDefault(), setSel((v) => (v + 1) % matches.length);
       if (e.key === "ArrowUp") return e.preventDefault(), setSel((v) => (v - 1 + matches.length) % matches.length);
@@ -369,6 +382,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
           )}
         >
           <SteerStrip chat={chat} />
+          <VoiceStrip target={voiceId} compact={compact} />
+          <div className="relative">
+          <FixLayer target={voiceId} ta={ta} text={text} />
           <textarea
             ref={ta}
             rows={1}
@@ -381,8 +397,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
               if (hist.current.i !== null && e.target.value !== chat.prompts[hist.current.i]) hist.current.i = null;
             }}
             onKeyDown={onKey}
-            className="selectable block max-h-[200px] min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-prose outline-none placeholder:text-faint"
+            className="selectable relative block max-h-[200px] min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-prose outline-none placeholder:text-faint"
           />
+          </div>
           {/* A container: the hints below fit the composer's own width (a narrow pane or a wide side panel), not the window's. */}
           <div className="@container flex items-center gap-1 px-2 pb-2">
             {/* model */}
@@ -488,6 +505,8 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                 <InfoPanel chat={chat} tab={infoTab} onTab={setInfoTab} turn={infoTurn} onTurn={setInfoTurn} />
               </Popover>
             </div>
+            <VoiceButton target={voiceId} disabled={disabled} />
+            <FixCount target={voiceId} ta={ta} />
             <span className="flex-1" />
             {/* One line or nothing: never wrapped or clipped. The full hint needs ~620px of composer, a short one ~470px. */}
             {!compact && working && (
@@ -546,6 +565,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             </AnimatePresence>
           </div>
         </div>
+        <FixOffer target={voiceId} />
       </div>
     </div>
   );

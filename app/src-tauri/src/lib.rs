@@ -23,6 +23,7 @@ mod power;
 mod prefs;
 mod selftest;
 mod trace;
+mod voice;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -1576,6 +1577,7 @@ pub fn run() {
         .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
         .manage(core.clone())
         .manage(devices.clone())
+        .manage(Arc::new(voice::Voice::new()))
         .invoke_handler(tauri::generate_handler![
             list_sessions,
             spawn_session,
@@ -1627,6 +1629,32 @@ pub fn run() {
             notify_take,
             notify_sounds,
             notify_sound_preview,
+            voice::voice_status,
+            voice::voice_permission,
+            voice::voice_permission_request,
+            voice::voice_open_privacy,
+            voice::voice_devices,
+            voice::voice_start,
+            voice::voice_stop,
+            voice::voice_cancel,
+            voice::voice_preload,
+            voice::voice_models,
+            voice::voice_model_download,
+            voice::voice_model_pause,
+            voice::voice_model_cancel,
+            voice::voice_model_delete,
+            voice::voice_model_check,
+            voice::voice_memory_read,
+            voice::voice_memory_write,
+            voice::voice_memory_clear,
+            voice::voice_reveal,
+            voice::voice_project_words,
+            voice::voice_spell,
+            voice::voice_polish,
+            voice::voice_selftest_inject,
+            voice::voice_selftest_counters,
+            voice::voice_selftest_transcribe,
+            voice::voice_selftest_env,
             login_status,
             login_set,
             apps_installed,
@@ -1741,6 +1769,8 @@ pub fn run() {
             }
             let d = devices.clone();
             c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, cwd, provider| d.mcp.server_for(id, cwd, provider).into_iter().collect())));
+            // Voice (APP_SPEC "Voice"): its folder (the self-test's own during a run) and the Fn key watcher.
+            voice::init(&handle, c.selftest.as_ref().map(|t| t.dir()));
             spawn_refresher(handle.clone(), c.clone());
             motion::spawn_watch(handle.clone());
             spawn_pump(handle, c);

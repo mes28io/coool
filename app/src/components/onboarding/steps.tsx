@@ -10,6 +10,8 @@ import { DoneStep, finish } from "./DoneStep";
 import { FolderStep } from "./FolderStep";
 import { LoginStep } from "./LoginStep";
 import { NotifyStep } from "./NotifyStep";
+import { VoiceStep } from "./VoiceStep";
+import { setVoicePrefs } from "../../lib/voice/prefs";
 import type { StepDef } from "./types";
 
 export const STEPS: StepDef[] = [
@@ -32,6 +34,14 @@ export const STEPS: StepDef[] = [
     title: "Hear from your agents",
     lead: "coool tells you when an agent needs you, so you can look away while it works.",
     component: NotifyStep,
+  },
+  {
+    id: "voice",
+    title: "Talk to your agents",
+    lead: "Speak your prompts. It runs on this Mac, stays private, and turns any language into English.",
+    component: VoiceStep,
+    // Skip leaves voice off until it's set up in Settings > Voice (a download already started keeps going).
+    onSkip: () => setVoicePrefs({ enabled: false }),
   },
   {
     id: "login",

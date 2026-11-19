@@ -15,6 +15,7 @@ pub mod lineage;
 mod loader;
 pub mod model;
 pub mod origin;
+pub mod polish;
 pub mod project;
 pub mod pty;
 pub mod shells;

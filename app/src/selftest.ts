@@ -43,6 +43,7 @@ import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
+import { voiceScenarios } from "./selftestVoice";
 
 interface Config {
   scenario: string;
@@ -5278,6 +5279,8 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, combo);
+// Voice (selftestVoice.ts): fixtures through the real engine, the composer, memory; no microphone, no model calls.
+Object.assign(scenarios, voiceScenarios({ step, shot, log, sleep, waitFor, fail: (m) => new Fail(m) }, (cmd, args) => invoke(cmd, args)));
 
 // ---------- notification clicks (notify.rs, lib/notifyRoute.ts) ----------
 //
