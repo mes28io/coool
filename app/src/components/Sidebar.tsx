@@ -17,7 +17,6 @@ import { agentOf, LEDGER_WINDOW_MS, publishOverlaps, useProjectChanges, useSessi
 import { Wordmark } from "./Wordmark";
 import { AutoTag, cx, ease, ProviderMark, spring, StatusDot } from "./primitives";
 import { SidebarSkeleton } from "./Skeletons";
-import { NeedsView } from "./LeftPanels";
 import { reducedMotion } from "./StepRail";
 import { AnimateScope } from "../lib/motion";
 
@@ -191,10 +190,6 @@ export function Sidebar() {
     }
   };
 
-  const view = useStore((s) => s.sidebarView);
-  const setView = useStore((s) => s.setSidebarView);
-  const fade = { duration: reducedMotion() ? 0 : 0.2 };
-
   const projectsView = (
     <div className="flex h-full flex-col" data-sidebar-view="projects">
       <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center justify-between pl-4 pr-2">
@@ -251,24 +246,14 @@ export function Sidebar() {
       className="relative h-full shrink-0 overflow-hidden"
       aria-hidden={!open}
       inert={!open}
-      data-sidebar-open={open ? view : "closed"}
+      data-sidebar-open={open ? "projects" : "closed"}
       data-anim-static
-      onKeyDown={(e) => {
-        if (e.key === "Escape" && view !== "projects" && !e.defaultPrevented) {
-          e.stopPropagation();
-          setView("projects");
-        }
-      }}
     >
       {/* Rows show activity static: it animates only in the open session (lib/motion.ts). */}
       <AnimateScope enabled={false}>
       {open && <OverlapWatch />}
       <div className="absolute inset-y-0 left-0 overflow-hidden border-r border-hairline bg-bg" style={{ width }}>
-        <AnimatePresence initial={false}>
-          <motion.div key={view} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={fade}>
-            {view === "needs" ? <NeedsView /> : projectsView}
-          </motion.div>
-        </AnimatePresence>
+        <div className="absolute inset-0">{projectsView}</div>
         <ResizeHandle width={width} onChange={setWidth} onDragging={setDragging} />
       </div>
       </AnimateScope>

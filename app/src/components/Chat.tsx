@@ -416,7 +416,7 @@ function PlanBlock({ b, chat }: { b: Extract<Block, { type: "plan" }>; chat: Cha
 }
 
 /** Claude's plan-mode proposal (the ExitPlanMode permission request) as a plan card. */
-function PlanApproval({ item, chat }: { item: Perm; chat: Chat }) {
+export function PlanApproval({ item, chat }: { item: Perm; chat: Chat }) {
   const raw = (item.input as { plan?: unknown } | null)?.plan;
   const md = typeof raw === "string" ? raw : item.summary;
   const p = useMemo(() => parsePlan(md), [md]);
@@ -581,7 +581,7 @@ function relPath(p: string, cwd: string): string {
 }
 
 /** A step as it reads (lib/toolNames.ts): built-ins keep their name, with a file path relative to the chat's folder. */
-function stepRow(t: Tool, cwd: string): ToolRow {
+export function stepRow(t: Tool, cwd: string): ToolRow {
   const r = toolRow({ name: t.name, input: t.input, output: t.output, summary: t.summary, ok: t.ok, running: t.endTs === null });
   if (r.family !== "tool") return r;
   // From the input when it names a file: the core's one-line summary may have clipped a long path.
@@ -907,7 +907,7 @@ export const deviceAsk = (p: Pick<Perm, "input">): DeviceAsk | null => {
   return d && typeof d.lead === "string" ? d : null;
 };
 
-function permDetail(p: Perm, cwd: string): { lead: string; body: string; full?: string; note?: string } {
+export function permDetail(p: Perm, cwd: string): { lead: string; body: string; full?: string; note?: string } {
   const dev = deviceAsk(p);
   if (dev) return { lead: dev.lead, body: dev.body, note: dev.note ?? undefined };
   const i = (p.input ?? {}) as Record<string, unknown>;
@@ -920,7 +920,7 @@ function permDetail(p: Perm, cwd: string): { lead: string; body: string; full?: 
 }
 
 /** "Allow `npm test` commands" -> text with `code` spans. */
-function Ticks({ text }: { text: string }) {
+export function Ticks({ text }: { text: string }) {
   const parts = text.split("`");
   return (
     <>
@@ -946,7 +946,7 @@ export function rememberedNote(r: RememberOption, provider: string): string {
   return r.file ? `${what}, saved to ${r.file}` : what;
 }
 
-function RememberRow({ option, quick, onPick }: { option: RememberOption; quick: boolean; onPick: () => void }) {
+export function RememberRow({ option, quick, onPick }: { option: RememberOption; quick: boolean; onPick: () => void }) {
   const saved = option.scope !== "chat";
   return (
     <button
@@ -1064,7 +1064,8 @@ function answersOf(item: Ask, drafts: Draft[]): string[][] {
   });
 }
 
-function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
+/** `bare`: without its title row (the Needs you page has its own header above it). */
+export function QuestionCard({ item, chat, bare }: { item: Ask; chat: Chat; bare?: boolean }) {
   const [drafts, setDrafts] = useState<Draft[]>(() => item.questions.map(() => ({ picked: [], other: "" })));
   const who = chat.provider === "claude" ? "Claude" : "Codex";
   const answers = answersOf(item, drafts);
@@ -1086,13 +1087,15 @@ function QuestionCard({ item, chat }: { item: Ask; chat: Chat }) {
           className="attn-card rounded-[14px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] bg-raised shadow-card"
           data-question={item.requestId}
         >
+          {!bare && (
           <div className="flex items-center gap-2 px-3.5 pb-1 pt-3.5">
             <span className="flex size-[24px] items-center justify-center rounded-[6px] bg-[color-mix(in_oklab,var(--status-needs)_16%,transparent)] text-base font-bold text-needs-text">?</span>
             <span className="text-title font-semibold tracking-[-0.01em] text-fg">
               {who} has {item.questions.length === 1 ? "a question" : `${item.questions.length} questions`}
             </span>
           </div>
-          <div className="flex flex-col gap-3.5 px-3.5 pb-1 pt-1.5">
+          )}
+          <div className={cx("flex flex-col gap-3.5 px-3.5 pb-1", bare ? "pt-3.5" : "pt-1.5")}>
             {item.questions.map((q, i) => {
               const d = drafts[i];
               return (

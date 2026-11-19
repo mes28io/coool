@@ -941,6 +941,10 @@ export function mockBackend(): Backend {
       emitSessions();
     }, 2600);
   }
+  // `?needs=demo`: a session in a terminal outside coool, blocked on its own permission prompt (the Needs you page's
+  // "outside coool" item: what the transcript knows, no answer buttons).
+  if (typeof location !== "undefined" && location.search.includes("needs=demo"))
+    add(session({ provider: "claude", id: "termwait1", cwd: pixel, title: "Clear the shader cache", status: "idle", pid: 40_720, waiting_for: "permission to run `rm -rf target/shader-cache`", tokens: tok(14_000, 2_100, 30_000), activity: history("pixel", ["Clear the shader cache, then rebuild the pipeline"], now - 70_000, 1, 6), updated: now - 70_000 }), "pixel", 99);
   add(session({ provider: "codex", id: "lightjob1", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the garden probe", status: "idle", pid: 40611, waiting_for: "Allow Bash: blender -b garden.blend -f 1", tokens: tok(9_000, 1_300, 22_000), activity: history("p3d", ["Bake the garden probe"], now - 90_000, 1, 5), updated: now - 20_000 }), "pixel", 5);
   add(session({ provider: "claude", id: "lightjob2", cwd: lightScratch, project: p3d, origin: "automation", parent: lightId, title: "Bake the attic probe", status: "ended", tokens: tok(11_000, 1_700, 24_000), activity: [...history("p3d", ["Bake the attic probe"], now - 240_000, 1, 4), act("error", "blender exited with code 139: segfault in the denoiser", now - 200_000)], updated: now - 200_000 }), "pixel");
 
@@ -1000,6 +1004,7 @@ export function mockBackend(): Backend {
   // session (loaded: false), with details filling in over the next ~2s.
   // `?slow=1` stretches this to ~30s and reveals sessions a few at a time.
   const slow = typeof location !== "undefined" && /[?&]slow=1\b/.test(location.search);
+  const noNeeds = typeof location !== "undefined" && location.search.includes("needs=none");
   const scanOrder = live.map((l) => l.s.id);
   const scan = { started: false, shown: 0, loaded: 0, loading: true };
   setTimeout(() => {
@@ -1101,7 +1106,9 @@ export function mockBackend(): Backend {
       // Like the backend: whatever coool runs is coool's.
       .map((s) => (s.chat != null || s.managed !== null ? { ...s, origin: "coool" as const } : s))
       // CHAT_SPEC "Session titles": the resolved title rides on every session.
-      .map((s) => ({ ...s, name: mockName(s) }));
+      .map((s) => ({ ...s, name: mockName(s) }))
+      // `?needs=none`: no terminal waits and no insight flags either.
+      .map((s) => (noNeeds ? { ...s, waiting_for: null, insight: s.insight ? { ...s.insight, needs_you: null } : s.insight } : s));
     // Demo knob (Mission control's project tabs): `coool.mock.projects` = N keeps the live sessions of N projects;
     // 8 adds an eighth project.
     const cap = mockProjectCap();
@@ -1271,7 +1278,8 @@ export function mockBackend(): Backend {
     }, 60);
   }
   const newChat = (provider: Provider, cwd: string, o: { model?: string | null; mode?: string | null; resume?: string | null } = {}, readyIn = 450) => {
-    const c = new MockChat(chats.length, provider, cwd, host, flushChat, o);
+    // `?needs=none`: nothing waits on the person (the Needs you page's empty state): chats never ask.
+    const c = new MockChat(chats.length, provider, cwd, host, flushChat, noNeeds ? { ...o, mode: "bypassPermissions" } : o);
     chats.push(c);
     chatReady.set(
       c.id,
@@ -1318,10 +1326,15 @@ export function mockBackend(): Backend {
         st.touchSeen([APP_SEEN]);
       });
   }
-  // `?needs=demo`: a second chat with a pending question (the notes chat above already asks to run something).
+  // `?needs=demo`: more for the Needs you page (the notes chat above already asks to run something, atlas to edit):
+  // a chat with a pending question, one whose Browser step the device gate asks about, and a plan to approve.
   if (location.search.includes("needs=demo")) {
     const cq = newChat("claude", `${HOME}/code/atlas`, {}, 0);
     setTimeout(() => cq.send("Which retry approach should I choose? ask me"), 1600);
+    const cd = newChat("claude", `${HOME}/code/affect-study`, {}, 0);
+    setTimeout(() => cd.send("Check the sign-in page's error states in the Browser (device gate)"), 1900);
+    const cp = newChat("claude", `${HOME}/code/notes-ios`, {}, 0);
+    setTimeout(() => cp.send("Plan the retry change first (plan mode)"), 2200);
   }
   if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
   if (location.search.includes("plan=chat")) void import("./mockPlan").then((m) => m.runPlanChat(newChat("claude", coool, {}, 0))); // see mockPlan.ts

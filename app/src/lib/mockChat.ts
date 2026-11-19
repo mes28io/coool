@@ -376,6 +376,12 @@ export class MockChat {
     const cmd = typeof i.command === "string" ? i.command : "";
     const first = cmd.split(/\s+/).slice(0, 2).join(" ");
     const o = (id: string, scope: RememberOption["scope"], label: string, detail: string, extra: Partial<RememberOption> = {}): RememberOption => ({ id, scope, label, detail, file: null, mode: null, rules: [], ...extra });
+    // coool's device gate (device/gate.rs): this chat, or always in this project.
+    if (i.coool_device)
+      return [
+        o("chat", "chat", "Allow the Browser in this chat", "Later changes ask only for submits, passwords, new sites and commands. Nothing is saved."),
+        o("project", "project", "Always allow the Browser in this project", "Saved in coool; form submits, passwords, commands and installs still ask.", { file: "coool" }),
+      ];
     if (this.provider === "claude") {
       if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool))
         return [o("0", "chat", "Allow all edits in this chat", "Switches this chat to Accept edits mode: later file edits, and file commands such as mkdir, mv or rm, run without asking. Nothing is saved.", { mode: "acceptEdits" })];
@@ -819,6 +825,8 @@ export class MockChat {
     if (/\bcodex plan\b/.test(p)) return this.planDemo(gen, "update_plan");
     if (/\btodo\b/.test(p)) return this.planDemo(gen, "TodoWrite", /\bstop\b/.test(p));
     if (/\bplan mode\b/.test(p)) return this.planApproval(gen);
+    // "device gate": a Browser step that coool's device gate stops to ask about (the Needs you page's device request).
+    if (/\bdevice gate\b/.test(p)) return this.deviceAsk(gen);
 
     const plan = this.mode === "plan";
     await this.say(`I'll start by reading how this works today, then make the change and run the ${f.lang} checks.`, gen, {
@@ -1011,6 +1019,32 @@ export class MockChat {
       await write(st);
     }
     await this.say(stopEarly ? "I'm stopping here: the remaining steps depend on whether you want retries capped. Tell me and I'll continue." : f.done, gen);
+  }
+
+  /** A device step the gate asks about first, shaped like device/gate.rs's request (tool "Browser", `coool_device` input). */
+  private async deviceAsk(gen: number) {
+    const D = (t: string) => (this.provider === "codex" ? `coool-device.${t}` : `mcp__coool-device__${t}`);
+    const url = "https://www.affectui.com/login?next=%2Fcomponents";
+    await this.say("I'll open the sign-in page in the Browser panel and check the form's error states.", gen, {
+      think: "The form lives behind /login. The Browser panel isn't allowed in this chat yet, so coool will ask before the first step.",
+    });
+    await this.tool(gen, "Grep", "LoginForm", {}, 400, "3 matches in 2 files");
+    const id = `toolu_${rid()}`;
+    this.emit({ type: "tool_start", id, name: D("browser_navigate"), summary: `${D("browser_navigate")} · ${url}`, input: { url }, parent_tool_id: null });
+    this.runningTool = id;
+    const input = { coool_device: { device: "browser", kind: "use", lead: "use the Browser", body: `Open ${url}`, note: null } };
+    const answer = await this.ask("Browser", `Browser · Open ${url}`, input, gen);
+    if (gen !== this.gen) throw new Interrupted();
+    if (answer === "deny") {
+      this.emit({ type: "tool_end", id, ok: false, output: `Denied by the person: use the Browser Open ${url}. coool did not do it; don't try another way around.` });
+      this.runningTool = null;
+      await this.say("Understood, I won't use the Browser. I can review the form's code instead.", gen);
+      return;
+    }
+    await this.sleep(900, gen);
+    this.emit({ type: "tool_end", id, ok: true, output: `opened ${url}\n(load 640 ms)` });
+    this.runningTool = null;
+    await this.say("The sign-in page loads; the empty-email error shows under the field as expected.", gen);
   }
 
   /** Plan mode: the agent proposes a plan with ExitPlanMode and waits for approval. */
