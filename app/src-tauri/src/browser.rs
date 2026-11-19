@@ -388,7 +388,7 @@ fn open_popup(app: &AppHandle, opener: &str, origin: Option<String>, url: &Url, 
         .window_features(features)
         .inner_size(w, h)
         .resizable(true)
-        .focused(true)
+        .focused(crate::selftest::windows_may_focus())
         .title(url.host_str().unwrap_or("Sign in"))
         .on_navigation(move |u| navigable(u, nav_origin.as_deref()))
         .on_new_window(popup_handler(app, &label, origin))

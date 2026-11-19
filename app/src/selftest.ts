@@ -1278,8 +1278,11 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         const m = p.main_frame ?? [0, 0, 0, 0];
         const mx = m[0] + m[2] / 2;
         const my = m[1] + m[3] / 2;
-        if (Math.abs(x + fw / 2 - mx) > 4) bad.push(`not centred: x ${x + fw / 2} vs main ${mx}`);
-        if (Math.abs(y + fh / 2 - my) > 24) bad.push(`not centred: y ${y + fh / 2} vs main ${my}`);
+        // A test window kept off screen (COOOL_SELFTEST_BACKGROUND / WINDOW=back): macOS keeps the preview on a
+        // display, so it can't be centred on the main window there.
+        const mainOff = m[0] < 0 || m[1] < 0;
+        if (!mainOff && Math.abs(x + fw / 2 - mx) > 4) bad.push(`not centred: x ${x + fw / 2} vs main ${mx}`);
+        if (!mainOff && Math.abs(y + fh / 2 - my) > 24) bad.push(`not centred: y ${y + fh / 2} vs main ${my}`);
       } else bad.push("no frame");
       if (r.internals !== "undefined") bad.push(`__TAURI_INTERNALS__ ${r.internals}`);
       if (r.tauri !== "undefined") bad.push(`__TAURI__ ${r.tauri}`);
@@ -1749,13 +1752,13 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const id = await startClaude(ctx, `Reply with exactly this markdown and nothing else:\n\n${doc}`);
       await nextTurn(id, 0);
       const find = () => {
-        const strong = $all("[data-chat-timeline] strong").find((e) => e.textContent === "2.5 GB free of 460 GB");
+        const strong = $all("[data-chat-timeline] strong").find((e) => e.textContent?.includes("2.5 GB free of 460 GB"));
         const block = strong?.closest("[data-block]") as HTMLElement | null;
         const table = block?.querySelector("table");
         return strong && block && table && table.querySelectorAll("th, td").length === 6 && block.querySelector("pre") ? { strong, block, cells: 6 } : null;
       };
       const got = await waitFor("a rendered reply (strong, 6-cell table, pre)", find, 10_000).catch(async (e) => {
-        const strong = $all("[data-chat-timeline] strong").find((x) => x.textContent === "2.5 GB free of 460 GB");
+        const strong = $all("[data-chat-timeline] strong").find((x) => x.textContent?.includes("2.5 GB free of 460 GB"));
         const html = ((strong?.closest("[data-block]") as HTMLElement | null)?.innerHTML ?? "").slice(-500);
         throw new Fail(`${e.message}; strong ${strong ? "present" : "missing"}; html tail ${JSON.stringify(html)}; reply ${JSON.stringify(lastText(id)?.text)}; timeline ${JSON.stringify(($("[data-chat-timeline]")?.textContent ?? "").slice(-300))}`);
       });
@@ -4790,6 +4793,392 @@ const whyScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, whyScenarios);
+
+// ---------- combo: the features merged on 2026-11-19, together (real Haiku chats in Ask mode) ----------
+//
+// `combo-keys` (Haiku; one Bash request): ⌘⌫ / ⇧⌘↵ / ⌘↵ never answer a request hidden under the onboarding (also with
+// Needs you under it), the palette, the New session sheet or Settings; Esc closes a tooltip first, then the page, and
+// the element's `title` comes back; no tab hover card over the Needs you page; the running-now pill's Open from the
+// page lands on the chat; with nothing over the chat ⌘↵ allows. `combo-cards` (Haiku): a request answered on the Needs
+// you page leaves the chat's card answered; a streamed reply with code, a table and a list renders the same as a fresh
+// mount of the chat; a turn started by a background task's notification times itself from its own start.
+// `combo-mc` (no model; a git folder with commits): Show all's dialog, the palette and the New session sheet dim with a
+// plain scrim in both themes, Colours off and on; Esc closes the dialog, not the page. `combo-glass` (no model): Jobs,
+// Models, Browser and iPhone panels over Colours in both themes, the sheet's cut-out following each panel open and
+// closed, the drift resting while the window isn't in front and under Reduce motion.
+
+const press = (k: string, mods: KeyboardEventInit = {}) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...mods }));
+const keyName = (k: string, m: KeyboardEventInit) => `${m.shiftKey ? "⇧" : ""}⌘${k === "Enter" ? "↵" : "⌫"}`;
+/** The element's tree as tag names and text only (what a reader sees), for comparing two renders. */
+function shape(el: Element): string {
+  const out: string[] = [];
+  const walk = (n: Node) => {
+    if (n.nodeType === Node.TEXT_NODE) {
+      const t = (n.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (t) out.push(t);
+      return;
+    }
+    if (!(n instanceof Element)) return;
+    out.push(`<${n.tagName.toLowerCase()}>`);
+    n.childNodes.forEach(walk);
+    out.push(`</${n.tagName.toLowerCase()}>`);
+  };
+  walk(el);
+  return out.join("");
+}
+/** Seconds in a timer text like "12s", "1m 05s", "2h 3m". */
+function timerSecs(t: string): number | null {
+  const m = /(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?\s*$/.exec(t.trim());
+  if (!m || (!m[1] && !m[2] && !m[3])) return null;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
+}
+
+const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async "combo-keys"(ctx) {
+    const { openOnboarding, closeOnboarding } = await import("./lib/onboarding");
+    const st = () => useStore.getState();
+    let id = -1;
+    let req = "";
+    let n = 0;
+    await step("combo-keys: answer keys never reach a request hidden under the onboarding, Needs you + onboarding, the palette, a sheet, Settings", async () => {
+      id = await startIn(ctx.cfg.dir, "default");
+      n = turnEnds(id).length;
+      await send(id, "Use the Bash tool exactly once to run: echo combo > combo-keys.txt . Then reply with one word: done");
+      req = (await approvalOf(id)).id;
+      const seen: string[] = [];
+      const tryKeys = async (what: string, keys: [string, KeyboardEventInit][]) => {
+        for (const [k, m] of keys) {
+          press(k, m);
+          await sleep(300);
+          if (chat(id)?.pendingPermission !== req) throw new Fail(`${keyName(k, m)} answered the request under ${what}`);
+        }
+        seen.push(what);
+      };
+      const all: [string, KeyboardEventInit][] = [
+        ["Backspace", { metaKey: true }],
+        ["Enter", { metaKey: true, shiftKey: true }],
+        ["Enter", { metaKey: true }],
+      ];
+      // The onboarding takes ⌘↵ itself (Continue): only once, on its first step (a later step would start a session).
+      openOnboarding();
+      await waitFor("the onboarding", () => $("[data-onboarding]"), 5_000);
+      await shot("combo-onboarding-over-ask");
+      await tryKeys("the onboarding", all);
+      closeOnboarding();
+      await waitFor("the onboarding gone", () => !$("[data-onboarding]"), 5_000);
+      const key = await waitFor("its Needs you key", () => needsKeyOf(id), 20_000);
+      st().openNeeds(key);
+      await waitFor("the Needs you page", () => $("[data-needs-page]"), 5_000);
+      openOnboarding();
+      await waitFor("the onboarding", () => $("[data-onboarding]"), 5_000);
+      await tryKeys("the onboarding over Needs you", all.slice(0, 2));
+      closeOnboarding();
+      await waitFor("the onboarding gone", () => !$("[data-onboarding]"), 5_000);
+      if (!st().needsPage) throw new Fail("the Needs you page closed under the onboarding");
+      st().closeNeeds();
+      st().open({ kind: "chat", id });
+      await sleep(400);
+      st().setPalette(true);
+      await sleep(300);
+      await tryKeys("the palette", all);
+      st().setPalette(false);
+      st().setSheet({ kind: "new" });
+      await sleep(300);
+      await tryKeys("the New session sheet", all);
+      st().setSheet(null);
+      st().openSettings("general");
+      await sleep(300);
+      await tryKeys("Settings", all);
+      st().closeSettings();
+      await sleep(300);
+      return `still waiting after every key under: ${seen.join(", ")}`;
+    });
+    if (!req) return;
+    await step("combo-keys: on Needs you, Esc closes the tooltip first (title given back), then the page; no tab hover card over it", async () => {
+      const key = needsKeyOf(id)!;
+      st().openNeeds(key);
+      await waitFor("the Needs you page", () => $("[data-needs-page]"), 5_000);
+      await sleep(300);
+      const back = $("[data-needs-back]")!;
+      const title = back.getAttribute("title");
+      restOn(back);
+      const tip = await waitFor("the app's tooltip", () => $("[role=tooltip]"), 3_000);
+      if (back.hasAttribute("title")) throw new Fail("the system's title is still on the element while ours shows");
+      press("Escape");
+      await sleep(250);
+      if ($("[role=tooltip]")) throw new Fail("the tooltip stayed after Esc");
+      if (!st().needsPage) throw new Fail("Esc closed the page together with the tooltip");
+      if (back.getAttribute("title") !== title) throw new Fail(`title not given back: ${back.getAttribute("title")}`);
+      const tab = $(`[data-tab-session]`);
+      let card = "no tab";
+      if (tab) {
+        restOn(tab);
+        await sleep(1_100);
+        card = $("[data-hover-card]") ? "shown" : "none";
+        tab.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, pointerType: "mouse" }));
+        if (card === "shown") throw new Fail("a tab's hover card lies over the Needs you page");
+      }
+      press("Escape");
+      await sleep(300);
+      if (st().needsPage) throw new Fail("the second Esc didn't close the page");
+      return `tooltip "${textOf(tip)}" first, page second; tab hover card over the page: ${card}`;
+    });
+    await step("combo-keys: the running-now pill's Open from the Needs you page lands on the chat", async () => {
+      st().openNeeds(needsKeyOf(id));
+      await waitFor("the Needs you page", () => $("[data-needs-page]"), 5_000);
+      const pill = await waitFor("the running-now pill", () => $("[data-running-pill]"), 5_000);
+      pill.querySelector("button")!.click();
+      const s = sessionOf(id)!;
+      const row = await waitFor("its row", () => $(`[data-running-row="${CSS.escape(sessionKey(s))}"]`), 3_000);
+      (row.querySelector("[data-running-open]") as HTMLElement).click();
+      await sleep(500);
+      if (st().needsPage) throw new Fail("the page stayed");
+      const card = await waitFor("the chat's card on screen", () => $(`[data-approval="${CSS.escape(req)}"]`), 5_000);
+      return `landed on the chat (${card ? "its card shows" : ""})`;
+    });
+    await step("combo-keys: with nothing over the chat, ⌘↵ allows and the turn goes on", async () => {
+      await sleep(300);
+      press("Enter", { metaKey: true });
+      await waitFor("the answer", () => chat(id)?.pendingPermission !== req, 5_000);
+      await nextTurn(id, n, 90_000);
+      const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).reverse().find((x) => x.name === "Bash");
+      if (!tool || tool.ok === false) throw new Fail("the command didn't run");
+      return "allowed, ran";
+    });
+  },
+
+  async "combo-cards"(ctx) {
+    let id = -1;
+    await step("combo-cards: a request answered on Needs you leaves the chat's card answered (memoised blocks)", async () => {
+      id = await startIn(ctx.cfg.dir, "default");
+      const n = turnEnds(id).length;
+      await send(id, "Use the Bash tool exactly once to run: echo cards > combo-cards.txt . Then reply with one word: done");
+      const { id: req } = await approvalOf(id);
+      const d = await needsDetail(id, "command");
+      (d.querySelector("[data-allow-once]") as HTMLElement).click();
+      useStore.getState().closeNeeds();
+      useStore.getState().open({ kind: "chat", id });
+      await nextTurn(id, n, 90_000);
+      await sleep(400);
+      const live = $(`[data-approval="${CSS.escape(req)}"] [data-allow-once]`);
+      if (live) throw new Fail("the chat's card still offers Allow");
+      const end = $all("[data-chat-timeline] [data-turn-end]").pop();
+      if (!end) throw new Fail("no turn end row");
+      await shot("combo-cards-answered");
+      return `card answered; turn end "${textOf(end).slice(0, 60)}"`;
+    });
+    await step("combo-cards: a streamed reply with code, a table and a list renders the same as a fresh mount", async () => {
+      const n = turnEnds(id).length;
+      await send(
+        id,
+        "Reply with exactly this markdown and nothing else (no tools):\n\n## COMBO-MD\n\nSteps:\n\n1. First **bold** step\n2. Second step with `inline code`\n\n```ts\nconst a = 1;\nconst b = a + 2;\n```\n\n| Name | Value |\n|---|---|\n| one | 1 |\n| two | 2 |\n\n- a bullet\n- another bullet\n\n```sh\necho done\n```\n\nThe end.",
+      );
+      await nextTurn(id, n, 90_000);
+      await sleep(1_500); // the reveal finishes
+      const block = () => $all("[data-chat-timeline] [data-block]").filter((b) => b.textContent?.includes("COMBO-MD") && b.querySelector("table")).pop() ?? null;
+      const a = await waitFor("the rendered reply", block, 10_000);
+      const before = shape(a);
+      await shot("combo-md-streamed");
+      home();
+      await sleep(600);
+      useStore.getState().open({ kind: "chat", id });
+      const b = await waitFor("the reply after a fresh mount", block, 10_000);
+      await sleep(600);
+      const after = shape(b);
+      if (before !== after) {
+        let i = 0;
+        while (i < before.length && before[i] === after[i]) i++;
+        throw new Fail(`differ at ${i}: streamed "${before.slice(Math.max(0, i - 60), i + 80)}" vs fresh "${after.slice(Math.max(0, i - 60), i + 80)}"`);
+      }
+      const pres = b.querySelectorAll("pre").length;
+      if (pres < 2 || !b.querySelector("ol") || !b.querySelector("ul")) throw new Fail(`missing parts: pre ${pres}, ol ${!!b.querySelector("ol")}, ul ${!!b.querySelector("ul")}`);
+      return `same tree (${before.length} chars), ${pres} code blocks, a table, both lists`;
+    });
+    await step("combo-cards: a turn started by a background task's notification times itself from its own start", async () => {
+      // A chat of its own in Bypass mode: the background command must start without a question in the way.
+      id = await startIn(ctx.cfg.dir, "bypassPermissions");
+      const n = turnEnds(id).length;
+      await send(id, "Use the Bash tool exactly once, with run_in_background set to true, to run: sleep 25 && echo combo-bg-done . Do not wait for it and do not check on it; reply with one word: started");
+      await nextTurn(id, n, 90_000);
+      const ended = Date.now();
+      const bg = (items(id).filter((i) => i.kind === "tool") as Tool[]).find((x) => x.name === "Bash");
+      if (!bg) throw new Fail(`no Bash call: ${JSON.stringify(lastText(id)?.text)}`);
+      // The Jobs panel (glass) with the shell in it, over Colours.
+      const { setBackdrop } = await import("./lib/glass");
+      setBackdrop("colours");
+      const pk = activePanelKey();
+      if (pk) useStore.getState().setRightPanel(pk, "agents");
+      await sleep(1_200);
+      const jobs = document.querySelector('[data-right-panel="agents"]');
+      await shot("combo-glass-jobs");
+      if (pk) useStore.getState().setRightPanel(pk, "closed");
+      setBackdrop("desktop");
+      await log(`INFO Jobs panel ${jobs ? "shown" : "not shown"} with the background shell`);
+      // The notification starts a new turn with no prompt from the person.
+      const began = await waitFor("a turn the notification started", () => chat(id)?.state !== "idle" && chat(id)!.turnStart !== null && chat(id)!.turnStart! > ended - 1000, 90_000).catch(() => null);
+      // The CLI decides whether a finished background shell wakes an idle chat; when it doesn't, there is nothing to time.
+      if (!began) return `skipped: the CLI started no turn when the background shell finished (Bash ${bg.ok === false ? "failed" : "ran"})`;
+      const start = chat(id)!.turnStart!;
+      await sleep(2_500);
+      const row = $("[data-chat-timeline] [data-live-row]");
+      const text = textOf(row);
+      const secs = timerSecs(text);
+      await shot("combo-bg-turn");
+      await nextTurn(id, n + 1, 90_000).catch(() => null);
+      const end = turnEnds(id)[n + 1];
+      const gap = Math.round((start - ended) / 1000);
+      if (row && secs !== null && secs > 15) throw new Fail(`the live timer reads ${text} (${secs}s) though the turn began ${Math.round((Date.now() - start) / 1000)}s ago`);
+      if (end && end.durationMs > 20_000) throw new Fail(`Worked for ${Math.round(end.durationMs / 1000)}s: counted from before the notification (gap ${gap}s)`);
+      return `notification turn ${gap}s after the last; live row "${text || "(gone before read)"}"; worked for ${end ? Math.round(end.durationMs / 1000) + "s" : "?"}`;
+    });
+  },
+
+  async "combo-mc"(ctx) {
+    const { setBackdrop } = await import("./lib/glass");
+    const st = () => useStore.getState();
+    const keep = localStorage.getItem("coool.theme");
+    await step("combo-mc: Show all's dialog, the palette and the New session sheet dim with a plain scrim (both themes, Colours off/on); Esc closes the dialog only", async () => {
+      // A session in the project, so Mission control shows its cards (the trail with Show all among them).
+      if (!useStore.getState().sessions.some((s) => s.cwd?.startsWith(ctx.cfg.dir) || s.cwd?.endsWith("/proj"))) {
+        const id = await startIn(ctx.cfg.dir, "default");
+        await turn(id, "Reply with the single word: hi", 90_000);
+      }
+      home();
+      await invoke("selftest_resize", { width: 1180, height: 520 });
+      await sleep(1_200);
+      const notes: string[] = [];
+      const scrimOf = (root: Element | null) => {
+        const s = root?.querySelector(":scope > div") as HTMLElement | null;
+        if (!s) return "none";
+        const cs = getComputedStyle(s);
+        return `${cs.backgroundColor}|${cs.backgroundImage}`;
+      };
+      const plain = (v: string) => /^rgba?\(/.test(v) && v.endsWith("|none");
+      for (const t of ["light", "dark"] as const) {
+        st().setThemePref(t);
+        for (const colours of [false, true]) {
+          setBackdrop(colours ? "colours" : "desktop");
+          await sleep(600);
+          const tag = `${t}/${colours ? "colours" : "plain"}`;
+          const all = $("[data-mc-showall]");
+          if (all) {
+            all.click();
+            const dlg = await waitFor("the dialog", () => document.querySelector("[data-mc-dialog]"), 3_000);
+            const s = scrimOf(dlg);
+            await shot(`combo-showall-${t}-${colours ? "colours" : "plain"}`);
+            if (!plain(s)) throw new Fail(`Show all scrim ${tag}: ${s}`);
+            const seen: string[] = [];
+            const spy = (e: KeyboardEvent) => seen.push(`${e.defaultPrevented ? "prevented" : "open"}`);
+            window.addEventListener("keydown", spy);
+            press("Escape");
+            window.removeEventListener("keydown", spy);
+            const gone = await waitFor("the dialog to close", () => !document.querySelector("[data-mc-dialog]"), 2_000).catch(() => false);
+            if (!gone) {
+              const d = document.querySelector<HTMLElement>("[data-mc-dialog]");
+              throw new Fail(`Esc left the dialog up: ${document.querySelectorAll("[data-mc-dialog]").length} dialog(s), opacity ${d ? getComputedStyle(d).opacity : "-"}, bubble listener saw ${seen.join(",") || "nothing"}, active ${document.activeElement?.tagName}`);
+            }
+            if (st().settings || st().needsPage) throw new Fail("Esc did more than close the dialog");
+            notes.push(`${tag} dialog ${s.split("|")[0]}`);
+          } else notes.push(`${tag}: no Show all on this page`);
+          st().setPalette(true);
+          await sleep(400);
+          const pal = [...document.querySelectorAll(".fixed.inset-0.z-50")].find((e) => e.querySelector("input[placeholder^='Jump to']")) ?? null;
+          const ps = scrimOf(pal);
+          if (colours && t === "dark") await shot("combo-palette-dark-colours");
+          st().setPalette(false);
+          if (!plain(ps)) throw new Fail(`palette scrim ${tag}: ${ps}`);
+          st().setSheet({ kind: "new" });
+          await sleep(400);
+          const sh = [...document.querySelectorAll(".fixed.inset-0.z-50")].find((e) => e.querySelector("form")) ?? null;
+          const ss = scrimOf(sh);
+          if (colours && t === "light") await shot("combo-newsession-light-colours");
+          st().setSheet(null);
+          await sleep(300);
+          if (!plain(ss)) throw new Fail(`New session scrim ${tag}: ${ss}`);
+        }
+      }
+      setBackdrop("desktop");
+      st().setThemePref(keep === "light" || keep === "dark" ? keep : "system");
+      await invoke("selftest_resize", { width: 1440, height: 900 });
+      if ($("[data-mc-needs]")) throw new Fail("a Needs-you strip is back on Mission control");
+      return notes.join("; ");
+    });
+  },
+
+  async "combo-glass"(ctx) {
+    const { setBackdrop, setGlassPref } = await import("./lib/glass");
+    const st = () => useStore.getState();
+    const keep = localStorage.getItem("coool.theme");
+    const key = await browserHost(ctx);
+    await step("combo-glass: Jobs, Models, Browser, iPhone over Colours, both themes; the sheet's cut-out follows each panel", async () => {
+      setGlassPref(false);
+      setBackdrop("colours");
+      const bg = document.querySelector("[data-sheet-bg]") as HTMLElement;
+      const notes: string[] = [];
+      for (const t of ["dark", "light"] as const) {
+        st().setThemePref(t);
+        for (const kind of ["agents", "models", "browser", "device"] as const) {
+          if (kind === "browser") st().openBrowser(key, { kind: "web", url: "https://example.com" });
+          st().setRightPanel(key, kind);
+          await sleep(120);
+          const mid = bg.style.maskImage;
+          await sleep(1_100);
+          const aside = document.querySelector(`[data-right-panel="${kind}"]`) as HTMLElement | null;
+          if (!aside) {
+            notes.push(`${kind}: not shown`);
+            continue;
+          }
+          const r = aside.getBoundingClientRect();
+          const m = bg.style.maskImage;
+          await shot(`combo-glass-${kind}-${t}`, undefined, 200);
+          if (!m) throw new Fail(`${kind}/${t}: no cut-out in the sheet with the panel open (${Math.round(r.width)}px)`);
+          notes.push(`${kind}/${t} ${Math.round(r.width)}px${mid && mid !== m ? " (cut moved while opening)" : ""}`);
+        }
+        st().setRightPanel(key, "closed");
+        await sleep(1_200);
+        if (bg.style.maskImage) throw new Fail(`${t}: the cut-out stayed after the panel closed`);
+      }
+      setBackdrop("desktop");
+      st().setThemePref(keep === "light" || keep === "dark" ? keep : "system");
+      return notes.join("; ");
+    });
+    await step("combo-glass: the Colours drift rests while the window isn't in front and under Reduce motion", async () => {
+      setBackdrop("colours");
+      await sleep(400);
+      const layer = await waitFor("the backdrop", () => document.querySelector<HTMLElement>("[data-backdrop-layer]"), 3_000);
+      const rest = layer.dataset.backdropRest !== undefined;
+      const focused = document.hasFocus();
+      const play = () => getComputedStyle(layer.querySelector(".backdrop-layer")!).animationPlayState;
+      const unfocused = play();
+      if (!focused && (!rest || unfocused !== "paused")) throw new Fail(`window not in front, drift ${unfocused} (rest ${rest})`);
+      setMotionPref("on");
+      await sleep(200);
+      const reduced = play();
+      setMotionPref("auto");
+      setBackdrop("desktop");
+      if (reduced !== "paused") throw new Fail(`Reduce motion on, drift ${reduced}`);
+      return `focused ${focused}, rest ${rest}, drift ${unfocused}; Reduce motion: ${reduced}`;
+    });
+  },
+  /** The window switches: hide / show / focus never give the test window focus unless no switch is set. No model. */
+  async "combo-window"() {
+    await step("combo-window: hide, show and focus keep the window where its switch puts it", async () => {
+      const at = () => `${window.screenX},${window.screenY} focus=${document.hasFocus()} vis=${document.visibilityState}`;
+      const start = at();
+      await invoke("selftest_window", { action: "hide" });
+      await sleep(800);
+      const hidden = at();
+      await invoke("selftest_window", { action: "show" });
+      await sleep(800);
+      const shown = at();
+      await invoke("selftest_window", { action: "focus" });
+      await sleep(800);
+      const focused = at();
+      return `start ${start}; hidden ${hidden}; shown ${shown}; after focus ${focused}`;
+    });
+  },
+};
+Object.assign(scenarios, combo);
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

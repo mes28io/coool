@@ -11,6 +11,7 @@ import { useChats } from "../lib/chat";
 import { displayTitle, fmtTokens, folderName, isThinking, projectOf, shortDetail } from "../lib/format";
 import { useAttention } from "../lib/live";
 import { contextWindow, modelLabel } from "../lib/models";
+import { keysCaptured } from "../lib/macKeys";
 import { useMotion } from "../lib/motion";
 import { firstLine, hoverAnchor, HOVER_REST_MS } from "../lib/hoverRest";
 import { stepParts } from "../lib/toolNames";
@@ -36,6 +37,7 @@ export function HoverCards() {
     let pressed: HTMLElement | null = null;
     // The row's own tooltip (Tooltips.tsx) stands aside from the moment the pointer is on the row: the card says more.
     let quiet: HTMLElement | null = null;
+    let up = false;
     const unquiet = () => {
       if (quiet) delete quiet.dataset.noTip;
       quiet = null;
@@ -43,16 +45,29 @@ export function HoverCards() {
     const hide = () => {
       if (timer) clearTimeout(timer);
       timer = null;
+      up = false;
       setShown((v) => (v ? null : v));
+    };
+    // Esc with a card up closes the card only (then a dialog, then the page): window capture, registered at launch,
+    // ahead of every page's own Esc. Any other key just hides it.
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && up && document.querySelector("[data-hover-card]") && !keysCaptured(e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+      hide();
     };
     const arm = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         if (!el || !el.isConnected || pressed === el) return;
+        // The Needs you page says what each session needs: a tab's card would only lie over its list.
+        if (useStore.getState().needsPage) return;
         const key = el.dataset.sessionRow ?? el.dataset.tabSession;
         if (!key) return;
         const r = el.getBoundingClientRect();
+        up = true;
         setShown({ key, rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, side: el.dataset.tabSession ? "below" : "right" });
       }, HOVER_REST_MS);
     };
@@ -103,7 +118,7 @@ export function HoverCards() {
     window.addEventListener("pointerout", leave, opts);
     window.addEventListener("wheel", hide, opts);
     window.addEventListener("scroll", hide, opts);
-    window.addEventListener("keydown", hide, opts);
+    window.addEventListener("keydown", key, true);
     window.addEventListener("blur", hide);
     window.addEventListener("dragstart", press, opts);
     return () => {
@@ -114,7 +129,7 @@ export function HoverCards() {
       window.removeEventListener("pointerout", leave, opts);
       window.removeEventListener("wheel", hide, opts);
       window.removeEventListener("scroll", hide, opts);
-      window.removeEventListener("keydown", hide, opts);
+      window.removeEventListener("keydown", key, true);
       window.removeEventListener("blur", hide);
       window.removeEventListener("dragstart", press, opts);
     };

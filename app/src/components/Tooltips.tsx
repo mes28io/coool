@@ -3,7 +3,8 @@
 // tooltip never shows), and draws it as a raised card beside the element.
 //
 //   rests     450 ms before the first one; moving on to a neighbour within 400 ms of one shows at once
-//   leaves    on pointer leave, press, key, scroll, wheel, or the window losing focus
+//   leaves    on pointer leave, press, key, scroll, wheel, or the window losing focus; an Esc that closes it does
+//             nothing else (the dialog or page under it closes on the next one)
 //   placed    below the element, else above, right, left: the first side that fits the window and stays off the
 //             in-app browser's page (a native view, which draws above everything)
 //   text      as written, line breaks kept, at most 320px wide and 8 lines
@@ -13,6 +14,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { keysCaptured } from "../lib/macKeys";
 import { useMotion } from "../lib/motion";
 import { placeTip, type Box } from "../lib/tipPlace";
 
@@ -122,11 +124,21 @@ export function Tooltips() {
     const out = (e: PointerEvent) => {
       if (host && !(e.relatedTarget instanceof Node && host.contains(e.relatedTarget))) drop();
     };
+    // Esc with a tooltip up closes the tooltip only (then a dialog, then the page): on the window in the capture phase,
+    // registered at launch, so it runs before every page's and dialog's own Esc. Any other key just hides it.
+    const key = (e: KeyboardEvent) => {
+      // (A panel that has the keyboard, the Mac, gets its Esc whatever shows.)
+      if (e.key === "Escape" && shown && !keysCaptured(e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+      drop();
+    };
     const opts = { capture: true, passive: true } as const;
     document.addEventListener("pointerover", over, opts);
     document.addEventListener("pointerout", out, opts);
     document.addEventListener("pointerdown", drop, opts);
-    document.addEventListener("keydown", drop, opts);
+    window.addEventListener("keydown", key, true);
     document.addEventListener("wheel", drop, opts);
     document.addEventListener("scroll", drop, opts);
     window.addEventListener("blur", drop);
@@ -135,7 +147,7 @@ export function Tooltips() {
       document.removeEventListener("pointerover", over, opts);
       document.removeEventListener("pointerout", out, opts);
       document.removeEventListener("pointerdown", drop, opts);
-      document.removeEventListener("keydown", drop, opts);
+      window.removeEventListener("keydown", key, true);
       document.removeEventListener("wheel", drop, opts);
       document.removeEventListener("scroll", drop, opts);
       window.removeEventListener("blur", drop);
