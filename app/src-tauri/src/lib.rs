@@ -1004,12 +1004,15 @@ struct AppPrefs {
     prevent_sleep: bool,
     notify: notify::Prefs,
     open_with: String,
+    /// What the person builds ("mobile", "web", "desktop", "other"), from the onboarding or Settings > General.
+    #[serde(default)]
+    building: Vec<String>,
 }
 
 #[tauri::command(async)]
 fn prefs_get(core: State<'_, Arc<Core>>) -> AppPrefs {
     let s = settings::load(core.selftest.as_ref());
-    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with }
+    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with, building: s.building }
 }
 
 /// Saves and applies them at once (the power assertion is taken or released right here).
@@ -1023,6 +1026,7 @@ fn prefs_set(core: State<'_, Arc<Core>>, prefs: AppPrefs) -> Res<()> {
     s.prevent_sleep = prefs.prevent_sleep;
     s.notify = prefs.notify;
     s.open_with = prefs.open_with;
+    s.building = prefs.building;
     settings::save(core.selftest.as_ref(), &s).map_err(err)
 }
 
@@ -1224,6 +1228,9 @@ mod settings {
         /// The first-run onboarding was finished or dismissed (APP_SPEC "Onboarding").
         #[serde(default)]
         pub onboarded: bool,
+        /// What the person builds (the onboarding's "What are you building?"): "mobile", "web", "desktop", "other".
+        #[serde(default)]
+        pub building: Vec<String>,
     }
 
     fn system() -> String {
@@ -1236,7 +1243,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, notify: Default::default(), open_with: system(), onboarded: false }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new() }
         }
     }
 
@@ -1635,6 +1642,7 @@ pub fn run() {
             selftest::selftest_click,
             selftest::selftest_native,
             selftest::selftest_sim_delete,
+            selftest::selftest_mac_install_requests,
             selftest::selftest_sim_screen,
             selftest::selftest_pilot_log,
             selftest::selftest_mac,
@@ -1661,6 +1669,7 @@ pub fn run() {
                 // A device and helper of the test's own: never the person's "coool iPhone" or their helper binary.
                 Some(t) => {
                     device::simctl::set_only_device(selftest::SIM_NAME);
+                    device::vm::stub_install();
                     devices.init_in(&handle, Some(t.dir().join(".coool-device")));
                 }
                 None => devices.init(&handle),

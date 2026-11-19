@@ -82,6 +82,10 @@ export function mockMac(): Mac {
     sharedDir: "/Users/you/Library/Application Support/sh.coool/mac/shared",
     network: "on",
   };
+  // `?vm=installed` (already installed, off), `?vm=lowdisk` (not installed, too little free space); else not installed.
+  const vm = typeof location !== "undefined" ? /[?&]vm=(\w+)/.exec(location.search)?.[1] : undefined;
+  if (vm === "installed") Object.assign(st, { state: "stopped", installed: true, provisioned: true, diskBytes: 24e9, free: 141e9 });
+  if (vm === "lowdisk") st.free = 22e9;
   const listeners = new Set<(s: Partial<MacStatus>) => void>();
   const emit = (p: Partial<MacStatus>) => {
     Object.assign(st, p);

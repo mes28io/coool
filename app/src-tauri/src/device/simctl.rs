@@ -164,6 +164,11 @@ fn pick_type() -> Result<(String, String), String> {
     Ok((pick["identifier"].as_str().unwrap_or("").to_string(), rt["identifier"].as_str().unwrap_or("").to_string()))
 }
 
+/// The iOS runtime [`ensure_coool_device`] would create coool's device with ("iOS 27.0"), or why there is none.
+pub fn setup_runtime() -> Result<String, String> {
+    pick_type().map(|(_, rt)| runtime_name(&rt))
+}
+
 /// coool's own device, created on first use.
 pub fn ensure_coool_device() -> Result<String, String> {
     if let Some(d) = devices()?.into_iter().find(|d| d.name == own_name()) {

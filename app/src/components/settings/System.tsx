@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { homeShort } from "../../lib/format";
 import { api, isNotAvailable, type DeviceGrant, type DeviceKind, type MacStatus, type PilotLogStatus, type SimDevice, type SimList } from "../../lib/backend";
-import { NetworkSwitch } from "../MacPanel";
+import { macStateLabel, NetworkSwitch } from "../MacPanel";
 import type { CliStatus, StorageStatus } from "../../lib/settingsTypes";
 import { IAlert, ICheck, IClose, IRefresh } from "../icons";
 import { Button, IconButton, ProviderMark } from "../primitives";
@@ -171,6 +171,8 @@ function Mac() {
     <Group label="Mac" attr="devices-mac" footer="The sandbox Mac sees one folder of this computer, its shared folder, and none of your other files.">
       {!st ? (
         <Row label="Sandbox Mac" desc={err ?? "…"} />
+      ) : st.state === "downloading" || st.state === "installing" ? (
+        <Row attr="mac-installing" label="Sandbox Mac" k="mac vm virtual machine install download" desc="Installing in the background. The Mac panel shows its progress." control={<Tag tone="warn">{macStateLabel(st)}</Tag>} />
       ) : !st.available || st.state === "absent" ? (
         <Row attr="mac-none" label="Sandbox Mac" k="mac vm virtual machine" desc={!st.available ? (st.reason ?? "Not available on this Mac.") : "Not installed. Install it from the Mac panel (the Mac button in a chat's header)."} />
       ) : (

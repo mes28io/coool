@@ -10,7 +10,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const KEY = "coool.mock.prefs";
 
 function loadPrefs(): AppPrefs {
-  const d: AppPrefs = { confirm_quit: true, prevent_sleep: false, notify: { needs_you: true, finished: false, failed: true, sound: true, only_unfocused: true }, open_with: "system" };
+  const d: AppPrefs = { confirm_quit: true, prevent_sleep: false, notify: { needs_you: true, finished: false, failed: true, sound: true, only_unfocused: true }, open_with: "system", building: [] };
   try {
     const v = JSON.parse(localStorage.getItem(KEY) || "null");
     return v ? { ...d, ...v, notify: { ...d.notify, ...v.notify } } : d;

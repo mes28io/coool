@@ -833,6 +833,14 @@ pub fn selftest_sim_delete(core: State<'_, Arc<Core>>, devices: State<'_, Arc<cr
     Ok(mine.into_iter().map(|d| d.udid).collect())
 }
 
+/// How many sandbox Mac installs were requested this run. A self-test never installs for real
+/// (`device::vm::stub_install`): this is what the onboarding scenario checks instead.
+#[tauri::command]
+pub fn selftest_mac_install_requests(core: State<'_, Arc<Core>>) -> Result<u64, String> {
+    active(&core)?;
+    Ok(crate::device::vm::install_requests())
+}
+
 /// The test simulator's screen as the backend reads it (the accessibility tree, rendered as `observe` does), so a
 /// scenario can confirm what is really on screen, apart from what an agent reports.
 #[tauri::command(async)]

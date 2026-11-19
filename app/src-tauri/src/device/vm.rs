@@ -49,6 +49,21 @@ pub const SHARED_IN_GUEST: &str = "/Volumes/My Shared Files";
 /// run at every boot, so a guest set up before it gets it too.
 const CLICK_WALLPAPER_OFF: &str = "[ \"$(defaults read com.apple.WindowManager EnableStandardClickToShowDesktop 2>/dev/null)\" = 0 ] || { defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false; killall WindowManager >/dev/null 2>&1; echo changed; }";
 
+/// Set for every self-test run ([`stub_install`]): `install` only counts the request, never downloads or installs.
+static INSTALL_STUB: AtomicBool = AtomicBool::new(false);
+static INSTALL_REQUESTS: AtomicU64 = AtomicU64::new(0);
+
+/// Self-test: installing the sandbox Mac is recorded, never run (a real install downloads many GB and would write
+/// over the one VM there is).
+pub fn stub_install() {
+    INSTALL_STUB.store(true, Ordering::SeqCst);
+}
+
+/// Self-test: how many installs were requested while stubbed.
+pub fn install_requests() -> u64 {
+    INSTALL_REQUESTS.load(Ordering::SeqCst)
+}
+
 pub fn vm_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("COOOL_VM_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
@@ -208,6 +223,11 @@ impl Vm {
 
     /// Downloads and installs macOS into the base Mac (once).
     pub fn install(&self, d: &Devices) -> Res<Value> {
+        if INSTALL_STUB.load(Ordering::SeqCst) {
+            INSTALL_REQUESTS.fetch_add(1, Ordering::SeqCst);
+            eprintln!("coool self-test: sandbox Mac install requested (stubbed, nothing downloaded)");
+            return Ok(json!({ "stub": true }));
+        }
         let _g = self.op.lock().unwrap();
         self.set(d, json!({ "error": null, "progress": null }));
         let r = self.call(

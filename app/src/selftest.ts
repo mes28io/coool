@@ -3704,7 +3704,8 @@ Object.assign(scenarios, sweep);
 // ---------- the first-run onboarding (components/onboarding/) ----------
 //
 // `onboarding` (no model; a fresh test folder, so its settings file has no "seen" flag): it opens by itself, walks the
-// steps with the keyboard, checks the macOS states render honestly WITHOUT pressing Allow or the login switch (a build
+// steps with the keyboard, checks What are you building? against this Mac (Mobile creates the test simulator, then deletes it;
+// the sandbox Mac install is stubbed), checks the macOS states render honestly WITHOUT pressing Allow or the login switch (a build
 // without an app bundle reports them unavailable / not found; nothing on this Mac changes), dismisses it, checks the
 // flag was saved, re-opens it from Settings > About and the palette's entry, and finishes on Home.
 // `onboarding-restart` (a second launch on the same folder): it stays closed, the flag survived. Only these scenarios
@@ -3726,7 +3727,7 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       await shot("onb-1-folder");
       return lines.join("; ");
     });
-    await step("onboarding: a known project is one click, Enter continues to Notifications", async () => {
+    await step("onboarding: a known project is one click, Enter continues to What are you building?", async () => {
       const chip = $("[data-onb-projects] button");
       if (chip) {
         chip.click();
@@ -3734,9 +3735,82 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       }
       ($("#onb-title") as HTMLElement | null)?.focus();
       winKey("Enter");
-      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      await waitFor("the build step", () => onb() === "build", 3_000);
       return chip ? `picked ${$("[data-onb-folder]")?.dataset.onbFolder ?? "?"}` : "no known projects in the test folder";
     });
+    // What are you building? The rows say what this Mac really has (simctl, the VM helper's status). The sandbox Mac
+    // is never installed by a self-test: the backend stubs `mac_install` (it only counts the request).
+    const SIM = "coool selftest iPhone";
+    const devState = (d: string) => $(`[data-onb-device='${d}']`)?.dataset.state ?? "";
+    const installs = () => invoke("selftest_mac_install_requests") as Promise<number>;
+    const ownSim = async () => (await api().simDevices()).devices.filter((d) => d.name === SIM);
+    let iphoneCan = false;
+    let macCan = false;
+    await step("onboarding: What are you building? shows this Mac's real iPhone and Mac state, nothing picked", async () => {
+      await waitFor("the device rows", () => ["iphone", "mac"].every((d) => devState(d) && devState(d) !== "loading") || null, 20_000);
+      if ($all("[data-onb-kind]").some((b) => b.getAttribute("aria-pressed") === "true")) throw new Fail("a kind is preselected");
+      if (devState("browser") !== "ready") throw new Fail(`browser row ${devState("browser")}`);
+      const sim = await api().simDevices();
+      const want = !sim.available || (!sim.devices.some((d) => d.coool) && !sim.runtime) ? "blocked" : sim.devices.some((d) => d.coool) ? "ready" : "choose";
+      if (devState("iphone") !== want) throw new Fail(`iPhone row ${devState("iphone")}, simctl says ${want} (${JSON.stringify({ ...sim, devices: sim.devices.length })})`);
+      const mac = await api().macStatus();
+      const wantMac = !mac.available ? "blocked" : mac.installed || mac.state !== "absent" ? "ready" : mac.free != null && mac.free < 40e9 ? "blocked" : "choose";
+      if (devState("mac") !== wantMac) throw new Fail(`Mac row ${devState("mac")}, status says ${wantMac}`);
+      iphoneCan = want === "choose";
+      macCan = wantMac === "choose";
+      await shot("onb-build-real");
+      return `iPhone ${want}: "${textOf($("[data-onb-device='iphone']"))}"; Mac ${wantMac}: "${textOf($("[data-onb-device='mac']"))}"`;
+    });
+    await step("onboarding: Websites only, Continue: nothing is set up, the answer is saved", async () => {
+      const before = await installs();
+      $("[data-onb-kind='web']")!.click();
+      await sleep(200);
+      if ($("[data-onb-summary]")?.dataset.onbSummary) throw new Fail(`would set up ${$("[data-onb-summary]")?.dataset.onbSummary}`);
+      $("[data-onb-next]")!.click();
+      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      await sleep(1500);
+      if ((await ownSim()).length) throw new Fail("a simulator was created");
+      if ((await installs()) !== before) throw new Fail("a Mac install was requested");
+      const b = (await api().prefsGet()).building;
+      if (JSON.stringify(b) !== '["web"]') throw new Fail(`saved ${JSON.stringify(b)}`);
+      return `building=${JSON.stringify(b)}, no simulator, Mac installs requested ${before}`;
+    });
+    await step("onboarding: Back, Mobile and Desktop, Continue: the iPhone set-up runs on the test simulator; the Mac only if it can (stubbed)", async () => {
+      $("[data-onb-back]")!.click();
+      await waitFor("the build step", () => onb() === "build", 3_000);
+      await waitFor("the device rows", () => ["iphone", "mac"].every((d) => devState(d) && devState(d) !== "loading") || null, 20_000);
+      $("[data-onb-kind='web']")!.click();
+      $("[data-onb-kind='mobile']")!.click();
+      $("[data-onb-kind='desktop']")!.click();
+      await sleep(250);
+      const going = $("[data-onb-summary]")?.dataset.onbSummary ?? "";
+      const want = [iphoneCan && "iphone", macCan && "mac"].filter(Boolean).join(",");
+      if (going !== want) throw new Fail(`would set up "${going}", expected "${want}"`);
+      await shot("onb-build-real-picked");
+      const before = await installs();
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      let sim = "not offered";
+      if (iphoneCan) {
+        const end = Date.now() + 60_000;
+        while (!(await ownSim()).length) {
+          if (Date.now() > end) throw new Fail("the test simulator wasn't created in 60 s");
+          await sleep(300);
+        }
+        sim = `created ${SIM}`;
+        const st = (await ownSim())[0]?.state;
+        if (st === "Booted" || st === "Booting") throw new Fail("set-up booted the simulator");
+      } else if ((await ownSim()).length) throw new Fail("a simulator was created though the row couldn't");
+      await sleep(500);
+      const after = await installs();
+      if (after - before !== (macCan ? 1 : 0)) throw new Fail(`Mac install requests ${before} -> ${after}`);
+      const b = (await api().prefsGet()).building;
+      if (JSON.stringify([...(b ?? [])].sort()) !== '["desktop","mobile"]') throw new Fail(`saved ${JSON.stringify(b)}`);
+      const gone = iphoneCan ? ((await invoke("selftest_sim_delete")) as string[]) : [];
+      return `iPhone: ${sim}, deleted ${gone.length}; Mac install requests ${before} -> ${after} (stub, nothing downloaded); building=${JSON.stringify(b)}`;
+    });
+
     await step("onboarding: Notifications says where the permission stands (not pressed)", async () => {
       const st = await waitFor("the permission", () => $("[data-onb-notify]")?.dataset.onbNotify || null, 5_000);
       const text = textOf($("[data-onb-notify]"));
@@ -3777,6 +3851,7 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       winKey("Escape");
       winKey("Escape");
       winKey("Escape");
+      winKey("Escape");
       await waitFor("the finish step", () => onb() === "done", 3_000);
       winKey("Escape");
       await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
@@ -3795,6 +3870,9 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       await sleep(300);
       if (useStore.getState().palette) throw new Fail("⌘K opened the palette over the onboarding");
       $("[data-onb-skip]")!.click(); // the folder step skipped: no folder, so the end is Home
+      await waitFor("build", () => onb() === "build", 3_000);
+      (await waitFor("the kinds", () => $("[data-onb-kind='other']"), 3_000)).click();
+      $("[data-onb-skip]")!.click(); // skipped: the answer stays as saved
       await waitFor("notifications", () => onb() === "notifications", 3_000);
       $("[data-onb-skip]")!.click();
       await waitFor("login", () => onb() === "login", 3_000);
@@ -3812,7 +3890,9 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
     await step("onboarding: the flag is in the test folder's settings file", async () => {
       const seen = await api().onboardingSeen();
       if (!seen) throw new Fail("not saved");
-      return "seen=true";
+      const b = (await api().prefsGet()).building;
+      if (JSON.stringify([...(b ?? [])].sort()) !== '["desktop","mobile"]') throw new Fail(`building ${JSON.stringify(b)} (Skip changed it?)`);
+      return `seen=true, building=${JSON.stringify(b)}`;
     });
   },
 
@@ -3823,6 +3903,18 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (!(await api().onboardingSeen())) throw new Fail("the flag is gone");
       await shot("onb-7-restart");
       return "closed, seen=true";
+    });
+    await step("onboarding-restart: the building answer survived and shows in Settings > General", async () => {
+      const b = (await api().prefsGet()).building;
+      useStore.getState().openSettings("general");
+      await waitFor("the building chips", () => $("[data-building]"), 5_000);
+      await sleep(400);
+      const on = $all("[data-building]").filter((e) => e.getAttribute("aria-pressed") === "true").map((e) => e.dataset.building).sort();
+      if (JSON.stringify(on) !== JSON.stringify([...(b ?? [])].sort()) || on.length !== 2) throw new Fail(`chips ${JSON.stringify(on)}, prefs ${JSON.stringify(b)}`);
+      $("[data-building]")!.scrollIntoView({ block: "center" });
+      await shot("onb-8-settings-building");
+      useStore.getState().closeSettings();
+      return `building=${JSON.stringify(b)}, chips ${on.join(",")}`;
     });
   },
 };
