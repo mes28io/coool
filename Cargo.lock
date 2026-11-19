@@ -666,6 +666,7 @@ dependencies = [
  "memchr",
  "notify",
  "portable-pty",
+ "regex",
  "serde",
  "serde_json",
  "unicode-width",

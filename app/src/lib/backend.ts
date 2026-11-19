@@ -2,6 +2,7 @@
 // when running in a plain browser (`pnpm dev`). See docs/APP_SPEC.md.
 
 import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
+import type { ExplainReply, ExplainRequest } from "./explain";
 import type { ChatEvent, ChatOptions, ContextMap, Environment, GitTrail, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
 import type { MotionHints } from "./motion";
 import type { SettingsBackend } from "./settingsTypes";
@@ -89,6 +90,8 @@ export interface Backend extends SettingsBackend {
   insightsSetKey(key: string): Promise<void>;
   insightsClearKey(): Promise<void>;
   insightsSetEnabled(enabled: boolean): Promise<void>;
+  /** The AI read of one permission request (CHAT_SPEC "What this does and why"; cached by request id in the backend). */
+  explainRequest(req: ExplainRequest): Promise<ExplainReply>;
 
   /** Settings: "Show runs started by other tools" (persisted; echoed in `Snapshot.show_automation`). */
   setShowAutomation(enabled: boolean): Promise<void>;
@@ -503,6 +506,14 @@ async function tauriBackend(): Promise<Backend> {
     insightsSetKey: (key) => soft("insights_set_key", { key }),
     insightsClearKey: () => soft("insights_clear_key"),
     insightsSetEnabled: (enabled) => soft("insights_set_enabled", { enabled }),
+    explainRequest: async (req) => {
+      try {
+        return await soft<ExplainReply>("explain_request", { req });
+      } catch (e) {
+        if (isNotAvailable(e)) return { status: "off", has_key: false };
+        throw e;
+      }
+    },
     setShowAutomation: (enabled) => soft("set_show_automation", { enabled }),
     pilotLogStatus: () => soft("pilot_log_status"),
     pilotLogSetEnabled: (enabled) => soft("pilot_log_set_enabled", { enabled }),

@@ -1,5 +1,7 @@
 // The "Risky" tag on a permission request (lib/risk.ts): shown only when a fixed rule matches, with the reason on
-// hover. There is no "safe" tag, no countdown and no default answer: the person decides, as on every request.
+// hover. There is no "safe" tag, no countdown and no default answer: the person decides, as on every request. The
+// rules are a short fixed list, so the tooltip says so: a request without the tag still deserves a read. The tag
+// never comes from the AI read (components/Explain.tsx keeps the two apart).
 
 import { useMemo } from "react";
 import { riskOf } from "../lib/risk";
@@ -12,7 +14,7 @@ export function RiskTag({ tool, input, cwd, className }: { tool: string; input: 
   return (
     <span
       className={cx("inline-flex h-[18px] shrink-0 items-center gap-1 rounded-[6px] bg-[color-mix(in_oklab,var(--error)_13%,transparent)] px-1.5 text-small font-medium text-err-text", className)}
-      title={risk.reason}
+      title={`${risk.reason}.\n\nFrom a short, fixed list of rules. A request without this tag only matched none of them, and still deserves a read.`}
       aria-label={`Risky: ${risk.reason}`}
       data-risk={risk.reason}
     >
