@@ -4162,7 +4162,7 @@ Object.assign(scenarios, fix2);
 // `perf-*` (selftestPerf.ts): numbers for docs/PERF.md, not pass/fail; not in `all`.
 Object.assign(
   scenarios,
-  Object.fromEntries(Object.entries(perfScenarios({ invoke: (c, a) => invoke(c, a), log, sleep, waitFor })).map(([n, f]) => [n, () => f()])),
+  Object.fromEntries(Object.entries(perfScenarios({ invoke: (c, a) => invoke(c, a), log, sleep, waitFor, shot: (n, s) => shot(n, undefined, s) })).map(([n, f]) => [n, () => f()])),
 );
 
 // ---------- the five inspiration ideas (docs/research/affectui-inspiration.md "Later"), against the real CLI ----------

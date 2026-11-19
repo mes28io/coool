@@ -17,8 +17,13 @@ import { useChats } from "./lib/chat";
 import type { ChatEvent, Session } from "./lib/types";
 import { sessionKey } from "./lib/types";
 import { useStore } from "./store";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { AnimGallery, AnimLab, LOOPS } from "./selftestAnim";
+import { setMotionPref } from "./lib/motion";
 
 export interface PerfKit {
+  shot: (name: string, settle?: number) => Promise<unknown>;
   invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
   log: (line: string) => Promise<unknown>;
   sleep: (ms: number) => Promise<unknown>;
@@ -117,6 +122,25 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
   };
   const gapLine = (g: number[]) => `frames=${g.length} gap_p50=${r1(pct(g, 0.5))} gap_p95=${r1(pct(g, 0.95))} gap_max=${r1(Math.max(0, ...g))} over50=${g.filter((x) => x > 50).length}`;
   const raf2 = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  /** The animations running on the page, by name and property: `name(props)×n`, longest first. */
+  function census() {
+    const by = new Map<string, number>();
+    let n = 0;
+    for (const a of document.getAnimations()) {
+      if (a.playState !== "running") continue;
+      const eff = a.effect as KeyframeEffect | null;
+      const iters = eff?.getComputedTiming().iterations;
+      if (iters !== Infinity) continue; // one-off transitions and entrances end by themselves
+      const name = (a as CSSAnimation).animationName ?? a.id ?? "js";
+      const props = new Set<string>();
+      for (const f of eff?.getKeyframes() ?? []) for (const p of Object.keys(f)) if (!["offset", "easing", "composite", "computedOffset"].includes(p)) props.add(p);
+      const key = `${name}(${[...props].join("+")})`;
+      by.set(key, (by.get(key) ?? 0) + 1);
+      n++;
+    }
+    return { n, line: [...by].sort((x, y) => y[1] - x[1]).map(([k, c]) => `${k}x${c}`).join(" ") };
+  }
 
   const home = async () => {
     useStore.setState({ activeTab: null, settings: null });
@@ -260,6 +284,218 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
         await measure(`loops-${name}`, 5_000, 40_000);
       }
       style.remove();
+    },
+
+    /**
+     * What one kind of loop costs WebKit, alone: every animation of the app paused, then six copies of one test loop
+     * (a 14px box in the corner of the window), 20 s each. `lab-none` is the floor.
+     */
+    async "perf-anim-lab"() {
+      closeAllTabs();
+      await home();
+      const style = document.createElement("style");
+      style.textContent = `
+        :not(#perf-lab, #perf-lab *), :not(#perf-lab, #perf-lab *)::before, :not(#perf-lab, #perf-lab *)::after { animation-play-state: paused !important; }
+        #perf-lab { position: fixed; left: 8px; bottom: 8px; z-index: 99999; display: flex; gap: 6px; padding: 4px; background: var(--bg); pointer-events: none; }
+        #perf-lab > * { width: 14px; height: 14px; display: block; color: var(--status-running); }
+        #perf-lab .box { border: 2.5px solid currentColor; border-right-color: transparent; border-radius: 50%; box-sizing: border-box; }
+        #perf-lab .word { width: auto; height: auto; font-size: 13px; }
+        @keyframes lab-spin { to { transform: rotate(360deg); } }
+        @keyframes lab-fade { 50% { opacity: 0.4; } }
+        @keyframes lab-dash { to { stroke-dashoffset: -1; } }
+        @keyframes lab-hard { ${Array.from({ length: 4 }, (_, i) => `${i * 25}%, ${i * 25 + 24.99}% { transform: rotate(${i * 90}deg); }`).join(" ")} 100% { transform: rotate(270deg); } }
+      `;
+      document.head.appendChild(style);
+      const lab = document.createElement("div");
+      lab.id = "perf-lab";
+      document.body.appendChild(lab);
+      const svgRing = `<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2.8"/><path d="M8 2a6 6 0 016 6" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>`;
+      const svgDots = `<svg viewBox="0 0 16 16"><circle cx="5" cy="8" r="1.4" fill="currentColor" style="animation: lab-fade 1.8s steps(5) infinite"/><circle cx="11" cy="8" r="1.4" fill="currentColor" style="animation: lab-fade 1.8s steps(5) infinite .3s"/></svg>`;
+      const shimmer = `<span class="word shimmer">Thinking</span>`;
+      let timer = 0;
+      const variants: [string, string, string, (() => void)?][] = [
+        ["none", "", ""],
+        ["box-rot-linear", `<div class="box"></div>`, "animation: lab-spin 1s linear infinite"],
+        ["box-rot-steps20", `<div class="box"></div>`, "animation: lab-spin 1s steps(20) infinite"],
+        ["svg-rot-linear", svgRing, "animation: lab-spin 1s linear infinite"],
+        ["svg-rot-steps20", svgRing, "animation: lab-spin 1s steps(20) infinite"],
+        ["box-opacity-ease", `<div class="box"></div>`, "animation: lab-fade 1.8s ease-in-out infinite"],
+        ["box-opacity-steps", `<div class="box"></div>`, "animation: lab-fade 1.8s steps(10) infinite"],
+        ["svg-child-opacity-steps", svgDots, ""],
+        ["svg-child-opacity-linear", svgDots.replaceAll("steps(5)", "linear"), ""],
+        ["svg-child-transform-linear", `<svg viewBox="0 0 16 16"><g style="transform-origin:8px 8px;animation:lab-spin 1s linear infinite"><circle cx="8" cy="3" r="1.6" fill="currentColor"/></g></svg>`, ""],
+        ["svg-dashoffset-linear", `<svg viewBox="0 0 16 16"><path d="M2 8H14" pathLength="1" stroke="currentColor" stroke-width="2" stroke-dasharray="1 3" style="animation:lab-dash 2s linear infinite"/></svg>`, ""],
+        // Steps written as keyframes: holds joined by 0.01 % ramps, run with linear timing.
+        ["box-rot-hardsteps", `<div class="box"></div>`, "animation: lab-hard 1s linear infinite"],
+        ["shimmer-bgpos-steps", shimmer, ""],
+        ["shimmer-bgpos-linear", shimmer.replace('class="word shimmer"', 'class="word shimmer" style="animation-timing-function:linear"'), ""],
+        // One shared 12 Hz timer stepping a transform from JS (what a JS-driven stepped loop would cost).
+        [
+          "js-12hz-transform",
+          `<div class="box"></div>`,
+          "",
+          () => {
+            let i = 0;
+            timer = window.setInterval(() => {
+              i = (i + 1) % 20;
+              lab.style.setProperty("--lab-a", `${i * 18}deg`);
+            }, 83);
+          },
+        ],
+      ];
+      for (const [name, html, css, setup] of variants) {
+        lab.innerHTML = "";
+        lab.style.removeProperty("--lab-a");
+        for (let i = 0; i < (html ? 6 : 0); i++) {
+          const t = document.createElement("template");
+          t.innerHTML = html.trim();
+          const el = t.content.firstElementChild as HTMLElement;
+          if (css) el.setAttribute("style", css);
+          if (name.startsWith("js-")) el.style.transform = "rotate(var(--lab-a, 0deg))";
+          lab.appendChild(el);
+        }
+        setup?.();
+        await raf2();
+        const c = census();
+        await k.log(`PERF lab-${name} running=${c.n} ${c.line}`);
+        await measure(`lab-${name}`, 4_000, 20_000);
+        window.clearInterval(timer);
+      }
+      lab.remove();
+      style.remove();
+    },
+
+    /**
+     * What each of the app's own loops costs alone (selftestAnim.tsx `LOOPS`): every other animation paused, six
+     * copies of the loop in the corner of the window, 15 s each.
+     */
+    async "perf-anim-app"() {
+      closeAllTabs();
+      await home();
+      const style = document.createElement("style");
+      style.textContent = ":not(#perf-lab, #perf-lab *), :not(#perf-lab, #perf-lab *)::before, :not(#perf-lab, #perf-lab *)::after { animation-play-state: paused !important; }";
+      document.head.appendChild(style);
+      const host = document.createElement("div");
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      for (const name of ["none", ...Object.keys(LOOPS)]) {
+        root.render(name === "none" ? null : createElement(AnimLab, { name }));
+        await k.sleep(1000);
+        const c = census();
+        await k.log(`PERF app-${name} running=${c.n} ${c.line}`);
+        await measure(`app-${name}`, 3_000, 15_000);
+      }
+      root.unmount();
+      host.remove();
+      style.remove();
+    },
+
+    /**
+     * The loops of each screen with live sessions, one at a time: Home, then the busiest live session. On each, the
+     * running loops by name (`document.getAnimations()`), then 20 s as is, with all paused, and with each name paused.
+     */
+    async "perf-anim"() {
+      closeAllTabs();
+      await home();
+      const style = document.createElement("style");
+      document.head.appendChild(style);
+      const screen = async (where: string) => {
+        await k.sleep(4000);
+        const c = census();
+        await k.log(`PERF anim-${where} running=${c.n} ${c.line}`);
+        style.textContent = "";
+        await measure(`anim-${where}-as-is`, 2_000, 20_000);
+        style.textContent = "*,*::before,*::after{animation-play-state:paused!important}";
+        await measure(`anim-${where}-all-paused`, 2_000, 20_000);
+        style.textContent = "";
+        // Each running name paused alone (CSSAnimation.pause(), re-applied every second for rows that re-render).
+        const names = [...new Set(document.getAnimations().filter((a) => a.playState === "running" && a.effect?.getComputedTiming().iterations === Infinity).map((a) => (a as CSSAnimation).animationName))];
+        for (const n of names) {
+          const hold = () => document.getAnimations().forEach((a) => (a as CSSAnimation).animationName === n && a.playState === "running" && a.pause());
+          hold();
+          const t = window.setInterval(hold, 1000);
+          await measure(`anim-${where}-without-${n}`, 2_000, 20_000);
+          window.clearInterval(t);
+          document.getAnimations().forEach((a) => (a as CSSAnimation).animationName === n && a.playState === "paused" && a.play());
+        }
+      };
+      await screen("home");
+      const busy = [...useStore.getState().sessions].filter((s) => s.status === "busy").sort((x, y) => y.updated - x.updated)[0];
+      if (busy) {
+        openSession(busy);
+        await screen("session");
+        closeAllTabs();
+        await home();
+      }
+      style.remove();
+    },
+
+    /**
+     * Every loop on one page (selftestAnim.tsx), all paused and set to the same times, a window shot at each: frames
+     * of one build to compare with another's. Logs each cell's rectangle (CSS px) for cropping; dark, light, and
+     * the running loops with Reduce motion on, off and auto.
+     */
+    async "perf-anim-frames"() {
+      closeAllTabs();
+      await home();
+      const host = document.createElement("div");
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      root.render(createElement(AnimGallery));
+      await k.waitFor("the gallery", () => document.querySelector("[data-anim-gallery]"), 10_000);
+      await k.sleep(1500);
+      const gal = document.querySelector<HTMLElement>("[data-anim-gallery]")!;
+      const theme0 = document.documentElement.dataset.theme;
+      const rects = () =>
+        [...gal.querySelectorAll<HTMLElement>("[data-anim-cell]")].map((c) => {
+          let [l, t, r, b] = [Infinity, Infinity, -Infinity, -Infinity];
+          for (const e of [c, ...c.querySelectorAll("*")]) {
+            const q = e.getBoundingClientRect();
+            if (!q.width && !q.height) continue;
+            [l, t, r, b] = [Math.min(l, q.left), Math.min(t, q.top), Math.max(r, q.right), Math.max(b, q.bottom)];
+          }
+          return `${c.dataset.animCell}:${Math.floor(l - 4)},${Math.floor(t - 4)},${Math.ceil(r - l + 8)},${Math.ceil(b - t + 8)}`;
+        });
+      await k.log(`PERF frames dpr=${devicePixelRatio} cells ${rects().join(" ")}`);
+      const seek = (t: number) => {
+        for (const a of gal.getAnimations({ subtree: true })) {
+          if (a.effect?.getComputedTiming().iterations !== Infinity) {
+            a.finish();
+            continue;
+          }
+          a.pause();
+          a.currentTime = t;
+        }
+      };
+      for (const theme of ["dark", "light"]) {
+        document.documentElement.dataset.theme = theme;
+        await k.sleep(400);
+        const c = census();
+        await k.log(`PERF frames ${theme} running=${c.n} ${c.line}`);
+        for (let t = 0; t <= 2400; t += 50) {
+          seek(t);
+          await raf2();
+          await k.shot(`frame-${theme}-${String(t).padStart(4, "0")}`, 60);
+        }
+      }
+      // Reduce motion: nothing may loop (the needs-you ring's slow breathe and dot excepted).
+      for (const a of gal.getAnimations({ subtree: true })) if (a.playState === "paused") a.play();
+      for (const p of ["on", "off", "auto"] as const) {
+        setMotionPref(p);
+        await k.sleep(600);
+        const c = census();
+        await k.log(`PERF frames reduce-motion=${p} running=${c.n} ${c.line}`);
+        if (p === "on") {
+          for (const t of [0, 600, 1200]) {
+            seek(t);
+            await raf2();
+            await k.shot(`frame-reduce-${t}`, 60);
+          }
+        }
+      }
+      document.documentElement.dataset.theme = theme0;
+      root.unmount();
+      host.remove();
     },
 
     async "perf-long"() {
