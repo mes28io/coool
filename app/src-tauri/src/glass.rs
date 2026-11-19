@@ -28,10 +28,12 @@ pub fn decide(wanted: bool, reduce_transparency: bool, supported: bool) -> Glass
     GlassState { active: supported && wanted && !reduce_transparency, reduce_transparency, supported }
 }
 
-/// The `NSVisualEffectMaterial`, in both themes (the appearance picks its light or dark variant). Sidebar is the
-/// material Finder, Mail and Xcode put under their sidebars: in light a pale frost that keeps dark text crisp, in
-/// dark a smoky one; both stay calm over a busy wallpaper. (Tried on macOS 27: under-window background and HUD read muddier; titlebar is close to sidebar.)
-const SIDEBAR: isize = 7;
+/// The `NSVisualEffectMaterial`, in both themes (the appearance picks its light or dark variant). Titlebar: the
+/// clearest of the frosts that keep text crisp. Measured on macOS 27 over a striped colour field, the rail's colour
+/// came through clearly more than with Sidebar (dark: rgb 81,60,62 against 64,38,41 behind a red band), so
+/// more of what is behind shows; full-screen UI went grey and flat, under-window background
+/// and HUD read muddier. `COOOL_GLASS_MATERIAL` overrides it in a debug build, to compare.
+const MATERIAL: isize = 3;
 
 /// macOS "Reduce transparency" (System Settings > Accessibility > Display). A debug build can force it with
 /// `COOOL_REDUCE_TRANSPARENCY=1`, to test the fallback without changing the system setting.
@@ -64,6 +66,7 @@ mod imp {
     // background loses its vibrancy and goes flat, as Finder's sidebar does, so the window in front reads as active.
     const BEHIND_WINDOW: isize = 0;
     const FOLLOWS_WINDOW: isize = 0;
+    const ACTIVE: isize = 1;
     // NSViewWidthSizable | NSViewHeightSizable
     const FILL: usize = 2 | 16;
     // NSWindowBelow
@@ -119,7 +122,10 @@ mod imp {
                     let v = Retained::from_raw(raw).ok_or("NSVisualEffectView init failed")?;
                     let _: () = msg_send![&*v, setAutoresizingMask: FILL];
                     let _: () = msg_send![&*v, setBlendingMode: BEHIND_WINDOW];
-                    let _: () = msg_send![&*v, setState: FOLLOWS_WINDOW];
+                    // A self-test window never takes focus, so it would always show the inactive (flat) material: a
+                    // debug build can ask for the active one with `COOOL_GLASS_ACTIVE=1`, as the person sees it.
+                    let state = if cfg!(debug_assertions) && std::env::var("COOOL_GLASS_ACTIVE").is_ok_and(|v| v == "1") { ACTIVE } else { FOLLOWS_WINDOW };
+                    let _: () = msg_send![&*v, setState: state];
                     // Under every webview (the app's and the in-app browser's), whatever is added later.
                     let none: *const AnyObject = std::ptr::null();
                     let _: () = msg_send![content, addSubview: &*v, positioned: BELOW, relativeTo: none];
@@ -127,7 +133,9 @@ mod imp {
                     v
                 }
             };
-            let _: () = msg_send![&*view, setMaterial: super::SIDEBAR];
+            // A debug build can try another material (`COOOL_GLASS_MATERIAL=<NSVisualEffectMaterial>`), to compare them.
+            let material = std::env::var("COOOL_GLASS_MATERIAL").ok().filter(|_| cfg!(debug_assertions)).and_then(|m| m.parse::<isize>().ok()).unwrap_or(super::MATERIAL);
+            let _: () = msg_send![&*view, setMaterial: material];
             // The material follows the app's theme, not the system's (coool can be light on a dark Mac). It has to be a
             // vibrant appearance: with plain Aqua / DarkAqua the view draws a flat fill and blends with nothing.
             if let Some(ap) = AnyClass::get(c"NSAppearance") {

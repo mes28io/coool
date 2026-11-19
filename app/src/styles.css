@@ -125,20 +125,40 @@
   --side-glass: var(--panel);
   --glass-line: var(--hairline);
 }
-/* Glass on: the window paints nothing (the NSVisualEffectView behind shows) and the two glass regions take a tint of
-   their solid colour over it, enough to keep text and icons legible over any wallpaper, plus a firmer hairline at
-   their edges (a translucent hairline over glass would show the desktop through it). */
-:root[data-glass="on"][data-theme="dark"] {
+/* Glass on (or coool's colour backdrop, `data-backdrop="colours"`): the window paints nothing (the NSVisualEffectView,
+   or the backdrop layer, behind shows) and the two glass regions take a light tint of their solid colour over it,
+   enough to keep text and icons legible over a bright or a dark wallpaper, plus a firmer hairline at their edges (a
+   translucent hairline over glass would show the desktop through it). Chrome / right sidebar tint: dark 20 / 26 %,
+   light 12 / 18 % (were 50 / 56 and 36 / 44 %), over the Titlebar material: more of what is behind shows through. */
+:root[data-glass="on"][data-theme="dark"],
+:root[data-backdrop="colours"][data-theme="dark"] {
   --window: transparent;
-  --chrome: rgb(23 23 23 / 0.5);
-  --side-glass: rgb(23 23 23 / 0.56);
-  --glass-line: rgb(255 255 255 / 0.09);
+  --chrome: rgb(23 23 23 / 0.2);
+  --side-glass: rgb(23 23 23 / 0.26);
+  --glass-line: rgb(255 255 255 / 0.1);
 }
-:root[data-glass="on"][data-theme="light"] {
+:root[data-glass="on"][data-theme="light"],
+:root[data-backdrop="colours"][data-theme="light"] {
   --window: transparent;
-  --chrome: rgb(249 249 249 / 0.36);
-  --side-glass: rgb(249 249 249 / 0.44);
-  --glass-line: rgb(0 0 0 / 0.08);
+  --chrome: rgb(249 249 249 / 0.12);
+  --side-glass: rgb(249 249 249 / 0.18);
+  --glass-line: rgb(0 0 0 / 0.09);
+}
+/* coool's backdrop (components/Backdrop.tsx): a few large soft blobs of colour on a base, one set per theme, drawn
+   once (no animation: ~0 CPU). Only the glass regions show it; the sheet and device screens stay opaque above it. */
+:root[data-theme="dark"] {
+  --backdrop: radial-gradient(42% 55% at 12% 18%, rgb(64 92 255 / 0.85), transparent 70%),
+    radial-gradient(38% 50% at 88% 12%, rgb(176 64 255 / 0.75), transparent 70%),
+    radial-gradient(45% 60% at 82% 88%, rgb(255 72 160 / 0.7), transparent 72%),
+    radial-gradient(40% 55% at 20% 92%, rgb(20 200 170 / 0.7), transparent 70%),
+    radial-gradient(35% 45% at 50% 50%, rgb(40 200 64 / 0.35), transparent 70%), #121226;
+}
+:root[data-theme="light"] {
+  --backdrop: radial-gradient(42% 55% at 12% 18%, rgb(120 160 255 / 0.85), transparent 70%),
+    radial-gradient(38% 50% at 88% 12%, rgb(205 150 255 / 0.8), transparent 70%),
+    radial-gradient(45% 60% at 82% 88%, rgb(255 150 200 / 0.8), transparent 72%),
+    radial-gradient(40% 55% at 20% 92%, rgb(110 225 200 / 0.8), transparent 70%),
+    radial-gradient(35% 45% at 50% 50%, rgb(255 210 120 / 0.55), transparent 70%), #f2f0ff;
 }
 
 @theme inline {

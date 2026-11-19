@@ -4193,6 +4193,392 @@ const ideas: Record<string, (ctx: Ctx) => Promise<void>> = {
 };
 Object.assign(scenarios, ideas);
 
+// ---------- the sandbox Mac stays dependable: shutdown / boot cycles, a long idle ----------
+
+const macTool = (chat: number, name: string, args: Record<string, unknown> = {}) => invoke("selftest_mac_tool", { chat, name, args }) as Promise<string>;
+const macState = async () => (await api().macStatus()).state;
+async function macUntil(state: string, ms = 120_000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const s = await macState();
+    if (s === state) return;
+    if (Date.now() > end) throw new Fail(`the Mac stayed ${s}, not ${state}, for ${Math.round(ms / 1000)} s`);
+    await sleep(500);
+  }
+}
+/** A `mac_observe` through the agent's own path (the boot on first use included): a screen listing, timed. */
+async function macObserve(chat: number): Promise<string> {
+  const t = Date.now();
+  const s = await macTool(chat, "mac_observe", { menus: false });
+  if (!/\[\w+\] \w+/.test(s)) {
+    const words = ((await invoke("selftest_vm", { request: { cmd: "ocr" } }).catch(() => null)) as { items?: { text: string }[] } | null)?.items?.map((i) => i.text).join(" ") ?? "";
+    await sleep(3000);
+    const again = await macTool(chat, "mac_observe", { menus: false }).catch((e) => String(e));
+    throw new Fail(`mac_observe gave no screen: ${s.slice(0, 200)}; the screen read ${words.slice(0, 300)}; 3 s later: ${again.slice(0, 200)}`);
+  }
+  return `observe ${Date.now() - t} ms`;
+}
+/** The running Mac answers every way it is used: an agent tool, the panel's input, a screenshot, the panel's screen. */
+async function macWorks(chat: number, what: string): Promise<string> {
+  const out = [await macObserve(chat)];
+  await api().macInput([{ kind: "pointer", x: 640, y: 420, buttons: 0 }]);
+  const shot = (await invoke("selftest_vm", { request: { cmd: "screenshot", maxDim: 320 } })) as { bytes?: number };
+  if (!shot.bytes) throw new Fail(`${what}: no screenshot`);
+  await waitFor(`${what}: the panel showing the running Mac`, () => $('[data-mac-panel="running"]') && $("[data-mac-screen]"), 30_000);
+  out.push(`input ok, screenshot ${shot.bytes} B, panel running`);
+  return out.join(", ");
+}
+
+const mac3: Record<string, (ctx: Ctx) => Promise<void>> = {
+  /**
+   * Ten shutdown → boot cycles in one app session, each a different way the Mac goes down or comes back: the panel's
+   * Shut down and Boot, a shutdown from inside the guest (its own menu, or an agent's command), the host helper
+   * restarted, an agent tool call that finds the Mac off (it boots it), calls racing a boot, the guest agent restarted
+   * by launchd. After each: an agent tool, the panel's input and its screen all work; while the Mac is off the panel
+   * says so and offers Boot.
+   */
+  async "mac-cycles"(ctx) {
+    let id = -1;
+    await step("mac-cycles: a chat with the Mac panel, the Mac running", async () => {
+      id = await macChat(ctx);
+      return await macWorks(id, "start");
+    });
+    if (id < 0) return;
+    await step("mac-cycles: a click on the guest's empty desktop leaves the windows where they are (click wallpaper to reveal desktop is off)", async () => {
+      const KEY = "com.apple.WindowManager EnableStandardClickToShowDesktop";
+      const setting = (await macSh(`defaults read ${KEY} 2>&1`)).trim();
+      // The words in the windows on screen (the menu bar left out: the click makes Finder frontmost, so it changes).
+      const words = async (name: string) => {
+        await macScreen(ctx, name);
+        const r = (await invoke("selftest_vm", { request: { cmd: "ocr" } })) as { items?: { text: string; frame: number[] }[] };
+        return new Set((r.items ?? []).filter((i) => i.frame[1] > 30 && i.text.length > 3).map((i) => i.text));
+      };
+      /** Of the words in windows before a click on the bare wallpaper (bottom left: the Dock is centred), how many stay. */
+      const clickWallpaper = async (tag: string) => {
+        await macSh("killall Calculator 2>/dev/null; open -a Calculator; sleep 2; echo ok");
+        const before = await words(`wallpaper-${tag}-before`);
+        await invoke("selftest_vm", { request: { cmd: "click", x: 60, y: 700 } });
+        await sleep(1500);
+        const after = await words(`wallpaper-${tag}-after`);
+        await macSh("killall Calculator 2>/dev/null; echo ok");
+        // With the setting on, every window slides off the screen and its words go with it.
+        return { kept: [...before].filter((w) => after.has(w)).length, of: before.size };
+      };
+      // The control: macOS's own behaviour with the setting on (it hides the windows), then coool's setting back.
+      await macSh(`defaults write ${KEY} -bool true; killall WindowManager; sleep 2; echo ok`);
+      const on = await clickWallpaper("on");
+      await macSh(`defaults write ${KEY} -bool false; killall WindowManager; sleep 2; echo ok`);
+      const off = await clickWallpaper("off");
+      const note = `boot left it ${setting}; setting on (control): ${on.kept} of ${on.of} words stayed; off: ${off.kept} of ${off.of}`;
+      if (setting !== "0" || off.of < 5 || off.kept < off.of * 0.8) throw new Fail(note);
+      return note;
+    });
+    const offShown = async (how: string) => {
+      await macUntil("stopped", 90_000);
+      await waitFor(`${how}: the panel showing the Mac off with Boot`, () => $('[data-mac-panel="stopped"]') && $("[data-mac-boot]"), 15_000);
+    };
+    const ways = ["panel", "guest", "tool-finds-off", "helper-restart", "concurrent", "panel", "guest", "agent-restart", "helper-restart", "concurrent"];
+    for (let i = 0; i < ways.length; i++) {
+      const how = ways[i];
+      await step(`mac-cycles: cycle ${i + 1}/${ways.length} (${how}): shut down, booted, and everything answers`, async () => {
+        const t = Date.now();
+        const notes: string[] = [];
+        if (how === "guest") {
+          await macSh("(sleep 1; sudo -n /sbin/shutdown -h now) >/dev/null 2>&1 & echo ok").catch(() => "");
+          await offShown(how);
+          notes.push(`off by itself in ${Date.now() - t} ms`);
+          // An agent's next call finds it off and boots it.
+          notes.push(await macWorks(id, how));
+        } else if (how === "helper-restart") {
+          const pid = await invoke("selftest_vm_helper", { action: "pid" });
+          await invoke("selftest_vm_helper", { action: "restart" });
+          notes.push(`helper ${pid} closed in ${Date.now() - t} ms`);
+          notes.push(await macWorks(id, how));
+          notes.push(`new helper ${await invoke("selftest_vm_helper", { action: "pid" })}`);
+        } else if (how === "tool-finds-off") {
+          await api().macShutdown();
+          await offShown(how);
+          notes.push(await macWorks(id, how));
+        } else if (how === "concurrent") {
+          await api().macShutdown();
+          await offShown(how);
+          const r = await Promise.allSettled([api().macBoot(), macObserve(id), macObserve(id), macTool(id, "mac_screenshot", { max_size: 400 })]);
+          const bad = r.filter((x) => x.status === "rejected").map((x) => String((x as PromiseRejectedResult).reason));
+          if (bad.length) throw new Fail(`racing the boot: ${bad.join(" | ")}`);
+          notes.push("4 racing calls ok", await macWorks(id, how));
+        } else {
+          await api().macShutdown();
+          await offShown(how);
+          await api().macBoot();
+          notes.push(await macWorks(id, how));
+        }
+        if (how === "agent-restart") {
+          await macSh("(sleep 0.3; launchctl kickstart -k gui/$(id -u)/sh.coool.vm-agent) >/dev/null 2>&1 & echo ok");
+          await sleep(1500);
+          notes.push(`after the agent restarted: ${await macWorks(id, how)}`);
+        }
+        return `${((Date.now() - t) / 1000).toFixed(1)} s; ${notes.join("; ")}`;
+      });
+    }
+    await step("mac-cycles: the Mac shut down at the end", async () => {
+      await api().macShutdown();
+      await macUntil("stopped", 90_000);
+      useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+    });
+  },
+  /**
+   * Clips for a screen recording of the beam: an agent's tools (called as its agent calls them, no model) drive the
+   * iPhone, the Mac and the Browser panel for 11 s each, dark theme, then the Browser again in light; Reduce motion
+   * Off. Each clip starts with a `CLIP <name> <seconds>` log line a recorder outside the app watches for. The Browser
+   * opens `COOOL_SELFTEST_SITE` + form.html (a local page with an invented order form).
+   */
+  async "beam-video"(ctx) {
+    const keep = (localStorage.getItem("coool.motion") as MotionPref | null) ?? "auto";
+    setMotionPref("off");
+    const st = () => useStore.getState();
+    let udid = "";
+    const until = async (ms: number, f: (i: number) => Promise<unknown>) => {
+      const end = Date.now() + ms;
+      for (let i = 0; Date.now() < end; i++) await f(i).catch((e) => log(`WARN beam-video step: ${e}`));
+    };
+    const clip = async (name: string, ms: number, drive: (end: number) => Promise<void>) => {
+      await log(`CLIP ${name} ${Math.round(ms / 1000) + 1}`);
+      await sleep(900);
+      await drive(ms);
+    };
+    try {
+      st().setThemePref("dark");
+      const { id, key } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions");
+      const dev = (name: string, args: Record<string, unknown> = {}) => invoke("selftest_device_tool", { chat: id, name, args }) as Promise<string>;
+      await step("beam-video: the iPhone, dark", async () => {
+        udid = await api().simEnsureDevice();
+        await api().simBoot(udid);
+        st().setDevice(key, udid);
+        st().setRightPanel(key, "device");
+        await waitFor("the booted iPhone", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 120_000);
+        await dev("app", { action: "launch", bundle_id: "com.apple.Preferences" });
+        await sleep(2500);
+        await clip("iphone-dark", 11_000, (ms) =>
+          until(ms, async (i) => {
+            await dev("swipe", { scroll: i % 2 ? "up" : "down", amount: 0.5, observe: false });
+            await sleep(400);
+          }),
+        );
+      });
+      await step("beam-video: the Mac, dark", async () => {
+        await api().macBoot();
+        await macSh("killall TextEdit 2>/dev/null; sleep 0.5; defaults write com.apple.TextEdit NSShowAppCentricOpenPanelInsteadOfUntitledFile -bool false; defaults write com.apple.TextEdit RichText -bool false; open -a TextEdit; sleep 2; echo ok");
+        st().setRightPanel(key, "mac");
+        await waitFor("the running Mac", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 90_000);
+        await sleep(2000);
+        const screen = await macTool(id, "mac_observe", { menus: false });
+        const area = /\[(\w+)\] textarea/.exec(screen)?.[1];
+        const words = ["The morning train was late again.", "Coffee helps.", "We meet at ten in the blue room.", "Bring the notes."];
+        await clip("mac-dark", 11_000, (ms) =>
+          until(ms, async (i) => {
+            await macTool(id, "mac_type", { text: words[i % words.length] + " ", ...(area ? { into: area, replace: false } : {}), observe: false });
+            await sleep(300);
+          }),
+        );
+        await macSh("killall TextEdit 2>/dev/null; echo ok").catch(() => "");
+      });
+      const site = ctx.cfg.site ?? "";
+      for (const theme of ["dark", "light"] as const) {
+        await step(`beam-video: the Browser panel, ${theme}`, async () => {
+          st().setThemePref(theme);
+          await sleep(800);
+          const page = await browserTool(id, "browser_navigate", { url: `${site}form.html` });
+          await waitFor("the page", () => $("[data-browser-native]"), 20_000);
+          await sleep(2500);
+          const name = idOf(page.text, "textbox", "Name");
+          const city = idOf(page.text, "textbox", "City");
+          const fill = [
+            [name, "Ada Brightwater"],
+            [city, "Lisbon"],
+            [name, "Milo Fernsby"],
+            [city, "Oslo"],
+          ] as const;
+          await clip(`browser-${theme}`, 11_000, (ms) =>
+            until(ms, async (i) => {
+              const [field, text] = fill[i % fill.length];
+              await browserTool(id, "browser_type", { id: field, text, observe: false });
+              await sleep(300);
+            }),
+          );
+        });
+      }
+      st().setRightPanel(key, "closed");
+    } finally {
+      setMotionPref(keep);
+      await api().macShutdown().catch(() => null);
+      if (udid) await invoke("selftest_sim_delete").catch(() => null);
+    }
+  },
+  /**
+   * The beam around the Browser panel's page while an agent drives it (the `browser_*` tools called as the agent
+   * calls them), Reduce motion Off, in both themes: four shots through the beam's loop, as `beam-shots` takes them
+   * around the iPhone and the Mac.
+   */
+  async "beam-browser"(ctx) {
+    const keep = (localStorage.getItem("coool.motion") as MotionPref | null) ?? "auto";
+    setMotionPref("off");
+    let id = -1;
+    try {
+      ({ id } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions"));
+      for (const theme of ["first", "second"]) {
+        if (theme === "second") {
+          themeButton()?.click();
+          await sleep(800);
+        }
+        const tag = document.documentElement.dataset.theme !== "light" ? "dark" : "light";
+        await step(`beam-browser: the Browser panel, ${tag}`, async () => {
+          await browserTool(id, "browser_navigate", { url: "https://example.com/" });
+          await waitFor("the page in the Browser panel", () => $("[data-browser-native]"), 20_000);
+          await sleep(2500);
+          const drive = (async () => {
+            for (let i = 0; i < 6; i++) {
+              await browserTool(id, "browser_scroll", { direction: i % 2 ? "up" : "down", observe: false }).catch(() => null);
+              await sleep(250);
+            }
+          })();
+          return await beamShots(`beam-browser-${tag}`, drive, "[data-browser-driving]");
+        });
+        await sleep(2500);
+      }
+      themeButton()?.click();
+    } finally {
+      setMotionPref(keep);
+      if (id >= 0) useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+    }
+  },
+  /**
+   * Frosted glass with a running iPhone (a simulator the test makes and deletes) and a running Mac in the right
+   * panel: glass on, glass off, and coool's colour backdrop (Window backdrop: Colours, glass on), light and dark, one
+   * shot each. Run with `COOOL_SELFTEST_SHOTS_ONSCREEN=1`, `COOOL_GLASS_ACTIVE=1` (the window is never focused) and
+   * something colourful behind the window, so the shots show what the glass lets through (the chrome and the right
+   * sidebar) and what it must not (the device screens). Logs the tint over the chrome as the page computes it.
+   */
+  async "glass-running"(ctx) {
+    const { setGlassPref, setBackdrop } = await import("./lib/glass");
+    const keepTheme = useStore.getState().themePref;
+    let udid = "";
+    try {
+      const { id, key } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions");
+      await step("glass-running: an iPhone booted and the Mac running", async () => {
+        udid = await api().simEnsureDevice();
+        await api().simBoot(udid);
+        await api().macBoot();
+        return `sim ${udid}, chat ${id}`;
+      });
+      for (const dev of ["device", "mac"] as const) {
+        await step(`glass-running: the ${dev === "device" ? "iPhone" : "Mac"} panel, glass on/off, light/dark`, async () => {
+          if (dev === "device") useStore.getState().setDevice(key, udid);
+          useStore.getState().setRightPanel(key, dev);
+          if (dev === "device") await waitFor("the booted iPhone", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 90_000);
+          else await waitFor("the running Mac", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 90_000);
+          await sleep(2500);
+          const notes: string[] = [];
+          for (const mode of ["on", "off", "colours"] as const) {
+            setGlassPref(mode !== "off");
+            setBackdrop(mode === "colours" ? "colours" : "desktop");
+            for (const t of ["light", "dark"] as const) {
+              useStore.getState().setThemePref(t);
+              await sleep(1200);
+              const screen = $(dev === "device" ? `[data-sim-screen="${udid}"]` : "[data-mac-screen]");
+              const chrome = getComputedStyle(document.querySelector("#root .bg-chrome") ?? document.body).backgroundColor;
+              notes.push(`${mode}/${t}: glass=${document.documentElement.dataset.glass ?? "-"} backdrop=${document.documentElement.dataset.backdrop ?? "-"} chrome ${chrome} screen bg ${screen ? getComputedStyle(screen).backgroundColor : "?"}`);
+              await shot(`glassrun-${dev === "device" ? "iphone" : "mac"}-${mode}-${t}`, undefined, 600);
+              if (mode === "on") {
+                // Before: the tint as it was (dark 50 / 56 %, light 36 / 44 %), for a before / after pair.
+                const r = document.documentElement.style;
+                const [c, sg] = t === "dark" ? ["rgb(23 23 23 / 0.5)", "rgb(23 23 23 / 0.56)"] : ["rgb(249 249 249 / 0.36)", "rgb(249 249 249 / 0.44)"];
+                r.setProperty("--chrome", c);
+                r.setProperty("--side-glass", sg);
+                await shot(`glassrun-${dev === "device" ? "iphone" : "mac"}-before-${t}`, undefined, 600);
+                r.removeProperty("--chrome");
+                r.removeProperty("--side-glass");
+              }
+            }
+          }
+          setGlassPref(true);
+          setBackdrop("desktop");
+          return notes.join("; ");
+        });
+      }
+      await step("glass-running: the window left alone 15 s with each backdrop (CPU sampled from outside: IDLE lines)", async () => {
+        useStore.getState().setThemePref("dark");
+        useStore.getState().setRightPanel(key, "closed");
+        for (const b of ["desktop", "colours"] as const) {
+          setBackdrop(b);
+          await sleep(2000);
+          await log(`IDLE ${b} start`);
+          await sleep(15_000);
+          await log(`IDLE ${b} end`);
+        }
+        setBackdrop("desktop");
+      });
+      useStore.getState().setRightPanel(key, "closed");
+    } finally {
+      setGlassPref(true);
+      setBackdrop("desktop");
+      useStore.getState().setThemePref(keepTheme);
+      await api().macShutdown().catch(() => null);
+      if (udid) await invoke("selftest_sim_delete").catch(() => null);
+    }
+  },
+  /** The glass over a chat with the Browser panel (example.com), no device booted: on, before (the old tint), off, colours. */
+  async "glass-peek"(ctx) {
+    const { setGlassPref, setBackdrop } = await import("./lib/glass");
+    const { key } = await gateChat(ctx, "claude", PERF_MODEL, "bypassPermissions");
+    useStore.getState().openBrowser(key, { kind: "web", url: "https://example.com" });
+    await sleep(3000);
+    await step("glass-peek: glass on / before / off / colours, light and dark", async () => {
+      const notes: string[] = [];
+      for (const t of ["light", "dark"] as const) {
+        useStore.getState().setThemePref(t);
+        for (const mode of ["on", "before", "off", "colours"] as const) {
+          setGlassPref(mode !== "off");
+          setBackdrop(mode === "colours" ? "colours" : "desktop");
+          const r = document.documentElement.style;
+          if (mode === "before") {
+            r.setProperty("--chrome", t === "dark" ? "rgb(23 23 23 / 0.5)" : "rgb(249 249 249 / 0.36)");
+            r.setProperty("--side-glass", t === "dark" ? "rgb(23 23 23 / 0.56)" : "rgb(249 249 249 / 0.44)");
+          }
+          await sleep(1500);
+          notes.push(`${mode}/${t}: glass=${document.documentElement.dataset.glass ?? "-"} backdrop=${document.documentElement.dataset.backdrop ?? "-"} chrome ${getComputedStyle(document.querySelector("#root .bg-chrome") ?? document.body).backgroundColor}`);
+          await shot(`glasspeek-${mode}-${t}`, undefined, 300);
+          r.removeProperty("--chrome");
+          r.removeProperty("--side-glass");
+        }
+      }
+      setGlassPref(true);
+      setBackdrop("desktop");
+      return notes.join("; ");
+    });
+  },
+  /** The Mac booted and used, left alone for 10 minutes, then used again. */
+  async "mac-idle"(ctx) {
+    let id = -1;
+    await step("mac-idle: a chat with the Mac panel, the Mac running and used", async () => {
+      id = await macChat(ctx);
+      return await macWorks(id, "start");
+    });
+    if (id < 0) return;
+    await step("mac-idle: after 10 minutes untouched, an agent tool, the panel's input and its screen all work", async () => {
+      const t = Date.now();
+      while (Date.now() - t < 600_000) await sleep(5_000);
+      const s = await macState();
+      return `state ${s} after ${Math.round((Date.now() - t) / 1000)} s; ${await macWorks(id, "after idle")}`;
+    });
+    await step("mac-idle: the Mac shut down at the end", async () => {
+      await api().macShutdown();
+      await macUntil("stopped", 90_000);
+      useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+    });
+  },
+};
+Object.assign(scenarios, mac3);
+
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.
 let started = false;

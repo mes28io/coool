@@ -20,6 +20,13 @@
 //!   `http://127.0.0.1:8741/`, serving the pages that scenario names).
 //! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
 //!   frosted glass shows what is behind it (the `glass` scenario).
+//! - `COOOL_SELFTEST_WINDOW`: `quiet` (on top, never focused, no Dock icon) or `back` (never focused, behind the
+//!   person's windows and off screen: checks that need no picture of the window, like `mac-cycles` and `mac-idle`)
+//!   or `behind` (never focused, on screen but behind the person's windows: window-only shots of the glass with a
+//!   window of the test's own just behind it).
+//!
+//! A run kept apart from the person's own data sets `HOME` to a throwaway folder too (the CLIs' `~/.claude` and
+//! `~/.codex`, coool's app data), with `COOOL_VM_DIR` pointing at the one sandbox Mac when a scenario uses it.
 //!
 //! Settings (the insights and "runs by other tools" toggles) and the list of
 //! sessions coool started are kept in the folder too, never in the real ones;
@@ -100,16 +107,36 @@ impl SelfTest {
         self.dir.join(".coool-selftest-titles.json")
     }
 
-    /// A fixed size, on top, so screenshots are comparable and unobstructed.
+    /// A fixed size, so screenshots are comparable. `COOOL_SELFTEST_WINDOW`: unset, on top and focused (as before);
+    /// `quiet`, on top but never focused (no Dock icon, never the active app: the person's typing stays theirs);
+    /// `back`, never focused, behind the person's windows and off screen (checks that need no picture of the window);
+    /// `behind`, the same but on screen (window-only shots of the glass, with a window of the test's own behind it).
     pub fn prepare_window(&self, app: &AppHandle) {
+        let mode = std::env::var("COOOL_SELFTEST_WINDOW").unwrap_or_default();
+        let quiet = self.quiet_window();
         // `get_window`, not `get_webview_window`: once the in-app browser adds a child webview, `main` is a window
         // with several webviews and no longer counts as a webview window.
         if let Some(w) = app.get_window("main") {
             let _ = w.set_size(tauri::LogicalSize::new(1440.0, 900.0));
             let _ = w.center();
-            let _ = w.set_always_on_top(true);
-            let _ = w.set_focus();
+            let _ = w.set_always_on_top(mode == "quiet");
+            if !quiet {
+                let _ = w.set_focus();
+            }
+            if mode == "back" {
+                // Off every screen as well as behind: nothing of it shows (the checks read the DOM and the Mac).
+                let _ = w.set_position(tauri::LogicalPosition::new(-20000.0, -20000.0));
+            }
+            #[cfg(target_os = "macos")]
+            if mode == "back" || mode == "behind" {
+                order_back(&w);
+            }
         }
+    }
+
+    /// The window must never take focus (`COOOL_SELFTEST_WINDOW` quiet or back).
+    pub fn quiet_window(&self) -> bool {
+        matches!(std::env::var("COOOL_SELFTEST_WINDOW").as_deref(), Ok("quiet" | "back" | "behind"))
     }
 
     fn log(&self, line: &str) {
@@ -209,6 +236,27 @@ fn window_number(w: &tauri::Window) -> Option<i64> {
 #[cfg(not(target_os = "macos"))]
 fn window_number(_w: &tauri::Window) -> Option<i64> {
     None
+}
+
+/// `-[NSWindow orderBack:nil]`: behind every other window of its level.
+#[cfg(target_os = "macos")]
+fn order_back(w: &tauri::Window) {
+    use std::ffi::{c_char, c_void};
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    let Ok(ns) = w.ns_window() else { return };
+    if ns.is_null() {
+        return;
+    }
+    // SAFETY: `ns` is a live NSWindow owned by Tauri, on the main thread (setup); `orderBack:` takes one object
+    // argument (nil) and returns nothing.
+    unsafe {
+        let sel = sel_registerName(c"orderBack:".as_ptr());
+        let f: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        f(ns, sel, std::ptr::null_mut());
+    }
 }
 
 // ---------- the `browser` scenario ----------
@@ -887,4 +935,37 @@ pub fn selftest_mac_screen(core: State<'_, Arc<Core>>, devices: State<'_, Arc<cr
     active(&core)?;
     let tree = crate::device::vm::MacTools { d: &devices, chat: usize::MAX }.tree(true)?;
     Ok(crate::device::observe::render(&tree, "coool Mac"))
+}
+
+/// A `mac_*` tool called for `chat` as its agent calls it through the MCP server (the boot on first use and the gate
+/// included): the text of its result. The `mac-cycles` and `mac-idle` scenarios.
+#[tauri::command(async)]
+pub fn selftest_mac_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize, name: String, args: serde_json::Value) -> Result<String, String> {
+    active(&core)?;
+    let out = crate::device::vm::MacTools { d: &devices, chat }.call(&name, &args)?;
+    Ok(out.iter().filter_map(|v| v["text"].as_str()).collect::<Vec<_>>().join("\n"))
+}
+
+/// The sandbox Mac's host helper: `pid` (its process id, or null) or `restart` (closes it as a quit does: it shuts the
+/// guest down cleanly and exits; the next call starts a new one). The `mac-cycles` scenario.
+#[tauri::command(async)]
+pub fn selftest_vm_helper(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, action: String) -> Result<serde_json::Value, String> {
+    active(&core)?;
+    match action.as_str() {
+        "pid" => Ok(serde_json::json!(devices.vm.helper_pid())),
+        "restart" => {
+            devices.vm.quit();
+            Ok(serde_json::Value::Null)
+        }
+        a => Err(format!("unknown action {a}")),
+    }
+}
+
+/// Any `coool-device` tool (the iPhone's `tap`, `observe`, …) called for `chat` as its agent calls it over MCP: the
+/// text of its result. The `beam-video` scenario drives the iPhone this way, without a model.
+#[tauri::command(async)]
+pub fn selftest_device_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<crate::device::Devices>>, chat: usize, name: String, args: serde_json::Value) -> Result<String, String> {
+    active(&core)?;
+    let out = crate::device::mcp::call_tool(devices.inner(), chat, &name, &args)?;
+    Ok(out.iter().filter_map(|v| v["text"].as_str()).collect::<Vec<_>>().join("\n"))
 }

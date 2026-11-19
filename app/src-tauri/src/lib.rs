@@ -1401,6 +1401,7 @@ pub fn run() {
     env::adopt_login_path();
 
     let selftest = selftest::SelfTest::from_env();
+    let quiet = selftest.as_ref().is_some_and(|t| t.quiet_window());
     let prefs = settings::load(selftest.as_ref());
     device::pilot::dataset::set_enabled(prefs.pilot_log);
     let mut ins = Insights::new();
@@ -1445,7 +1446,13 @@ pub fn run() {
 
     let devices = Arc::new(device::Devices::default());
 
-    let app = tauri::Builder::default()
+    // A self-test window that must not take the person's focus (`COOOL_SELFTEST_WINDOW`, see selftest.rs): never
+    // the active app, from launch on.
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(!quiet);
+    #[allow(unused_mut)]
+    let mut app = builder
         .plugin(tauri_plugin_dialog::init())
         // No click-to-open script: it would run in the in-app browser's pages too, swallowing every `target=_blank`
         // link click (its IPC call is refused there). The app's own links open through its handlers.
@@ -1576,6 +1583,9 @@ pub fn run() {
             selftest::selftest_mac_screen,
             selftest::selftest_pilot,
             selftest::selftest_vm,
+            selftest::selftest_mac_tool,
+            selftest::selftest_vm_helper,
+            selftest::selftest_device_tool,
         ])
         .setup(move |app| {
             app.set_menu(build_menu(app.handle())?)?;
@@ -1637,8 +1647,22 @@ pub fn run() {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build({
+            #[allow(unused_mut)]
+            let mut ctx = tauri::generate_context!();
+            // Its window opens without taking focus too.
+            if quiet {
+                for w in ctx.config_mut().app.windows.iter_mut() {
+                    w.focus = false;
+                }
+            }
+            ctx
+        })
         .expect("error while building coool");
+    #[cfg(target_os = "macos")]
+    if quiet {
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    }
 
     app.run(move |handle, ev| match ev {
         RunEvent::ExitRequested { code, api, .. } => {

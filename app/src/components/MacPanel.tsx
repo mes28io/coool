@@ -6,7 +6,7 @@
 // while one drives (components/Presence.tsx). The Mac is shared, so two chats can show two cursors at once.
 
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, MAC_NETWORK_TRUTH, type MacInput, type MacNetworkMode, type MacStatus } from "../lib/backend";
 import { macKeyCode } from "../lib/macKeys";
 import { simTarget, usePresenceOf } from "../lib/presence";
@@ -165,7 +165,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
     );
   } else if (running) {
     content = (
-      <MacScreen active={active} box={box} initial={shape} />
+      <MacScreen active={active} box={box} initial={shape} onLost={() => void refresh()} />
     );
   } else {
     content = (
@@ -445,14 +445,18 @@ function Frame({
 /** Command keys: on macOS a key pressed while Command is held gets no keyup in WebKit, so they are released with it. */
 const META = new Set([54, 55]);
 const MODIFIERS = new Set([54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
+/** Errors that mean the Mac is gone (not running, its helper stopped). */
+const GONE = /isn.t running|helper stopped/;
 
-/** The live screen of the running Mac: attached while `active`, driven by pointer, wheel and keyboard. */
-function MacScreen({ active, box, initial }: { active: boolean; box: { w: number; h: number }; initial: { w: number; h: number } }) {
+/** The live screen of the running Mac: attached while `active`, driven by pointer, wheel and keyboard. `onLost`: the
+ * screen or the input found the Mac gone (shut down from inside it, say), so the panel reads its state again. */
+function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w: number; h: number }; initial: { w: number; h: number }; onLost: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const frameEl = useRef<HTMLDivElement>(null);
   const [d, setD] = useState(initial);
   const [attachErr, setAttachErr] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const lost = useEffectEvent(onLost);
   const [shown, setShown] = useState(false);
   const [focused, setFocused] = useState(false);
 
@@ -501,7 +505,11 @@ function MacScreen({ active, box, initial }: { active: boolean; box: { w: number
           stream = r.stream;
           if (r.w > 0 && r.h > 0) setD({ w: r.w, h: r.h });
         },
-        (e) => !dead && setAttachErr(msg(e)),
+        (e) => {
+          if (dead) return;
+          setAttachErr(msg(e));
+          if (GONE.test(msg(e))) lost();
+        },
       );
     return () => {
       dead = true;
@@ -529,7 +537,7 @@ function MacScreen({ active, box, initial }: { active: boolean; box: { w: number
     sending.current = true;
     void api()
       .macInput(batch)
-      .catch(() => {})
+      .catch((e) => GONE.test(msg(e)) && onLost())
       .finally(flush);
   };
   const send = (input: MacInput) => {
