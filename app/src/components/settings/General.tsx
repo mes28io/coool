@@ -11,6 +11,7 @@ import { PERMISSION_MODES } from "../ChatComposer";
 import { IAlert, ICheck, IPlay } from "../icons";
 import { BUILD_KINDS } from "../onboarding/BuildStep";
 import { Button, cx, ProviderMark } from "../primitives";
+import { LidAwakeRow } from "./LidAwake";
 import { ErrorLine, errText, Group, Note, Row, Select, Switch, type Option } from "./ui";
 
 /** The "CLI default" choice in a Select (stored as null). */
@@ -110,7 +111,9 @@ export function General() {
     ? null
     : power?.failed
       ? "macOS refused to keep the Mac awake."
-      : power?.held
+      : power?.covered
+        ? "Keeping this Mac awake now through “Keep working with the lid closed” (it covers this too)."
+        : power?.held
         ? `Keeping this Mac awake now: ${power.working === 1 ? "1 agent is" : `${power.working} agents are`} working.`
         : "Not holding anything now: no agent is working.";
 
@@ -193,14 +196,15 @@ export function General() {
         >
           {prefs?.prevent_sleep && (
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-center gap-2 text-small text-dim" data-power-state={power?.held ? "held" : "idle"}>
-                {power?.held ? <ICheck size={14} className="shrink-0 text-accent-text" /> : <span className="size-[6px] shrink-0 rounded-full bg-faint/60" />}
+              <div className="flex items-center gap-2 text-small text-dim" data-power-state={power?.held ? "held" : power?.covered ? "covered" : "idle"}>
+                {power?.held || power?.covered ? <ICheck size={14} className="shrink-0 text-accent-text" /> : <span className="size-[6px] shrink-0 rounded-full bg-faint/60" />}
                 {powerLine}
               </div>
-              <Note>On battery, closing the lid still puts the Mac to sleep; macOS doesn’t let an app stop that.</Note>
+              {!prefs?.lid?.enabled && <Note>Closing the lid still puts the Mac to sleep (unless an external display is connected and it’s on power). “Keep working with the lid closed” below handles that.</Note>}
             </div>
           )}
         </Row>
+        <LidAwakeRow />
         <Row
           attr="login"
           label="Open coool at login"

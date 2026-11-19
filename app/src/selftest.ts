@@ -3204,6 +3204,137 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
     });
   },
 
+  // "Keep working with the lid closed" end to end with the real helper code in its dry-run mode (run with
+  // COOOL_LID_DRYRUN=1; nothing on the Mac changes): the Settings row's states, Install…, a working chat engaging the
+  // hold, its turn ending releasing it, a battery drop, a simulated kill (the connection drops without a RELEASE), heat,
+  // and Remove helper. One Haiku chat, two short turns.
+  async "lid-awake"(ctx) {
+    const st = () => api().lidStatus();
+    const helperLog = async () => String(await invoke("lid_helper_log").catch((e) => `err ${e}`));
+    const sim = (s: Record<string, unknown>) => invoke("lid_simulate", { sim: s });
+    const row = () => textOf(settingRow("lid-awake"));
+    const state = () => settingRow("lid-awake")?.querySelector("[data-lid-state]")?.getAttribute("data-lid-state") ?? "";
+    const openGeneral = async () => {
+      useStore.getState().openSettings("general");
+      await waitFor("the lid row", () => settingRow("lid-awake"), 10_000);
+      settingRow("lid-awake")?.scrollIntoView({ block: "start" });
+      await sleep(2600); // the row re-reads every 2 s
+    };
+    const holdWait = (what: string, f: (s: Awaited<ReturnType<typeof st>>) => boolean, ms = 15_000) =>
+      (async () => {
+        const end = Date.now() + ms;
+        for (;;) {
+          const s = await st();
+          if (f(s)) return s;
+          if (Date.now() > end) throw new Fail(`timed out waiting for ${what}: ${JSON.stringify({ via: s.via, blocked: s.blocked, working: s.working, helper: s.helper })}`);
+          await sleep(500);
+        }
+      })();
+    let id = -1;
+    await step("lid: dry-run backend, switch on, needs one-time approval", async () => {
+      const s0 = await st();
+      if (!s0.dry_run) throw new Fail("run with COOOL_LID_DRYRUN=1 (the real helper must never be touched by a test)");
+      await openGeneral();
+      const sw = switchIn(settingRow("lid-awake"));
+      if (!sw) throw new Fail("no switch");
+      if (sw.getAttribute("aria-checked") !== "true") sw.click();
+      await waitFor("the lid row's details", () => settingRow("lid-awake")?.querySelector("[data-lid-row]"), 5_000);
+      await sleep(2600);
+      await shot("lid-needs-approval");
+      if (!/Needs one-time approval/.test(row())) throw new Fail(`row: ${row().slice(0, 200)}`);
+      return `state ${state()}; "${row().slice(0, 140)}"`;
+    });
+    await step("lid: Install… starts the (dry-run) helper; Ready", async () => {
+      const b = settingRow("lid-awake")?.querySelector("[data-lid-install]") as HTMLElement | null;
+      if (!b) throw new Fail("no Install… button");
+      b.click();
+      await holdWait("the helper ready", (s) => s.helper.state === "ready");
+      await sleep(2600);
+      await shot("lid-ready");
+      if (!/Ready\./.test(row())) throw new Fail(`row: ${row().slice(0, 200)}`);
+      return `"${row().slice(0, 120)}"; helper log: ${(await helperLog()).split("\n").filter(Boolean).slice(-2).join(" | ")}`;
+    });
+    await step("lid: a working chat engages the hold (SleepDisabled via the helper), the keep-awake assertion steps aside", async () => {
+      // Keep-awake on too: it must step aside ("covered") while the helper holds, so the Mac is never held twice.
+      const ps = switchIn(settingRow("prevent-sleep"));
+      if (ps && ps.getAttribute("aria-checked") !== "true") ps.click();
+      await sleep(500);
+      id = await startIn(ctx.cfg.dir, "bypassPermissions");
+      await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 30 127.0.0.1 > /dev/null . Then reply with: done");
+      await waitFor("the chat working", () => chat(id)?.state !== "idle" && chat(id)?.turnStart, 60_000);
+      const s = await holdWait("the hold", (s) => s.via === "helper");
+      const power = await api().powerStatus();
+      if (!power.covered) throw new Fail(`keep-awake isn't covered: ${JSON.stringify(power)}`);
+      await openGeneral();
+      await shot("lid-holding");
+      const log = await helperLog();
+      if (!log.includes("would run: /usr/bin/pmset -a disablesleep 1")) throw new Fail(`helper log: ${log}`);
+      if (power.held) throw new Fail(`the keep-awake assertion is held too: ${JSON.stringify(power)}`);
+      return `via ${s.via}, working ${s.working}; power ${JSON.stringify(power)}; row "${row().slice(0, 140)}"`;
+    });
+    await step("lid: on battery (only on power) lets go and records it; power back holds again", async () => {
+      await sim({ on_battery: true, battery_pct: 64 });
+      const s = await holdWait("the release on battery", (s) => s.via === null && s.blocked === "on_battery");
+      await sleep(2600);
+      await shot("lid-on-battery");
+      const stop = s.stops[0];
+      if (stop?.code !== "on_battery") throw new Fail(`stops: ${JSON.stringify(s.stops)}`);
+      await sim({ on_battery: false, battery_pct: 100 });
+      await holdWait("holding again on power", (s) => s.via === "helper");
+      return `stop ${JSON.stringify(stop)}; row then "${row().slice(0, 100)}"`;
+    });
+    await step("lid: the turn ending releases at once", async () => {
+      await nextTurn(id, 0, 90_000);
+      const s = await holdWait("the release", (s) => s.via === null, 5_000);
+      const log = await helperLog();
+      if (!log.includes("normal sleep restored (coool let go)")) throw new Fail(`helper log: ${log}`);
+      return `working ${s.working}, blocked ${s.blocked}`;
+    });
+    await step("lid: a simulated kill (connection dropped, no RELEASE): the helper lets go by itself", async () => {
+      await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 60 127.0.0.1 > /dev/null . Then reply with: done again");
+      await waitFor("the chat working", () => chat(id)?.state !== "idle" && chat(id)?.turnStart, 60_000);
+      await holdWait("the hold", (s) => s.via === "helper");
+      const before = (await helperLog()).split("coool went away").length;
+      await sim({ crash: true });
+      const end = Date.now() + 5_000;
+      while ((await helperLog()).split("coool went away").length === before && Date.now() < end) await sleep(200);
+      const log = await helperLog();
+      if (log.split("coool went away").length === before) throw new Fail(`helper log: ${log}`);
+      // coool notices at its next heartbeat (every 15 s) and records it.
+      const s = await holdWait("the let-go recorded", (s) => s.stops[0]?.code === "helper_let_go", 20_000);
+      return `helper: "${log.trim().split("\n").slice(-2).join(" | ")}"; coool: ${JSON.stringify(s.stops[0])}`;
+    });
+    await step("lid: heat lets go and stays off for this working stretch", async () => {
+      await sim({ thermal: "serious" });
+      const s = await holdWait("not holding: hot", (s) => s.blocked === "hot" && s.via === null, 20_000);
+      await openGeneral();
+      await shot("lid-hot");
+      await sim({ thermal: "nominal" });
+      await sleep(6000);
+      const s2 = await st();
+      if (s2.via) throw new Fail("held again while still working after heat");
+      return `blocked ${s.blocked}; after cooling: blocked ${s2.blocked}; row "${row().slice(0, 120)}"`;
+    });
+    await step("lid: Remove helper removes it (no prompt); switching off", async () => {
+      await nextTurn(id, 1, 90_000).catch(() => {});
+      await openGeneral();
+      const b = settingRow("lid-awake")?.querySelector("[data-lid-remove]") as HTMLElement | null;
+      if (!b) throw new Fail("no Remove helper button");
+      b.click();
+      const s = await holdWait("the helper gone", (s) => s.helper.state === "missing");
+      await sleep(2600);
+      await shot("lid-removed");
+      const log = await helperLog();
+      if (!log.includes("would remove: /Library/LaunchDaemons/sh.coool.lid-helper.plist")) throw new Fail(`helper log: ${log}`);
+      const sw = switchIn(settingRow("lid-awake"));
+      if (sw?.getAttribute("aria-checked") === "true") sw.click();
+      const ps = switchIn(settingRow("prevent-sleep"));
+      if (ps?.getAttribute("aria-checked") === "true") ps.click();
+      await sleep(800);
+      return `helper ${s.helper.state}; stops ${s.stops.map((x) => x.code).join(",")}`;
+    });
+  },
+
   async "sweep-settings"(ctx) {
     const st = useStore.getState();
     const open = async (sec: Parameters<typeof st.openSettings>[0]) => {

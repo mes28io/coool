@@ -31,6 +31,8 @@ export interface AppPrefs {
   open_with: string;
   /** What the person builds (the onboarding's "What are you building?", Settings > General). Older backends: absent. */
   building?: Building[];
+  /** "Keep working with the lid closed" and its limits. Left out of a `prefs_set`, it stays as it is. */
+  lid?: LidPrefs | null;
 }
 
 /** The onboarding's answer: each kind suggests a device panel (components/onboarding/BuildStep.tsx). */
@@ -43,6 +45,66 @@ export interface PowerStatus {
   working: number;
   /** macOS refused the assertion. */
   failed: boolean;
+  /** The lid hold (SleepDisabled through its helper) keeps the Mac awake instead, so this assertion steps aside. */
+  covered?: boolean;
+}
+
+// ---------- "Keep working with the lid closed" (app/src-tauri/src/lid/, lib/lid.ts) ----------
+
+export interface LidPrefs {
+  enabled: boolean;
+  /** Hold with the lid closed only while on power (default on). */
+  only_on_power: boolean;
+  /** On battery at or below this percent, let go (10..50, default 20). */
+  min_battery: number;
+  /** Longest hold of one working stretch in hours; 0 = no limit (default 8). */
+  max_hours: number;
+}
+
+export type LidCode = "on_battery" | "low_battery" | "hot" | "max_duration" | "needs_helper" | "helper_error" | "already_disabled" | "no_lid" | "helper_let_go" | "recovered";
+
+/** An automatic release. */
+export interface LidStop {
+  /** Epoch ms. */
+  at: number;
+  code: LidCode;
+  /** "battery 20%", "the Mac is running hot". */
+  detail: string;
+}
+
+export type LidHelper = { state: "unavailable" | "missing" | "ready" } | { state: "unreachable"; detail: string } | { state: "outdated"; detail: number };
+
+export interface LidReading {
+  on_battery: boolean | null;
+  battery_pct: number | null;
+  thermal: "nominal" | "fair" | "serious" | "critical" | null;
+  /** null: no lid. */
+  lid_closed: boolean | null;
+  /** false in closed-display mode (on power with an external display). */
+  lid_sleeps: boolean | null;
+  /** The system's SleepDisabled switch. */
+  sleep_disabled: boolean | null;
+}
+
+export interface LidStatus {
+  enabled: boolean;
+  helper: LidHelper;
+  /** A self-test's dry-run helper: nothing on the Mac changes. */
+  dry_run: boolean;
+  /** Holding now, and how: SleepDisabled through the helper, or closed-display mode plus the no-idle-sleep assertion. */
+  via: "helper" | "display" | null;
+  /** Agents work but it isn't holding, and why. */
+  blocked: LidCode | null;
+  working: number;
+  /** Epoch ms the hold began. */
+  since: number | null;
+  reading: LidReading;
+  /** Automatic releases, newest first. */
+  stops: LidStop[];
+  /** coool left SleepDisabled on (its marker) and no helper answers: offer "Restore normal sleep…". */
+  stale: boolean;
+  error: string | null;
+  prefs: LidPrefs;
 }
 
 export interface NotifyPermission {
@@ -164,6 +226,13 @@ export interface SettingsBackend {
   prefsGet(): Promise<AppPrefs>;
   prefsSet(prefs: AppPrefs): Promise<void>;
   powerStatus(): Promise<PowerStatus>;
+  lidStatus(): Promise<LidStatus>;
+  /** The system's administrator prompt, once; installs the helper. Rejects with "cancelled" when the person says no. */
+  lidInstall(): Promise<LidStatus>;
+  /** The helper removes itself (the administrator prompt only when it doesn't answer). */
+  lidRemove(): Promise<LidStatus>;
+  /** Turns a stale SleepDisabled off (administrator prompt). */
+  lidRestore(): Promise<LidStatus>;
   notifyPermission(): Promise<NotifyPermission>;
   /** The system's one-time prompt; afterwards only System Settings changes it. */
   notifyRequest(): Promise<NotifyPermission>;

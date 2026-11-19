@@ -3,11 +3,16 @@
 //! While the setting is on and at least one chat or coool-launched terminal session is working (a turn is running),
 //! coool holds one macOS power assertion, `PreventUserIdleSystemSleep` (what `caffeinate -i` takes): the Mac does not
 //! idle-sleep, the display still may. It is released as soon as nothing is working, or the setting goes off, or coool
-//! quits (the OS drops a process's assertions when it exits, even on a crash). A closed lid on battery still sleeps:
-//! macOS ignores idle-sleep assertions there.
+//! quits (the OS drops a process's assertions when it exits, even on a crash). A closed lid still sleeps the Mac
+//! (except in closed-display mode: on power with an external display): the kernel doesn't look at assertions when
+//! the lid closes.
 //!
 //! [`Keeper::update`] runs on every refresh (about once a second) with the number of working agents; it takes or
 //! releases the assertion only on a change, so it never stacks.
+//!
+//! "Keep working with the lid closed" (lid/) works with it through [`Keeper::set_lid`]: in closed-display mode it
+//! needs this same assertion (taken then even with this setting off), and while its helper holds SleepDisabled, which
+//! stops idle sleep too, this assertion steps aside ("covered") so the Mac is never held twice.
 
 use serde::Serialize;
 
@@ -25,6 +30,10 @@ pub struct Keeper {
     held: Option<u32>,
     /// The OS refused the last take (shown in Settings).
     failed: bool,
+    /// The lid hold wants the assertion (closed-display mode).
+    lid_assert: bool,
+    /// The lid hold's SleepDisabled covers idle sleep: no assertion needed.
+    covered: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -35,11 +44,13 @@ pub struct PowerStatus {
     /// Chats and terminal sessions working right now.
     pub working: usize,
     pub failed: bool,
+    /// The lid hold (SleepDisabled through its helper) is keeping the Mac awake instead.
+    pub covered: bool,
 }
 
 impl Keeper {
     pub fn new(a: Box<dyn Assertor>, enabled: bool) -> Self {
-        Keeper { a, enabled, working: 0, held: None, failed: false }
+        Keeper { a, enabled, working: 0, held: None, failed: false, lid_assert: false, covered: false }
     }
 
     pub fn set_enabled(&mut self, on: bool) {
@@ -56,8 +67,18 @@ impl Keeper {
         self.sync();
     }
 
+    /// What the lid hold needs (see the module doc); applied at once on a change.
+    pub fn set_lid(&mut self, assert: bool, covered: bool) {
+        if (assert, covered) == (self.lid_assert, self.covered) {
+            return;
+        }
+        self.lid_assert = assert;
+        self.covered = covered;
+        self.sync();
+    }
+
     fn want(&self) -> bool {
-        self.enabled && self.working > 0
+        (self.enabled || self.lid_assert) && self.working > 0 && !self.covered
     }
 
     fn sync(&mut self) {
@@ -78,7 +99,7 @@ impl Keeper {
     }
 
     pub fn status(&self) -> PowerStatus {
-        PowerStatus { enabled: self.enabled, held: self.held.is_some(), working: self.working, failed: self.failed }
+        PowerStatus { enabled: self.enabled, held: self.held.is_some(), working: self.working, failed: self.failed, covered: self.covered && self.working > 0 }
     }
 }
 
@@ -212,7 +233,29 @@ mod tests {
         assert_eq!(log(&f), ["take 1 2 agents are working in coool"]);
         k.set_enabled(false);
         assert_eq!(log(&f), ["release 1"]);
-        assert_eq!(k.status(), PowerStatus { enabled: false, held: false, working: 2, failed: false });
+        assert_eq!(k.status(), PowerStatus { enabled: false, held: false, working: 2, failed: false, covered: false });
+    }
+
+    #[test]
+    fn the_lid_hold_borrows_or_covers_the_assertion() {
+        let f = Fake::default();
+        let mut k = Keeper::new(Box::new(f.clone()), false);
+        k.update(1);
+        assert!(log(&f).is_empty());
+        // Closed-display mode: the lid hold needs the assertion even with keep-awake off.
+        k.set_lid(true, false);
+        assert_eq!(log(&f), ["take 1 An agent is working in coool"]);
+        // Its helper took over (SleepDisabled): the assertion steps aside, so nothing is held twice.
+        k.set_lid(false, true);
+        assert_eq!(log(&f), ["release 1"]);
+        k.set_enabled(true);
+        assert!(log(&f).is_empty(), "keep-awake on, but covered");
+        assert!(k.status().covered);
+        // The helper let go (a limit): keep-awake's own assertion comes back at once.
+        k.set_lid(false, false);
+        assert_eq!(log(&f), ["take 2 An agent is working in coool"]);
+        k.update(0);
+        assert_eq!(log(&f), ["release 2"]);
     }
 
     #[test]

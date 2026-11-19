@@ -144,6 +144,13 @@ pub fn read() -> Hints {
     Hints { low_power, thermal, on_battery, battery_pct, reduce, reason, intel: hw.intel, memory_gb: hw.memory_gb, perf_cores: hw.perf_cores, busy_at_launch }
 }
 
+/// The thermal state and the internal battery (on battery, percent) right now; also read by the lid hold (lid/).
+pub fn power_now() -> (Thermal, Option<bool>, Option<u8>) {
+    let (_, thermal) = sys::process_info();
+    let (on_battery, pct) = sys::battery();
+    (thermal, on_battery, pct)
+}
+
 #[tauri::command(async)]
 pub fn motion_hints() -> Hints {
     read()
