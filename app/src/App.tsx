@@ -18,6 +18,7 @@ import { Sheets } from "./components/Sheets";
 import { Tooltips } from "./components/Tooltips";
 import { Onboarding } from "./components/onboarding/Onboarding";
 import { useOnboarding } from "./lib/onboarding";
+import { useFullscreen } from "./lib/fullscreen";
 import { Rail } from "./components/Rail";
 import { RunningPill } from "./components/RunningPill";
 import { HoverCards } from "./components/HoverCard";
@@ -213,6 +214,7 @@ export default function App() {
   const setSystemTheme = useStore((s) => s.setSystemTheme);
   const settingsOpen = useStore((s) => s.settings !== null);
   // The title bar's own controls also step aside under the onboarding (it lets this bar show through above it).
+  const fullscreen = useFullscreen();
   const barHidden = useOnboarding((s) => s.open) || settingsOpen;
   const needsOpen = useStore((s) => s.needsPage);
   const covered = settingsOpen || needsOpen;
@@ -247,8 +249,9 @@ export default function App() {
       <Backdrop />
       {/* The window chrome (title bar and icon rail): frosted glass when Settings > Appearance > Translucent window is on. */}
       <div className="flex h-full w-full flex-col bg-chrome">
-        {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle. The whole bar drags the window. */}
-        <div data-tauri-drag-region className="flex h-[44px] shrink-0 items-center pl-[84px] pr-2">
+        {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle; in full screen, where macOS
+            takes the lights away, the toggle moves into their place. The whole bar drags the window. */}
+        <div data-tauri-drag-region className={cx("flex h-[44px] shrink-0 items-center pr-2 transition-[padding] duration-200", fullscreen ? "pl-[22px]" : "pl-[84px]")} data-fullscreen={fullscreen || undefined}>
           {/* The app's own controls step aside (kept mounted) while the Settings page is up. */}
           <div data-tauri-drag-region className={cx("flex h-full min-w-0 flex-1 items-center", barHidden && "invisible")} inert={barHidden} aria-hidden={barHidden || undefined}>
             <button
