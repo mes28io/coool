@@ -144,15 +144,25 @@
   --side-glass: rgb(249 249 249 / 0.18);
   --glass-line: rgb(0 0 0 / 0.09);
 }
-/* coool's backdrop (components/Backdrop.tsx): the six-colour rainbow (green, yellow, orange, red, purple, blue) as one
-   soft diagonal sweep, so the title bar reads it left to right and the icon rail top to bottom; a deeper set for the
-   dark theme, a lighter one for the light theme. Drawn once (no animation: ~0 CPU). Only the glass regions show it;
-   the sheet and device screens stay opaque above it. */
+/* coool's backdrop (components/Backdrop.tsx): a quiet wash of the six rainbow colours (green, yellow, orange, red,
+   purple, blue) as large soft blobs on a neutral base, in rainbow order around the window, so each glass region
+   carries a hint of colour and none of them shouts. Drawn once (no animation: ~0 CPU). Only the glass regions show
+   it; the sheet and device screens stay opaque above it. */
 :root[data-theme="dark"] {
-  --backdrop: linear-gradient(122deg, #3f9a2e 0%, #5bb040 10%, #e0a31c 27%, #e2701a 43%, #cf3136 60%, #8a3690 77%, #0b8fcd 92%, #0a7fb8 100%);
+  --backdrop: radial-gradient(46% 60% at 0% 0%, rgb(97 187 70 / 0.34), transparent 72%),
+    radial-gradient(40% 55% at 34% 0%, rgb(253 184 39 / 0.26), transparent 72%),
+    radial-gradient(40% 55% at 68% 0%, rgb(245 130 31 / 0.26), transparent 72%),
+    radial-gradient(46% 60% at 100% 6%, rgb(224 58 62 / 0.3), transparent 72%),
+    radial-gradient(50% 62% at 100% 78%, rgb(150 61 151 / 0.3), transparent 74%),
+    radial-gradient(52% 64% at 0% 96%, rgb(0 157 220 / 0.32), transparent 74%), #18181b;
 }
 :root[data-theme="light"] {
-  --backdrop: linear-gradient(122deg, #7fd066 0%, #8dd672 10%, #ffcd4d 27%, #ff9a47 43%, #f2666a 60%, #b869ba 77%, #3fb7ea 92%, #35aee2 100%);
+  --backdrop: radial-gradient(46% 60% at 0% 0%, rgb(97 187 70 / 0.3), transparent 72%),
+    radial-gradient(40% 55% at 34% 0%, rgb(253 184 39 / 0.28), transparent 72%),
+    radial-gradient(40% 55% at 68% 0%, rgb(245 130 31 / 0.24), transparent 72%),
+    radial-gradient(46% 60% at 100% 6%, rgb(224 58 62 / 0.22), transparent 72%),
+    radial-gradient(50% 62% at 100% 78%, rgb(150 61 151 / 0.22), transparent 74%),
+    radial-gradient(52% 64% at 0% 96%, rgb(0 157 220 / 0.26), transparent 74%), #f5f4f1;
 }
 
 @theme inline {
