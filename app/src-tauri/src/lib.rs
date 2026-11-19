@@ -453,7 +453,8 @@ impl Core {
         if self.selftest.is_none() {
             for n in notices {
                 thread::spawn(move || {
-                    let _ = notify::post("coool let the Mac sleep", &n, false);
+                    // Silent; a click only brings coool forward (a `test` target opens nothing).
+                    let _ = notify::post("coool let the Mac sleep", &n, &notify::Sound::Off, &notify::Target::test());
                 });
             }
         }
