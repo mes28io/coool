@@ -168,9 +168,16 @@
     radial-gradient(31% 40% at 83% 21%, rgb(224 58 62 / 0.22), transparent 72%),
     radial-gradient(35% 43% at 17% 81%, rgb(0 157 220 / 0.26), transparent 74%);
 }
+/* Each layer is drawn at a third of its size and scaled up 3x as the first transform (the same picture: soft blobs lose
+   nothing at a third of the pixels). At full size (150 % of the window) WebKit tiles the layer, and a tiled layer's
+   animation is serviced on the main thread every display frame (~260 app wakeups and ~40 ms CPU a second in the app
+   and the page each); at a third it is one Core Animation layer (~3 wakeups) and ~75 MB lighter (docs/PERF.md). */
 .backdrop-layer {
   position: absolute;
-  inset: -25%;
+  left: 25%;
+  top: 25%;
+  width: 50%;
+  height: 50%;
   will-change: transform;
   animation: backdrop-drift-a 38s ease-in-out infinite alternate;
 }
@@ -183,18 +190,18 @@
 }
 @keyframes backdrop-drift-a {
   from {
-    transform: translate3d(-6%, 3%, 0) rotate(4deg) scale(1.04);
+    transform: scale(3) translate3d(-6%, 3%, 0) rotate(4deg) scale(1.04);
   }
   to {
-    transform: translate3d(5%, -4%, 0) rotate(-3deg) scale(1);
+    transform: scale(3) translate3d(5%, -4%, 0) rotate(-3deg) scale(1);
   }
 }
 @keyframes backdrop-drift-b {
   from {
-    transform: translate3d(5%, -3%, 0) rotate(-4deg) scale(1);
+    transform: scale(3) translate3d(5%, -3%, 0) rotate(-4deg) scale(1);
   }
   to {
-    transform: translate3d(-6%, 4%, 0) rotate(3deg) scale(1.05);
+    transform: scale(3) translate3d(-6%, 4%, 0) rotate(3deg) scale(1.05);
   }
 }
 

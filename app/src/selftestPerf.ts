@@ -461,7 +461,27 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
         const r = document.querySelector(".backdrop-layer")?.getBoundingClientRect();
         await k.log(`PERF bdlab-${name} layer=${Math.round(r?.width ?? 0)}x${Math.round(r?.height ?? 0)} running=${census().n}`);
         await measure(`bdlab-${name}`, 3_000, 15_000);
-        await k.shot(`bdlab-${name}`, 0);
+      }
+      // Frames of the layers at full size (s1, as they were) and as they are, paused at the same times, both themes.
+      {
+        const theme0 = document.documentElement.dataset.theme;
+        for (const theme of ["dark", "light"]) {
+          document.documentElement.dataset.theme = theme;
+          for (const [name, css] of [["s1", run + kf(1)], ["as-is", run]] as const) {
+            style.textContent = css;
+            await k.sleep(800);
+            for (const t of [0, 12_000, 24_000, 36_000, 60_000]) {
+              for (const el of document.querySelectorAll(".backdrop-layer"))
+                for (const a of el.getAnimations()) {
+                  a.pause();
+                  a.currentTime = t;
+                }
+              await raf2();
+              await k.shot(`bd-${theme}-${name}-${String(t).padStart(5, "0")}`, 150);
+            }
+          }
+        }
+        document.documentElement.dataset.theme = theme0;
       }
       style.remove();
       setBackdrop(was);
