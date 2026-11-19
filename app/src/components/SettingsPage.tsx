@@ -14,10 +14,13 @@ import { About, Insights, UsageSection } from "./settings/Other";
 import { Devices, Providers, Storage } from "./settings/System";
 import { SearchScope, textMatches } from "./settings/ui";
 import { Connections, Git } from "./settings/Workspace";
+import { IMic } from "./voice/parts";
+import { VoiceSettings } from "./voice/SettingsVoice";
 
 const META: Record<SettingsSection, { label: string; icon: ReactNode; desc: string; body: () => ReactNode }> = {
   general: { label: "General", icon: <IGear size={16} />, desc: "New chats, where files open, and what coool does while agents run.", body: () => <General /> },
   notifications: { label: "Notifications", icon: <IBell size={16} />, desc: "macOS notifications when an agent needs you, finishes or fails.", body: () => <Notifications /> },
+  voice: { label: "Voice", icon: <IMic size={16} />, desc: "Speak your prompts: a model on this Mac writes them down, in English or as spoken, and learns your words.", body: () => <VoiceSettings /> },
   appearance: { label: "Appearance", icon: <ISun size={16} />, desc: "How coool looks and moves.", body: () => <Appearance /> },
   shortcuts: { label: "Keyboard shortcuts", icon: <ICommand size={16} />, desc: "Every shortcut coool has.", body: () => <Shortcuts /> },
   providers: { label: "Providers", icon: <ITerminal size={16} />, desc: "The Claude Code and Codex CLIs coool runs.", body: () => <Providers /> },

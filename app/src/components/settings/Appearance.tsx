@@ -9,6 +9,7 @@ import { useStore, type ThemePref } from "../../store";
 import { ICheck, ISearch } from "../icons";
 import { cx, Kbd, Segmented } from "../primitives";
 import { Group, Row, Switch, useSearching } from "./ui";
+import { VoiceKeyRows } from "../voice/SettingsVoice";
 
 /** What Auto looks at, each with whether it says "reduce" right now and the reading. */
 function autoReasons(): { label: string; on: boolean; now: string }[] {
@@ -187,8 +188,13 @@ export function Shortcuts() {
           </Group>
         );
       })}
+      {(!q || /voice|talk|dictat|hands|fn|option/i.test(q)) && (
+        <Group label="Voice" attr="shortcuts-Voice">
+          <VoiceKeyRows />
+        </Group>
+      )}
       {list.length === 0 && <div className="rounded-[12px] border border-dashed border-line px-4 py-5 text-center text-base text-dim">No shortcut matches “{q}”.</div>}
-      {!searching && <p className="px-1 pt-3 text-small text-faint">⌘ also works as Ctrl. Shortcuts can’t be changed yet.</p>}
+      {!searching && <p className="px-1 pt-3 text-small text-faint">⌘ also works as Ctrl. The voice keys can be changed here; the others can’t be changed yet.</p>}
     </>
   );
 }

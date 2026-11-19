@@ -42,6 +42,7 @@ import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
 import { useReads } from "./lib/explainStore";
+import { voiceScenarios } from "./selftestVoice";
 
 interface Config {
   scenario: string;
@@ -5178,6 +5179,8 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, combo);
+// Voice (selftestVoice.ts): fixtures through the real engine, the composer, memory; no microphone, no model calls.
+Object.assign(scenarios, voiceScenarios({ step, shot, log, sleep, waitFor, fail: (m) => new Fail(m) }, (cmd, args) => invoke(cmd, args)));
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

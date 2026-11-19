@@ -27,6 +27,7 @@ import { NeedsPage } from "./components/needs/NeedsPage";
 import { cx } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
+import { VoiceHost } from "./components/voice/VoiceHost";
 import { APP_SEEN, leaves, seenAt, useStore } from "./store";
 import { sessionKey } from "./lib/types";
 
@@ -289,6 +290,7 @@ export default function App() {
       <Sheets />
       <Tooltips />
       <Onboarding />
+      <VoiceHost />
       <Toasts />
     </MotionConfig>
   );

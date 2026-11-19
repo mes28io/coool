@@ -1,0 +1,26 @@
+/* The fixer's marks in a composer's mirror layer (FixLayer.tsx). The mirror's text is transparent: only the
+   underline and the tint show, under the textarea's own letters. No animation loops; the tint is a one-off transition. */
+
+.fix-mark {
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: none;
+}
+.fix-mark-voice {
+  text-decoration-color: color-mix(in oklab, var(--accent) 75%, transparent);
+}
+.fix-mark-spell {
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: color-mix(in oklab, var(--error) 70%, transparent);
+}
+.fix-applied {
+  border-radius: 3px;
+  background-color: transparent;
+  transition: background-color 1.4s ease-out;
+}
+.fix-applied-on {
+  background-color: color-mix(in oklab, var(--accent) 22%, transparent);
+  transition: none;
+}

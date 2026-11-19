@@ -37,6 +37,8 @@ cargo run --release -p coool   # builds the `coool-tui` binary
 
 Tested on macOS; Linux should work.
 
+Voice to prompt (Settings > Voice) builds whisper.cpp from source with the Xcode command line tools: no CMake or other tools to install. It runs on Apple silicon (Metal); the speech model is downloaded from Settings or the onboarding when you choose one.
+
 ## Desktop app
 
 - **Projects sidebar** with every session grouped by folder, live status, and subagents nested under their session.
@@ -44,6 +46,7 @@ Tested on macOS; Linux should work.
 - **Native chats** for sessions started in coool: streamed text, step lists, subagent cards, approval and question cards, a `/` command menu, model and permission-mode pickers. The CLI's own terminal is one click away for the few commands that need it.
 - **Tabs and split panes** for working on several sessions side by side.
 - **Models and context**: which models each session and subagent used, with token counts and a context meter.
+- **Voice to prompt**: hold Right ⌥ in any composer and speak, in any language; a whisper model on your Mac writes an English prompt (or keeps your language), cleans it up, learns your words and your fixes, and underlines likely mistakes. Audio never leaves the Mac.
 - **AI insights** (optional, off by default, your own Anthropic API key): a one-line status per agent and "needs you" detection.
 - Dark and light themes.
 

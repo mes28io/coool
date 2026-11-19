@@ -8,6 +8,7 @@ import type { Provider } from "../lib/types";
 import { useStore, type Sheet } from "../store";
 import { IFolder, ITerminal } from "./icons";
 import { Button, cx, Kbd, ProviderMark } from "./primitives";
+import { voiceRef } from "./voice/VoiceHost";
 
 export function Sheets() {
   const sheet = useStore((s) => s.sheet);
@@ -183,6 +184,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
         </Field>
         <Field label="First prompt" aside={<span className="text-small text-faint">optional</span>}>
           <textarea
+            ref={voiceRef("new-session-prompt")}
             className={cx(inputCls, "selectable min-h-[72px] resize-none py-2 leading-[19px]")}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}

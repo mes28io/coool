@@ -4,12 +4,14 @@ import { api } from "../lib/backend";
 import { useStore } from "../store";
 import { IArrowUp } from "./icons";
 import { cx, Kbd } from "./primitives";
+import { useVoiceField } from "./voice/VoiceHost";
 
 export function Composer({ pty, provider, disabled, compact }: { pty: number; provider: string; disabled?: boolean; compact?: boolean }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
   const toast = useStore((s) => s.toast);
+  useVoiceField(ta);
 
   useLayoutEffect(() => {
     const el = ta.current;

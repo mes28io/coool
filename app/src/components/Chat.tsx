@@ -44,6 +44,7 @@ import { useStore } from "../store";
 import { isPilotTool, liveRun, parseOutcome, usePilot } from "../lib/pilot";
 import type { PilotOutcome } from "../lib/backend";
 import { countRender } from "../lib/perfCount";
+import { voiceRef } from "./voice/VoiceHost";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
 type Perm = Extract<ChatItem, { kind: "permission" }>;
@@ -1307,6 +1308,7 @@ export function QuestionCard({ item, chat, bare }: { item: Ask; chat: Chat; bare
                   )}
                   {q.allow_other && (
                     <input
+                      ref={q.secret ? undefined : voiceRef(`q-${item.requestId}-${i}`)}
                       value={d.other}
                       type={q.secret ? "password" : "text"}
                       data-other={i}

@@ -229,6 +229,10 @@ Checking it: `cargo run --release -p coool-core --example context_print -- [--ki
 - Sessions running outside coool are unchanged: read-only Activity from the transcript, with Stop and (once ended) Resume here.
 - Read-only Activity text: each `session.activity[]` / `agent.activity[]` entry has `text` (one line, ~400 columns: lists, TUI, insights) and, for prompts, replies and errors whose one-line form loses anything, `full` (the whole text with line breaks, up to 24,000 characters). Render `full ?? text`. `shortened: true` means what is kept is not the whole message (cut at 24k, or an entry older than the newest 50 full texts of that timeline, which keeps only its one line): say so. Both fields are left out when empty/false. Messages typed mid-turn in Claude Code (`queued_command` attachments) appear as prompts.
 
+### Voice in the composer
+
+The composer is a voice target (APP_SPEC "Voice"): hold Right ⌥ (or ⌥Space hands-free, or the mic chip) to dictate; the listening strip sits at the top of the composer card, the text is inserted at the caret through the textarea's own undo history, and nothing is sent unless "Send when I release" is on (then it goes through the same `send` as Enter, so steering, slash commands and the pending-request guard apply). The fixer's underlines are a mirror layer behind the textarea (no contenteditable); Tab accepts a suggestion only while the slash menu is closed; Esc while listening cancels the dictation and never interrupts the turn. On send, the composer hands the sent text to voice's learning (`noteSent`), which compares it with what was dictated; nothing else about sending changes.
+
 ### Tool rows
 
 One function names every tool call on every surface (`app/src/lib/toolNames.ts`, `toolRow` / `toolRowFromText`): the chat's step rows and group chips, subagent and Jobs cards, Mission control's "doing now" line and fan-out hover, the Needs-you list and `chatNeeds` (the sidebar and tab "Approve …" line), the read-only Activity timeline and its live row.
