@@ -4797,7 +4797,7 @@ Object.assign(scenarios, whyScenarios);
 // ---------- combo: the features merged on 2026-11-19, together (real Haiku chats in Ask mode) ----------
 //
 // `combo-keys` (Haiku; one Bash request): ⌘⌫ / ⇧⌘↵ / ⌘↵ never answer a request hidden under the onboarding (also with
-// Needs you under it), the palette, the New session sheet or Settings; Esc closes a tooltip first, then the page, and
+// Needs you under it), the palette, the New session sheet or Settings; Esc hides a tooltip and closes the page in one press, and
 // the element's `title` comes back; no tab hover card over the Needs you page; the running-now pill's Open from the
 // page lands on the chat; with nothing over the chat ⌘↵ allows. `combo-cards` (Haiku): a request answered on the Needs
 // you page leaves the chat's card answered; a streamed reply with code, a table and a list renders the same as a fresh
@@ -4894,21 +4894,11 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
       return `still waiting after every key under: ${seen.join(", ")}`;
     });
     if (!req) return;
-    await step("combo-keys: on Needs you, Esc closes the tooltip first (title given back), then the page; no tab hover card over it", async () => {
+    await step("combo-keys: on Needs you, one Esc closes the tooltip and the page (title given back); no tab hover card over it", async () => {
       const key = needsKeyOf(id)!;
       st().openNeeds(key);
       await waitFor("the Needs you page", () => $("[data-needs-page]"), 5_000);
       await sleep(300);
-      const back = $("[data-needs-back]")!;
-      const title = back.getAttribute("title");
-      restOn(back);
-      const tip = await waitFor("the app's tooltip", () => $("[role=tooltip]"), 3_000);
-      if (back.hasAttribute("title")) throw new Fail("the system's title is still on the element while ours shows");
-      press("Escape");
-      await sleep(250);
-      if ($("[role=tooltip]")) throw new Fail("the tooltip stayed after Esc");
-      if (!st().needsPage) throw new Fail("Esc closed the page together with the tooltip");
-      if (back.getAttribute("title") !== title) throw new Fail(`title not given back: ${back.getAttribute("title")}`);
       const tab = $(`[data-tab-session]`);
       let card = "no tab";
       if (tab) {
@@ -4918,10 +4908,19 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
         tab.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, pointerType: "mouse" }));
         if (card === "shown") throw new Fail("a tab's hover card lies over the Needs you page");
       }
+      const back = $("[data-needs-back]")!;
+      const title = back.getAttribute("title");
+      restOn(back);
+      const tip = await waitFor("the app's tooltip", () => $("[role=tooltip]"), 3_000);
+      const text = textOf(tip);
+      if (back.hasAttribute("title")) throw new Fail("the system's title is still on the element while ours shows");
+      // A tooltip never eats the key: it hides, and the same Esc closes the page.
       press("Escape");
       await sleep(300);
-      if (st().needsPage) throw new Fail("the second Esc didn't close the page");
-      return `tooltip "${textOf(tip)}" first, page second; tab hover card over the page: ${card}`;
+      if ($("[role=tooltip]")) throw new Fail("the tooltip stayed after Esc (the page's Esc handler hid the key from it)");
+      if (st().needsPage) throw new Fail("Esc hid the tooltip but didn't close the page");
+      if (back.isConnected && back.getAttribute("title") !== title) throw new Fail(`title not given back: ${back.getAttribute("title")}`);
+      return `tooltip "${text}" and the page closed on one Esc; tab hover card over the page: ${card}`;
     });
     await step("combo-keys: the running-now pill's Open from the Needs you page lands on the chat", async () => {
       st().openNeeds(needsKeyOf(id));

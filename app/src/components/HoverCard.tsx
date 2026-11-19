@@ -11,7 +11,6 @@ import { useChats } from "../lib/chat";
 import { displayTitle, fmtTokens, folderName, isThinking, projectOf, shortDetail } from "../lib/format";
 import { useAttention } from "../lib/live";
 import { contextWindow, modelLabel } from "../lib/models";
-import { keysCaptured } from "../lib/macKeys";
 import { useMotion } from "../lib/motion";
 import { firstLine, hoverAnchor, HOVER_REST_MS } from "../lib/hoverRest";
 import { stepParts } from "../lib/toolNames";
@@ -37,7 +36,6 @@ export function HoverCards() {
     let pressed: HTMLElement | null = null;
     // The row's own tooltip (Tooltips.tsx) stands aside from the moment the pointer is on the row: the card says more.
     let quiet: HTMLElement | null = null;
-    let up = false;
     const unquiet = () => {
       if (quiet) delete quiet.dataset.noTip;
       quiet = null;
@@ -45,18 +43,12 @@ export function HoverCards() {
     const hide = () => {
       if (timer) clearTimeout(timer);
       timer = null;
-      up = false;
       setShown((v) => (v ? null : v));
     };
-    // Esc with a card up closes the card only (then a dialog, then the page): window capture, registered at launch,
-    // ahead of every page's own Esc. Any other key just hides it.
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && up && document.querySelector("[data-hover-card]") && !keysCaptured(e)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-      }
-      hide();
-    };
+    // Any key hides it, Esc included, and the key goes on to whatever it was meant for (a tooltip never eats an Esc:
+    // one press still closes the dialog or page under it). On the window in the capture phase, registered at launch,
+    // so it sees the key before any page or dialog stops it.
+    const key = () => hide();
     const arm = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -67,7 +59,6 @@ export function HoverCards() {
         const key = el.dataset.sessionRow ?? el.dataset.tabSession;
         if (!key) return;
         const r = el.getBoundingClientRect();
-        up = true;
         setShown({ key, rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, side: el.dataset.tabSession ? "below" : "right" });
       }, HOVER_REST_MS);
     };
