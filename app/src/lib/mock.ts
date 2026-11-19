@@ -1666,7 +1666,9 @@ export function mockBackend(): Backend {
       return { total: (a ?? s)?.tokens.context ?? 0, parts: [], compaction: null, note: "The mock itemises only the first session's context.", chars_per_token: null };
     },
     async environment() {
-      return { home: HOME, claude: "/usr/local/bin/claude", codex: "/opt/homebrew/bin/codex" };
+      // `?env=nocodex` / `?env=noclaude` / `?env=none`: a CLI not installed (the onboarding's and the new-session sheet's lines).
+      const e = /[?&]env=(\w+)/.exec(location.search)?.[1] ?? "";
+      return { home: HOME, claude: e === "noclaude" || e === "none" ? null : "/usr/local/bin/claude", codex: e === "nocodex" || e === "none" ? null : "/opt/homebrew/bin/codex" };
     },
     async quit() {
       ptys.forEach((p) => endPty(p.id));

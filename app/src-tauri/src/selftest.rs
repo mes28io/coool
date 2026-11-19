@@ -70,6 +70,11 @@ impl SelfTest {
         Some(Self { scenario: scenario.trim().to_string(), dir, canonical, shots, log, site })
     }
 
+    /// The onboarding scenarios run: only then does the first-run onboarding show (`onboarding_seen`).
+    pub fn wants_onboarding(&self) -> bool {
+        self.scenario.split(',').any(|s| s.trim().starts_with("onboarding"))
+    }
+
     /// The throwaway folder.
     pub fn dir(&self) -> &Path {
         &self.dir

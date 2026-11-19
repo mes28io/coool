@@ -3592,6 +3592,133 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
 const fmtTokensLocal = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`);
 Object.assign(scenarios, sweep);
 
+// ---------- the first-run onboarding (components/onboarding/) ----------
+//
+// `onboarding` (no model; a fresh test folder, so its settings file has no "seen" flag): it opens by itself, walks the
+// steps with the keyboard, checks the macOS states render honestly WITHOUT pressing Allow or the login switch (a build
+// without an app bundle reports them unavailable / not found; nothing on this Mac changes), dismisses it, checks the
+// flag was saved, re-opens it from Settings > About and the palette's entry, and finishes on Home.
+// `onboarding-restart` (a second launch on the same folder): it stays closed, the flag survived. Only these scenarios
+// see the onboarding at all; every other run counts it as seen (`onboarding_seen`).
+
+const onb = () => $("[data-onboarding]")?.dataset.onboarding ?? null;
+const winKey = (key: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async onboarding() {
+    await step("onboarding: opens by itself on a first launch, on the folder step", async () => {
+      await waitFor("the onboarding", () => onb() === "folder", 10_000);
+      await waitFor("the CLI lines", () => $all("[data-onb-cli]").every((e) => e.dataset.found !== ""), 10_000);
+      const env = useStore.getState().env;
+      const lines = $all("[data-onb-cli]").map((e) => `${e.dataset.onbCli}=${e.dataset.found} "${textOf(e)}"`);
+      for (const e of $all("[data-onb-cli]")) {
+        const p = e.dataset.onbCli as "claude" | "codex";
+        if (String(!!env?.[p]) !== e.dataset.found) throw new Fail(`${p} line says ${e.dataset.found}, environment says ${env?.[p]}`);
+      }
+      await shot("onb-1-folder");
+      return lines.join("; ");
+    });
+    await step("onboarding: a known project is one click, Enter continues to Notifications", async () => {
+      const chip = $("[data-onb-projects] button");
+      if (chip) {
+        chip.click();
+        await waitFor("the folder", () => $("[data-onb-folder]")?.dataset.onbFolder || null, 2_000);
+      }
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      return chip ? `picked ${$("[data-onb-folder]")?.dataset.onbFolder ?? "?"}` : "no known projects in the test folder";
+    });
+    await step("onboarding: Notifications says where the permission stands (not pressed)", async () => {
+      const st = await waitFor("the permission", () => $("[data-onb-notify]")?.dataset.onbNotify || null, 5_000);
+      const text = textOf($("[data-onb-notify]"));
+      await shot("onb-2-notify");
+      // A self-test build has no app bundle: the honest answer is "unavailable" and no Allow button.
+      if (st === "unavailable" && $("[data-onb-allow]")) throw new Fail("an Allow button for an unavailable permission");
+      if (st === "not_determined" && !$("[data-onb-allow]")) throw new Fail("no Allow button while macOS hasn't asked");
+      if (st === "denied" && !$("[data-onb-open-settings]")) throw new Fail("no Open System Settings when denied");
+      return `${st}: ${text}`;
+    });
+    await step("onboarding: Esc skips to Open at login, which says why its switch can't work here (not pressed)", async () => {
+      winKey("Escape");
+      await waitFor("the login step", () => onb() === "login", 3_000);
+      const st = await waitFor("the login status", () => $("[data-onb-login]")?.dataset.onbLogin || null, 5_000);
+      const sw = $("[data-onb-login] [role=switch]") as HTMLButtonElement | null;
+      await shot("onb-3-login");
+      if ((st === "not_found" || st === "unavailable") && !sw?.disabled) throw new Fail(`switch enabled for ${st}`);
+      return `${st}, switch ${sw?.disabled ? "disabled" : "enabled"}: ${textOf($("[data-onb-login]"))}`;
+    });
+    await step("onboarding: Esc to the finish step, Back works, Skip setup dismisses it and saves the flag", async () => {
+      winKey("Escape");
+      await waitFor("the finish step", () => onb() === "done", 3_000);
+      await shot("onb-4-done");
+      $("[data-onb-back]")!.click();
+      await waitFor("back on login", () => onb() === "login", 3_000);
+      $("[data-onb-dismiss]")!.click();
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      await sleep(300);
+      if (!(await api().onboardingSeen())) throw new Fail("the flag wasn't saved");
+      return "seen=true";
+    });
+    await step("onboarding: Settings > About re-opens it at the first step; Esc on the finish step returns to Settings", async () => {
+      useStore.getState().openSettings("about");
+      const again = await waitFor("Show onboarding again", () => $("[data-onboarding-again]"), 5_000);
+      await shot("onb-5-about");
+      again.click();
+      await waitFor("the folder step", () => onb() === "folder", 3_000);
+      winKey("Escape");
+      winKey("Escape");
+      winKey("Escape");
+      await waitFor("the finish step", () => onb() === "done", 3_000);
+      winKey("Escape");
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      if (useStore.getState().settings === null) throw new Fail("Settings closed with it");
+    });
+    await step("onboarding: the palette's entry opens it; ⌘K waits while it is up; Go to Home lands on Home", async () => {
+      useStore.getState().closeSettings();
+      useStore.getState().setPalette(true);
+      const input = await waitFor("the palette", () => $("input[placeholder^='Jump']") as HTMLInputElement | null, 3_000);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "onboarding again");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await sleep(200);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await waitFor("the folder step", () => onb() === "folder", 3_000);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", metaKey: true, bubbles: true, cancelable: true }));
+      await sleep(300);
+      if (useStore.getState().palette) throw new Fail("⌘K opened the palette over the onboarding");
+      $("[data-onb-skip]")!.click(); // the folder step skipped: no folder, so the end is Home
+      await waitFor("notifications", () => onb() === "notifications", 3_000);
+      $("[data-onb-skip]")!.click();
+      await waitFor("login", () => onb() === "login", 3_000);
+      $("[data-onb-skip]")!.click();
+      await waitFor("done", () => onb() === "done", 3_000);
+      const label = textOf($("[data-onb-next]"));
+      if (!label.startsWith("Go to Home")) throw new Fail(`finish button says "${label}"`);
+      $("[data-onb-next]")!.click();
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      const st = useStore.getState();
+      if (st.sheet) throw new Fail(`a ${st.sheet.kind} sheet opened`);
+      await shot("onb-6-home");
+      return `active tab ${st.activeTab ?? "none (Home)"}`;
+    });
+    await step("onboarding: the flag is in the test folder's settings file", async () => {
+      const seen = await api().onboardingSeen();
+      if (!seen) throw new Fail("not saved");
+      return "seen=true";
+    });
+  },
+
+  async "onboarding-restart"() {
+    await step("onboarding-restart: a second launch keeps it closed (the flag survived)", async () => {
+      await sleep(4000);
+      if ($("[data-onboarding]")) throw new Fail("it opened again");
+      if (!(await api().onboardingSeen())) throw new Fail("the flag is gone");
+      await shot("onb-7-restart");
+      return "closed, seen=true";
+    });
+  },
+};
+Object.assign(scenarios, onboarding);
+
 // ---------- the sandbox Mac: a clean boot, the pilot driven directly, click-then-type ----------
 
 const macReq = (request: Record<string, unknown>) => invoke("selftest_mac", { request }) as Promise<Record<string, unknown>>;

@@ -6,7 +6,8 @@ import { seenAt, isUnseen, leaves, resolveTarget, useStore } from "../store";
 import { openChatInTerminal } from "../lib/actions";
 import { api } from "../lib/backend";
 import { useOpenWithName } from "../lib/prefs";
-import { IFolder, IGauge, IGear, IGrid, IMoon, IPlus, ISearch, ISplitDown, ISplitRight, IStop, ISun, ITerminal } from "./icons";
+import { openOnboarding } from "../lib/onboarding";
+import { IFolder, IGauge, IGear, IGrid, IMoon, ISpark, IPlus, ISearch, ISplitDown, ISplitRight, IStop, ISun, ITerminal } from "./icons";
 import { cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
 import { askStop } from "./SessionView";
 import { score } from "../lib/fuzzy";
@@ -104,6 +105,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       { id: "a:new", group: "Actions", label: "New session", icon: <IPlus size={16} />, keys: ["⌘", "T"], run: done(() => st.setSheet({ kind: "new" })) },
       { id: "a:usage", group: "Actions", label: "Show usage", icon: <IGauge size={16} />, run: done(() => st.openSettings("usage")) },
       { id: "a:home", group: "Actions", label: "Home", icon: <IGrid size={16} />, run: done(() => st.activate(null)) },
+      { id: "a:onboarding", group: "Actions", label: "Show onboarding again", hint: "Project folder, notifications, open at login", icon: <ISpark size={16} />, run: done(openOnboarding) },
       { id: "a:settings", group: "Actions", label: "Settings", hint: "General, notifications, appearance, shortcuts, providers, devices, storage", icon: <IGear size={16} />, keys: ["⌘", ","], run: done(() => st.openSettings()) },
       {
         id: "a:theme",
