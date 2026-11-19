@@ -64,6 +64,7 @@ export function CommitTrail({ trail, loading, committing, minRows = 8, className
         <FitList
           total={list.length}
           minRows={minRows}
+          title={trail?.branch ?? "Commits"}
           render={(count) => (
             <ol className="shrink-0">
               <AnimatePresence initial={false}>

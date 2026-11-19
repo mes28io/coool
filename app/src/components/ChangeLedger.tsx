@@ -90,6 +90,7 @@ export function ChangeLedger({
         <FitList
           total={units.length}
           minRows={minRows}
+          title="Changes"
           render={(n) => (
             <AnimatePresence initial={false}>
               {units.slice(0, n).map((u) => (
