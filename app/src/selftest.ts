@@ -5179,6 +5179,277 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
 };
 Object.assign(scenarios, combo);
 
+// ---------- notification clicks (notify.rs, lib/notifyRoute.ts) ----------
+//
+// `notify-click` (one short Haiku chat; any build, a dev binary too): a click handed to the backend's click handler
+// as the notification delegate hands it (`selftest_notify_click` with a target's JSON) opens Needs you on the waiting
+// request, its chat once answered, the chat for a finished turn, and nothing more for a stale or test notification.
+// `notify-bundle` (the bundled `coool selftest` app only, run in front: it asks macOS for the permission once, which a
+// person must answer): the permission states against `UNUserNotificationCenter`, real delivery of the test, needs-you
+// and finished notifications, and clicks sent to the delegate itself from the delivered notifications (window hidden,
+// minimised, app hidden). `login-bundle`: Open at login on and off through the app's own switch, with the Settings row
+// and the onboarding step read in each state; it ends OFF.
+
+interface NotifyState {
+  pid: number;
+  permission: { status: string; reason: string | null };
+  delivered: { Ok?: { id: string; title: string; info: string | null }[]; Err?: string } | { id: string; title: string; info: string | null }[];
+  log: string[];
+}
+const notifyState = async () => (await invoke("selftest_notify")) as NotifyState;
+const deliveredOf = (s: NotifyState) => (Array.isArray(s.delivered) ? s.delivered : (s.delivered.Ok ?? []));
+const tabTargets = () => {
+  const s = useStore.getState();
+  const tab = s.tabs.find((t) => t.id === s.activeTab);
+  return tab ? leaves(tab.root).map((l) => l.target) : [];
+};
+const showsSession = (key: string) => tabTargets().some((t) => t?.kind === "session" && t.key === key);
+const showsChat = (id: number) => tabTargets().some((t) => (t?.kind === "chat" && t.id === id) || (t?.kind === "session" && useStore.getState().chatOwner[id] === t.key));
+const homeAgain = async () => {
+  const st = useStore.getState();
+  if (st.needsPage) st.closeNeeds();
+  st.activate(null);
+  await sleep(400);
+};
+
+const notifyScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async "notify-click"(ctx) {
+    const st = () => useStore.getState();
+    const me = await notifyState();
+    const click = async (t: Record<string, unknown>) => {
+      const how = await invoke("selftest_notify_click", { info: JSON.stringify({ chat: null, session: null, request: null, pid: me.pid, ...t }) });
+      await sleep(1200);
+      return how;
+    };
+    let id = -1;
+    let req = "";
+    let key = "";
+    await step("notify-click: a needs-you click opens Needs you with that request picked", async () => {
+      id = await startIn(ctx.cfg.dir, "default");
+      await send(id, "Use the Bash tool exactly once to run: echo notify > notify-click.txt . Then reply with one word: done");
+      req = (await approvalOf(id)).id;
+      key = await waitFor("its session key", () => needsKeyOf(id), 60_000);
+      // The notifier's own path builds the target (a build without a bundle can't post it: logged).
+      await invoke("selftest_notify_post", { chat: id, kind: "needs", request: req });
+      await sleep(500);
+      const posted = (await notifyState()).log.filter((l) => l.startsWith("post")).slice(-1)[0] ?? "nothing logged";
+      await homeAgain();
+      await click({ kind: "needs", chat: id, session: key, request: req });
+      const row = await waitFor("Needs you, the item picked", () => st().needsPage && $(`[data-needs-item="${CSS.escape(key)}"][aria-selected="true"]`), 8_000);
+      await waitFor("its detail", () => $(`[data-needs-detail="${CSS.escape(key)}"]`), 5_000);
+      await shot("notify-click-needs");
+      return `picked "${textOf(row).slice(0, 80)}"; notifier: ${posted.slice(0, 200)}`;
+    });
+    if (!req) return;
+    await step("notify-click: the same click once answered opens its chat, never an empty page", async () => {
+      const { answerPermission } = await import("./lib/actions");
+      answerPermission(id, req, "allow");
+      await waitFor("the item gone", () => !$(`[data-needs-item="${CSS.escape(key)}"]`), 30_000);
+      await homeAgain();
+      await click({ kind: "needs", chat: id, session: key, request: req });
+      await waitFor("the chat on screen", () => !st().needsPage && showsSession(key), 8_000);
+      await shot("notify-click-answered");
+      return `tab shows ${key}, Needs you page closed`;
+    });
+    await step("notify-click: a turn-finished click opens that chat (also by session key alone, as after a relaunch)", async () => {
+      await waitFor("the turn to end", () => turnEnds(id)[0], 120_000);
+      await homeAgain();
+      await click({ kind: "finished", chat: id, session: key });
+      await waitFor("the chat", () => showsSession(key), 8_000);
+      await homeAgain();
+      await click({ kind: "finished", chat: 999, pid: me.pid + 1, session: key });
+      await waitFor("the chat (session key only)", () => showsSession(key), 8_000);
+      return "both opened it";
+    });
+    await step("notify-click: a stale target or the test notification only brings coool forward", async () => {
+      await homeAgain();
+      await click({ kind: "needs", chat: id, pid: me.pid + 1, session: "claude:gone-session" });
+      if (st().needsPage || tabTargets().length) throw new Fail(`went somewhere: needs ${st().needsPage}, ${JSON.stringify(tabTargets())}`);
+      await click({ kind: "test" });
+      if (st().needsPage || tabTargets().length) throw new Fail("the test notification went somewhere");
+      const log = (await notifyState()).log.filter((l) => l.startsWith("click") || l.startsWith("forward"));
+      return log.slice(-6).join(" | ");
+    });
+  },
+
+  async "notify-bundle"() {
+    const st = () => useStore.getState();
+    const s0 = await notifyState();
+    const openNotif = async () => {
+      st().openSettings("notifications");
+      await waitFor("the settings page", () => $("[data-settings-page]"), 5_000);
+      await sleep(800);
+    };
+    const rowState = () => $("[data-notify-permission]")?.dataset.notifyPermission ?? "";
+    let perm = s0.permission.status;
+    await step("notify-bundle: the permission row matches UNUserNotificationCenter before anything is asked", async () => {
+      await openNotif();
+      await waitFor("the row", () => rowState() || null, 5_000);
+      await shot("bundle-notify-before");
+      if (rowState() !== perm) throw new Fail(`row ${rowState()} vs system ${perm}`);
+      return `${perm}: "${textOf(settingRow("notify-permission")).slice(0, 160)}"; buttons: ${["Allow notifications", "Open System Settings", "Send a test"].filter((b) => button(b)).join(", ") || "none"}`;
+    });
+    if (perm === "not_determined") {
+      await step("notify-bundle: Allow notifications asks macOS once; wait up to 10 min for the person", async () => {
+        const b = button("Allow notifications");
+        if (!b) throw new Fail("no Allow button while not determined");
+        await log(`PROMPT-REQUESTED ${new Date().toISOString()}`);
+        b.click();
+        await sleep(1500);
+        const seen = [`after 1.5 s: ${(await notifyState()).permission.status}, button "${textOf(settingRow("notify-permission")).slice(0, 80)}"`];
+        await shot("bundle-notify-asking");
+        const t0 = Date.now();
+        while (Date.now() - t0 < 600_000) {
+          const p = (await notifyState()).permission.status;
+          if (p !== "not_determined") {
+            perm = p;
+            seen.push(`changed to ${p} after ${Math.round((Date.now() - t0) / 1000)} s`);
+            break;
+          }
+          await sleep(3_000);
+        }
+        if (perm === "not_determined") seen.push("no answer in 10 min");
+        await log(`PROMPT-RESULT ${perm}`);
+        return seen.join("; ");
+      });
+    }
+    await step("notify-bundle: after the answer the row and its button match the system", async () => {
+      await sleep(2_500);
+      window.dispatchEvent(new Event("focus"));
+      await waitFor("the row to follow", () => rowState() === perm || null, 125_000);
+      await shot("bundle-notify-after");
+      const want = perm === "denied" ? "Open System Settings" : perm === "authorized" || perm === "provisional" ? "Send a test" : perm === "not_determined" ? "Allow notifications" : null;
+      if (want && !button(want)) throw new Fail(`no "${want}" for ${perm}`);
+      return `${perm}: "${textOf(settingRow("notify-permission")).slice(0, 160)}", button ${want}`;
+    });
+    if (perm !== "authorized" && perm !== "provisional") return;
+    let chatId = -1;
+    await step("notify-bundle: Send a test, a needs-you and a finished notification are delivered with their targets", async () => {
+      await invoke("selftest_notify_post", { chat: null, kind: "clear" });
+      button("Send a test")!.click();
+      const cwd = (await invoke("selftest_config") as Config).dir;
+      const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+      await newChat({ provider: "claude", cwd, model: PERF_MODEL, permissionMode: "default" });
+      chatId = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+      await sleep(1500);
+      await invoke("selftest_notify_post", { chat: chatId, kind: "needs", request: "bundle-req" });
+      await invoke("selftest_notify_post", { chat: chatId, kind: "finished" });
+      let list: ReturnType<typeof deliveredOf> = [];
+      const t0 = Date.now();
+      while (Date.now() - t0 < 10_000) {
+        list = deliveredOf(await notifyState());
+        if (list.length >= 3) break;
+        await sleep(500);
+      }
+      if (list.length < 3) throw new Fail(`delivered ${JSON.stringify(list)}`);
+      return list.map((n) => `${n.id} "${n.title}" ${n.info}`).join(" | ");
+    });
+    const clickOn = async (kind: string, before: () => Promise<unknown>) => {
+      const n = deliveredOf(await notifyState()).find((x) => x.info && JSON.parse(x.info).kind === kind);
+      if (!n) throw new Fail(`no delivered ${kind} notification`);
+      await before();
+      await sleep(800);
+      const how = await invoke("selftest_notify_click", { id: n.id });
+      await sleep(1500);
+      return `${how}; visible=${document.visibilityState}`;
+    };
+    await step("notify-bundle: a click on the delivered needs-you notification (window hidden) reaches the delegate and opens its chat", async () => {
+      await homeAgain();
+      const how = await clickOn("needs", () => invoke("selftest_window", { action: "hide" }));
+      await waitFor("its chat", () => showsChat(chatId) || null, 8_000);
+      await shot("bundle-click-needs");
+      return how;
+    });
+    await step("notify-bundle: a click on the finished notification (window minimised) opens its chat", async () => {
+      await homeAgain();
+      const how = await clickOn("finished", () => invoke("selftest_window", { action: "minimize" }));
+      await waitFor("its chat", () => showsChat(chatId) || null, 8_000);
+      return how;
+    });
+    await step("notify-bundle: a click on the test notification (app hidden) only brings coool forward", async () => {
+      await homeAgain();
+      const how = await clickOn("test", () => invoke("selftest_window", { action: "app-hide" }));
+      if (tabTargets().length || st().needsPage) throw new Fail("went somewhere");
+      const log = (await notifyState()).log.filter((l) => /^(response|click|forward|present)/.test(l));
+      return `${how}; ${log.slice(-9).join(" | ")}`;
+    });
+    await step("notify-bundle: clean up its notifications", async () => {
+      await invoke("selftest_notify_post", { chat: null, kind: "clear" });
+      await sleep(800);
+      const left = deliveredOf(await notifyState());
+      if (left.length) throw new Fail(`still delivered: ${left.length}`);
+      return "none delivered";
+    });
+  },
+
+  async "login-bundle"() {
+    const st = () => useStore.getState();
+    const { openOnboarding, closeOnboarding } = await import("./lib/onboarding");
+    const general = async () => {
+      st().openSettings("general");
+      await waitFor("the settings page", () => $("[data-settings-page]"), 5_000);
+      await sleep(800);
+    };
+    const onbLogin = async () => {
+      st().closeSettings();
+      openOnboarding();
+      await waitFor("the onboarding", () => onb(), 5_000);
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("notifications", () => onb() === "notifications", 3_000);
+      winKey("Escape");
+      await waitFor("login", () => onb() === "login", 3_000);
+      const s = await waitFor("its status", () => $("[data-onb-login]")?.dataset.onbLogin || null, 5_000);
+      const sw = $("[data-onb-login] [role=switch]");
+      const out = `${s}, switch ${sw?.getAttribute("aria-checked")}${(sw as HTMLButtonElement | null)?.disabled ? " disabled" : ""}, "${textOf($("[data-onb-login]")).slice(0, 140)}"`;
+      await shot(`bundle-onb-login-${s}`);
+      closeOnboarding();
+      await waitFor("closed", () => !onb(), 3_000);
+      return out;
+    };
+    const row = () => `"${textOf(settingRow("login")).slice(0, 160)}", switch ${switchIn(settingRow("login"))?.getAttribute("aria-checked")}`;
+    const s0 = await api().loginStatus();
+    await step("login-bundle: before: Settings and the onboarding say what SMAppService says", async () => {
+      await general();
+      await shot("bundle-login-before");
+      return `${JSON.stringify(s0)}; settings ${row()}; onboarding ${await onbLogin()}`;
+    });
+    await step("login-bundle: the switch turns it on (SMAppService register)", async () => {
+      await general();
+      switchIn(settingRow("login"))!.click();
+      let now = await api().loginStatus();
+      const t0 = Date.now();
+      while (Date.now() - t0 < 10_000 && now.status === "not_registered") {
+        await sleep(500);
+        now = await api().loginStatus();
+      }
+      await sleep(600);
+      await shot(`bundle-login-on-${now.status}`);
+      const onRow = row();
+      if (now.status === "requires_approval" && !button("Open Login Items")) throw new Fail("requires approval but no Open Login Items");
+      await log(`LOGIN-ON ${now.status}`);
+      // A moment for checks from outside (sfltool, launchctl) while it is on.
+      await sleep(25_000);
+      return `${JSON.stringify(now)}; settings ${onRow}; onboarding ${await onbLogin()}`;
+    });
+    await step("login-bundle: the switch turns it off again (unregister), and it stays off", async () => {
+      await general();
+      const sw = switchIn(settingRow("login"))!;
+      if (sw.getAttribute("aria-checked") === "true") sw.click();
+      let now = await api().loginStatus();
+      const t0 = Date.now();
+      while (Date.now() - t0 < 10_000 && now.status !== "not_registered") {
+        await sleep(500);
+        now = await api().loginStatus();
+      }
+      await log(`LOGIN-OFF ${now.status}`);
+      if (now.status !== "not_registered") throw new Fail(`still ${now.status}`);
+      return `${JSON.stringify(now)}; settings ${row()}; onboarding ${await onbLogin()}`;
+    });
+  },
+};
+Object.assign(scenarios, notifyScenarios);
+
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.
 let started = false;

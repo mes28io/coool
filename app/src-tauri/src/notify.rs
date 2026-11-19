@@ -8,6 +8,15 @@
 //! the first notification, or "Allow notifications" in Settings, asks once; after that only System Settings can
 //! change it). An interrupt or stop the person asked for is not a failure: [`Notifier::user_stopped`] marks the chat
 //! for a few seconds.
+//!
+//! A click on a notification opens where it points (APP_SPEC "Notifications"): every notification carries a
+//! [`Target`] in its `userInfo` (what it is, the chat id, the session key, the request id, the posting process), and
+//! coool's `UNUserNotificationCenter` delegate turns a click into a [`Route`], keeps it until the page takes it
+//! ([`take`], the `notify_take` command) and pings the page (`notify-open`), bringing the window forward (unhidden,
+//! unminimised, focused: macOS switches to its Space). The page decides where (lib/notifyRoute.ts). The delegate is
+//! set before the app finishes launching, so a click that launches coool is kept until the page asks for it. The
+//! delegate also lets banners show while coool is the active app (otherwise macOS keeps them silent then; the settings
+//! decide whether one goes out at all).
 
 use coool_core::chat::{ChatEventKind, ChatState};
 use serde::{Deserialize, Serialize};
@@ -90,7 +99,7 @@ pub struct Notifier {
 
 impl Notifier {
     pub fn new(prefs: Prefs) -> Self {
-        Notifier { prefs: Mutex::new(prefs), focused: std::sync::atomic::AtomicBool::new(true), stopped: Mutex::default() }
+        Notifier { prefs: Mutex::new(prefs), focused: std::sync::atomic::AtomicBool::new(false), stopped: Mutex::default() }
     }
 
     pub fn set_focused(&self, f: bool) {
@@ -122,16 +131,150 @@ impl Notifier {
         Some((kind, format!("{title} {head}"), detail))
     }
 
-    /// Posts what [`Self::decide`] allows, on a background thread.
-    pub fn on_event(&self, id: usize, title: &str, ev: &ChatEventKind) {
-        if let Some((_, t, b)) = self.decide(id, title, ev) {
+    /// Posts what [`Self::decide`] allows, on a background thread. `session`: the chat's session key
+    /// (`claude:<id>`) once the app knows it.
+    pub fn on_event(&self, id: usize, title: &str, session: Option<&str>, ev: &ChatEventKind) {
+        if let Some((kind, t, b)) = self.decide(id, title, ev) {
             let sound = self.prefs.lock().unwrap().sound;
+            let target = Target::of(kind, id, session, ev);
             std::thread::spawn(move || {
-                let _ = post(&t, &b, sound);
+                if let Err(e) = post(&t, &b, sound, &target) {
+                    log(&format!("post failed: {e}"));
+                }
             });
         }
     }
 }
+
+/// What a notification points at, kept in its `userInfo` (JSON under [`INFO_KEY`]) for a click.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Target {
+    /// "needs" | "finished" | "failed" | "test"
+    pub kind: String,
+    /// coool's chat id: meaningful only to the process that posted it (`pid`).
+    pub chat: Option<usize>,
+    /// The session key (`claude:<session id>`): still names the session after coool restarted.
+    pub session: Option<String>,
+    /// The permission request or question it was about.
+    pub request: Option<String>,
+    pub pid: u32,
+}
+
+pub const INFO_KEY: &str = "coool";
+
+impl Target {
+    pub fn of(kind: Kind, chat: usize, session: Option<&str>, ev: &ChatEventKind) -> Self {
+        let request = match ev {
+            ChatEventKind::PermissionRequest { request_id, .. } | ChatEventKind::Question { request_id, .. } => Some(request_id.clone()),
+            _ => None,
+        };
+        let kind = match kind {
+            Kind::NeedsYou => "needs",
+            Kind::Finished => "finished",
+            Kind::Failed => "failed",
+        };
+        Target { kind: kind.into(), chat: Some(chat), session: session.map(str::to_string), request, pid: std::process::id() }
+    }
+
+    /// The Settings "Send a test" notification: a click only brings coool forward.
+    pub fn test() -> Self {
+        Target { kind: "test".into(), chat: None, session: None, request: None, pid: std::process::id() }
+    }
+}
+
+/// Where a click asks the page to go (lib/notifyRoute.ts decides what is still there).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Route {
+    /// The [`Target`] kind, or "app" for a notification without one (bring coool forward only).
+    pub kind: String,
+    /// Only when posted by this run of coool (chat ids start over at each launch).
+    pub chat: Option<usize>,
+    pub session: Option<String>,
+    pub request: Option<String>,
+    /// The notification action: "default" (a click on it), "dismiss", or an action id.
+    pub action: String,
+}
+
+/// The route for a click on a notification whose `userInfo` JSON is `info`, in the process `pid`.
+pub fn route_of(info: Option<&str>, action: &str, pid: u32) -> Route {
+    match info.and_then(|i| serde_json::from_str::<Target>(i).ok()) {
+        Some(t) => Route { kind: t.kind, chat: t.chat.filter(|_| t.pid == pid), session: t.session, request: t.request, action: action.into() },
+        None => Route { kind: "app".into(), chat: None, session: None, request: None, action: action.into() },
+    }
+}
+
+/// A click waiting for the page (set before the page or even the app is ready), the app once it is, and the log.
+static PENDING: Mutex<Option<Route>> = Mutex::new(None);
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+/// A self-test window that must not take focus: a click routes but doesn't bring the window forward.
+static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The delegate's log (what it was asked and did), kept for the self-test and printed to stderr.
+pub fn log(line: &str) {
+    eprintln!("coool notify: {line}");
+    let mut l = LOG.lock().unwrap();
+    if l.len() >= 200 {
+        l.remove(0);
+    }
+    l.push(line.to_string());
+}
+
+pub fn log_lines() -> Vec<String> {
+    LOG.lock().unwrap().clone()
+}
+
+/// A notification was clicked (the delegate, or a self-test standing in for it).
+pub fn clicked(info: Option<&str>, action: &str) {
+    let r = route_of(info, action, std::process::id());
+    log(&format!("click {} action={} chat={:?} session={:?} request={:?}", r.kind, r.action, r.chat, r.session, r.request));
+    // Dismissing it from Notification Center (reported only for a category that asks) goes nowhere.
+    if r.action == "dismiss" {
+        return;
+    }
+    *PENDING.lock().unwrap() = Some(r);
+    if let Some(app) = APP.get() {
+        bring_forward(app);
+        use tauri::Emitter;
+        let _ = app.emit("notify-open", ());
+    }
+}
+
+/// The app is up (`setup`): clicks from now on reach it; one that launched coool brings the window forward.
+pub fn attach(app: &tauri::AppHandle, quiet: bool) {
+    QUIET.store(quiet, std::sync::atomic::Ordering::Relaxed);
+    let _ = APP.set(app.clone());
+    if PENDING.lock().unwrap().is_some() {
+        log("a click launched coool: kept for the page");
+        bring_forward(app);
+    }
+}
+
+/// The click waiting for the page, once.
+pub fn take() -> Option<Route> {
+    PENDING.lock().unwrap().take()
+}
+
+/// Shows the main window wherever it is: hidden (⌘H), minimised, behind other windows, on another Space.
+fn bring_forward(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if QUIET.load(std::sync::atomic::Ordering::Relaxed) {
+        log("forward: skipped (a self-test window that never takes focus)");
+        return;
+    }
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        #[cfg(target_os = "macos")]
+        let _ = app2.show();
+        if let Some(w) = app2.get_window("main") {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        log("forward: shown");
+    });
+}
+
 
 /// Where the system's notification permission stands for coool.
 #[derive(Clone, Debug, Serialize)]
@@ -142,21 +285,27 @@ pub struct Permission {
     pub reason: Option<String>,
 }
 
-pub use sys::{permission, post, request};
+pub use sys::{Delivered, delivered, install_delegate, permission, post, remove_all, request, simulate_click};
 
 #[cfg(target_os = "macos")]
 mod sys {
-    use super::Permission;
-    use block2::RcBlock;
-    use objc2::runtime::Bool;
-    use objc2_foundation::{NSBundle, NSError, NSString};
-    use objc2_user_notifications::{UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent, UNNotificationRequest, UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter};
+    use super::{INFO_KEY, Permission, Target, clicked, log};
+    use block2::{DynBlock, RcBlock};
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject};
+    use objc2::{AnyThread, define_class, msg_send};
+    use objc2_foundation::{NSArray, NSBundle, NSDictionary, NSError, NSString};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent, UNNotification, UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse, UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter,
+        UNUserNotificationCenterDelegate,
+    };
+    use serde::Serialize;
     use std::ptr::NonNull;
     use std::sync::mpsc;
     use std::time::Duration;
 
     /// `UNUserNotificationCenter` throws without a bundle identifier (a bare binary): check first.
-    fn center() -> Result<objc2::rc::Retained<UNUserNotificationCenter>, String> {
+    fn center() -> Result<Retained<UNUserNotificationCenter>, String> {
         let id = NSBundle::mainBundle().bundleIdentifier();
         if id.is_none() {
             return Err("This build of coool has no app bundle, so macOS won't show its notifications.".into());
@@ -167,6 +316,68 @@ mod sys {
     fn err_text(e: *mut NSError) -> Option<String> {
         // SAFETY: the completion handler's error is null or a valid NSError for the call's duration.
         unsafe { e.as_ref() }.map(|e| e.localizedDescription().to_string())
+    }
+
+    /// The [`Target`] JSON a notification carries, if any.
+    fn info_of(n: &UNNotification) -> Option<String> {
+        let info = n.request().content().userInfo();
+        let key = NSString::from_str(INFO_KEY);
+        let v = info.objectForKey(key.as_ref())?;
+        v.downcast_ref::<NSString>().map(|s| s.to_string())
+    }
+
+    define_class!(
+        /// coool's `UNUserNotificationCenterDelegate`: banners while coool is in front, and clicks.
+        #[unsafe(super(NSObject))]
+        #[name = "CooolNotificationDelegate"]
+        struct Delegate;
+
+        unsafe impl NSObjectProtocol for Delegate {}
+
+        unsafe impl UNUserNotificationCenterDelegate for Delegate {
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn will_present(&self, _c: &UNUserNotificationCenter, n: &UNNotification, done: &DynBlock<dyn Fn(UNNotificationPresentationOptions)>) {
+                // The settings already decided it goes out (including "only when coool isn't in front"): show it.
+                let mut o = UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List;
+                if n.request().content().sound().is_some() {
+                    o |= UNNotificationPresentationOptions::Sound;
+                }
+                log(&format!("present in front: {}", n.request().identifier()));
+                done.call((o,));
+            }
+
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive(&self, _c: &UNUserNotificationCenter, r: &UNNotificationResponse, done: &DynBlock<dyn Fn()>) {
+                let n = r.notification();
+                let action = r.actionIdentifier().to_string();
+                let action = match action.as_str() {
+                    "com.apple.UNNotificationDefaultActionIdentifier" => "default".to_string(),
+                    "com.apple.UNNotificationDismissActionIdentifier" => "dismiss".to_string(),
+                    _ => action,
+                };
+                log(&format!("response to {}", n.request().identifier()));
+                clicked(info_of(&n).as_deref(), &action);
+                done.call(());
+            }
+        }
+    );
+
+    impl Delegate {
+        fn new() -> Retained<Self> {
+            let this = Self::alloc().set_ivars(());
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// Sets coool's delegate (before the app finishes launching, so a click that launched it still arrives). A build
+    /// without a bundle has no notification center: nothing to do.
+    pub fn install_delegate() {
+        let Ok(c) = center() else { return };
+        let d = Delegate::new();
+        c.setDelegate(Some(ProtocolObject::from_ref(&*d)));
+        // The center holds its delegate weakly: this one lives as long as the app.
+        std::mem::forget(d);
+        log("delegate set");
     }
 
     pub fn permission() -> Permission {
@@ -196,7 +407,8 @@ mod sys {
         }
     }
 
-    /// Asks once (the system prompt); afterwards macOS answers from the person's earlier choice.
+    /// Asks once (the system prompt); afterwards macOS answers from the person's earlier choice. Waits for the answer
+    /// up to 2 minutes; after that it reports where things stand (the page reads it again when the window regains focus).
     pub fn request() -> Permission {
         let c = match center() {
             Ok(c) => c,
@@ -206,15 +418,17 @@ mod sys {
         let block = RcBlock::new(move |ok: Bool, e: *mut NSError| {
             let _ = tx.send((ok.as_bool(), err_text(e)));
         });
+        log("asking for permission");
         c.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound, &block);
-        match rx.recv_timeout(Duration::from_secs(120)) {
+        let r = rx.recv_timeout(Duration::from_secs(120));
+        log(&format!("permission answer: {r:?}"));
+        match r {
             Ok((_, Some(e))) => Permission { status: "unavailable".into(), reason: Some(e) },
-            Ok(_) => permission(),
-            Err(_) => permission(),
+            _ => permission(),
         }
     }
 
-    pub fn post(title: &str, body: &str, sound: bool) -> Result<(), String> {
+    pub fn post(title: &str, body: &str, sound: bool, target: &Target) -> Result<(), String> {
         let c = center()?;
         let content = UNMutableNotificationContent::new();
         content.setTitle(&NSString::from_str(title));
@@ -223,8 +437,12 @@ mod sys {
         if sound {
             content.setSound(Some(&UNNotificationSound::defaultSound()));
         }
-        let id = NSString::from_str(&format!("coool-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)));
-        let req = UNNotificationRequest::requestWithIdentifier_content_trigger(&id, &content, None);
+        let json = serde_json::to_string(target).map_err(|e| e.to_string())?;
+        let info = NSDictionary::<NSString, NSString>::from_slices(&[&*NSString::from_str(INFO_KEY)], &[&*NSString::from_str(&json)]);
+        // SAFETY: a dictionary of strings is a property list; `cast_unchecked` only forgets the key and value types.
+        unsafe { content.setUserInfo(&Retained::cast_unchecked::<NSDictionary>(info)) };
+        let id = format!("coool-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let req = UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&id), &content, None);
         let (tx, rx) = mpsc::channel();
         let block = RcBlock::new(move |e: *mut NSError| {
             let _ = tx.send(err_text(e));
@@ -232,22 +450,102 @@ mod sys {
         c.addNotificationRequest_withCompletionHandler(&req, Some(&block));
         match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Some(e)) => Err(e),
-            _ => Ok(()),
+            _ => {
+                log(&format!("posted {id} {json}"));
+                Ok(())
+            }
         }
+    }
+
+    /// One notification in Notification Center (self-test evidence of delivery).
+    #[derive(Serialize)]
+    pub struct Delivered {
+        pub id: String,
+        pub title: String,
+        pub info: Option<String>,
+    }
+
+    fn delivered_raw(c: &UNUserNotificationCenter) -> Result<Vec<Retained<UNNotification>>, String> {
+        let (tx, rx) = mpsc::channel::<Vec<usize>>();
+        let block = RcBlock::new(move |a: NonNull<NSArray<UNNotification>>| {
+            // SAFETY: a valid array for the handler's duration; each element is retained before it is sent on.
+            let a = unsafe { a.as_ref() };
+            let v = a.iter().map(|n| Retained::into_raw(n) as usize).collect();
+            let _ = tx.send(v);
+        });
+        c.getDeliveredNotificationsWithCompletionHandler(&block);
+        let v = rx.recv_timeout(Duration::from_secs(5)).map_err(|_| "macOS didn't answer".to_string())?;
+        // SAFETY: each pointer was retained above and is taken back exactly once.
+        Ok(v.into_iter().filter_map(|p| unsafe { Retained::from_raw(p as *mut UNNotification) }).collect())
+    }
+
+    /// coool's notifications still in Notification Center.
+    pub fn delivered() -> Result<Vec<Delivered>, String> {
+        let c = center()?;
+        Ok(delivered_raw(&c)?.iter().map(|n| Delivered { id: n.request().identifier().to_string(), title: n.request().content().title().to_string(), info: info_of(n) }).collect())
+    }
+
+    /// Removes all of this app's delivered and pending notifications (self-test cleanup).
+    pub fn remove_all() -> Result<(), String> {
+        let c = center()?;
+        c.removeAllDeliveredNotifications();
+        c.removeAllPendingNotificationRequests();
+        Ok(())
+    }
+
+    /// A click on the delivered notification `id`, sent to the center's delegate the way macOS sends a real one: the
+    /// delegate method itself, with a response built from that notification. Self-test only. Without a bundle (dev
+    /// builds) or a delivered notification, `info` goes straight to the click handler.
+    pub fn simulate_click(id: Option<&str>, info: Option<&str>) -> Result<String, String> {
+        if let (Some(id), Ok(c)) = (id, center()) {
+            let n = delivered_raw(&c)?.into_iter().find(|n| n.request().identifier().to_string() == id).ok_or("not delivered")?;
+            let cls = AnyClass::get(c"UNNotificationResponse").ok_or("no UNNotificationResponse")?;
+            let sel = objc2::sel!(responseWithNotification:actionIdentifier:);
+            if !cls.responds_to(sel) {
+                clicked(info_of(&n).as_deref(), "default");
+                return Ok("handler (this macOS can't build a response)".into());
+            }
+            let action = NSString::from_str("com.apple.UNNotificationDefaultActionIdentifier");
+            let resp: Option<Retained<AnyObject>> = unsafe { msg_send![cls, responseWithNotification: &*n, actionIdentifier: &*action] };
+            let resp = resp.ok_or("no response")?;
+            let d = c.delegate().ok_or("no delegate")?;
+            let done = RcBlock::new(|| log("click handled (completion called)"));
+            let _: () = unsafe { msg_send![&*d, userNotificationCenter: &*c, didReceiveNotificationResponse: &*resp, withCompletionHandler: &*done] };
+            return Ok("delegate".into());
+        }
+        clicked(info, "default");
+        Ok("handler".into())
     }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod sys {
-    use super::Permission;
+    use super::{Permission, Target, clicked};
+    #[derive(serde::Serialize)]
+    pub struct Delivered {
+        pub id: String,
+        pub title: String,
+        pub info: Option<String>,
+    }
+    pub fn install_delegate() {}
     pub fn permission() -> Permission {
         Permission { status: "unavailable".into(), reason: Some("Notifications are macOS only for now.".into()) }
     }
     pub fn request() -> Permission {
         permission()
     }
-    pub fn post(_t: &str, _b: &str, _s: bool) -> Result<(), String> {
+    pub fn post(_t: &str, _b: &str, _s: bool, _target: &Target) -> Result<(), String> {
         Err("Notifications are macOS only for now.".into())
+    }
+    pub fn delivered() -> Result<Vec<Delivered>, String> {
+        Ok(Vec::new())
+    }
+    pub fn remove_all() -> Result<(), String> {
+        Ok(())
+    }
+    pub fn simulate_click(_id: Option<&str>, info: Option<&str>) -> Result<String, String> {
+        clicked(info, "default");
+        Ok("handler".into())
     }
 }
 
@@ -299,5 +597,40 @@ mod tests {
     fn old_settings_files_get_the_defaults() {
         let p: Prefs = serde_json::from_str("{}").unwrap();
         assert_eq!(p, Prefs::default());
+    }
+
+    #[test]
+    fn a_notification_carries_where_it_points() {
+        let t = Target::of(Kind::NeedsYou, 3, Some("claude:abc"), &perm());
+        assert_eq!((t.kind.as_str(), t.chat, t.session.as_deref(), t.request.as_deref()), ("needs", Some(3), Some("claude:abc"), Some("r")));
+        let done = Target::of(Kind::Finished, 3, None, &ChatEventKind::TurnEnd { duration_ms: 1, ok: true });
+        assert_eq!((done.kind.as_str(), done.request), ("finished", None));
+    }
+
+    #[test]
+    fn a_click_routes_to_its_target() {
+        let me = std::process::id();
+        let json = serde_json::to_string(&Target::of(Kind::NeedsYou, 3, Some("claude:abc"), &perm())).unwrap();
+        let r = route_of(Some(&json), "default", me);
+        assert_eq!(r, Route { kind: "needs".into(), chat: Some(3), session: Some("claude:abc".into()), request: Some("r".into()), action: "default".into() });
+        // Posted by an earlier run of coool (the click launched this one): its chat id means nothing here.
+        let old = route_of(Some(&json), "default", me.wrapping_add(1));
+        assert_eq!((old.chat, old.session.as_deref()), (None, Some("claude:abc")));
+        // No target (another build's notification, garbage): just bring coool forward.
+        assert_eq!(route_of(None, "default", me).kind, "app");
+        assert_eq!(route_of(Some("{not json"), "default", me).kind, "app");
+        assert_eq!(route_of(Some(&serde_json::to_string(&Target::test()).unwrap()), "default", me).kind, "test");
+    }
+
+    #[test]
+    fn a_click_waits_for_the_page_and_is_taken_once() {
+        // No app attached (as before `setup`, a click that launched coool): kept.
+        let json = serde_json::to_string(&Target::of(Kind::Finished, 9, Some("codex:x"), &ChatEventKind::TurnEnd { duration_ms: 1, ok: true })).unwrap();
+        clicked(Some(&json), "default");
+        let r = take().expect("kept for the page");
+        assert_eq!((r.kind.as_str(), r.chat), ("finished", Some(9)));
+        assert!(take().is_none(), "taken once");
+        clicked(Some(&json), "dismiss");
+        assert!(take().is_none(), "a dismissal goes nowhere");
     }
 }
