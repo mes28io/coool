@@ -59,7 +59,14 @@ export const LOOPS: Record<string, () => ReactNode> = {
   ),
   skel: () => <Skel w={140} h={10} i={0} />,
   "attn-card": () => <div className="attn-card h-[30px] w-[200px] rounded-[10px] border border-line bg-raised" />,
-  globe: () => <GlobeGlyph size={19} live />,
+  globe: () => (
+    <span className="flex items-center gap-3">
+      <GlobeGlyph size={19} live />
+      <span style={{ zoom: 3 }} className="flex">
+        <GlobeGlyph size={19} live />
+      </span>
+    </span>
+  ),
   // The new chat's provider mark: the Motion loop it was, and the CSS class it is (absent from older builds).
   "welcome-motion": () => (
     <motion.div animate={{ rotate: [0, 8, 0] }} transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }} className="size-[26px] rounded-[6px] bg-running" />
@@ -71,7 +78,8 @@ export const LOOPS: Record<string, () => ReactNode> = {
       () => (
         <span className="flex items-center gap-3 text-running">
           <MoodSvg mood={m} size={14} />
-          <span className="origin-left scale-[3]">
+          {/* zoom, not a scale transform: laid out and rasterised at 3x, as the person's own zoom would be */}
+          <span style={{ zoom: 3 }} className="flex">
             <MoodSvg mood={m} size={14} />
           </span>
         </span>
@@ -94,7 +102,7 @@ export function AnimGallery() {
   const cols = [names.filter((n) => !n.startsWith("mood-")).slice(0, 10), names.filter((n) => !n.startsWith("mood-")).slice(10), names.filter((n) => n.startsWith("mood-"))];
   return (
     <div className="fixed inset-0 z-[99999] overflow-hidden bg-bg p-6 text-fg" data-anim-gallery>
-      <div className="grid grid-cols-3 gap-x-6">
+      <div className="grid grid-cols-[440px_440px_440px] gap-x-6">
         {cols.map((c, i) => (
           <div key={i}>
             {c.map((n) => (

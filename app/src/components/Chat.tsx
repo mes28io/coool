@@ -21,6 +21,7 @@ import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
 import { AgentMark } from "./AgentMark";
 import { MoodSvg } from "./MoodGlyph";
+import { Shimmer } from "./Shimmer";
 import { Markdown } from "./Markdown";
 import { CheckpointsCard } from "./Checkpoints";
 import { toolMood } from "../lib/activityMood";
@@ -739,7 +740,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
           <IChevron size={14} />
         </motion.span>
         {active ? (
-          <span className="shimmer font-medium">Running {tools.length === 1 ? "a step" : `${tools.length} steps`}</span>
+          <Shimmer className="font-medium">{`Running ${tools.length === 1 ? "a step" : `${tools.length} steps`}`}</Shimmer>
         ) : (
           <span className="font-medium text-dim group-hover:text-fg/85">Ran {tools.length === 1 ? "1 step" : `${tools.length} steps`}</span>
         )}
@@ -1502,9 +1503,9 @@ const SUGGEST = ["Explain how this codebase is organised", "Find and fix the fla
 function Welcome({ chat, onSuggest }: { chat: Chat; onSuggest: (t: string) => void }) {
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease }} className="flex min-h-[46vh] flex-col items-center justify-center text-center">
-      <motion.div animate={{ rotate: [0, 8, 0] }} transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}>
+      <div className="welcome-sway">
         <ProviderMark provider={chat.provider} size={26} />
-      </motion.div>
+      </div>
       <div className="mt-4 text-display font-semibold tracking-[-0.02em]">
         {chat.provider === "claude" ? "Claude Code" : "Codex"} in {folderName(chat.cwd)}
       </div>

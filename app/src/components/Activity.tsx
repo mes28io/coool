@@ -7,6 +7,7 @@ import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
 import { AgentMark } from "./AgentMark";
 import { MoodGlyph } from "./MoodGlyph";
+import { Shimmer } from "./Shimmer";
 import { useStore, type Since } from "../store";
 import { useClock } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
@@ -403,9 +404,7 @@ export function ThinkingRow({
   const m = MOODS[mood];
   // Same shimmer as the subagent strips: the default tone (a near-full-text base hid the sweep in the large row).
   const label = given ? (
-    <span className="shimmer inline-block" style={{ ["--shimmer-hi" as string]: "var(--text)" }}>
-      {given}
-    </span>
+    <Shimmer style={{ ["--shimmer-hi" as string]: "var(--text)" }}>{given}</Shimmer>
   ) : (
     <ThinkingWord seed={seed} origin={exact ? since : null} words={m.words} cycle={exact} />
   );
@@ -599,7 +598,7 @@ const StepGroup = memo(function StepGroup({
           <IChevron size={14} />
         </motion.span>
         {active ? (
-          <span className="shimmer font-medium">Running {items.length === 1 ? "a step" : `${items.length} steps`}</span>
+          <Shimmer className="font-medium">{`Running ${items.length === 1 ? "a step" : `${items.length} steps`}`}</Shimmer>
         ) : (
           <span className="font-medium text-dim group-hover:text-fg/85">Ran {items.length === 1 ? "1 step" : `${items.length} steps`}</span>
         )}

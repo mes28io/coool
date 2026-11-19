@@ -5,6 +5,7 @@
 import { motion } from "motion/react";
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cx, ease } from "./primitives";
+import { Shimmer } from "./Shimmer";
 
 import { reducedMotion } from "../lib/motion";
 export { reducedMotion };
@@ -31,7 +32,17 @@ export function Reveal({ text, fresh, inner }: { text: string; fresh?: boolean; 
     const t = setTimeout(() => setOn(false), 520);
     return () => clearTimeout(t);
   }, [on]);
-  return <span className={on ? "rv-sweep" : undefined}>{inner ? <span className={inner.className} style={inner.style}>{text}</span> : text}</span>;
+  return (
+    <span className={on ? "rv-sweep" : undefined}>
+      {inner ? (
+        <Shimmer className={inner.className?.replace(/\bshimmer\b/, "").trim()} style={inner.style}>
+          {text}
+        </Shimmer>
+      ) : (
+        text
+      )}
+    </span>
+  );
 }
 
 const Ready = createContext<{ current: boolean }>({ current: true });
