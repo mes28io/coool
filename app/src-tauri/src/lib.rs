@@ -15,6 +15,7 @@ mod browser;
 mod device;
 mod env;
 mod glass;
+mod lid;
 mod login;
 mod motion;
 mod notify;
@@ -92,6 +93,10 @@ struct Core {
     confirm_quit: AtomicBool,
     /// Settings > General: "Prevent sleep while agents are working" (see [`power`]).
     power: Mutex<power::Keeper>,
+    /// Settings > General: "Keep working with the lid closed" (see [`lid`]).
+    lid: Mutex<lid::Lid>,
+    /// A self-test's stand-ins for the lid hold (`COOOL_LID_DRYRUN=1`): its readings and the dry-run helper.
+    lid_fake: Option<(lid::sensors::Fake, Arc<lid::helper::DryRun>)>,
     /// Settings > Notifications (see [`notify`]).
     notifier: notify::Notifier,
     /// `COOOL_TRACE_SESSIONS`: latency trace (off unless set).
@@ -423,7 +428,25 @@ impl Core {
         // Working agents coool runs: chats mid-turn, and its terminal sessions the transcript shows busy.
         let working = chats.iter().filter(|c| c.state == ChatState::Working).count()
             + sessions.iter().filter(|(_, s, _)| s.managed.is_some() && s.chat.is_none() && s.status == coool_core::model::Status::Busy).count();
-        self.power.lock().unwrap().update(working);
+        // A chat waiting on the person (permission, question) isn't `Working`: it holds nothing.
+        let now = lid::now_ms();
+        let (assert, covered, notices) = {
+            let mut l = self.lid.lock().unwrap();
+            l.tick(now, working);
+            (l.wants_assertion(), l.covers_idle_sleep(), l.take_notices())
+        };
+        {
+            let mut p = self.power.lock().unwrap();
+            p.set_lid(assert, covered);
+            p.update(working);
+        }
+        if self.selftest.is_none() {
+            for n in notices {
+                thread::spawn(move || {
+                    let _ = notify::post("coool let the Mac sleep", &n, false);
+                });
+            }
+        }
         (sessions, Rest { pending, ptys, loading, chats, usage, show_automation })
     }
 
@@ -1004,21 +1027,35 @@ struct AppPrefs {
     prevent_sleep: bool,
     notify: notify::Prefs,
     open_with: String,
+    /// "Keep working with the lid closed" and its limits. Absent in a `prefs_set`: left as it is (so a caller that
+    /// doesn't know it never switches it off, which would also remove its helper).
+    #[serde(default)]
+    lid: Option<lid::Prefs>,
 }
 
 #[tauri::command(async)]
 fn prefs_get(core: State<'_, Arc<Core>>) -> AppPrefs {
     let s = settings::load(core.selftest.as_ref());
-    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with }
+    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with, lid: Some(s.lid) }
 }
 
-/// Saves and applies them at once (the power assertion is taken or released right here).
+/// Saves and applies them at once (the power assertion is taken or released right here, and so is the lid hold).
 #[tauri::command(async)]
 fn prefs_set(core: State<'_, Arc<Core>>, prefs: AppPrefs) -> Res<()> {
     core.confirm_quit.store(prefs.confirm_quit, Ordering::Relaxed);
     core.power.lock().unwrap().set_enabled(prefs.prevent_sleep);
     *core.notifier.prefs.lock().unwrap() = prefs.notify.clone();
     let mut s = settings::load(core.selftest.as_ref());
+    if let Some(l) = prefs.lid {
+        let l = l.clamped();
+        {
+            let mut lid = core.lid.lock().unwrap();
+            lid.set_prefs(l.clone(), lid::now_ms());
+            let (assert, covered) = (lid.wants_assertion(), lid.covers_idle_sleep());
+            core.power.lock().unwrap().set_lid(assert, covered);
+        }
+        s.lid = l;
+    }
     s.confirm_quit = prefs.confirm_quit;
     s.prevent_sleep = prefs.prevent_sleep;
     s.notify = prefs.notify;
@@ -1046,6 +1083,120 @@ fn onboarding_set_seen(core: State<'_, Arc<Core>>, seen: bool) -> Res<()> {
 #[tauri::command]
 fn power_status(core: State<'_, Arc<Core>>) -> power::PowerStatus {
     core.power.lock().unwrap().status()
+}
+
+// ---------- "Keep working with the lid closed" (lid/) ----------
+
+#[tauri::command(async)]
+fn lid_status(core: State<'_, Arc<Core>>) -> lid::Status {
+    core.lid.lock().unwrap().status(lid::now_ms())
+}
+
+/// "Install…": the system's administrator prompt, once (a dry-run helper in a self-test). The prompt may wait on the
+/// person for minutes, so it runs without the lid's lock.
+#[tauri::command(async)]
+fn lid_install(core: State<'_, Arc<Core>>) -> Res<lid::Status> {
+    let job = core.lid.lock().unwrap().install_job();
+    let r = job();
+    let mut l = core.lid.lock().unwrap();
+    l.refresh_helper(lid::now_ms());
+    r.map_err(err)?;
+    Ok(l.status(lid::now_ms()))
+}
+
+/// "Remove helper": the helper removes itself (no prompt); if it doesn't answer, the administrator prompt runs the
+/// removal script instead.
+#[tauri::command(async)]
+fn lid_remove(core: State<'_, Arc<Core>>) -> Res<lid::Status> {
+    let direct = core.lid.lock().unwrap().uninstall(lid::now_ms());
+    if direct.is_err() {
+        let job = core.lid.lock().unwrap().remove_job();
+        job().map_err(err)?;
+    }
+    let mut l = core.lid.lock().unwrap();
+    l.refresh_helper(lid::now_ms());
+    Ok(l.status(lid::now_ms()))
+}
+
+/// "Restore normal sleep…": a stale SleepDisabled (coool's marker, the switch on, no helper answering), turned off
+/// with the administrator prompt.
+#[tauri::command(async)]
+fn lid_restore(core: State<'_, Arc<Core>>) -> Res<lid::Status> {
+    let job = core.lid.lock().unwrap().restore_job();
+    job().map_err(err)?;
+    let mut l = core.lid.lock().unwrap();
+    l.clear_stale(lid::now_ms());
+    Ok(l.status(lid::now_ms()))
+}
+
+/// A self-test's simulated readings and events (`COOOL_LID_DRYRUN=1` only): battery, heat, lid, closed-display
+/// mode, and `crash` (the helper connection drops without a RELEASE, as when coool is killed).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct LidSim {
+    on_battery: Option<bool>,
+    battery_pct: Option<u8>,
+    /// "nominal" | "fair" | "serious" | "critical"
+    thermal: Option<String>,
+    lid_closed: Option<bool>,
+    lid_sleeps: Option<bool>,
+    crash: bool,
+}
+
+#[tauri::command(async)]
+fn lid_simulate(core: State<'_, Arc<Core>>, sim: LidSim) -> Res<lid::Status> {
+    let Some((fake, dry)) = &core.lid_fake else { return Err("lid_simulate needs a self-test with COOOL_LID_DRYRUN=1".into()) };
+    let r = {
+        let mut r = fake.0.lock().unwrap();
+        if let Some(v) = sim.on_battery {
+            r.on_battery = Some(v);
+        }
+        if let Some(v) = sim.battery_pct {
+            r.battery_pct = Some(v);
+        }
+        if let Some(t) = &sim.thermal {
+            r.thermal = Some(match t.as_str() {
+                "fair" => motion::Thermal::Fair,
+                "serious" => motion::Thermal::Serious,
+                "critical" => motion::Thermal::Critical,
+                _ => motion::Thermal::Nominal,
+            });
+        }
+        if let Some(v) = sim.lid_closed {
+            r.lid_closed = Some(v);
+        }
+        if let Some(v) = sim.lid_sleeps {
+            r.lid_sleeps = Some(v);
+        }
+        r.clone()
+    };
+    // The dry-run helper reads the same values (its own battery floor and heat check, and sleepnow on a closed lid).
+    let th = match r.thermal {
+        Some(motion::Thermal::Critical) => 3,
+        Some(motion::Thermal::Serious) => 2,
+        Some(motion::Thermal::Fair) => 1,
+        _ => 0,
+    };
+    let line = format!(
+        "battery={} ac={} thermal={th} lid={} causes={}\n",
+        r.battery_pct.unwrap_or(100),
+        u8::from(r.on_battery != Some(true)),
+        if r.lid_closed == Some(true) { "closed" } else { "open" },
+        u8::from(r.lid_sleeps != Some(false))
+    );
+    std::fs::write(dry.sensors(), line).map_err(err)?;
+    let mut l = core.lid.lock().unwrap();
+    if sim.crash {
+        l.simulate_crash();
+    }
+    Ok(l.status(lid::now_ms()))
+}
+
+/// The dry-run helper's output (what it would have run), for a self-test.
+#[tauri::command(async)]
+fn lid_helper_log(core: State<'_, Arc<Core>>) -> Res<String> {
+    let Some((_, dry)) = &core.lid_fake else { return Err("no dry-run helper".into()) };
+    Ok(std::fs::read_to_string(dry.log()).unwrap_or_default())
 }
 
 #[tauri::command(async)]
@@ -1216,6 +1367,9 @@ mod settings {
         /// Hold a no-idle-sleep assertion while agents work.
         #[serde(default)]
         pub prevent_sleep: bool,
+        /// "Keep working with the lid closed" and its limits (see `lid`).
+        #[serde(default)]
+        pub lid: crate::lid::Prefs,
         #[serde(default)]
         pub notify: crate::notify::Prefs,
         /// The app files and folders open in (`apps::KNOWN` id, or "system").
@@ -1236,7 +1390,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, notify: Default::default(), open_with: system(), onboarded: false }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false }
         }
     }
 
@@ -1461,6 +1615,25 @@ pub fn run() {
     // Self-test runs stay off the person's accounts: free file reads only.
     // Probes send no prompt and spend no model usage; the self-test turns them on only when asked.
     usage.set_probes(selftest.is_none() || std::env::var_os("COOOL_SELFTEST_PROBES").is_some());
+    // The lid hold: the real helper and readings, or (a self-test with `COOOL_LID_DRYRUN=1`, debug builds only) the
+    // real helper code in its dry-run mode inside the test's folder, with readings the test sets.
+    let lid_fake = match &selftest {
+        Some(t) if cfg!(debug_assertions) && std::env::var("COOOL_LID_DRYRUN").is_ok_and(|v| v == "1") => {
+            let fake = lid::sensors::Fake::default();
+            *fake.0.lock().unwrap() = lid::Reading { on_battery: Some(false), battery_pct: Some(100), thermal: Some(motion::Thermal::Nominal), lid_closed: Some(false), lid_sleeps: Some(true), sleep_disabled: Some(false) };
+            Some((fake, lid::helper::DryRun::new(t.dir().join(".coool-lid-helper"))))
+        }
+        _ => None,
+    };
+    let lid_dir = match &selftest {
+        Some(t) => Some(t.dir().join(".coool-lid")),
+        None => dirs::config_dir().map(|d| d.join("coool")),
+    };
+    let lid_parts: (Box<dyn lid::Helper>, Box<dyn lid::Sensors>) = match &lid_fake {
+        Some((fake, dry)) => (Box::new(lid::helper::Socket::dry(dry.clone())), Box::new(fake.clone())),
+        None => (Box::new(lid::helper::Socket::real(dirs::config_dir().map(|d| d.join("coool")).unwrap_or_else(std::env::temp_dir))), Box::new(lid::sensors::System)),
+    };
+    let lid = lid::Lid::new(lid_parts.0, lid_parts.1, lid_dir, prefs.lid.clone(), lid::now_ms());
     let core = Arc::new(Core {
         hub: Mutex::new(hub),
         published: Mutex::new(Published::new()),
@@ -1482,6 +1655,8 @@ pub fn run() {
         show_automation: AtomicBool::new(prefs.show_automation),
         confirm_quit: AtomicBool::new(prefs.confirm_quit),
         power: Mutex::new(power::Keeper::new(power::system(), prefs.prevent_sleep)),
+        lid: Mutex::new(lid),
+        lid_fake,
         notifier: notify::Notifier::new(prefs.notify.clone()),
         trace: trace::Trace::from_env(),
         previews: artifact::Previews::default(),
@@ -1561,6 +1736,12 @@ pub fn run() {
             prefs_get,
             prefs_set,
             power_status,
+            lid_status,
+            lid_install,
+            lid_remove,
+            lid_restore,
+            lid_simulate,
+            lid_helper_log,
             notify_permission,
             notify_request,
             notify_test,

@@ -3,7 +3,7 @@
 // (`allowed` / `unavailable` the others); `?login=enabled|approval|not_found|unavailable` the login item's states;
 // `?onboarding=1` shows the first-run onboarding (otherwise the mock counts it as seen, so other demos never see it).
 
-import type { AppPrefs, Connections, InstalledApp, LoginStatus, NotifyPermission, SettingsBackend, StorageStatus, Worktrees } from "./settingsTypes";
+import type { AppPrefs, Connections, InstalledApp, LidStatus, LoginStatus, NotifyPermission, SettingsBackend, StorageStatus, Worktrees } from "./settingsTypes";
 
 const HOME = "/Users/you";
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -120,6 +120,33 @@ export function mockSettings(sim: { shutdown(udid: string): Promise<void> }): Se
   let login: LoginStatus = loginKnob[knob("login")] ?? { status: "not_registered" };
   let onboarded = knob("onboarding") !== "1";
   const removed = new Set<string>();
+  // "Keep working with the lid closed": `?lid=missing|ready|display|holding|battery|hot|stale` (any value opens
+  // Settings > General on the row; anything but `missing` turns the setting on).
+  const lidKnob = knob("lid");
+  if (lidKnob) {
+    prefs = { ...prefs, lid: { enabled: lidKnob !== "missing" || /[?&]lidon=1/.test(q), only_on_power: true, min_battery: 20, max_hours: 8 } };
+    void import("../store").then(({ useStore }) =>
+      setTimeout(() => {
+        useStore.getState().openSettings("general");
+        setTimeout(() => document.querySelector('[data-setting="lid-awake"]')?.scrollIntoView({ block: "start" }), 400);
+      }, 300),
+    );
+  }
+  let lidHelper: LidStatus["helper"] = lidKnob === "missing" || lidKnob === "display" ? { state: "missing" } : lidKnob === "stale" ? { state: "unreachable", detail: "Connection refused" } : { state: "ready" };
+  const lidStatus = (): LidStatus => {
+    const p = prefs.lid ?? { enabled: false, only_on_power: true, min_battery: 20, max_hours: 8 };
+    const now = Date.now();
+    const reading: LidStatus["reading"] = { on_battery: lidKnob === "battery", battery_pct: lidKnob === "battery" ? 64 : 100, thermal: lidKnob === "hot" ? "serious" : "nominal", lid_closed: false, lid_sleeps: lidKnob !== "display", sleep_disabled: lidKnob === "holding" || lidKnob === "stale" };
+    const working = p.enabled && ["holding", "display", "battery", "hot"].includes(lidKnob) ? 2 : 0;
+    const via = !p.enabled || !working ? null : lidKnob === "holding" && lidHelper.state === "ready" ? "helper" : lidKnob === "display" ? "display" : null;
+    const blocked = !p.enabled || !working || via ? null : lidKnob === "battery" ? "on_battery" : lidKnob === "hot" ? "hot" : lidHelper.state !== "ready" ? "needs_helper" : null;
+    const stops: LidStatus["stops"] = [
+      ...(lidKnob === "hot" ? [{ at: now - 4 * 60_000, code: "hot" as const, detail: "the Mac is running hot" }] : []),
+      ...(lidKnob === "battery" ? [{ at: now - 11 * 60_000, code: "on_battery" as const, detail: "on battery" }] : []),
+      { at: now - 9 * 3_600_000, code: "low_battery", detail: "battery 20%" },
+    ];
+    return { enabled: p.enabled, helper: lidHelper, dry_run: false, via, blocked, working, since: via ? now - 72 * 60_000 : null, reading, stops: lidKnob ? stops : [], stale: lidKnob === "stale", error: null, prefs: p };
+  };
   const storage: StorageStatus = {
     items: [
       { id: "transcripts", label: "Transcript cache", desc: "Parsed transcripts, so the sidebar loads fast. Rebuilt from the CLIs' own files.", path: `${HOME}/Library/Caches/coool`, bytes: 96_400_000, files: 1312, clearable: true, clear_label: "Clear cache" },
@@ -138,13 +165,33 @@ export function mockSettings(sim: { shutdown(udid: string): Promise<void> }): Se
       return JSON.parse(JSON.stringify(prefs));
     },
     async prefsSet(p) {
-      prefs = JSON.parse(JSON.stringify(p));
+      // Switching the lid hold off removes its helper (as the backend does).
+      if (prefs.lid?.enabled && p.lid && !p.lid.enabled) lidHelper = { state: "missing" };
+      prefs = { ...JSON.parse(JSON.stringify(p)), lid: p.lid ?? prefs.lid };
       try {
         localStorage.setItem(KEY, JSON.stringify(prefs));
       } catch {}
     },
     async powerStatus() {
-      return { enabled: prefs.prevent_sleep, held: prefs.prevent_sleep, working: 2, failed: false };
+      const covered = lidStatus().via === "helper";
+      return { enabled: prefs.prevent_sleep, held: prefs.prevent_sleep && !covered, working: 2, failed: false, covered };
+    },
+    async lidStatus() {
+      return lidStatus();
+    },
+    async lidInstall() {
+      await wait(900);
+      lidHelper = { state: "ready" };
+      return lidStatus();
+    },
+    async lidRemove() {
+      await wait(400);
+      lidHelper = { state: "missing" };
+      return lidStatus();
+    },
+    async lidRestore() {
+      await wait(400);
+      return { ...lidStatus(), stale: false };
     },
     async notifyPermission() {
       return { ...perm };

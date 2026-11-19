@@ -1,6 +1,7 @@
 fn main() {
     sim_helper();
     vm_helpers();
+    lid_helper();
     tauri_build::build()
 }
 
@@ -79,5 +80,34 @@ fn vm_helpers() {
         if !ok {
             std::fs::write(dir.join(name), b"").unwrap();
         }
+    }
+}
+
+/// Builds `native/coool-lid-helper.m` (the root helper of "Keep working with the lid closed", see src/lid/) into
+/// OUT_DIR on macOS. The app embeds it; installing copies these bytes to /Library/PrivilegedHelperTools, so the
+/// installed helper doesn't change when coool is rebuilt. Without `clang` an empty file is embedded and Settings says
+/// the helper is unavailable in this build.
+fn lid_helper() {
+    println!("cargo:rerun-if-changed=native/coool-lid-helper.m");
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("coool-lid-helper");
+    let mut ok = false;
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "macos" {
+        let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default().as_str() {
+            "x86_64" => "x86_64",
+            _ => "arm64",
+        };
+        let status = std::process::Command::new("xcrun")
+            .args(["clang", "-O2", "-fobjc-arc", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-arch", arch, "-mmacosx-version-min=13.0"])
+            .args(["-framework", "Foundation", "-framework", "IOKit", "-framework", "CoreFoundation", "-o"])
+            .arg(&out)
+            .arg("native/coool-lid-helper.m")
+            .status();
+        ok = matches!(status, Ok(s) if s.success());
+        if !ok {
+            println!("cargo:warning=couldn't build the lid helper (native/coool-lid-helper.m); \"Keep working with the lid closed\" will work only in closed-display mode");
+        }
+    }
+    if !ok {
+        std::fs::write(&out, b"").unwrap();
     }
 }

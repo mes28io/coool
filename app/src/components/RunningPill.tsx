@@ -2,8 +2,10 @@
 // quiet "3 working · 1 needs you". It opens a list of those sessions with what each is doing now, how many steps
 // its turn has taken, and Open / Stop. Hidden when nothing is working or waiting on the person.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api } from "../lib/backend";
 import { useClock } from "../lib/clock";
+import { pillText } from "../lib/lid";
 import { displayTitle, folderName, isThinking, projectOf, shortDetail } from "../lib/format";
 import { runningLabel } from "../lib/lanes";
 import { attention, useChatDigest, type Attention } from "../lib/live";
@@ -77,8 +79,40 @@ export function RunningPill() {
             <LiveRow key={sessionKey(l.s)} l={l} onDone={close} />
           ))}
         </div>
+        {open && <AwakeFooter />}
       </Popover>
     </div>
+  );
+}
+
+/** A quiet line on whether coool is keeping the Mac awake (Settings > General), read while the list is open. */
+function AwakeFooter() {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const read = () =>
+      Promise.all([api().lidStatus().catch(() => null), api().powerStatus().catch(() => null)]).then(([lid, power]) => {
+        if (live) setText(pillText(lid, power));
+      });
+    void read();
+    const t = setInterval(read, 5000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, []);
+  if (!text) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => useStore.getState().openSettings("general")}
+      className="flex w-full items-center gap-2 border-t border-hairline px-3.5 py-2 text-left text-small text-faint transition-colors hover:text-dim"
+      title="Settings > General"
+      data-running-awake
+    >
+      <span className="size-[5px] shrink-0 rounded-full bg-faint/70" />
+      {text}
+    </button>
   );
 }
 
