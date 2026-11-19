@@ -27,7 +27,7 @@ import { CommitTrail, type Committing } from "./CommitTrail";
 import { FanOut } from "./FanOut";
 import { IAgent, IForward, IPlay, IPlus, ITerminal } from "./icons";
 import { editPairs, InlineDiff } from "./InlineDiff";
-import { Age, Card, CardHeader, Node, TEXT_X } from "./MissionCard";
+import { Age, Card, CardHeader, Node } from "./MissionCard";
 import { AutoTag, Button, cx, ease, Kbd, NeedsBadge, PathText, ProviderMark, softSpring, StatusDot } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { RecentSkeleton, Skel } from "./Skeletons";
