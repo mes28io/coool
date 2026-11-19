@@ -90,8 +90,8 @@ headers and the xnu source, by unit tests with a fake helper, and by the real he
 ### Holding
 
 - **The count.** On every refresh (~1 s), coool counts the agents working right now: chats mid-turn plus coool's busy
-  terminal sessions. A chat waiting on the person (permission prompt, question) doesn't count, so a prompt left
-  waiting with the lid closed releases the hold.
+  terminal sessions. A chat waiting on the person (permission prompt, question) doesn't count: it is counted apart, and
+  a prompt left waiting with the lid closed releases the hold after a short grace ("A chat that asks" below).
 - **When to hold.** While the count is above zero and the limits allow:
   1. If the helper is ready, coool sends `HOLD 60` on a connection it keeps open, and a `BEAT` every 15 s. It writes
      its own marker (`~/Library/Application Support/coool/lid-hold.json`). The keep-awake assertion steps aside, since
@@ -99,8 +99,42 @@ headers and the xnu source, by unit tests with a fake helper, and by the real he
   2. Otherwise, in closed-display mode, coool holds the no-idle-sleep assertion (`power::Keeper::set_lid`), even with
      "Prevent sleep" off.
   3. Otherwise: "Needs one-time approval".
-- **When to release.** As soon as the count is zero, the setting goes off, or a limit hits: `RELEASE`, marker removed.
-  The keep-awake assertion comes back if its own setting is on.
+- **When to release.** As soon as the count is zero and nobody waits (the work finished), the setting goes off, or a
+  limit hits: `RELEASE`, marker removed. The keep-awake assertion comes back if its own setting is on. When the count
+  is zero but agents wait on the person, after the grace (next section).
+
+### A chat that asks
+
+A permission prompt or a question stops an agent until someone answers. With the lid closed nobody can, so holding
+the Mac awake for it would only spend battery and heat. Instead coool makes the situation visible before, during and
+after, and makes the unattended path one click away.
+
+- **What counts as waiting.** On every refresh, next to the working count (`Core::collect` in `lib.rs`), coool counts
+  the chats whose state is `WaitingPermission` (a pending permission or question) and coool's terminal sessions the
+  CLI reports blocked on the person (`waiting_for`), and passes the first one: its title as the app shows it, what it
+  asked in the needs-you notification's words (`notify::ask_of`, kept per chat by the output pump), its session key and
+  request id (`Lid::tick_with(now, working, waiting, asker)`). A chat that finished is idle, not waiting.
+- **Before.** While the setting is on, something would hold a closed Mac (the helper ready, or closed-display mode),
+  and a chat runs a turn in a mode that asks (Claude Ask, Accept edits, Plan; Codex Untrusted, On request), one line
+  sits above its message box (`components/LidAskBanner.tsx`): "Lid-closed is on, but this chat asks before it acts: it
+  will pause, and the Mac will sleep, at its first prompt." Its button picks the first mode in the composer's list (least
+  permissive first) that doesn't ask and isn't a bypass (`lidModeFix` in `lib/lid.ts`): for Codex **Switch to Never
+  ask** (approvals off, the chat's sandbox unchanged). Claude's list has no such mode (Accept edits still asks before
+  commands; only Bypass doesn't ask), so for Claude the button is **Choose a mode…** and opens the mode menu, whose
+  warning names Bypass and says to use it only where the task is trusted. No mode ever changes without the click.
+  **Dismiss for this chat** hides it for that chat (by chat id, and by session id across launches). The Settings row
+  lists the working chats in a mode that asks ("2 working chats are in a mode that asks: …", each opens its chat).
+- **During: the grace.** When the last working agent starts waiting, the hold carries on for "When every agent waits
+  on you, keep holding for" (0, 1, 2, 5 or 10 min; default 2 min; `grace_mins`): long enough for a quick lid reopen, or
+  for another agent to resume. Any agent working again cancels it, and the next wait starts a fresh one. All the safety
+  limits below, and the helper's floor, still apply during the grace and win. Settings shows "Holding a little longer:
+  “Fix the build” is waiting for your answer. If nobody answers, the Mac can sleep at 02:16."
+- **After.** When the grace runs out with the lid closed, coool lets go and records a stop (`Code::Waiting`, with the
+  chat, session and request): "Let the Mac sleep at 02:14: “Fix the build” was waiting for your answer (Bash: npm
+  test)." It is listed under the row and notified when the lid opens; a click on the notification opens the Needs you
+  page on that item (or its chat, once answered; `notify::Target::of_lid_stop`), and the item's header says "This paused
+  a lid-closed run at 02:14". With the lid open the grace ends quietly (the person is there; the needs-you notification
+  already went out).
 
 ### Safety limits (enforced)
 
@@ -126,7 +160,7 @@ headers and the xnu source, by unit tests with a fake helper, and by the real he
   `/usr/bin/pmset -a disablesleep 0`).
 - **Automatic releases** are recorded (the last 10, in `lid-stops.json` next to `settings.json`), shown in Settings
   ("Stopped holding the Mac awake at 02:14: battery 20%."), and posted as a notification ("coool let the Mac sleep"):
-  at once with the lid open, or when it opens again.
+  at once with the lid open, or when it opens again. So is the end of a grace with every agent waiting (above).
 
 ### What gets installed, and how it goes away
 
@@ -215,7 +249,15 @@ headers and the xnu source, by unit tests with a fake helper, and by the real he
   - no lid;
   - switching off removes the helper; Remove helper while holding;
   - crash recovery from the marker, the stale switch;
-  - drop releases; the simulated kill; clamped limits.
+  - drop releases; the simulated kill; clamped limits;
+  - the grace: it starts when the last agent waits and keeps beating, a working agent cancels it (a later wait starts
+    a fresh one), it runs out into a `waiting` stop naming the chat, its session and request (kept on disk, noticed when
+    the lid opens), nothing is recorded with the lid open or when the work finished, no grace when nothing was held,
+    0 min lets go at once, and battery, heat, the maximum duration and switching off all win during it.
+- **Notifier** (`notify::tests`): a `waiting` stop's notice targets the Needs you item (`Target::of_lid_stop`), any
+  other only brings coool forward; `ask_of` gives the request id and the needs-you words.
+- **Pure UI logic** (`lib/lid.test.ts`): the banner's button per CLI (`lidModeFix`), when the banner can show
+  (`lidWouldHold`), the grace line, the stop text, the Needs you match (`pausedBy`).
 - **The real helper in `--dry-run`** (`lid::helper::tests`):
   - hold, beat, release, busy;
   - connection close releases;
@@ -236,8 +278,14 @@ headers and the xnu source, by unit tests with a fake helper, and by the real he
 - **In the app:** the `lid-awake` self-test scenario (`COOOL_LID_DRYRUN=1`; real client, real helper code dry-run,
   readings set by the test, one Haiku chat). It covers the Settings row's states, Install…, a working chat engaging
   the hold with the keep-awake assertion covered, a battery drop, the turn ending, a simulated kill, heat, and Remove
-  helper.
-- **Browser mock:** `?lid=missing&lidon=1|ready|display|holding|battery|hot|stale`.
+  helper. A second Haiku chat in Ask mode covers "A chat that asks": the line above its message box (for Claude its
+  button opens the menu), its permission prompt with the lid closed starting the grace (shortened to 8 s with
+  `lid_simulate { grace_ms }`) and the Settings line naming it, the grace running out into a `waiting` stop with the
+  chat's title, session and request, a notification click with that target opening the Needs you item and its
+  "paused" note, the mode menu's warning and a mode picked there hiding the line, and Dismiss for this chat sticking
+  through the next prompt.
+- **Browser mock:** `?lid=missing&lidon=1|ready|display|holding|grace|battery|hot|stale|chat` (`chat`: on and ready,
+  Settings not opened; any knob names the first chat waiting on a permission in a `waiting` stop).
 
 ### Manual test plan for the owner (about 5 minutes plus the closed-lid time)
 
@@ -270,6 +318,12 @@ You'll need: a MacBook on its charger, no external display, coool built from thi
      neither;
    - `sudo launchctl print system/sh.coool.lid-helper` says not found;
    - `pmset -g | grep -i sleep` is back to the values from step 1.
+
+**A chat that asks (optional, 5 minutes).** With the helper installed, start a chat in Ask mode with "Run `sleep 20`
+with Bash, then run `date` with Bash". The line above its message box says it will pause; leave the mode as it is.
+Close the lid as soon as it starts. It asks for the first command, keeps holding for 2 minutes, then lets go (the Mac
+sleeps). Open the lid after 4 minutes: a notification "coool let the Mac sleep … “…” was waiting for your answer
+(Bash: sleep 20)"; clicking it opens Needs you on that request, whose header says "This paused a lid-closed run at …".
 
 If anything leaves `SleepDisabled 1` behind, run `sudo pmset -a disablesleep 0` and send the
 `log show --last 30m --predicate 'process == "sh.coool.lid-helper"'` output.

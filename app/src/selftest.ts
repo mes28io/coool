@@ -3207,7 +3207,9 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
   // "Keep working with the lid closed" end to end with the real helper code in its dry-run mode (run with
   // COOOL_LID_DRYRUN=1; nothing on the Mac changes): the Settings row's states, Install…, a working chat engaging the
   // hold, its turn ending releasing it, a battery drop, a simulated kill (the connection drops without a RELEASE), heat,
-  // and Remove helper. One Haiku chat, two short turns.
+  // and Remove helper. One Haiku chat, two short turns. Then a second Haiku chat in Ask mode for "A chat that asks"
+  // (docs/LID.md): the line above its message box, its prompt with the lid closed starting the grace (shortened to
+  // 8 s), the grace running out into a `waiting` stop naming it, the Needs you note, the mode menu, Dismiss.
   async "lid-awake"(ctx) {
     const st = () => api().lidStatus();
     const helperLog = async () => String(await invoke("lid_helper_log").catch((e) => `err ${e}`));
@@ -3289,6 +3291,96 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
       const log = await helperLog();
       if (!log.includes("normal sleep restored (coool let go)")) throw new Fail(`helper log: ${log}`);
       return `working ${s.working}, blocked ${s.blocked}`;
+    });
+    // A chat in Ask mode (it stops to ask): the line above its message box, the grace when its prompt is the only
+    // thing left, the "waiting" stop naming it, the Needs you header, the mode menu, and "Dismiss for this chat".
+    let ask = -1;
+    let req = "";
+    const banner = () => (ask >= 0 ? (document.querySelector(`[data-lid-ask="${ask}"]`) as HTMLElement | null) : null);
+    await step("lid: a working chat in Ask mode shows the line above its message box", async () => {
+      ask = await startIn(ctx.cfg.dir, "default");
+      await send(ask, "Use the Bash tool to run exactly: echo lid-ask-check . Then reply with: ok");
+      await waitFor("the chat working", () => chat(ask)?.state !== "idle" && chat(ask)?.turnStart, 60_000);
+      const b = await waitFor("the line above the message box", banner, 10_000);
+      await shot("lid-ask-banner");
+      const fix = b.querySelector("[data-lid-ask-fix]")?.getAttribute("data-lid-ask-fix");
+      if (fix !== "menu") throw new Fail(`Claude's only mode that doesn't ask is Bypass: the button must open the menu, got ${fix}`);
+      return `"${textOf(b).slice(0, 160)}"; button ${fix}`;
+    });
+    await step("lid: its permission prompt with the lid closed starts the grace; Settings names the chat", async () => {
+      await sim({ lid_closed: true, grace_ms: 8_000 });
+      req = (await waitFor("the permission prompt", () => chat(ask)?.pendingPermission, 60_000)) as string;
+      const s = await holdWait("the grace", (s) => s.working === 0 && s.grace_until != null && s.via === "helper", 10_000);
+      await openGeneral();
+      const line = settingRow("lid-awake")?.querySelector("[data-lid-asking]");
+      await shot("lid-grace-settings");
+      if (!line || !line.querySelector(`[data-lid-asking-chat="${ask}"]`)) throw new Fail(`no "in a mode that asks" line naming the chat: ${row().slice(0, 300)}`);
+      if (!/Holding a little longer/.test(row())) throw new Fail(`row: ${row().slice(0, 200)}`);
+      return `grace until +${Math.round(((s.grace_until ?? 0) - Date.now()) / 1000)}s for "${s.grace_title}"; "${textOf(line)}"`;
+    });
+    let stopAt = 0;
+    await step("lid: the grace runs out: let go, recorded as waiting with the chat's title", async () => {
+      const s = await holdWait("the waiting stop", (s) => s.via === null && s.stops[0]?.code === "waiting", 20_000);
+      const stop = s.stops[0];
+      const title = displayTitle(sessionOf(ask)!);
+      if (!stop.detail.includes(`“${title}” was waiting for your answer`)) throw new Fail(`stop: ${JSON.stringify(stop)} (title "${title}")`);
+      if (stop.session !== needsKeyOf(ask) || stop.request !== req) throw new Fail(`stop target: ${JSON.stringify(stop)} vs ${needsKeyOf(ask)} / ${req}`);
+      stopAt = stop.at;
+      await openGeneral();
+      await shot("lid-waiting-stop");
+      const stops = textOf(settingRow("lid-awake")?.querySelector("[data-lid-stops]") ?? null);
+      if (!stops.includes("Let the Mac sleep at")) throw new Fail(`stop list: ${stops}`);
+      const log = await helperLog();
+      if (!log.includes("normal sleep restored (coool let go)")) throw new Fail(`helper log: ${log}`);
+      return `${JSON.stringify(stop)}; Settings: "${stops.slice(0, 200)}"`;
+    });
+    await step("lid: a click on its notice opens the Needs you item, whose header says it paused the run", async () => {
+      await sim({ lid_closed: false, grace_ms: 0 });
+      const me = await notifyState();
+      // The target `Target::of_lid_stop` posts (notify.rs; unit-tested there): the stop's chat, session and request.
+      const s = (await st()).stops[0];
+      await invoke("selftest_notify_click", { info: JSON.stringify({ kind: "needs", chat: s.chat ?? null, session: s.session ?? null, request: s.request ?? null, pid: me.pid }) });
+      const key = needsKeyOf(ask)!;
+      await waitFor("Needs you, the item picked", () => useStore.getState().needsPage && $(`[data-needs-item="${CSS.escape(key)}"][aria-selected="true"]`), 10_000);
+      const note = await waitFor("the paused note", () => $(`[data-needs-detail="${CSS.escape(key)}"] [data-needs-lid-paused]`), 8_000);
+      await shot("lid-needs-paused");
+      if (Number(note.getAttribute("data-needs-lid-paused")) !== stopAt) throw new Fail(`note for another stop: ${note.getAttribute("data-needs-lid-paused")} vs ${stopAt}`);
+      return `"${textOf(note)}"`;
+    });
+    await step("lid: the line's button opens the mode menu (with the warning); picking a mode that doesn't ask hides the line", async () => {
+      await homeAgain();
+      useStore.getState().open({ kind: "chat", id: ask });
+      const b = await waitFor("the line, still there while it waits", banner, 10_000);
+      (b.querySelector("[data-lid-ask-fix]") as HTMLElement).click();
+      const hint = await waitFor("the mode menu's warning", () => $("[data-lid-mode-hint]"), 5_000);
+      await shot("lid-ask-menu");
+      // The person picks Bypass in the menu (a test folder of its own); the mode changes only on that click.
+      const item = [...(hint.parentElement?.querySelectorAll("button") ?? [])].find((x) => /^Bypass/.test(textOf(x)));
+      if (!item) throw new Fail("no Bypass item in the menu");
+      (item as HTMLElement).click();
+      await waitFor("the mode switched", () => chat(ask)?.permissionMode === "bypassPermissions", 10_000);
+      await waitFor("the line gone", () => !banner(), 5_000);
+      const { answerPermission } = await import("./lib/actions");
+      answerPermission(ask, req, "allow");
+      await nextTurn(ask, 0, 90_000);
+      return `hint "${textOf(hint).slice(0, 100)}"; mode ${chat(ask)?.permissionMode}`;
+    });
+    await step("lid: Dismiss for this chat sticks", async () => {
+      await api().chatSetPermissionMode(ask, "default");
+      await waitFor("back in Ask", () => chat(ask)?.permissionMode === "default", 10_000);
+      await send(ask, "Use the Bash tool to run exactly: echo lid-ask-two . Then reply with: two");
+      const b = await waitFor("the line again", banner, 30_000);
+      (b.querySelector("[data-lid-ask-dismiss]") as HTMLElement).click();
+      await waitFor("the line gone", () => !banner(), 3_000);
+      // Through its permission prompt (state changes, status polls) it stays gone.
+      const req2 = (await waitFor("the second prompt", () => chat(ask)?.pendingPermission, 60_000)) as string;
+      await sleep(4_000);
+      const back = !!banner();
+      const { answerPermission } = await import("./lib/actions");
+      answerPermission(ask, req2, "deny");
+      await nextTurn(ask, 1, 90_000).catch(() => {});
+      if (back) throw new Fail("the line came back after Dismiss");
+      return "gone, and still gone through its next prompt";
     });
     await step("lid: a simulated kill (connection dropped, no RELEASE): the helper lets go by itself", async () => {
       await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 60 127.0.0.1 > /dev/null . Then reply with: done again");

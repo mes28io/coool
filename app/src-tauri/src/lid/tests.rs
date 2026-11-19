@@ -204,6 +204,7 @@ fn only_on_power_lets_go_on_battery_and_holds_again_on_power() {
     assert_eq!(st.stops[0].code, Code::OnBattery);
     let n = t.lid.take_notices();
     assert_eq!(n.len(), 1, "the lid is open: notified at once");
+    let n: Vec<String> = n.iter().map(notice_text).collect();
     assert!(n[0].starts_with("Stopped holding the Mac awake at ") && n[0].ends_with(": on battery."), "{n:?}");
     t.sense(|r| r.on_battery = Some(false));
     t.lid.tick(2 * READ_EVERY_MS, 1);
@@ -212,7 +213,7 @@ fn only_on_power_lets_go_on_battery_and_holds_again_on_power() {
 
 #[test]
 fn battery_threshold_with_hysteresis_when_battery_is_allowed() {
-    let mut t = T::new(FakeHelper::ready(), Prefs { enabled: true, only_on_power: false, min_battery: 20, max_hours: 8 });
+    let mut t = T::new(FakeHelper::ready(), Prefs { enabled: true, only_on_power: false, min_battery: 20, max_hours: 8, grace_mins: 2 });
     t.sense(|r| {
         r.on_battery = Some(true);
         r.battery_pct = Some(50);
@@ -293,7 +294,7 @@ fn a_release_with_the_lid_closed_is_notified_when_it_opens() {
     t.lid.tick(2 * READ_EVERY_MS, 0);
     let n = t.lid.take_notices();
     assert_eq!(n.len(), 1);
-    assert!(n[0].contains(": on battery."));
+    assert!(notice_text(&n[0]).contains(": on battery."));
 }
 
 #[test]
@@ -459,9 +460,162 @@ fn a_simulated_kill_drops_the_connection_without_a_release() {
 
 #[test]
 fn limits_are_clamped() {
-    let p = Prefs { enabled: true, only_on_power: false, min_battery: 3, max_hours: 1000 }.clamped();
-    assert_eq!((p.min_battery, p.max_hours), (10, 72));
+    let p = Prefs { enabled: true, only_on_power: false, min_battery: 3, max_hours: 1000, grace_mins: 60 }.clamped();
+    assert_eq!((p.min_battery, p.max_hours, p.grace_mins), (10, 72, 10));
     assert_eq!(Prefs { min_battery: 90, ..Prefs::default() }.clamped().min_battery, 50);
     let d: Prefs = serde_json::from_str("{}").unwrap();
-    assert_eq!(d, Prefs { enabled: false, only_on_power: true, min_battery: 20, max_hours: 8 });
+    assert_eq!(d, Prefs { enabled: false, only_on_power: true, min_battery: 20, max_hours: 8, grace_mins: 2 });
+    // A settings.json from before the grace existed gets the default.
+    let old: Prefs = serde_json::from_str(r#"{"enabled":true,"only_on_power":true,"min_battery":20,"max_hours":8}"#).unwrap();
+    assert_eq!(old.grace_mins, 2);
+}
+
+// ---------- every agent waiting on the person: the grace, and the stop it records ----------
+
+fn asker() -> Waiting {
+    Waiting { title: "Fix the build".into(), ask: "Bash: npm test".into(), chat: Some(7), session: Some("claude:abc".into()), request: Some("req-1".into()) }
+}
+
+#[test]
+fn the_grace_starts_when_the_last_agent_waits_and_lets_go_when_it_runs_out() {
+    let mut t = T::on();
+    t.sense(|r| r.lid_closed = Some(true));
+    t.lid.tick_with(0, 1, 0, None);
+    assert_eq!(t.h.log(), ["hold 60"]);
+    // The only agent stops to ask: still held, for 2 minutes.
+    t.lid.tick_with(10 * S, 0, 1, Some(asker()));
+    assert!(t.h.held() && t.h.log().is_empty(), "the grace keeps holding");
+    let st = t.lid.status(10 * S);
+    assert_eq!((st.via, st.grace_until, st.grace_title.as_deref(), st.waiting), (Some(Via::Helper), Some(10 * S + 2 * MIN), Some("Fix the build"), 1));
+    // Heartbeats go on through it.
+    t.lid.tick_with(10 * S + BEAT_EVERY_MS, 0, 1, None);
+    assert_eq!(t.h.log(), ["beat"]);
+    t.lid.tick_with(10 * S + 2 * MIN - 1, 0, 1, None);
+    assert!(t.h.held());
+    // Out of time: let go, recorded with the chat and what it asked; noticed when the lid opens.
+    t.lid.tick_with(10 * S + 2 * MIN, 0, 1, None);
+    assert_eq!(t.h.log().last().map(String::as_str), Some("release"));
+    assert!(!t.marker());
+    let st = t.lid.status(10 * S + 2 * MIN);
+    assert_eq!((st.via, st.grace_until), (None, None));
+    let stop = &st.stops[0];
+    assert_eq!(stop.code, Code::Waiting);
+    assert_eq!(stop.detail, "“Fix the build” was waiting for your answer (Bash: npm test)");
+    assert_eq!((stop.chat, stop.session.as_deref(), stop.request.as_deref()), (Some(7), Some("claude:abc"), Some("req-1")));
+    assert!(t.lid.take_notices().is_empty(), "the lid is closed: the notice waits");
+    t.sense(|r| r.lid_closed = Some(false));
+    t.lid.tick_with(10 * S + 2 * MIN + READ_EVERY_MS, 0, 1, None);
+    let n = t.lid.take_notices();
+    assert_eq!(n.len(), 1);
+    assert!(notice_text(&n[0]).starts_with("Let the Mac sleep at "), "{}", notice_text(&n[0]));
+    assert!(notice_text(&n[0]).ends_with(": “Fix the build” was waiting for your answer (Bash: npm test)."));
+    // The stop log keeps the chat on disk too.
+    let back: Vec<Stop> = serde_json::from_slice(&std::fs::read(t.dir.join("lid-stops.json")).unwrap()).unwrap();
+    assert_eq!(back[0].session.as_deref(), Some("claude:abc"));
+}
+
+#[test]
+fn an_agent_working_again_cancels_the_grace() {
+    let mut t = T::on();
+    t.lid.tick_with(0, 1, 0, None);
+    t.h.log();
+    t.lid.tick_with(S, 0, 1, Some(asker()));
+    assert!(t.lid.status(S).grace_until.is_some());
+    // Answered (or another agent resumed) within the grace: a plain hold again, the clock gone.
+    t.lid.tick_with(MIN, 1, 0, None);
+    assert_eq!(t.lid.status(MIN).grace_until, None);
+    // Waiting again later starts a fresh grace from then.
+    t.lid.tick_with(5 * MIN, 0, 1, None);
+    assert_eq!(t.lid.status(5 * MIN).grace_until, Some(7 * MIN));
+    t.lid.tick_with(6 * MIN, 0, 1, None);
+    assert!(t.h.held(), "the old grace would have ended at 3 min");
+    assert!(t.h.log().iter().all(|l| l != "release"));
+}
+
+#[test]
+fn finished_is_not_waiting_and_a_waiting_release_with_the_lid_open_records_nothing() {
+    let mut t = T::on();
+    t.lid.tick_with(0, 1, 0, None);
+    t.h.log();
+    // Done (nobody waits): let go at once, nothing recorded.
+    t.lid.tick_with(S, 0, 0, None);
+    assert_eq!(t.h.log(), ["release"]);
+    // Waiting with the lid open (the person is at the Mac): the grace runs out quietly.
+    t.lid.tick_with(2 * S, 1, 0, None);
+    t.lid.tick_with(3 * S, 0, 1, Some(asker()));
+    t.lid.tick_with(3 * S + 2 * MIN, 0, 1, None);
+    assert!(!t.h.held());
+    assert!(t.lid.status(3 * S + 2 * MIN).stops.is_empty());
+    assert!(t.lid.take_notices().is_empty());
+}
+
+#[test]
+fn no_grace_when_nothing_was_held_and_zero_grace_lets_go_at_once() {
+    let mut t = T::new(FakeHelper::ready(), Prefs { enabled: true, grace_mins: 0, ..Prefs::default() });
+    t.sense(|r| r.lid_closed = Some(true));
+    t.lid.tick_with(0, 1, 0, None);
+    t.h.log();
+    t.lid.tick_with(S, 0, 1, Some(asker()));
+    assert_eq!(t.h.log(), ["release"]);
+    assert_eq!(t.lid.status(S).stops[0].code, Code::Waiting);
+    // Waiting while not holding at all: no grace, no second stop.
+    t.lid.tick_with(2 * S, 0, 1, None);
+    assert_eq!(t.lid.status(2 * S).stops.len(), 1);
+    assert_eq!(t.lid.status(2 * S).grace_until, None);
+}
+
+#[test]
+fn the_limits_win_during_the_grace() {
+    // Battery.
+    let mut t = T::on();
+    t.sense(|r| r.lid_closed = Some(true));
+    t.lid.tick_with(0, 1, 0, None);
+    t.lid.tick_with(S, 0, 1, Some(asker()));
+    t.sense(|r| r.on_battery = Some(true));
+    t.lid.tick_with(S + READ_EVERY_MS, 0, 1, None);
+    assert!(!t.h.held(), "on battery lets go mid-grace");
+    let st = t.lid.status(S + READ_EVERY_MS);
+    assert_eq!(st.stops[0].code, Code::OnBattery);
+    assert_eq!(st.grace_until, None, "nothing held, no grace shown");
+    // And the grace running out later records nothing more.
+    t.lid.tick_with(S + 3 * MIN, 0, 1, None);
+    assert_eq!(t.lid.status(S + 3 * MIN).stops.len(), 1);
+
+    // Heat.
+    let mut t = T::on();
+    t.lid.tick_with(0, 1, 0, None);
+    t.lid.tick_with(S, 0, 1, Some(asker()));
+    t.sense(|r| r.thermal = Some(Thermal::Serious));
+    t.lid.tick_with(S + READ_EVERY_MS, 0, 1, None);
+    assert!(!t.h.held());
+    assert_eq!(t.lid.status(S + READ_EVERY_MS).stops[0].code, Code::Hot);
+
+    // The maximum duration.
+    let mut t = T::new(FakeHelper::ready(), Prefs { enabled: true, max_hours: 1, ..Prefs::default() });
+    t.lid.tick_with(0, 1, 0, None);
+    t.lid.tick_with(60 * MIN - S, 0, 1, Some(asker()));
+    t.lid.tick_with(60 * MIN, 0, 1, None);
+    assert!(!t.h.held());
+    assert_eq!(t.lid.status(60 * MIN).stops[0].code, Code::MaxDuration);
+
+    // Switching the setting off ends the grace too.
+    let mut t = T::on();
+    t.lid.tick_with(0, 1, 0, None);
+    t.lid.tick_with(S, 0, 1, Some(asker()));
+    t.lid.set_prefs(Prefs { enabled: false, ..Prefs::default() }, 2 * S);
+    assert!(!t.h.held());
+    assert_eq!(t.lid.status(2 * S).grace_until, None);
+}
+
+#[test]
+fn a_self_test_can_shorten_the_grace_and_a_waiting_stop_without_a_title_still_reads() {
+    let mut t = T::on();
+    t.lid.set_grace_override(Some(3 * S));
+    t.sense(|r| r.lid_closed = Some(true));
+    t.lid.tick_with(0, 1, 0, None);
+    t.lid.tick_with(S, 0, 1, Some(Waiting::default()));
+    t.lid.tick_with(4 * S, 0, 1, None);
+    assert!(!t.h.held());
+    assert_eq!(t.lid.status(4 * S).stops[0].detail, "An agent was waiting for your answer");
+    assert_eq!(waiting_detail(&Waiting { title: "A".into(), ask: "Which one?".into(), ..Waiting::default() }), "“A” was waiting for your answer (Which one?)");
 }

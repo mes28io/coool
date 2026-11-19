@@ -155,6 +155,15 @@ pub fn kind_of(ev: &ChatEventKind) -> Option<(Kind, String)> {
     }
 }
 
+/// A permission request or question: (request id, its needs-you words as [`kind_of`] has them).
+pub fn ask_of(ev: &ChatEventKind) -> Option<(String, String)> {
+    let id = match ev {
+        ChatEventKind::PermissionRequest { request_id, .. } | ChatEventKind::Question { request_id, .. } => request_id.clone(),
+        _ => return None,
+    };
+    kind_of(ev).map(|(_, d)| (id, d))
+}
+
 fn human(ms: u64) -> String {
     let s = ms / 1000;
     if s < 60 { format!("{s}s") } else if s < 3600 { format!("{}m {}s", s / 60, s % 60) } else { format!("{}h {}m", s / 3600, (s % 3600) / 60) }
@@ -304,6 +313,15 @@ impl Target {
             Kind::Failed => "failed",
         };
         Target { kind: kind.into(), chat: Some(chat), session: session.map(str::to_string), request, pid: std::process::id() }
+    }
+
+    /// A lid stop's notice: one that names a waiting chat opens it on the Needs you page; any other only brings coool
+    /// forward.
+    pub fn of_lid_stop(s: &crate::lid::Stop) -> Self {
+        if s.code == crate::lid::Code::Waiting && (s.session.is_some() || s.chat.is_some()) {
+            return Target { kind: "needs".into(), chat: s.chat, session: s.session.clone(), request: s.request.clone(), pid: std::process::id() };
+        }
+        Self::test()
     }
 
     /// The Settings "Send a test" notification: a click only brings coool forward.
@@ -918,5 +936,25 @@ mod tests {
         assert!(take().is_none(), "taken once");
         clicked(Some(&json), "dismiss");
         assert!(take().is_none(), "a dismissal goes nowhere");
+    }
+
+    #[test]
+    fn a_lid_stop_for_a_waiting_chat_opens_needs_you_and_others_only_bring_coool_forward() {
+        use crate::lid::{Code, Stop};
+        let w = Stop { at: 1, code: Code::Waiting, detail: "“A” was waiting for your answer".into(), chat: Some(4), session: Some("claude:s1".into()), request: Some("r9".into()) };
+        let t = Target::of_lid_stop(&w);
+        assert_eq!((t.kind.as_str(), t.chat, t.session.as_deref(), t.request.as_deref()), ("needs", Some(4), Some("claude:s1"), Some("r9")));
+        let r = route_of(Some(&serde_json::to_string(&t).unwrap()), "default", std::process::id());
+        assert_eq!((r.kind.as_str(), r.session.as_deref()), ("needs", Some("claude:s1")));
+        let b = Stop { at: 1, code: Code::OnBattery, detail: "on battery".into(), chat: None, session: None, request: None };
+        assert_eq!(Target::of_lid_stop(&b).kind, "test");
+        assert_eq!(Target::of_lid_stop(&Stop { session: None, chat: None, ..w }).kind, "test", "a waiting stop that names no chat");
+    }
+
+    #[test]
+    fn ask_of_takes_the_request_and_the_needs_you_words() {
+        let ev = ChatEventKind::PermissionRequest { request_id: "r1".into(), tool: "Bash".into(), summary: "npm test".into(), input: serde_json::json!({}), remember: vec![] };
+        assert_eq!(ask_of(&ev), Some(("r1".into(), "Bash: npm test".into())));
+        assert_eq!(ask_of(&ChatEventKind::TurnEnd { duration_ms: 1, ok: true }), None);
     }
 }

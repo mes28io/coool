@@ -10,9 +10,13 @@
 //!   approval, see [`helper`]) turns SleepDisabled on while coool holds a connection to it and keeps a heartbeat, and
 //!   turns it off the moment either stops (crash, force quit, kill), at its own limits, and at every start.
 //!
-//! [`Lid::tick`] runs on every refresh (about once a second) with the number of agents working right now: chats
-//! mid-turn and coool's busy terminal sessions. A chat waiting on the person (a permission prompt, a question) doesn't
-//! count: a prompt left waiting with the lid closed shouldn't hold the Mac awake for hours.
+//! [`Lid::tick_with`] runs on every refresh (about once a second) with the number of agents working right now (chats
+//! mid-turn and coool's busy terminal sessions) and the number waiting on the person (a permission prompt, a
+//! question). A waiting agent doesn't count as working: a prompt left waiting with the lid closed shouldn't hold the
+//! Mac awake for hours. When the last working agent starts waiting, the hold carries on for a short grace
+//! ([`Prefs::grace_mins`], default 2 min: a quick lid reopen, another agent resuming), with every limit still
+//! applying; any agent working again cancels it. When it runs out with the lid closed, the release is recorded as a
+//! [`Code::Waiting`] stop naming the chat and what it asked.
 //!
 //! Safety limits, enforced here (and the battery floor and heat again in the helper): on battery when "only on
 //! power" is on (default); on battery at or below the threshold (default 20%, 10..=50); thermal state serious or
@@ -55,11 +59,13 @@ pub struct Prefs {
     pub min_battery: u8,
     /// Longest hold of one working stretch, in hours; 0 = no limit.
     pub max_hours: u32,
+    /// Minutes the hold carries on once every agent is waiting on the person (0..=10).
+    pub grace_mins: u32,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { enabled: false, only_on_power: true, min_battery: 20, max_hours: 8 }
+        Prefs { enabled: false, only_on_power: true, min_battery: 20, max_hours: 8, grace_mins: 2 }
     }
 }
 
@@ -67,6 +73,7 @@ impl Prefs {
     pub fn clamped(mut self) -> Self {
         self.min_battery = self.min_battery.clamp(10, 50);
         self.max_hours = self.max_hours.min(72);
+        self.grace_mins = self.grace_mins.min(10);
         self
     }
 }
@@ -161,6 +168,23 @@ pub enum Code {
     HelperLetGo,
     /// coool quit (or crashed) while holding; found at the next launch.
     Recovered,
+    /// Every agent was waiting on the person (a permission, a question) past the grace, with the lid closed.
+    Waiting,
+}
+
+/// The first agent waiting on the person, as [`Lid::tick_with`] gets it: what a [`Code::Waiting`] stop names.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Waiting {
+    /// The chat's title as the app shows it.
+    pub title: String,
+    /// What it asked, in the needs-you notification's words ("Bash: npm test", the question); empty when unknown.
+    pub ask: String,
+    /// coool's chat id (this run only).
+    pub chat: Option<usize>,
+    /// Its session key (`claude:<session id>`): what a click on the notice opens on the Needs you page.
+    pub session: Option<String>,
+    /// The permission request or question.
+    pub request: Option<String>,
 }
 
 /// An automatic release.
@@ -171,6 +195,13 @@ pub struct Stop {
     pub code: Code,
     /// "battery 20%", "the Mac is running hot".
     pub detail: String,
+    /// A [`Code::Waiting`] stop: the chat that was waiting (this run's id), its session key and the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -183,6 +214,11 @@ pub struct Status {
     /// Not holding although agents work, and why.
     pub blocked: Option<Code>,
     pub working: usize,
+    /// Agents waiting on the person (a permission prompt, a question).
+    pub waiting: usize,
+    /// Holding only through the grace (every agent is waiting): epoch ms it ends, and the chat it waits for.
+    pub grace_until: Option<u64>,
+    pub grace_title: Option<String>,
     /// Epoch ms the current working stretch began holding.
     pub since: Option<u64>,
     pub reading: Reading,
@@ -209,6 +245,13 @@ pub struct Lid {
     dir: Option<PathBuf>,
     prefs: Prefs,
     working: usize,
+    waiting: usize,
+    /// The first waiting agent, while any waits.
+    asker: Option<Waiting>,
+    /// Every agent is waiting and the hold carries on until then (epoch ms).
+    grace_until: Option<u64>,
+    /// A self-test's shorter grace, in ms.
+    grace_override: Option<u64>,
     hold: Option<Via>,
     since: Option<u64>,
     last_beat: u64,
@@ -237,6 +280,10 @@ impl Lid {
             dir,
             prefs: prefs.clamped(),
             working: 0,
+            waiting: 0,
+            asker: None,
+            grace_until: None,
+            grace_override: None,
             hold: None,
             since: None,
             last_beat: 0,
@@ -346,13 +393,29 @@ impl Lid {
             self.retry_at = 0;
             self.probed_at = None;
         }
-        self.tick(now, self.working);
+        self.tick_with(now, self.working, self.waiting, self.asker.clone());
     }
 
     // ---------- every refresh ----------
 
+    /// [`Self::tick_with`] with nobody waiting (the tests).
+    #[cfg(test)]
     pub fn tick(&mut self, now: u64, working: usize) {
+        self.tick_with(now, working, 0, None);
+    }
+
+    /// One refresh: `working` agents work, `waiting` wait on the person, `asker` is the first of those.
+    pub fn tick_with(&mut self, now: u64, working: usize, waiting: usize, asker: Option<Waiting>) {
         self.working = working;
+        self.waiting = waiting;
+        if waiting == 0 {
+            self.asker = None;
+        } else if asker.is_some() {
+            self.asker = asker;
+        }
+        if working > 0 || waiting == 0 || !self.prefs.enabled {
+            self.grace_until = None;
+        }
         let reading_due = self.read_at.is_none_or(|t| now.saturating_sub(t) >= READ_EVERY_MS);
         if !self.prefs.enabled {
             if self.hold.is_some() {
@@ -366,7 +429,23 @@ impl Lid {
             }
             return;
         }
-        if working == 0 {
+        if working == 0 && waiting > 0 && self.hold.is_some() {
+            // Every agent waits on the person: carry on through the grace (the limits below still apply), then let go.
+            let until = *self.grace_until.get_or_insert(now + self.grace_ms());
+            if now >= until {
+                self.grace_until = None;
+                // A fresh reading: was the lid closed when it let go (only then is it worth a notice)?
+                self.read(now);
+                let stop = (self.reading.lid_closed == Some(true)).then(|| (Code::Waiting, String::new()));
+                self.let_go(stop, now);
+                self.since = None;
+                self.latch = None;
+                self.blocked = None;
+                self.low_battery = false;
+                return;
+            }
+        } else if working == 0 {
+            self.grace_until = None;
             if self.hold.is_some() {
                 self.let_go(None, now);
             }
@@ -483,6 +562,15 @@ impl Lid {
         });
     }
 
+    fn grace_ms(&self) -> u64 {
+        self.grace_override.unwrap_or(self.prefs.grace_mins as u64 * 60_000)
+    }
+
+    /// A self-test's shorter grace (ms); None goes back to the setting.
+    pub fn set_grace_override(&mut self, ms: Option<u64>) {
+        self.grace_override = ms;
+    }
+
     fn read(&mut self, now: u64) {
         self.reading = self.sensors.read();
         self.read_at = Some(now);
@@ -552,7 +640,12 @@ impl Lid {
     }
 
     fn record(&mut self, now: u64, code: Code, detail: String, notify: bool) {
-        let s = Stop { at: now, code, detail };
+        let mut s = Stop { at: now, code, detail, chat: None, session: None, request: None };
+        if code == Code::Waiting {
+            let w = self.asker.clone().unwrap_or_default();
+            s.detail = waiting_detail(&w);
+            (s.chat, s.session, s.request) = (w.chat, w.session, w.request);
+        }
         self.stops.push_front(s.clone());
         self.stops.truncate(KEEP_STOPS);
         self.save_stops();
@@ -575,9 +668,9 @@ impl Lid {
         self.hold == Some(Via::Helper)
     }
 
-    /// Automatic releases to notify now ("Stopped holding the Mac awake at 02:14: battery 20%").
-    pub fn take_notices(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.pending_out).into_iter().map(|s| notice_text(&s)).collect()
+    /// Automatic releases to notify now ([`notice_text`] has the words).
+    pub fn take_notices(&mut self) -> Vec<Stop> {
+        std::mem::take(&mut self.pending_out)
     }
 
     /// The status for Settings; re-reads the sensors and the helper (it's called every 2 s at most, while Settings shows).
@@ -598,6 +691,9 @@ impl Lid {
             via: self.hold,
             blocked: if self.working > 0 && self.prefs.enabled { self.blocked } else { None },
             working: self.working,
+            waiting: self.waiting,
+            grace_until: self.grace_until.filter(|_| self.hold.is_some()),
+            grace_title: self.grace_until.filter(|_| self.hold.is_some()).and_then(|_| self.asker.as_ref().map(|a| a.title.clone())),
             since: self.since.filter(|_| self.hold.is_some()),
             reading: self.reading.clone(),
             stops: self.stops.iter().cloned().collect(),
@@ -625,7 +721,7 @@ impl Lid {
         self.probed_at = Some(now);
         self.retry_at = 0;
         self.error = None;
-        self.tick(now, self.working);
+        self.tick_with(now, self.working, self.waiting, self.asker.clone());
     }
 
     /// "Remove helper": lets go, then the helper removes itself. Err when it doesn't answer (then [`Self::remove_job`]).
@@ -681,9 +777,17 @@ pub fn clock(ms: u64) -> String {
     if ok { format!("{:02}:{:02}", tm.tm_hour, tm.tm_min) } else { "?".into() }
 }
 
+/// "“Fix the build” was waiting for your answer (Bash: npm test)".
+pub fn waiting_detail(w: &Waiting) -> String {
+    let who = if w.title.is_empty() { "An agent".to_string() } else { format!("“{}”", w.title) };
+    let ask = w.ask.trim().trim_end_matches('.');
+    if ask.is_empty() { format!("{who} was waiting for your answer") } else { format!("{who} was waiting for your answer ({ask})") }
+}
+
 pub fn notice_text(s: &Stop) -> String {
     match s.code {
         Code::Recovered | Code::HelperLetGo => format!("At {}: {}.", clock(s.at), s.detail),
+        Code::Waiting => format!("Let the Mac sleep at {}: {}.", clock(s.at), s.detail),
         _ => format!("Stopped holding the Mac awake at {}: {}.", clock(s.at), s.detail),
     }
 }

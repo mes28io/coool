@@ -18,6 +18,8 @@ import { InfoPanel, type InfoTab } from "./InfoPanel";
 import { useInfoRequest } from "../lib/infoRequest";
 import { flushLocal, steer } from "../lib/steer";
 import { SteerStrip } from "./SteerStrip";
+import { LidAskBanner } from "./LidAskBanner";
+import { asksBeforeActing } from "../lib/lid";
 import { Chip, ContextRing, cx, ease, Kbd, Popover } from "./primitives";
 import { noteSent } from "../lib/voice/controller";
 import { FixCount, FixLayer, FixOffer, fixKey } from "./voice/FixLayer";
@@ -44,9 +46,6 @@ const nativeFor = (name: string, provider: string) => {
 };
 
 /** Permission modes per provider. Names are the CLI's own, passed through untouched. */
-/** Modes in which the CLI stops to ask the person (a waiting agent does not hold a lid-closed Mac awake). */
-const ASKS = new Set(["default", "acceptEdits", "plan", "untrusted", "on-request"]);
-
 export const PERMISSION_MODES: Record<string, { id: string; label: string; description: string }[]> = {
   claude: [
     { id: "default", label: "Ask", description: "Ask before edits and commands" },
@@ -386,6 +385,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
           )}
         </AnimatePresence>
 
+        <LidAskBanner chat={chat} modes={modes} onModes={() => openPop("mode")} />
         <div
           className={cx(
             "rounded-[20px] border bg-raised shadow-card transition-[border-color,box-shadow] duration-200",
@@ -457,9 +457,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                 <Popover open={pop === "mode"} onClose={() => setPop(null)} side="top" width={300}>
                   <div className="p-1">
                     <div className="px-2.5 pb-1 pt-1.5 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Permission mode</div>
-                    {lidOn && ASKS.has(chat.permissionMode ?? "default") && (
+                    {lidOn && asksBeforeActing(chat.permissionMode) && (
                       <div className="mx-1.5 mb-1 rounded-[8px] bg-[color-mix(in_oklab,var(--busy)_12%,transparent)] px-2 py-1.5 text-small leading-[17px] text-busy-text" data-lid-mode-hint>
-                        Lid closed: this mode stops to ask, and a waiting agent lets the Mac sleep. For an unattended run, pick a mode that doesn’t ask.
+                        Lid closed: this mode stops to ask, and the Mac sleeps soon after a prompt nobody answers. For an unattended run, pick a mode that doesn’t ask{chat.provider === "claude" ? " (in Claude, only Bypass: use it only where you trust the task)" : ""}.
                       </div>
                     )}
                     {modes.map((m) => (
