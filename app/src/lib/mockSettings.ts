@@ -120,32 +120,67 @@ export function mockSettings(sim: { shutdown(udid: string): Promise<void> }): Se
   let login: LoginStatus = loginKnob[knob("login")] ?? { status: "not_registered" };
   let onboarded = knob("onboarding") !== "1";
   const removed = new Set<string>();
-  // "Keep working with the lid closed": `?lid=missing|ready|display|holding|battery|hot|stale` (any value opens
-  // Settings > General on the row; anything but `missing` turns the setting on).
+  // "Keep working with the lid closed": `?lid=missing|ready|display|holding|grace|battery|hot|stale` (any value opens
+  // Settings > General on the row; anything but `missing` turns the setting on). `?lid=chat`: on and ready, the app
+  // left where it opens (the "this chat asks" line above a working chat's message box). With any knob, the first chat
+  // waiting on a permission is named in a `waiting` stop (the Settings stop list, the Needs you header).
   const lidKnob = knob("lid");
+  let lidWaiter: () => { key: string; title: string; request: string; chat: number | null } | null = () => null;
   if (lidKnob) {
-    prefs = { ...prefs, lid: { enabled: lidKnob !== "missing" || /[?&]lidon=1/.test(q), only_on_power: true, min_battery: 20, max_hours: 8 } };
-    void import("../store").then(({ useStore }) =>
+    prefs = { ...prefs, lid: { enabled: lidKnob !== "missing" || /[?&]lidon=1/.test(q), only_on_power: true, min_battery: 20, max_hours: 8, grace_mins: 2 } };
+    void Promise.all([import("../store"), import("./chat"), import("./format")]).then(([{ useStore }, { useChats }, { displayTitle }]) => {
+      lidWaiter = () => {
+        for (const c of Object.values(useChats.getState().chats)) {
+          if (!c.pendingPermission) continue;
+          const s = useStore.getState().sessions.find((x) => x.chat === c.id || (c.sessionId != null && x.id === c.sessionId));
+          if (s) return { key: `${s.provider}:${s.id}`, title: displayTitle(s), request: c.pendingPermission, chat: c.id };
+        }
+        // No chat asks yet: a session blocked in its terminal (also a Needs you item).
+        const t = useStore.getState().sessions.find((x) => x.waiting_for && x.status !== "ended");
+        return t ? { key: `${t.provider}:${t.id}`, title: displayTitle(t), request: "", chat: null } : null;
+      };      if (lidKnob === "chat") return;
       setTimeout(() => {
         useStore.getState().openSettings("general");
         setTimeout(() => document.querySelector('[data-setting="lid-awake"]')?.scrollIntoView({ block: "start" }), 400);
-      }, 300),
-    );
+      }, 300);
+    });
   }
+  // The waiting stop keeps the time it was first seen.
+  let lidWaitAt = 0;
   let lidHelper: LidStatus["helper"] = lidKnob === "missing" || lidKnob === "display" ? { state: "missing" } : lidKnob === "stale" ? { state: "unreachable", detail: "Connection refused" } : { state: "ready" };
   const lidStatus = (): LidStatus => {
-    const p = prefs.lid ?? { enabled: false, only_on_power: true, min_battery: 20, max_hours: 8 };
+    const p = prefs.lid ?? { enabled: false, only_on_power: true, min_battery: 20, max_hours: 8, grace_mins: 2 };
     const now = Date.now();
-    const reading: LidStatus["reading"] = { on_battery: lidKnob === "battery", battery_pct: lidKnob === "battery" ? 64 : 100, thermal: lidKnob === "hot" ? "serious" : "nominal", lid_closed: false, lid_sleeps: lidKnob !== "display", sleep_disabled: lidKnob === "holding" || lidKnob === "stale" };
+    const reading: LidStatus["reading"] = { on_battery: lidKnob === "battery", battery_pct: lidKnob === "battery" ? 64 : 100, thermal: lidKnob === "hot" ? "serious" : "nominal", lid_closed: false, lid_sleeps: lidKnob !== "display", sleep_disabled: lidKnob === "holding" || lidKnob === "stale" || lidKnob === "grace" };
     const working = p.enabled && ["holding", "display", "battery", "hot"].includes(lidKnob) ? 2 : 0;
-    const via = !p.enabled || !working ? null : lidKnob === "holding" && lidHelper.state === "ready" ? "helper" : lidKnob === "display" ? "display" : null;
+    const grace = p.enabled && lidKnob === "grace";
+    const via = grace ? "helper" : !p.enabled || !working ? null : lidKnob === "holding" && lidHelper.state === "ready" ? "helper" : lidKnob === "display" ? "display" : null;
     const blocked = !p.enabled || !working || via ? null : lidKnob === "battery" ? "on_battery" : lidKnob === "hot" ? "hot" : lidHelper.state !== "ready" ? "needs_helper" : null;
+    const w = lidWaiter();
+    if (w && !lidWaitAt) lidWaitAt = now - 7 * 60_000;
     const stops: LidStatus["stops"] = [
       ...(lidKnob === "hot" ? [{ at: now - 4 * 60_000, code: "hot" as const, detail: "the Mac is running hot" }] : []),
+      ...(w ? [{ at: lidWaitAt, code: "waiting" as const, detail: `“${w.title}” was waiting for your answer (Bash: npm test)`, chat: w.chat, session: w.key, request: w.request }] : []),
       ...(lidKnob === "battery" ? [{ at: now - 11 * 60_000, code: "on_battery" as const, detail: "on battery" }] : []),
       { at: now - 9 * 3_600_000, code: "low_battery", detail: "battery 20%" },
     ];
-    return { enabled: p.enabled, helper: lidHelper, dry_run: false, via, blocked, working, since: via ? now - 72 * 60_000 : null, reading, stops: lidKnob ? stops : [], stale: lidKnob === "stale", error: null, prefs: p };
+    return {
+      enabled: p.enabled,
+      helper: lidHelper,
+      dry_run: false,
+      via,
+      blocked,
+      working,
+      waiting: grace ? 1 : 0,
+      grace_until: grace ? now + 100_000 : null,
+      grace_title: grace ? (w?.title ?? "Offline sync queue") : null,
+      since: via ? now - 72 * 60_000 : null,
+      reading,
+      stops: lidKnob ? stops : [],
+      stale: lidKnob === "stale",
+      error: null,
+      prefs: p,
+    };
   };
   const storage: StorageStatus = {
     items: [

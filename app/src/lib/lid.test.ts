@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lidLine, pillText, spanText, stopText } from "./lid.ts";
+import { askingChatsText, lidLine, lidModeFix, lidWouldHold, pausedBy, pausedText, pillText, spanText, stopText } from "./lid.ts";
 import type { LidStatus } from "./settingsTypes.ts";
 
 const T = new Date(2026, 10, 19, 2, 14, 0).getTime();
@@ -18,7 +18,7 @@ const base = (o: Partial<LidStatus> = {}): LidStatus => ({
   stops: [],
   stale: false,
   error: null,
-  prefs: { enabled: true, only_on_power: true, min_battery: 20, max_hours: 8 },
+  prefs: { enabled: true, only_on_power: true, min_battery: 20, max_hours: 8, grace_mins: 2 },
   ...o,
 });
 
@@ -63,4 +63,54 @@ test("the pill's footer", () => {
   assert.equal(pillText(base({ via: "helper", working: 1 }), { held: false, covered: true }), "Keeping the Mac awake, lid closed too");
   assert.equal(pillText(base({ working: 1, blocked: "on_battery" }), { held: true }), "Lid closed would sleep the Mac: on battery (idle sleep is held)");
   assert.equal(pillText(base({ enabled: false }), { held: true }), "Keeping the Mac awake (lid open)");
+});
+
+// The menus as ChatComposer.tsx `PERMISSION_MODES` lists them (least permissive first).
+const CLAUDE = [
+  { id: "default", label: "Ask" },
+  { id: "acceptEdits", label: "Accept edits" },
+  { id: "plan", label: "Plan" },
+  { id: "bypassPermissions", label: "Bypass" },
+];
+const CODEX = [
+  { id: "untrusted", label: "Untrusted" },
+  { id: "on-request", label: "On request" },
+  { id: "never", label: "Never ask" },
+];
+
+test("the banner's button: the least permissive mode that doesn't ask, never a bypass", () => {
+  // Claude: every listed mode but Bypass asks, so the person picks in the menu.
+  for (const m of ["default", "acceptEdits", "plan", null]) assert.deepEqual(lidModeFix(m, CLAUDE), { kind: "menu" });
+  assert.equal(lidModeFix("bypassPermissions", CLAUDE), null, "doesn't ask: no banner");
+  assert.equal(lidModeFix("auto", CLAUDE), null);
+  // An auto-style mode in the list would be picked over Bypass.
+  assert.deepEqual(lidModeFix("default", [...CLAUDE.slice(0, 3), { id: "auto", label: "Auto" }, CLAUDE[3]]), { kind: "switch", id: "auto", label: "Auto" });
+  // Codex: Never ask keeps the chat's sandbox.
+  assert.deepEqual(lidModeFix("untrusted", CODEX), { kind: "switch", id: "never", label: "Never ask" });
+  assert.deepEqual(lidModeFix("on-request", CODEX), { kind: "switch", id: "never", label: "Never ask" });
+  assert.equal(lidModeFix("never", CODEX), null);
+});
+
+test("the banner shows only when something would hold a closed Mac", () => {
+  assert.equal(lidWouldHold(base()), true, "the helper is ready");
+  assert.equal(lidWouldHold(base({ enabled: false })), false);
+  assert.equal(lidWouldHold(base({ helper: { state: "missing" } })), false, "nothing would hold anyway");
+  assert.equal(lidWouldHold(base({ helper: { state: "missing" }, reading: { ...base().reading, lid_sleeps: false } })), true, "closed-display mode");
+  assert.equal(lidWouldHold(base({ reading: { ...base().reading, lid_closed: null } })), false, "no lid");
+  assert.equal(lidWouldHold(null), false);
+});
+
+test("the grace and the waiting stop", () => {
+  const g = base({ via: "helper", working: 0, waiting: 1, grace_until: T + 2 * 60_000, grace_title: "Fix the build", since: T - 60_000 });
+  assert.deepEqual(lidLine(g, T), { tone: "held", text: "Holding a little longer: “Fix the build” is waiting for your answer. If nobody answers, the Mac can sleep at 02:16." });
+  const stop = { at: T, code: "waiting" as const, detail: "“Fix the build” was waiting for your answer (Bash: npm test)", chat: 3, session: "claude:abc", request: "r1" };
+  assert.equal(stopText(stop), "Let the Mac sleep at 02:14: “Fix the build” was waiting for your answer (Bash: npm test).");
+  assert.equal(pausedBy([stop], "claude:abc", "r1"), stop);
+  assert.equal(pausedBy([stop], "claude:abc", null), stop);
+  assert.equal(pausedBy([stop], "claude:abc", "r2"), null, "a later request of the same chat");
+  assert.equal(pausedBy([stop], "claude:other", "r1"), null);
+  assert.equal(pausedBy([{ ...stop, code: "on_battery" }], "claude:abc", "r1"), null);
+  assert.equal(pausedText(stop), "This paused a lid-closed run at 02:14");
+  assert.equal(askingChatsText(1), "1 working chat is in a mode that asks");
+  assert.equal(askingChatsText(2), "2 working chats are in a mode that asks");
 });

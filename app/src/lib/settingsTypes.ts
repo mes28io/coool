@@ -59,17 +59,23 @@ export interface LidPrefs {
   min_battery: number;
   /** Longest hold of one working stretch in hours; 0 = no limit (default 8). */
   max_hours: number;
+  /** Minutes it keeps holding once every agent waits on the person (0..10, default 2). */
+  grace_mins: number;
 }
 
-export type LidCode = "on_battery" | "low_battery" | "hot" | "max_duration" | "needs_helper" | "helper_error" | "already_disabled" | "no_lid" | "helper_let_go" | "recovered";
+export type LidCode = "on_battery" | "low_battery" | "hot" | "max_duration" | "needs_helper" | "helper_error" | "already_disabled" | "no_lid" | "helper_let_go" | "recovered" | "waiting";
 
 /** An automatic release. */
 export interface LidStop {
   /** Epoch ms. */
   at: number;
   code: LidCode;
-  /** "battery 20%", "the Mac is running hot". */
+  /** "battery 20%", "the Mac is running hot", "“Fix the build” was waiting for your answer (Bash: npm test)". */
   detail: string;
+  /** A `waiting` stop: the chat (this run's id), its session key and the request it waited on. */
+  chat?: number | null;
+  session?: string | null;
+  request?: string | null;
 }
 
 export type LidHelper = { state: "unavailable" | "missing" | "ready" } | { state: "unreachable"; detail: string } | { state: "outdated"; detail: number };
@@ -96,6 +102,11 @@ export interface LidStatus {
   /** Agents work but it isn't holding, and why. */
   blocked: LidCode | null;
   working: number;
+  /** Agents waiting on the person (a permission prompt, a question). */
+  waiting?: number;
+  /** Holding only through the grace (every agent waits): epoch ms it ends, and the chat it waits for. */
+  grace_until?: number | null;
+  grace_title?: string | null;
   /** Epoch ms the hold began. */
   since: number | null;
   reading: LidReading;

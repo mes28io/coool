@@ -25,6 +25,7 @@ import { Button, cx, Kbd, PathText, ProviderMark } from "../primitives";
 import { Explain, PermExplain, RedactedPre, terminalSource } from "../Explain";
 import { RiskTag } from "../RiskTag";
 import { KindIcon } from "./KindIcon";
+import { LidPaused } from "./LidPaused";
 import type { Need } from "./need";
 
 const label = "font-mono text-micro font-medium uppercase tracking-[0.06em] text-faint";
@@ -63,6 +64,7 @@ export function NeedDetail({ n }: { n: Need }) {
                 waiting <Age ms={n.since} className="inline w-auto text-dim" />
               </span>
             </div>
+            <LidPaused sessionKey={n.key} request={perm?.requestId ?? ask?.requestId ?? null} />
           </div>
           {/* The "Risky" tag (lib/risk.ts), as on the chat's card; never for device-panel requests, which have their own gate. */}
           {perm && chat && !deviceAsk(perm) && <RiskTag tool={perm.tool} input={perm.input} cwd={chat.cwd} className="mt-1.5" />}

@@ -65,6 +65,8 @@ struct ChatStream {
     title: String,
     /// Its session key (`claude:<session id>`) once the refresh knows it: what a notification click opens.
     key: Option<String>,
+    /// Its latest permission request or question (request id, the needs-you words): what a lid stop names.
+    ask: Option<(String, String)>,
 }
 
 struct Core {
@@ -438,23 +440,51 @@ impl Core {
         // Working agents coool runs: chats mid-turn, and its terminal sessions the transcript shows busy.
         let working = chats.iter().filter(|c| c.state == ChatState::Working).count()
             + sessions.iter().filter(|(_, s, _)| s.managed.is_some() && s.chat.is_none() && s.status == coool_core::model::Status::Busy).count();
-        // A chat waiting on the person (permission, question) isn't `Working`: it holds nothing.
+        // Agents waiting on the person (a chat's permission or question, a terminal session the CLI says is blocked):
+        // not working, but the lid keeper gives them a short grace and names the first in its stop.
+        let waiting: Vec<lid::Waiting> = {
+            let streams = self.chats.lock().unwrap();
+            chats
+                .iter()
+                .filter(|c| c.state == ChatState::WaitingPermission)
+                .map(|c| {
+                    let st = streams.get(&c.id);
+                    let ask = st.and_then(|s| s.ask.clone());
+                    lid::Waiting {
+                        title: st.map(|s| s.title.clone()).unwrap_or_default(),
+                        ask: ask.as_ref().map(|a| a.1.clone()).unwrap_or_default(),
+                        chat: Some(c.id),
+                        session: st.and_then(|s| s.key.clone()),
+                        request: ask.map(|a| a.0),
+                    }
+                })
+                .chain(sessions.iter().filter(|(_, s, _)| s.managed.is_some() && s.chat.is_none() && s.status != coool_core::model::Status::Busy && s.waiting_for.is_some()).map(|(key, s, _)| lid::Waiting {
+                    title: s.name.as_ref().map(|n| n.title.clone()).unwrap_or_default(),
+                    ask: s.waiting_for.clone().unwrap_or_default(),
+                    chat: None,
+                    session: Some(key.clone()),
+                    request: None,
+                }))
+                .collect()
+        };
         let now = lid::now_ms();
         let (assert, covered, notices) = {
             let mut l = self.lid.lock().unwrap();
-            l.tick(now, working);
+            l.tick_with(now, working, waiting.len(), waiting.into_iter().next());
             (l.wants_assertion(), l.covers_idle_sleep(), l.take_notices())
         };
         {
             let mut p = self.power.lock().unwrap();
             p.set_lid(assert, covered);
-            p.update(working);
+            // The closed-display hold's assertion covers its grace too (every agent waiting, none working).
+            p.update(if assert { working.max(1) } else { working });
         }
         if self.selftest.is_none() {
             for n in notices {
                 thread::spawn(move || {
-                    // Silent; a click only brings coool forward (a `test` target opens nothing).
-                    let _ = notify::post("coool let the Mac sleep", &n, &notify::Sound::Off, &notify::Target::test());
+                    // Silent. A click on a "was waiting for your answer" one opens that item on the Needs you page (or its
+                    // chat once answered); any other only brings coool forward (a `test` target opens nothing).
+                    let _ = notify::post("coool let the Mac sleep", &lid::notice_text(&n), &notify::Sound::Off, &notify::Target::of_lid_stop(&n));
                 });
             }
         }
@@ -704,7 +734,7 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
         let mut hub = core.hub.lock().unwrap();
         let id = hub.start_chat(opts).map_err(|e| format!("couldn't start {}: {e:#}", provider.label()))?;
         let handle = hub.chat(id).expect("just started").handle();
-        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd), key: None });
+        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd), key: None, ask: None });
         core.pump_waker.kick();
         id
     };
@@ -1156,6 +1186,8 @@ struct LidSim {
     lid_closed: Option<bool>,
     lid_sleeps: Option<bool>,
     crash: bool,
+    /// The grace once every agent waits, in ms (instead of the setting's minutes); 0 clears the override.
+    grace_ms: Option<u64>,
 }
 
 #[tauri::command(async)]
@@ -1203,6 +1235,9 @@ fn lid_simulate(core: State<'_, Arc<Core>>, sim: LidSim) -> Res<lid::Status> {
     let mut l = core.lid.lock().unwrap();
     if sim.crash {
         l.simulate_crash();
+    }
+    if let Some(ms) = sim.grace_ms {
+        l.set_grace_override((ms > 0).then_some(ms));
     }
     Ok(l.status(lid::now_ms()))
 }
@@ -1535,6 +1570,7 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                     }
                     for e in &events {
                         core.notifier.on_event(id, &c.title, c.key.as_deref(), &e.kind);
+                        c.ask = notify::ask_of(&e.kind).or(c.ask.take());
                         match e.kind {
                             ChatEventKind::Exited { .. } => {
                                 c.exit_sent = true;
