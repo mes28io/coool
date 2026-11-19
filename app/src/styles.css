@@ -144,21 +144,15 @@
   --side-glass: rgb(249 249 249 / 0.18);
   --glass-line: rgb(0 0 0 / 0.09);
 }
-/* coool's backdrop (components/Backdrop.tsx): a few large soft blobs of colour on a base, one set per theme, drawn
-   once (no animation: ~0 CPU). Only the glass regions show it; the sheet and device screens stay opaque above it. */
+/* coool's backdrop (components/Backdrop.tsx): the six-colour rainbow (green, yellow, orange, red, purple, blue) as one
+   soft diagonal sweep, so the title bar reads it left to right and the icon rail top to bottom; a deeper set for the
+   dark theme, a lighter one for the light theme. Drawn once (no animation: ~0 CPU). Only the glass regions show it;
+   the sheet and device screens stay opaque above it. */
 :root[data-theme="dark"] {
-  --backdrop: radial-gradient(42% 55% at 12% 18%, rgb(64 92 255 / 0.85), transparent 70%),
-    radial-gradient(38% 50% at 88% 12%, rgb(176 64 255 / 0.75), transparent 70%),
-    radial-gradient(45% 60% at 82% 88%, rgb(255 72 160 / 0.7), transparent 72%),
-    radial-gradient(40% 55% at 20% 92%, rgb(20 200 170 / 0.7), transparent 70%),
-    radial-gradient(35% 45% at 50% 50%, rgb(40 200 64 / 0.35), transparent 70%), #121226;
+  --backdrop: linear-gradient(122deg, #3f9a2e 0%, #5bb040 10%, #e0a31c 27%, #e2701a 43%, #cf3136 60%, #8a3690 77%, #0b8fcd 92%, #0a7fb8 100%);
 }
 :root[data-theme="light"] {
-  --backdrop: radial-gradient(42% 55% at 12% 18%, rgb(120 160 255 / 0.85), transparent 70%),
-    radial-gradient(38% 50% at 88% 12%, rgb(205 150 255 / 0.8), transparent 70%),
-    radial-gradient(45% 60% at 82% 88%, rgb(255 150 200 / 0.8), transparent 72%),
-    radial-gradient(40% 55% at 20% 92%, rgb(110 225 200 / 0.8), transparent 70%),
-    radial-gradient(35% 45% at 50% 50%, rgb(255 210 120 / 0.55), transparent 70%), #f2f0ff;
+  --backdrop: linear-gradient(122deg, #7fd066 0%, #8dd672 10%, #ffcd4d 27%, #ff9a47 43%, #f2666a 60%, #b869ba 77%, #3fb7ea 92%, #35aee2 100%);
 }
 
 @theme inline {

@@ -10,8 +10,10 @@ import { reducedMotion } from "./StepRail";
 
 export type RightKind = RightPanelKind;
 
-/** The device panels: their background is frosted glass when the window's glass is on (lib/glass.ts). */
-const GLASS: ReadonlySet<RightKind> = new Set<RightKind>(["device", "mac", "browser"]);
+/**
+ * Every right panel (the device panels, Jobs, Models) has the frosted glass background when the window's glass or
+ * colour backdrop is on (lib/glass.ts): a tint over what is behind; the cards inside stay opaque.
+ */
 
 export function RightPanel({
   which,
@@ -40,7 +42,7 @@ export function RightPanel({
   const open = which !== null;
   const w = width(kind);
   const fade = { duration: reducedMotion() ? 0 : 0.2 };
-  const glass = translucent(useGlass()) && GLASS.has(kind);
+  const glass = translucent(useGlass());
   const [aside, setAside] = useState<HTMLElement | null>(null);
   useGlassHole(aside, glass);
   return (
