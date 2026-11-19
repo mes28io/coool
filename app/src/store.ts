@@ -44,8 +44,6 @@ export interface BrowserTabs {
 }
 export type RightPanelKind = "agents" | "models" | "browser" | "device" | "mac";
 
-/** What the left sidebar panel shows: one view at a time. Projects is the default. */
-export type SidebarView = "projects" | "needs";
 /** The full-screen Settings page's categories, in order (components/SettingsPage.tsx). */
 export const SETTINGS_SECTIONS = ["general", "notifications", "appearance", "shortcuts", "providers", "devices", "git", "connections", "storage", "usage", "insights", "about"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -166,11 +164,15 @@ interface State {
   exited: Record<number, boolean>;
   env: Environment | null;
   usage: PlanUsages;
-  sidebarView: SidebarView;
-  /** Show a view; a non-Projects view expands a collapsed sidebar. */
-  setSidebarView(v: SidebarView): void;
-  /** Same view again goes back to Projects. */
-  toggleSidebarView(v: SidebarView): void;
+  /**
+   * The full-content "Needs you" page (components/needs/NeedsPage.tsx), opened by the rail's bell: it lies over the
+   * sheet like Settings (sidebar and panes stay mounted underneath). `needsPick` is the session key to select first.
+   * Opening a session, switching tabs or opening Settings closes it.
+   */
+  needsPage: boolean;
+  needsPick: string | null;
+  openNeeds(pick?: string | null): void;
+  closeNeeds(): void;
   /**
    * The full-screen Settings page, open on this category; null = the app (sidebar and panes stay mounted underneath,
    * untouched). Opening a session or switching tabs closes it.
@@ -473,20 +475,10 @@ export const useStore = create<State>((set, get) => ({
   exited: {},
   env: null,
   usage: { claude: null, codex: null },
-  sidebarView: "projects",
-  setSidebarView(v) {
-    if (v !== "projects" && !get().sidebarOpen) {
-      try {
-        localStorage.setItem("coool.sidebarOpen", "1");
-      } catch {}
-      set({ sidebarOpen: true });
-    }
-    set({ sidebarView: v });
-  },
-  toggleSidebarView(v) {
-    const s = get();
-    s.setSidebarView(s.sidebarOpen && s.sidebarView === v ? "projects" : v);
-  },
+  needsPage: false,
+  needsPick: null,
+  openNeeds: (pick) => set({ needsPage: true, needsPick: pick ?? null, settings: null }),
+  closeNeeds: () => set({ needsPage: false, needsPick: null }),
   settings: null,
   settingsLast: readSettingsLast(),
   openSettings(section) {
@@ -497,7 +489,7 @@ export const useStore = create<State>((set, get) => ({
       } catch {}
       set({ settingsLast: v });
     }
-    set({ settings: v });
+    set({ settings: v, needsPage: false });
   },
   closeSettings: () => set({ settings: null }),
   chatInfos: {},
@@ -754,7 +746,7 @@ export const useStore = create<State>((set, get) => ({
   markExited: (id) => set((s) => ({ exited: { ...s.exited, [id]: true } })),
 
   open(t, opts) {
-    if (get().settings) set({ settings: null });
+    if (get().settings || get().needsPage) set({ settings: null, needsPage: false });
     const { tabs, activeTab } = get();
     let target = t;
     if (t.kind === "pty" && get().ptyOwner[t.id]) target = { kind: "session", key: get().ptyOwner[t.id] };
@@ -821,11 +813,11 @@ export const useStore = create<State>((set, get) => ({
     if (tab.root.type === "split") get().closePane(tab.focus);
     else get().closeTab(tab.id);
   },
-  activate: (tab) => set({ activeTab: tab, settings: null }),
+  activate: (tab) => set({ activeTab: tab, settings: null, needsPage: false }),
   activateIndex(i) {
     const { tabs } = get();
     const t = i === 8 ? tabs[tabs.length - 1] : tabs[i];
-    if (t) set({ activeTab: t.id, settings: null });
+    if (t) set({ activeTab: t.id, settings: null, needsPage: false });
   },
   reorder(ids) {
     const by = new Map(get().tabs.map((t) => [t.id, t]));

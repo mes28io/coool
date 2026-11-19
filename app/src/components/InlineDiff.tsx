@@ -20,7 +20,8 @@ export function editPairs(tool: string, input: unknown): { path: string; pairs: 
   return path && pairs.length ? { path, pairs } : null;
 }
 
-export function InlineDiff({ path, pairs, root, onAllow, onDeny }: { path: string; pairs: [string, string][]; root: string; onAllow: () => void; onDeny: () => void }) {
+/** Without `onAllow` / `onDeny` it is the diff alone (the Needs you page puts the answer below it); `tall` lets it grow. */
+export function InlineDiff({ path, pairs, root, onAllow, onDeny, tall }: { path: string; pairs: [string, string][]; root: string; onAllow?: () => void; onDeny?: () => void; tall?: boolean }) {
   const parts = useMemo(() => pairs.map(([a, b]) => wordDiff(a, b)), [pairs]);
   const counts = useMemo(() => pairs.reduce((n, [a, b]) => {
     const c = lineCounts(a, b);
@@ -38,7 +39,7 @@ export function InlineDiff({ path, pairs, root, onAllow, onDeny }: { path: strin
           {counts.removed > 0 && <span className="text-err-text">−{counts.removed}</span>}
         </span>
       </div>
-      <div className="scroll selectable max-h-[168px] overflow-y-auto px-2.5 py-2 font-mono text-mono-small text-dim">
+      <div className={cx("scroll selectable overflow-y-auto px-2.5 py-2 font-mono text-mono-small text-dim", tall ? "max-h-[min(520px,55vh)]" : "max-h-[168px]")}>
         {parts.map((p, k) => (
           <div key={k} className={cx("whitespace-pre-wrap break-words", k > 0 && "mt-2 border-t border-dashed border-hairline pt-2")}>
             {p.map((s, j) =>
@@ -57,6 +58,7 @@ export function InlineDiff({ path, pairs, root, onAllow, onDeny }: { path: strin
           </div>
         ))}
       </div>
+      {onAllow && onDeny && (
       <div className="flex items-center justify-end gap-1.5 border-t border-hairline px-2 py-1.5">
         <Button variant="ghost" className="h-[28px] px-2.5 text-small" onClick={onDeny} data-mc-deny>
           Deny
@@ -65,6 +67,7 @@ export function InlineDiff({ path, pairs, root, onAllow, onDeny }: { path: strin
           Allow edit
         </Button>
       </div>
+      )}
     </div>
   );
 }

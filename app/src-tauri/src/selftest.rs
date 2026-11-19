@@ -27,6 +27,8 @@
 //!
 //! A run kept apart from the person's own data sets `HOME` to a throwaway folder too (the CLIs' `~/.claude` and
 //! `~/.codex`, coool's app data), with `COOOL_VM_DIR` pointing at the one sandbox Mac when a scenario uses it.
+//! - `COOOL_SELFTEST_BACKGROUND=1`: the window goes off screen, never on top or focused, and the app takes no Dock
+//!   icon (window-alone screenshots still work), so a run leaves the person's screen and keyboard alone.
 //!
 //! Settings (the insights and "runs by other tools" toggles) and the list of
 //! sessions coool started are kept in the folder too, never in the real ones;
@@ -118,6 +120,14 @@ impl SelfTest {
         // with several webviews and no longer counts as a webview window.
         if let Some(w) = app.get_window("main") {
             let _ = w.set_size(tauri::LogicalSize::new(1440.0, 900.0));
+            // `COOOL_SELFTEST_BACKGROUND=1`: off screen and never focused, so a run doesn't take the person's screen
+            // or keyboard (window-alone screenshots still work).
+            if std::env::var("COOOL_SELFTEST_BACKGROUND").is_ok_and(|v| v == "1") {
+                let _ = w.set_position(tauri::LogicalPosition::new(-4000.0, -3000.0));
+                #[cfg(target_os = "macos")]
+                let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                return;
+            }
             let _ = w.center();
             let _ = w.set_always_on_top(mode == "quiet");
             if !quiet {

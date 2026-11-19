@@ -6,7 +6,7 @@ import type { PlanUsages, Provider, UsageWindow } from "../lib/types";
 import { useStore } from "../store";
 import { IBell, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
 import { cx, ease, ProviderMark } from "./primitives";
-import { useNeedsYou } from "./LeftPanels";
+import { useNeedsYou } from "./needs/useNeedsYou";
 import { resetText, toneColor, usageHighest, usageTone, useUsageProviders } from "./Usage";
 
 /**
@@ -184,26 +184,18 @@ function UsagePill({ items, index }: { items: UsageItem[]; index: number }) {
   );
 }
 
-/** Sessions that are blocked on the person: the badge counts them, the view lists them. */
+/** Sessions that are blocked on the person: the badge counts them, the Needs you page (components/needs/) lists them. */
 function NeedsYou() {
   const list = useNeedsYou();
-  const view = useStore((s) => s.sidebarView);
-  const open = useStore((s) => s.sidebarOpen);
-  const settings = useStore((s) => s.settings !== null);
-  const toggle = useStore((s) => s.toggleSidebarView);
-  const setView = useStore((s) => s.setSidebarView);
-  const closeSettings = useStore((s) => s.closeSettings);
+  const on = useStore((s) => s.needsPage);
+  const openNeeds = useStore((s) => s.openNeeds);
+  const closeNeeds = useStore((s) => s.closeNeeds);
   return (
     <RailButton
       label="Needs you"
-      onClick={() => {
-        // From the Settings page: back to the app, showing the list (never toggling it away unseen).
-        if (settings) {
-          closeSettings();
-          setView("needs");
-        } else toggle("needs");
-      }}
-      active={!settings && open && view === "needs"}
+      // From the Settings page it opens the page (openNeeds closes Settings); the bell again goes back.
+      onClick={() => (on ? closeNeeds() : openNeeds())}
+      active={on}
       badge={list.length}
     >
       <IBell size={20} />
@@ -309,8 +301,7 @@ export function Rail() {
   const toggleTheme = useStore((s) => s.toggleTheme);
   const sheet = useStore((s) => s.sheet);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
-  const view = useStore((s) => s.sidebarView);
-  const setView = useStore((s) => s.setSidebarView);
+  const needsPage = useStore((s) => s.needsPage);
   const settings = useStore((s) => s.settings);
   const openSettings = useStore((s) => s.openSettings);
   const closeSettings = useStore((s) => s.closeSettings);
@@ -320,11 +311,8 @@ export function Rail() {
     <nav data-tauri-drag-region aria-label="coool" className="relative z-20 flex w-[56px] shrink-0 flex-col items-center gap-1.5 pb-3 pt-1">
       <RailButton
         label="Home"
-        active={settings === null && activeTab === null && view === "projects"}
-        onClick={() => {
-          activate(null);
-          setView("projects");
-        }}
+        active={settings === null && activeTab === null && !needsPage}
+        onClick={() => activate(null)}
       >
         <IHome size={20} />
       </RailButton>

@@ -1,13 +1,11 @@
 // Mission control (Home): a calm overview of every project with live agents (APP_SPEC "Mission
-// control"). "Needs you" sits on top, with a pending edit shown inline to allow or deny. Then one
-// section per project: its sessions (one click opens one) with their fan-outs, the ledger of what
+// control"). One section per project: its sessions (one click opens one) with their fan-outs, the ledger of what
 // agents changed, and the branch's commit trail. Ended sessions are listed under "Earlier".
 
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { answerPermission } from "../lib/actions";
 import { useAgentCards } from "../lib/agentCards";
-import { pendingPermission, pendingQuestion, useChats, type ChatItem } from "../lib/chat";
+import { useChats } from "../lib/chat";
 import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, fmtElapsed, fmtTokens, headlineIsTitle, homeShort, isThinking, projectOf, shortDetail, tsToMs } from "../lib/format";
 import { stepParts } from "../lib/toolNames";
@@ -26,10 +24,9 @@ import { AwayStrip } from "./Away";
 import { ChangeLedger } from "./ChangeLedger";
 import { CommitTrail, type Committing } from "./CommitTrail";
 import { FanOut } from "./FanOut";
-import { IAgent, IForward, IPlay, IPlus, ITerminal } from "./icons";
-import { editPairs, InlineDiff } from "./InlineDiff";
+import { IAgent, IPlay, IPlus } from "./icons";
 import { Age, Card, CardHeader, Node } from "./MissionCard";
-import { AutoTag, Button, cx, ease, Kbd, NeedsBadge, PathText, ProviderMark, softSpring, StatusDot } from "./primitives";
+import { AutoTag, Button, cx, ease, Kbd, PathText, ProviderMark, softSpring, StatusDot } from "./primitives";
 import { resumeInto } from "./SessionView";
 import { RecentSkeleton, Skel } from "./Skeletons";
 import { Wordmark } from "./Wordmark";
@@ -96,7 +93,6 @@ export function MissionControl() {
   }, [projects, picked]);
   if (current && current.path !== picked) setPicked(current.path);
 
-  const needing = live.filter((s) => att.get(s)!.needs);
   const recent = useMemo(() => sessions.filter((s) => !s.nested && att.get(s)?.status === "ended").slice(0, 6), [sessions, att]);
   const nothing = projects.length === 0;
   const firstPaint = useRef(true);
@@ -116,21 +112,6 @@ export function MissionControl() {
             <EmptyState />
           ) : (
             <div>
-              {needing.length > 0 && (
-                <section className="mb-6" data-mc-needs={needing.length}>
-                  <div className="mb-2.5 flex items-center gap-2 px-1">
-                    <NeedsBadge small />
-                    <span className="text-small text-dim">{needing.length === 1 ? "One session is waiting on you" : `${needing.length} sessions are waiting on you`}</span>
-                  </div>
-                  <div className="gap-3 @[880px]:columns-2">
-                    <AnimatePresence initial={stagger}>
-                      {needing.map((s, i) => (
-                        <NeedsCard key={sessionKey(s)} s={s} att={att.get(s)!} i={i} />
-                      ))}
-                    </AnimatePresence>
-                  </div>
-                </section>
-              )}
               <AwayStrip att={att} />
               {current && (
                 <>
@@ -154,60 +135,6 @@ export function MissionControl() {
         </div>
       </div>
     </AnimateScope>
-  );
-}
-
-// ---------- needs you ----------
-
-type Perm = Extract<ChatItem, { kind: "permission" }>;
-
-function NeedsCard({ s, att, i }: { s: Session; att: Attention; i: number }) {
-  const open = useStore((st) => st.open);
-  const reduce = useMotion().reduce;
-  const perm = useChats((st) => (s.chat != null ? pendingPermission(st.chats[s.chat]) : null)) as Perm | null;
-  const asking = useChats((st) => (s.chat != null ? !!pendingQuestion(st.chats[s.chat]) : false));
-  const key = sessionKey(s);
-  const edit = perm ? editPairs(perm.tool, perm.input) : null;
-  const command = perm && !edit && /bash|shell|exec/i.test(perm.tool) ? String((perm.input as { command?: unknown })?.command ?? perm.summary) : null;
-  const answer = (a: "allow" | "deny") => perm && s.chat != null && answerPermission(s.chat, perm.requestId, a);
-  return (
-    <motion.div
-      initial={reduce ? false : { opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0, transition: { ...softSpring, delay: Math.min(i, 6) * 0.04 } }}
-      exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.18 } }}
-      className="mb-3 break-inside-avoid rounded-[14px] border border-[color-mix(in_oklab,var(--status-needs)_38%,var(--border))] bg-bg p-3.5"
-      data-mc-needs-card={att.source ?? ""}
-    >
-      <button type="button" onClick={() => open({ kind: "session", key })} className="group flex w-full min-w-0 items-center gap-2 text-left">
-        <StatusDot status="needs" size={7} />
-        <ProviderMark provider={s.provider} size={13} />
-        <span className="shrink-0 text-small text-dim">{folderName(projectOf(s))}</span>
-        <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{displayTitle(s)}</span>
-        <span className="flex shrink-0 items-center gap-1 text-small text-dim transition-colors group-hover:text-fg">
-          {asking ? "Answer" : perm && !edit && !command ? "Review" : "Open"}
-          <IForward size={11} />
-        </span>
-      </button>
-      <p className="mt-1 line-clamp-2 pl-[17px] text-base text-needs-text">{edit ? "Wants to edit a file" : command ? "Wants to run a command" : att.needs}</p>
-      {perm && edit ? (
-        <div className="pl-[17px]">
-          <InlineDiff path={edit.path} pairs={edit.pairs} root={projectOf(s)} onAllow={() => answer("allow")} onDeny={() => answer("deny")} />
-        </div>
-      ) : perm && command ? (
-        <div className="ml-[17px] mt-2.5 flex items-center gap-2 overflow-hidden rounded-[10px] border border-hairline bg-panel py-1.5 pl-2.5 pr-1.5">
-          <ITerminal size={12} className="shrink-0 text-faint" />
-          <span className="selectable min-w-0 flex-1 truncate font-mono text-mono-small text-fg/90" title={command}>
-            {command}
-          </span>
-          <Button variant="ghost" className="h-[28px] px-2.5 text-small" onClick={() => answer("deny")} data-mc-deny>
-            Deny
-          </Button>
-          <Button variant="primary" className="h-[28px] px-3 text-small" onClick={() => answer("allow")} data-mc-allow>
-            Allow
-          </Button>
-        </div>
-      ) : null}
-    </motion.div>
   );
 }
 

@@ -25,7 +25,8 @@
 // click and observe take on each page and what they returned. `browser-real` (no model calls; public network) opens
 // four public affectui.com component pages the same way, saving the first screenshot after each navigation, and logs
 // the Reduce motion state and the beam (with Reduce motion as it is, then Off).
-// Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
+// `needs` (the Needs you page: a Haiku chat in Ask mode; a Write and an Edit allowed, a command denied and a question
+// answered from the page). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { ignoreChatDefaults, setTextSize } from "./lib/prefs";
 import { newChat } from "./lib/actions";
@@ -1408,12 +1409,12 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (!opts.length || opts[0].dataset.rememberScope !== "chat" || !/Allow all edits in this chat/.test(opts[0].textContent ?? "")) throw new Fail(`unexpected options: ${labels.join(" | ")}`);
       if (button("Always allow", c)) throw new Fail("an unlabelled Always allow button is still there");
       await shot("approval");
-      // The Needs-you popover and the other theme, while the request is pending.
+      // The Needs you page and the other theme, while the request is pending.
       const bell = ([...document.querySelectorAll("button[aria-label]")] as HTMLElement[]).find((x) => x.getAttribute("aria-label")!.startsWith("Needs you"));
       if (bell) {
         bell.click();
         await sleep(500);
-        await shot("needs-popover");
+        await shot("needs-page");
         bell.click();
         await sleep(200);
       }
@@ -2892,19 +2893,23 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
       const sessions = textOf($("[data-mc-sessions]"));
       return `tabs ${tabs.join(" | ")}; switched to ${sel?.dataset.mcTab?.split("/").pop()}; trail: ${t.slice(0, 260)}; sessions card: ${sessions.slice(0, 160)}`;
     });
-    await step("mc: a real pending Edit shows inline in Needs you with its word diff, Allow edit there applies it", async () => {
+    await step("mc: no Needs-you strip on Home; a real pending Edit shows on the Needs you page with its word diff, Allow there applies it", async () => {
       const id = sweepState.a;
       await send(id, "Use the Edit tool to change the word red to blue in notes.txt. Do not do anything else, then reply with: done");
       await waitFor("the pending edit", () => chat(id)?.pendingPermission, 90_000);
       home();
-      const card = await waitFor("the Needs-you edit card", () => $all("[data-mc-needs-card]").find((c) => /notes\.txt/.test(textOf(c))), 15_000);
+      await sleep(800);
+      if ($("[data-mc-needs]") || $("[data-mc-needs-card]")) throw new Fail("Mission control still shows a Needs-you strip");
+      const key = needsKeyOf(id);
+      useStore.getState().openNeeds(key);
+      const card = await waitFor("the Needs you page's edit", () => $all("[data-needs-detail]").find((c) => /notes\.txt/.test(textOf(c))), 15_000);
       await sleep(800);
       await shot("sweep-mc-edit-review");
       const txt = textOf(card);
       const ins = [...card.querySelectorAll("ins, [data-add]")].map(textOf).join(",");
       const del = [...card.querySelectorAll("del, s, [data-del]")].map(textOf).join(",");
-      const allow = card.querySelector("[data-mc-allow]") as HTMLElement | null;
-      if (!allow) throw new Fail(`no Allow edit: ${txt}`);
+      const allow = card.querySelector("[data-allow-once]") as HTMLElement | null;
+      if (!allow) throw new Fail(`no Allow: ${txt}`);
       allow.click();
       const end = await nextTurn(id, turnEnds(id).length, 90_000);
       const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).find((t) => t.name === "Edit");
@@ -3589,6 +3594,104 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
     });
   },
 };
+/** The session key the Needs you page lists chat `id` under, once discovery linked them. */
+const needsKeyOf = (id: number) => {
+  const s = useStore.getState().sessions.find((x) => x.chat === id);
+  return s ? sessionKey(s) : null;
+};
+/** Opens the Needs you page on chat `id`'s item and returns its detail once it shows `kind`. */
+async function needsDetail(id: number, kind: string, ms = 90_000): Promise<HTMLElement> {
+  const key = await waitFor("the chat's session (for its Needs you item)", () => needsKeyOf(id), ms);
+  useStore.getState().openNeeds(key);
+  return waitFor(`the Needs you page showing a ${kind}`, () => $all("[data-needs-detail]").find((d) => d.dataset.needsDetail === key && d.dataset.needsDetailKind === kind) ?? null, ms);
+}
+
+/**
+ * `needs`: the Needs you page against a real Claude Haiku chat in Ask mode (`default`). A Write request shows with its
+ * file and the person's prompt as context, and Allow on the page runs it; a command shows whole with Deny, which
+ * returns the denial; an Edit shows its diff and is allowed from the page; a question is answered from the page.
+ * Each answered item leaves the list; Mission control has no Needs-you strip; Esc goes back. A few cents of Haiku.
+ */
+const needsScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async needs(ctx) {
+    let id = -1;
+    await step("needs: a Write request shows on the page with its file and the prompt; Allow there runs it and the turn goes on", async () => {
+      id = await startIn(ctx.cfg.dir, "default");
+      const prompt = "Use the Write tool to create the file needs-a.txt containing the text owls. Do nothing else, then reply with one word: done";
+      const n = turnEnds(id).length;
+      await send(id, prompt);
+      await waitFor("the pending write", () => chat(id)?.pendingPermission, 90_000);
+      if ($("[data-mc-needs]")) throw new Fail("a Needs-you strip on Home");
+      const d = await needsDetail(id, "write");
+      const why = textOf(d.querySelector("[data-needs-why]"));
+      const facts = textOf(d.querySelector("[data-needs-facts]"));
+      if (!/needs-a\.txt/.test(textOf(d))) throw new Fail(`no file in the detail: ${textOf(d).slice(0, 200)}`);
+      if (!/create the file needs-a\.txt/.test(why)) throw new Fail(`no prompt in "why": ${why.slice(0, 200)}`);
+      if (!/Ask/.test(facts)) throw new Fail(`permission mode not shown: ${facts.slice(0, 200)}`);
+      const row = $(`[data-needs-item="${CSS.escape(needsKeyOf(id)!)}"]`);
+      if (!row || row.getAttribute("aria-selected") !== "true") throw new Fail("the item isn't selected in the list");
+      await shot("needs-write");
+      (d.querySelector("[data-allow-once]") as HTMLElement).click();
+      const end = await nextTurn(id, n, 120_000);
+      const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).find((t) => t.name === "Write");
+      if (!tool || tool.ok === false) throw new Fail(`the Write didn't run: ${tool?.output.slice(0, 160)}`);
+      await waitFor("the item to leave the list", () => !$(`[data-needs-item="${CSS.escape(needsKeyOf(id)!)}"]`), 10_000);
+      return `title "${textOf(d.querySelector("h1"))}"; why: ${why.slice(0, 140)}; turn ${end.ok ? "ok" : "not ok"}`;
+    });
+    await step("needs: a command shows whole on the page; Deny there returns the denial to the agent", async () => {
+      const n = turnEnds(id).length;
+      await send(id, "Run exactly this one Bash command and nothing else: echo needs-check > needs-b.txt . If it is denied, reply with one word: denied");
+      await waitFor("the pending command", () => chat(id)?.pendingPermission, 90_000);
+      const d = await needsDetail(id, "command");
+      const cmd = textOf(d.querySelector("[data-needs-command]"));
+      if (!/echo needs-check > needs-b\.txt/.test(cmd)) throw new Fail(`command: ${cmd}`);
+      await shot("needs-command");
+      (d.querySelector("[data-deny]") as HTMLElement).click();
+      await nextTurn(id, n, 120_000);
+      const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).filter((t) => t.name === "Bash").pop();
+      if (!tool || tool.ok !== false) throw new Fail(`the command wasn't denied: ${tool?.output.slice(0, 160)}`);
+      return `"${cmd}" denied: ${tool.output.slice(0, 100)}`;
+    });
+    await step("needs: an Edit shows its word diff on the page; Allow there applies it", async () => {
+      const n = turnEnds(id).length;
+      await send(id, "Use the Edit tool to change the word owls to larks in needs-a.txt. Do nothing else, then reply with one word: done");
+      await waitFor("the pending edit", () => chat(id)?.pendingPermission, 90_000);
+      const d = await needsDetail(id, "edit");
+      const diff = d.querySelector("[data-mc-diff]");
+      const ins = [...(diff?.querySelectorAll("ins") ?? [])].map(textOf).join(",");
+      const del = [...(diff?.querySelectorAll("del") ?? [])].map(textOf).join(",");
+      if (!/larks/.test(ins) || !/owls/.test(del)) throw new Fail(`diff: +[${ins}] -[${del}]`);
+      const steps = textOf(d.querySelector("[data-needs-steps]"));
+      await shot("needs-edit");
+      (d.querySelector("[data-allow-once]") as HTMLElement).click();
+      await nextTurn(id, n, 120_000);
+      const tool = (items(id).filter((i) => i.kind === "tool") as Tool[]).filter((t) => t.name === "Edit").pop();
+      if (!tool || tool.ok === false) throw new Fail(`the Edit didn't run: ${tool?.output.slice(0, 160)}`);
+      return `+[${ins}] -[${del}]; steps: ${steps.slice(0, 120) || "(none)"}`;
+    });
+    await step("needs: a question is answered from the page; Esc goes back", async () => {
+      const n = turnEnds(id).length;
+      await send(id, "Use the AskUserQuestion tool exactly once to ask me which colour I prefer, with the options Red and Blue (single choice). After I answer, reply with only the colour I picked.");
+      await waitFor("the pending question", () => chat(id)?.pendingQuestion, 90_000);
+      const d = await needsDetail(id, "question");
+      await shot("needs-question");
+      const blue = d.querySelector('[data-option="Blue"]') as HTMLElement | null;
+      if (!blue) throw new Fail(`no Blue option: ${textOf(d).slice(0, 200)}`);
+      blue.click();
+      await nextTurn(id, n, 120_000);
+      const t = lastText(id)?.text ?? "";
+      if (!/blue/i.test(t)) throw new Fail(`reply: ${t.slice(0, 80)}`);
+      await waitFor("the empty state or another item", () => !$(`[data-needs-detail="${CSS.escape(needsKeyOf(id)!)}"]`), 10_000);
+      await shot("needs-after");
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      await sleep(400);
+      if (useStore.getState().needsPage) throw new Fail("Esc didn't close the page");
+      return `answered Blue; reply "${t.trim().slice(0, 30)}"`;
+    });
+  },
+};
+Object.assign(scenarios, needsScenarios);
+
 const fmtTokensLocal = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`);
 Object.assign(scenarios, sweep);
 

@@ -22,6 +22,7 @@ import { Rail } from "./components/Rail";
 import { RunningPill } from "./components/RunningPill";
 import { HoverCards } from "./components/HoverCard";
 import { SettingsPage } from "./components/SettingsPage";
+import { NeedsPage } from "./components/needs/NeedsPage";
 import { cx } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
@@ -78,7 +79,7 @@ function useShortcuts() {
       e.stopPropagation();
       const st = useStore.getState();
       // While the Settings page is up, pane and sidebar shortcuts would act on things out of sight: they wait.
-      if (sc.hiddenBySettings && st.settings !== null) return;
+      if (sc.hiddenBySettings && (st.settings !== null || st.needsPage)) return;
       runShortcut(sc.id, e);
     };
     window.addEventListener("keydown", onKey, true);
@@ -213,6 +214,8 @@ export default function App() {
   const settingsOpen = useStore((s) => s.settings !== null);
   // The title bar's own controls also step aside under the onboarding (it lets this bar show through above it).
   const barHidden = useOnboarding((s) => s.open) || settingsOpen;
+  const needsOpen = useStore((s) => s.needsPage);
+  const covered = settingsOpen || needsOpen;
   useShortcuts();
   useBackendEvents();
   useMarkSeen();
@@ -268,11 +271,13 @@ export default function App() {
               (the app stays mounted underneath, hidden and inert, so going back finds every tab, pane and scroll as it was). */}
           <div className="relative flex min-w-0 flex-1 overflow-hidden rounded-tl-[18px] border-l border-t border-hairline">
             <div ref={setSheetBg} className="pointer-events-none absolute inset-0 bg-bg" aria-hidden data-sheet-bg />
-            <div className={cx("relative flex min-w-0 flex-1", settingsOpen && "invisible")} inert={settingsOpen} aria-hidden={settingsOpen || undefined}>
+            <div className={cx("relative flex min-w-0 flex-1", covered && "invisible")} inert={covered} aria-hidden={covered || undefined}>
               <Sidebar />
               <Workspace />
             </div>
             <AnimatePresence>{settingsOpen && <SettingsPage key="settings" />}</AnimatePresence>
+            {/* The Needs you page (the rail's bell) lies over the sheet the same way; the title bar's tabs stay. */}
+            <AnimatePresence>{needsOpen && !settingsOpen && <NeedsPage key="needs" />}</AnimatePresence>
           </div>
         </div>
       </div>
