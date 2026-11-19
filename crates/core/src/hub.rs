@@ -160,6 +160,12 @@ impl Hub {
                     s.current = None;
                 }
                 s.pid = s.pid.or(c.pid);
+            } else if c.provider == Provider::Codex && s.updated.elapsed().is_ok_and(|a| a >= Duration::from_secs(3)) {
+                // Codex rollouts carry no pid, so the transcript alone would keep a stopped chat "idle" for two
+                // minutes (or "busy" for ten after a Stop mid-turn) and offer no Resume. coool ran its only process,
+                // which is gone: it ended, unless something else writes the rollout again (a `codex resume`).
+                s.status = Status::Ended;
+                s.current = None;
             }
         }
 

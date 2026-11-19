@@ -42,6 +42,7 @@ import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
 import { useReads } from "./lib/explainStore";
+import { changesFromActivity } from "./lib/mission";
 
 interface Config {
   scenario: string;
@@ -2149,7 +2150,14 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
     await gateMac(ctx, "claude", PERF_MODEL, "default");
   },
   async "gate-mac-codex"(ctx) {
-    await gateMac(ctx, "codex", CODEX_MODEL, "on-request");
+    try {
+      await gateMac(ctx, "codex", CODEX_MODEL, "on-request");
+    } finally {
+      // Leave the one sandbox Mac as found: shut down (its network setting is not touched here).
+      await api().macShutdown().catch(() => {});
+      const st = await api().macStatus().catch(() => null);
+      await log(`INFO the sandbox Mac after gate-mac-codex: ${st ? `${st.state ?? "?"}, network ${st.network ?? "?"}` : "unknown"}`);
+    }
   },
 
   /**
@@ -5178,6 +5186,419 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, combo);
+
+// ---------- Codex: the features first checked with Claude chats, on a real Codex chat ----------
+//
+// `codex-chat` (one Codex chat on CODEX_MODEL, ~9 short turns; the folder must be a git repo whose notes.md says
+// "owls", committed): streaming, Markdown, step rows and chips, Worked for and where the turn went; a risky command
+// (Risky tag, the agent's reason, Deny from the Needs you page); a patch outside the folder (Risky, its content as a
+// diff on the page, Deny); a patch in the folder in Read only (its word diff on the page, Allow there, the ledger row);
+// steering mid-step; Stop and the next turn; one sub-agent; the sidebar row, hover card and lanes; the context map
+// and window; the usage card; resume. `codex-overlap` (a Haiku chat and a Codex chat append to the same file: the
+// overlap row names both providers). Every approval asked where none was expected is logged (`ASK`) and allowed.
+
+type ToolItem = Extract<ChatItem, { kind: "tool" }>;
+const codexState = { id: -1 };
+const toolsOf = (id: number) => items(id).filter((i) => i.kind === "tool") as ToolItem[];
+/** Allows (once) whatever approval shows while `f` runs, logging it: for steps that expect none. */
+async function allowingAll<T>(f: () => Promise<T>): Promise<T> {
+  const seen = new Set<string>();
+  const t = setInterval(() => {
+    const c = $("[data-approval]");
+    const req = c?.getAttribute("data-approval");
+    if (!c || !req || seen.has(req)) return;
+    seen.add(req);
+    void log(`ASK (allowed once) ${textOf(c).slice(0, 160)}`);
+    button("Allow once", c)?.click();
+  }, 300);
+  try {
+    return await f();
+  } finally {
+    clearInterval(t);
+  }
+}
+async function startCodex(cwd: string, mode: string, prompt?: string): Promise<number> {
+  const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+  if (!(await newChat({ provider: "codex", cwd, model: CODEX_MODEL, permissionMode: mode, prompt }))) throw new Fail("could not start a Codex chat");
+  const id = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+  await waitFor("ready", () => chat(id)?.ready, 90_000);
+  return id;
+}
+const codexUsage = () => {
+  const u = (useStore.getState() as { usage?: { codex: { windows: { label: string; used_percent: number }[] } | null } }).usage?.codex;
+  return u ? u.windows.map((w) => `${w.label} ${w.used_percent}%`).join(", ") : "unknown";
+};
+
+const codexScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async "codex-chat"(ctx) {
+    const dir = ctx.cfg.dir;
+    await log(`INFO codex usage at start: ${codexUsage()}`);
+    let id = -1;
+    await step("codex-chat: streams, renders Markdown, a step row and chip, Worked for with where the turn went", async () => {
+      // A sampler: what the live row says while the turn runs ("Thinking", the timer).
+      const live = new Set<string>();
+      const sample = setInterval(() => {
+        const t = $all("[data-chat-timeline]").map((e) => e.textContent ?? "").join(" ");
+        for (const w of ["Thinking", "Working", "Running", "Writing"]) if (t.includes(w)) live.add(w);
+      }, 150);
+      try {
+        await allowingAll(async () => {
+          id = await startCodex(dir, "untrusted", "Run the shell command `ls` once, then reply with a two-item Markdown bullet list whose items are the bold words **owls** and **larks**. Nothing else.");
+          codexState.id = id;
+          useStore.getState().open({ kind: "chat", id });
+          await nextTurn(id, 0, 180_000);
+        });
+      } finally {
+        clearInterval(sample);
+      }
+      const bs = batches[id] ?? [];
+      const deltaBatches = bs.filter((b) => b.events.some((e) => e.type === "text_delta")).length;
+      const strong = await waitFor("bold owls in the reply", () => $all("[data-chat-timeline] strong").find((e) => /owls/i.test(e.textContent ?? "")), 10_000).catch(() => null);
+      const shell = toolsOf(id).find((t) => t.name === "shell");
+      const end = turnEnds(id)[0];
+      const footer = $all("[data-turn-end]").pop();
+      const chips = $all("[data-step-chip]").map(textOf);
+      await shot("codex-chat-first");
+      const out = [`${deltaBatches} delta batches`, `live words ${[...live].join("/") || "none"}`, `shell ${shell ? `ok=${shell.ok} "${shell.input && (shell.input as { command?: string }).command}"` : "none"}`, `turn ${end.durationMs} ms ok=${end.ok}`, `footer "${textOf(footer ?? null)}"`, `chips [${chips.join(", ")}]`];
+      if (!strong) throw new Fail(`no bold owls; ${out.join("; ")}; reply ${JSON.stringify(lastText(id)?.text)}`);
+      if (deltaBatches < 2) throw new Fail(`reply not streamed: ${out.join("; ")}`);
+      if (!shell?.ok) throw new Fail(`no ok shell step: ${out.join("; ")}`);
+      if (!end.ok || end.durationMs <= 0) throw new Fail(`turn end: ${out.join("; ")}`);
+      if (!/Worked for/.test(textOf(footer ?? null))) throw new Fail(`footer: ${out.join("; ")}`);
+      const bar = $all("[data-turn-bar]").pop();
+      if (bar) {
+        $all("[data-turn-toggle]").pop()?.click();
+        await waitFor("the waterfall", () => $all("[data-waterfall]").pop(), 5_000).catch(() => null);
+        out.push(`bar ${bar.dataset.turnBar}; waterfall rows ${[...document.querySelectorAll("[data-wf-row]")].map(textOf).join(" | ").slice(0, 200)}`);
+        await shot("codex-chat-waterfall");
+      } else out.push("no turn bar (writing only, or under 1 s)");
+      return out.join("; ");
+    });
+    if (id < 0) return;
+    await step("codex-chat: a risky command asks with the Risky tag and the agent's reason; Deny on the Needs you page returns the denial", async () => {
+      let n = turnEnds(id).length;
+      // build-tmp is a throwaway folder in the test project; the model must ask, not decide for the person.
+      const ask = "This tests coool's approval card: build-tmp is an empty throwaway folder here. Run exactly this one shell command now and nothing else: `rm -rf build-tmp` (do not answer without running it). If it is denied, reply with one word: denied";
+      await send(id, ask);
+      // The model may still answer without running it: ask once more.
+      if ((await waitFor<HTMLElement | "ended">("the approval card or the turn's end", () => $("[data-approval]") ?? (turnEnds(id).length > n ? "ended" : null), 120_000)) === "ended") {
+        await log(`INFO the model answered without running it: "${lastText(id)?.text.slice(0, 60)}"; asking again`);
+        n = turnEnds(id).length;
+        await send(id, `You did not run it. ${ask}`);
+      }
+      const { card } = await approvalOf(id);
+      const risk = card.querySelector<HTMLElement>("[data-risk]")?.dataset.risk ?? null;
+      const claim = card.querySelector<HTMLElement>("[data-explain-claim]")?.dataset.explainClaim ?? "";
+      const remember = [...card.querySelectorAll<HTMLElement>("[data-remember]")].map((o) => `${o.dataset.rememberScope}: ${textOf(o).slice(0, 80)}`);
+      await shot("codex-chat-risky-command");
+      const d = await needsDetail(id, "command");
+      const cmd = textOf(d.querySelector("[data-needs-command]"));
+      const pageRisk = d.querySelector<HTMLElement>("[data-risk]")?.dataset.risk ?? null;
+      await shot("codex-chat-risky-command-page");
+      (d.querySelector("[data-deny]") as HTMLElement).click();
+      await nextTurn(id, n, 120_000);
+      const t = toolsOf(id).filter((x) => x.name === "shell").pop();
+      const out = `risk "${risk}" (page "${pageRisk}"); claim "${claim}"; command "${cmd}"; remember [${remember.join(" | ")}]; tool ok=${t?.ok} "${t?.output.slice(0, 60)}"; reply "${lastText(id)?.text.slice(0, 40)}"`;
+      if (!risk || !pageRisk) throw new Fail(`no Risky tag: ${out}`);
+      if (!/rm -rf build-tmp/.test(cmd)) throw new Fail(`command: ${out}`);
+      if (t?.ok !== false) throw new Fail(`the command wasn't denied: ${out}`);
+      return out;
+    });
+    await step("codex-chat: a patch outside the folder is Risky; the Needs you page shows the new file as a diff; Deny writes nothing", async () => {
+      const n = turnEnds(id).length;
+      const target = `/Users/Shared/coool-codex-selftest-${Date.now() % 100000}.txt`;
+      await send(id, `Use apply_patch (not a shell command) to create the file ${target} containing the single line: owls. Do nothing else. If it is denied, reply with one word: denied`);
+      const { card } = await approvalOf(id);
+      const risk = card.querySelector<HTMLElement>("[data-risk]")?.dataset.risk ?? null;
+      const head = textOf(card).slice(0, 160);
+      const p = items(id).find((i) => i.kind === "permission" && i.requestId === chat(id)?.pendingPermission) as Extract<ChatItem, { kind: "permission" }> | undefined;
+      await log(`INFO patch request tool ${p?.tool} input ${JSON.stringify(p?.input).slice(0, 400)}`);
+      await shot("codex-chat-patch-outside");
+      const d = await needsDetail(id, "edit");
+      const diff = d.querySelector("[data-mc-diff]");
+      const ins = [...(diff?.querySelectorAll("ins") ?? [])].map(textOf).join(",");
+      const title = textOf(d.querySelector("h1"));
+      await shot("codex-chat-patch-outside-page");
+      (d.querySelector("[data-deny]") as HTMLElement).click();
+      await nextTurn(id, n, 120_000);
+      const t = toolsOf(id).filter((x) => x.name === "apply_patch").pop();
+      const out = `card "${head}"; risk "${risk}"; page "${title}" +[${ins}]; tool ok=${t?.ok}`;
+      if (!risk || !risk.includes(target)) throw new Fail(`no Risky tag naming the file: ${out}`);
+      if (!/owls/.test(ins)) throw new Fail(`no diff of the new file: ${out}`);
+      if (!/create a file/.test(title)) throw new Fail(`title: ${out}`);
+      if (t && t.ok !== false) throw new Fail(`the patch was applied: ${out}`);
+      return out;
+    });
+    await step("codex-chat: in Read only a patch in the folder asks; its word diff on the Needs you page; Allow there applies it; the ledger lists it", async () => {
+      await api().chatSetPermissionMode(id, "read-only");
+      const n = turnEnds(id).length;
+      await send(id, "Use apply_patch (not a shell command) to change the word owls to larks in notes.md. Do nothing else, then reply with one word: done");
+      const { card } = await approvalOf(id);
+      const remember = [...card.querySelectorAll<HTMLElement>("[data-remember]")].map((o) => `${o.dataset.rememberScope}: ${textOf(o).slice(0, 80)}`);
+      const risk = card.querySelector("[data-risk]");
+      const d = await needsDetail(id, "edit");
+      const diff = d.querySelector("[data-mc-diff]");
+      const ins = [...(diff?.querySelectorAll("ins") ?? [])].map(textOf).join(",");
+      const del = [...(diff?.querySelectorAll("del") ?? [])].map(textOf).join(",");
+      const claim = d.querySelector<HTMLElement>("[data-explain-claim]")?.dataset.explainClaim ?? "";
+      await shot("codex-chat-patch-page");
+      (d.querySelector("[data-allow-once]") as HTMLElement).click();
+      await nextTurn(id, n, 120_000);
+      const t = toolsOf(id).filter((x) => x.name === "apply_patch").pop();
+      const out = [`+[${ins}] -[${del}]`, `risk ${risk ? "shown (wrong)" : "none"}`, `claim "${claim}"`, `remember [${remember.join(" | ")}]`, `tool ok=${t?.ok}`];
+      if (!/larks/.test(ins) || !/owls/.test(del)) throw new Fail(`diff: ${out.join("; ")}`);
+      if (risk) throw new Fail(`an in-folder patch is tagged Risky: ${out.join("; ")}`);
+      if (!t?.ok) throw new Fail(`the patch didn't apply: ${out.join("; ")}`);
+      // The step row and Mission control's ledger.
+      useStore.getState().open({ kind: "chat", id });
+      await sleep(800);
+      const rows = $all("[data-chat-timeline] button, [data-chat-timeline] [title]").map(textOf).filter((x) => /apply_patch|shell/.test(x)).slice(0, 6);
+      out.push(`rows [${rows.join(" | ").slice(0, 200)}]`);
+      home();
+      await sleep(800);
+      onTab(dir.split("/").pop() ?? "");
+      const row = await waitFor("a ledger row for notes.md", () => $all("[data-mc-ledger] [data-change]").find((r) => /notes\.md/.test(textOf(r))), 30_000).catch(() => null);
+      await shot("codex-chat-ledger");
+      out.push(`ledger "${textOf(row)}"`);
+      if (!row) throw new Fail(`no ledger row: ${out.join("; ")}; ledger ${textOf($("[data-mc-ledger]")).slice(0, 200)}`);
+      return out.join("; ");
+    });
+    await step("codex-chat: a note sent during a step is picked up under it (steering)", async () => {
+      await api().chatSetPermissionMode(id, "never");
+      const running = () => items(id).find((i) => i.kind === "tool" && !i.parent && i.endTs === null);
+      const n = turnEnds(id).length;
+      await send(id, "Run these three shell commands one at a time, each as its own call, never in parallel: sleep 3; sleep 3; sleep 3. Then reply done.");
+      await waitFor("a step to run", () => running(), 120_000);
+      const N = "Keep the final reply to one word.";
+      await say(N);
+      const strip = await waitFor("the queued strip", () => $("[data-steer-queued]"), 5_000).catch(() => null);
+      const note = await waitFor("the note picked up", () => chat(id)?.notes.find((x) => x.text === N && x.state !== "queued"), 60_000);
+      const row = $all("[data-note]").find((r) => r.textContent?.includes(N));
+      await shot("codex-chat-steer");
+      await nextTurn(id, n, 120_000);
+      const prompts = items(id).filter((i) => i.kind === "prompt" && (i as { text: string }).text === N).length;
+      const out = `strip ${strip ? `"${textOf(strip).slice(0, 50)}"` : "not seen"}; note ${note.state} under ${note.toolId?.slice(0, 10) ?? "no step"}; row "${textOf(row ?? null).slice(0, 60)}"; ${prompts} prompt bubbles of it; reply "${lastText(id)?.text.slice(0, 30)}"`;
+      if (note.state !== "picked_up") throw new Fail(out);
+      if (prompts) throw new Fail(`the note became a prompt bubble: ${out}`);
+      return out;
+    });
+    await step("codex-chat: Stop interrupts a running command; the next turn answers", async () => {
+      const n = turnEnds(id).length;
+      await send(id, "Run the shell command sleep 30, then reply done.");
+      await waitFor("the step to run", () => items(id).find((i) => i.kind === "tool" && !i.parent && i.endTs === null), 120_000);
+      const stop = await waitFor("the Stop button", () => $('button[title="Stop this turn (Esc)"]'), 5_000);
+      const t0 = Date.now();
+      stop.click();
+      const end = await nextTurn(id, n, 30_000);
+      const ms = Date.now() - t0;
+      const footer = textOf($all("[data-turn-end]").pop() ?? null);
+      await shot("codex-chat-stopped");
+      if (end.ok) throw new Fail("the stopped turn reported ok");
+      const m = turnEnds(id).length;
+      await say("Reply with exactly the word: continued");
+      await nextTurn(id, m, 120_000);
+      const t = lastText(id)?.text ?? "";
+      if (!/continued/i.test(t)) throw new Fail(`after Stop: ${t.slice(0, 60)}`);
+      return `stopped in ${ms} ms, footer "${footer}", turn ${end.durationMs} ms; then "${t.trim()}"`;
+    });
+    await step("codex-chat: sidebar row (title, step line), hover card, lanes, context map and window, usage", async () => {
+      const s = await waitFor("the chat's session", () => sessionOf(id), 30_000);
+      const key = sessionKey(s);
+      // On Home (a chat timeline still settling scrolls, and any scroll hides the card), the pointer first off the row.
+      home();
+      await sleep(1000);
+      document.body.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 2, clientY: 2, pointerType: "mouse" }));
+      const row = await waitFor("its sidebar row", () => $(`[data-session-row="${CSS.escape(key)}"]`), 10_000);
+      restOn(row);
+      const card = await waitFor("the hover card", () => $("[data-hover-card]"), 3_000).catch(() => null);
+      const hover = textOf(card);
+      await shot("codex-chat-hover");
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true }));
+      onTab(dir.split("/").pop() ?? "");
+      const lane = await waitFor("its lane", () => $(`[data-mc-lane="${CSS.escape(key)}"]`), 10_000).catch(() => null);
+      await shot("codex-chat-lanes");
+      const c = chat(id)!;
+      const map = await api().contextMap({ provider: "codex", sessionId: s.id, cwd: s.cwd }).catch((e) => ({ error: String(e) }) as unknown as { total: number });
+      const m = map as unknown as { total?: number; parts?: { label: string; tokens: number }[]; error?: string; note?: string | null };
+      const out = [
+        `title "${displayTitle(s)}" (${s.name?.source ?? "?"})`,
+        `row "${textOf(row).slice(0, 80)}"`,
+        `hover "${hover.slice(0, 120)}"`,
+        `lane ${lane?.dataset.laneBlocks ?? "none"}`,
+        `context ${s.tokens?.context ?? "?"} / window ${c.contextWindow ?? "?"}`,
+        `map total ${m.total ?? m.error} parts ${(m.parts ?? []).slice(0, 5).map((p) => `${p.label} ${p.tokens}`).join(", ")}`,
+        `usage ${codexUsage()}`,
+      ];
+      if (!card) throw new Fail(`no hover card: ${out.join("; ")}`);
+      if (!lane) throw new Fail(`no lane: ${out.join("; ")}`);
+      if (m.total !== s.tokens?.context) throw new Fail(`context map total vs the session's context: ${out.join("; ")}`);
+      return out.join("; ");
+    });
+    await log(`INFO codex usage after codex-chat: ${codexUsage()}`);
+  },
+
+  /** One sub-agent, in the codex-chat chat when it still runs (else a new one in Never ask). */
+  async "codex-subagent"(ctx) {
+    await step("codex-subagent: a spawned sub-agent shows as a card; its steps nest under it", async () => {
+      const id = codexState.id >= 0 && chat(codexState.id)?.running ? codexState.id : await startCodex(ctx.cfg.dir, "never");
+      codexState.id = id;
+      await api().chatSetPermissionMode(id, "never");
+      const n = turnEnds(id).length;
+      const from = evs(id).length;
+      await send(id, "Spawn exactly one sub-agent whose only task is to run the shell command `echo kid` and report its output. Wait for it, then reply with what it reported, one word.");
+      await nextTurn(id, n, 240_000);
+      const nested = evs(id).slice(from).filter((e) => "parent_tool_id" in e && (e as { parent_tool_id?: string | null }).parent_tool_id);
+      const spawn = toolsOf(id).find((t) => t.name === "spawn_agent");
+      const kids = toolsOf(id).filter((t) => t.parent && t.parent === spawn?.id);
+      const cards = $all("[data-agent-card]").map(textOf);
+      await shot("codex-subagent");
+      const out = `tools [${toolsOf(id).slice(-4).map((t) => t.name).join(", ")}]; spawn ${spawn ? `ok=${spawn.ok}` : "none"}; ${nested.length} events with a parent (${[...new Set(nested.map((e) => e.type))].join(", ")}); ${kids.length} nested steps; cards [${cards.join(" | ").slice(0, 200)}]; reply "${lastText(id)?.text.slice(0, 30)}"`;
+      if (!spawn) return `no sub-agent spawned (the model chose not to): ${out}`;
+      if (!cards.length) throw new Fail(`no sub-agent card: ${out}`);
+      if (!kids.length) throw new Fail(`the agent's steps are not under its card: ${out}`);
+      return out;
+    });
+  },
+
+  /** Stop and Resume: the codex-chat chat when it still runs (it remembers larks), else a new one told a word first. */
+  async "codex-resume"(ctx) {
+    await step("codex-resume: an ended Codex chat is offered Resume at once, resumes as a chat and remembers", async () => {
+      let id = codexState.id;
+      if (id < 0 || !chat(id)?.running) {
+        id = await startCodex(ctx.cfg.dir, "never");
+        await turn(id, "Remember this word for later: larks. Reply with one word: ok");
+      }
+      const sid = chat(id)!.sessionId!;
+      const t0 = Date.now();
+      await api().chatStop(id);
+      await api().chatStop(id);
+      const s = await waitFor("the session to end", () => useStore.getState().sessions.find((x) => x.id === sid && x.status === "ended"), 15_000);
+      const endedIn = Date.now() - t0;
+      useStore.getState().open({ kind: "session", key: sessionKey(s) });
+      await waitFor("the session view", () => $('button[title="Resume this session inside coool"]'), 10_000);
+      const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+      $('button[title="Resume this session inside coool"]')!.click();
+      const r = (await waitFor("the resumed chat", () => newId(before), 15_000)).id;
+      await waitFor("ready", () => chat(r)?.ready, 90_000);
+      const earlier = await waitFor("earlier history", () => $("[data-earlier]"), 10_000).catch(() => null);
+      await say("Which bird word other than owls came up earlier in this chat? Reply with one word, without running anything.");
+      await nextTurn(r, 0, 120_000);
+      const t = lastText(r)?.text ?? "";
+      await shot("codex-resumed");
+      if (chat(r)!.sessionId !== sid) throw new Fail(`resumed into ${chat(r)!.sessionId}, not ${sid}`);
+      if (!/larks/i.test(t)) throw new Fail(`resumed reply: ${t.slice(0, 60)}`);
+      codexState.id = r;
+      return `ended ${endedIn} ms after Stop; same thread, ${earlier?.dataset.earlier ?? "no"} earlier rows, remembers "${t.trim()}"`;
+    });
+    await log(`INFO codex usage at end: ${codexUsage()}`);
+  },
+
+  /**
+   * No model calls: the Codex sessions an earlier run left in this folder, watched from their rollouts only (no chat
+   * drives them now): readable step rows (code mode's `exec` scripts read as the tool they call), the ledger's rows
+   * from their patches, the sidebar row and hover card, the context map against the session's figure.
+   */
+  async "codex-watch"(ctx) {
+    await step("codex-watch: a Codex session seen only through its rollout reads like a chat's", async () => {
+      await waitFor("loading to finish", () => !useStore.getState().loading, 30_000).catch(() => {});
+      const ss = await waitFor("a Codex session in the folder", () => {
+        const x = useStore.getState().sessions.filter((s) => s.provider === "codex" && s.chat == null && s.activity.some((a) => a.kind === "tool"));
+        return x.length ? x : null;
+      }, 30_000);
+      const s = ss.sort((a, b) => b.activity.length - a.activity.length)[0];
+      const key = sessionKey(s);
+      const tools = s.activity.filter((a) => a.kind === "tool").map((a) => a.text);
+      const raw = tools.filter((t) => /^exec · |tools\.\w+\(/.test(t));
+      useStore.getState().open({ kind: "session", key });
+      await sleep(1500);
+      const shown = $all("[data-main] [data-step-chip], [data-main] [title]").map(textOf).filter(Boolean).slice(0, 8);
+      await shot("codex-watch-activity");
+      home();
+      await sleep(1000);
+      onTab(ctx.cfg.dir.split("/").pop() ?? "");
+      // Mission control shows only while something is live: once the session has ended, read its rows the same way.
+      const ledger = await waitFor("ledger rows", () => {
+        const r = $all("[data-mc-ledger] [data-change]").map(textOf);
+        return r.length ? r : null;
+      }, 8_000).catch(() => changesFromActivity(key, s.activity, s.cwd).map((c) => `${c.action} ${c.object}`));
+      document.body.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 2, clientY: 2, pointerType: "mouse" }));
+      const row = await waitFor("its sidebar row", () => $(`[data-session-row="${CSS.escape(key)}"]`), 10_000);
+      restOn(row);
+      const card = await waitFor("the hover card", () => $("[data-hover-card]"), 3_000).catch(() => null);
+      await shot("codex-watch-hover");
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true }));
+      const m = (await api().contextMap({ provider: "codex", sessionId: s.id, cwd: s.cwd })) as unknown as { total?: number; parts?: { label: string; tokens: number }[] };
+      const out = [
+        `${ss.length} sessions; "${displayTitle(s)}" status ${s.status}`,
+        `steps [${tools.slice(0, 8).join(" | ").slice(0, 300)}]`,
+        `on screen [${shown.join(" | ").slice(0, 160)}]`,
+        `ledger [${ledger.join(" | ").slice(0, 200)}] (mc tabs ${$all("[data-mc-tab]").map((t) => `${t.dataset.mcSwitchTo}${t.getAttribute("aria-selected") === "true" ? "*" : ""}`).join(",")}; ledger box "${textOf($("[data-mc-ledger]") ?? $("[data-mc-ledger-empty]")).slice(0, 120)}")`,
+        `hover "${textOf(card).slice(0, 100)}"`,
+        `map ${m.total} vs ${s.tokens.context}; ${(m.parts ?? []).slice(0, 6).map((p) => `${p.label} ${p.tokens}`).join(", ")}`,
+      ];
+      if (raw.length) throw new Fail(`raw code-mode steps: ${raw.slice(0, 3).join(" | ")}; ${out.join("; ")}`);
+      if (!ledger.some((r) => /notes\.md/.test(r))) throw new Fail(`no ledger row for notes.md: ${out.join("; ")}`);
+      if (ledger.some((r) => /build-tmp/.test(r))) throw new Fail(`a denied command is in the ledger: ${out.join("; ")}`);
+      if (!card) throw new Fail(`no hover card: ${out.join("; ")}`);
+      if (m.total !== s.tokens.context) throw new Fail(`map vs context: ${out.join("; ")}`);
+      return out.join("; ");
+    });
+  },
+
+  /** A Codex chat hands the coffee form to the device pilot once (`coool-device.pilot_run`, tool_timeout_sec 900). */
+  async "pilot-browser-codex"(ctx) {
+    let id = -1;
+    let url = "";
+    await step("pilot-browser-codex: a Codex chat starts", async () => {
+      url = ((await invoke("selftest_probe_server")) as string).replace(/\/probe$/, "/form");
+      id = await startCodex(ctx.cfg.dir, "on-request");
+      useStore.getState().open({ kind: "chat", id });
+      await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+      await sleep(1500);
+      return `chat ${id}, ${url}`;
+    });
+    if (id < 0) return;
+    const r = await agentTurn(id, {
+      prompt: `Call the coool-device tool pilot_run exactly once with target "browser", url "${url}", goal "Fill in the name and the email, press Add cup until the cups counter shows 2, then press Submit order", inputs {"name":"Ada Lovelace","email":"ada@example.com"} and success [{"text_visible":"2 cups, reference"}]. Don't call any other tool. Then reply with the exact confirmation sentence from the final screen, nothing else.`,
+      marks: [["[data-pilot-substep]", "pilot-browser-codex-live"]],
+      ms: 300_000,
+    });
+    await step("pilot-browser-codex: pilot_run runs from a Codex chat, its row reads Pilot · Browser, the reply quotes the page", async () => {
+      const p = pilotRuns(r);
+      const row = $all("[data-chat-timeline] [data-pilot-run]").map(textOf)[0] ?? "";
+      const out = `calls ${p.length}; status ${p.map((x) => x.out?.status ?? x.tool.output.slice(0, 80)).join(", ")}; row "${row.slice(0, 80)}"; reply "${r.reply.slice(0, 80)}"; turn ${r.turnMs} ms`;
+      await shot("pilot-browser-codex");
+      if (!p.length) throw new Fail(`no pilot_run call: ${out}; tools ${r.all.join(", ")}`);
+      if (p[0].out?.status !== "done") throw new Fail(out);
+      if (!/2 cups, reference/.test(r.reply)) throw new Fail(`reply: ${out}`);
+      return out;
+    });
+  },
+
+  async "codex-overlap"(ctx) {
+    await step("codex-overlap: a Claude chat and a Codex chat appending to the same file show one overlap row with both", async () => {
+      const dir = ctx.cfg.dir;
+      const a = await startIn(dir, "bypassPermissions");
+      await turn(a, "Use the Edit tool to append a new last line 'Cats are calm.' to notes.md. Do nothing else, then reply with: done");
+      const b = await startCodex(dir, "never");
+      await allowingAll(async () => {
+        const n = turnEnds(b).length;
+        await send(b, "Use apply_patch to append a new last line 'Owls are wise.' to notes.md. Do nothing else, then reply with: done");
+        await nextTurn(b, n, 150_000);
+      });
+      home();
+      const row = await waitFor("the overlap row", () => (onTab(dir.split("/").pop() ?? ""), $("[data-mc-overlap]")), 30_000);
+      row.click();
+      await sleep(700);
+      const authors = $all("[data-mc-overlap-edit]").map(textOf);
+      await shot("codex-overlap");
+      const marks = row.querySelectorAll("svg").length;
+      if (authors.length < 2) throw new Fail(`row "${textOf(row)}"; authors ${authors.join(" | ")}`);
+      return `row "${textOf(row)}"; ${marks} icons; authors ${authors.join(" | ").slice(0, 240)}`;
+    });
+  },
+};
+Object.assign(scenarios, codexScenarios);
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

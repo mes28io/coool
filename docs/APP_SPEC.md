@@ -441,7 +441,7 @@ The `coool-device` tools are callable without the CLI's own prompt (see the MCP 
 | CLI | asks (the rules below) | doesn't ask | denies what would ask |
 |---|---|---|---|
 | Claude Code | `default` (Ask), `acceptEdits` (it still asks before commands), `plan` | `bypassPermissions`, `auto` | `dontAsk` |
-| Codex (approval policy) | `untrusted`, `on-request`, `on-failure` | `never` (also what "Full access" sets) | — |
+| Codex (approval policy) | `untrusted`, `on-request` (an old `on-failure` choice runs as `on-request`: codex-cli 0.145 dropped it) | `never` (also what "Full access" sets) | — |
 
 An unknown or not yet reported mode asks. A chat coool didn't start (the headless `--coool-device-serve`, the self-test's scripted client) has no gate.
 

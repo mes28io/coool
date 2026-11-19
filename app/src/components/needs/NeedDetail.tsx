@@ -18,6 +18,7 @@ import { deviceAsk, permDetail, PlanApproval, QuestionCard, RememberRow, stepRow
 import { PERMISSION_MODES } from "../ChatComposer";
 import { IAgent, IBranch, IClock, IFolder, IForward, ILock, ISpark, ITerminal } from "../icons";
 import { editPairs, InlineDiff } from "../InlineDiff";
+import { patchFiles, patchPairs } from "../../lib/patch";
 import { Markdown } from "../Markdown";
 import { Age, Card, CardHeader, Node } from "../MissionCard";
 import { Button, cx, Kbd, PathText, ProviderMark } from "../primitives";
@@ -194,6 +195,16 @@ function Payload({ n }: { n: Need }) {
   const s = (k: string) => (typeof i[k] === "string" ? (i[k] as string) : "");
   const edit = n.kind === "edit" ? editPairs(perm.tool, perm.input) : null;
   if (edit) return <InlineDiff path={edit.path} pairs={edit.pairs} root={projectOf(n.s) || cwd} tall />;
+  // Codex's apply_patch: each file's change (lib/patch.ts), a created file as all new text.
+  const patch = n.kind === "edit" ? patchFiles(perm.input) : null;
+  if (patch)
+    return (
+      <div className="flex flex-col" data-needs-patch={patch.length}>
+        {patch.map((f) => (
+          <InlineDiff key={f.path} path={f.movePath ?? f.path} pairs={patchPairs(f)} root={projectOf(n.s) || cwd} tall />
+        ))}
+      </div>
+    );
   if (n.kind === "command")
     return (
       <>

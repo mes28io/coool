@@ -9,6 +9,7 @@ import { answerPermission, answerQuestion } from "../lib/actions";
 import { type Chat, type ChatItem, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { permissionWhat, rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
+import { patchFiles, patchLead } from "../lib/patch";
 import { agentFill, fillModel, handoffLine, taskPrompt } from "../lib/agentFill";
 import { FillBar, Handoff } from "./AgentFill";
 import { LiveTurnBar, TurnBar, useTurnBreakdown, Waterfall } from "./TurnBreakdown";
@@ -1029,8 +1030,19 @@ export function permDetail(p: Perm, cwd: string): { lead: string; body: string; 
   const dev = deviceAsk(p);
   if (dev) return { lead: dev.lead, body: dev.body, note: dev.note ?? undefined };
   const i = (p.input ?? {}) as Record<string, unknown>;
-  if (typeof i.command === "string") return { lead: "run a command", body: i.command, note: typeof i.description === "string" ? i.description : undefined };
+  if (typeof i.command === "string")
+    return {
+      lead: typeof i.network_host === "string" ? `reach ${i.network_host}` : "run a command",
+      body: i.command,
+      note: typeof i.description === "string" ? i.description : undefined,
+    };
   if (typeof i.file_path === "string") return { lead: /write/i.test(p.tool) ? "create a file" : "edit a file", body: cwd ? relPath(i.file_path, cwd) : i.file_path, full: i.file_path };
+  // Codex's apply_patch: the files it writes (lib/patch.ts).
+  const patch = patchFiles(p.input);
+  if (patch) {
+    const rel = (f: string) => (cwd ? relPath(f, cwd) : f);
+    return { lead: patchLead(patch), body: patch.map((f) => (f.movePath ? `${rel(f.path)} → ${rel(f.movePath)}` : rel(f.path))).join("\n"), full: patch.map((f) => f.path).join("\n") };
+  }
   if (typeof i.url === "string") return { lead: "fetch a page", body: i.url };
   // Any other tool reads as rows name it ("weather" + "Get forecast Paris"), never as `mcp__weather__get_forecast`.
   const w = permissionWhat(p.tool, p.input, p.summary);
