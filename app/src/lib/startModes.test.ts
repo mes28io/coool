@@ -22,7 +22,7 @@ test("a CLI that isn't installed gives way to one that is; unknown keeps the cho
 
 test("onboarding modes never include the never-ask ones", () => {
   const ids = [...START_MODES.claude, ...START_MODES.codex].map((m) => m.id);
-  assert.deepEqual(ids, ["default", "acceptEdits", "plan", "untrusted", "on-request", "on-failure"]);
+  assert.deepEqual(ids, ["default", "acceptEdits", "plan", "untrusted", "on-request"]);
   assert.equal(modeWords("claude", "acceptEdits"), "Edit files freely, ask before commands");
   assert.equal(modeWords("claude", null), null);
   assert.equal(modeWords("claude", "bypassPermissions"), "bypassPermissions");

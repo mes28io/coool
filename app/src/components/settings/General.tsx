@@ -279,8 +279,11 @@ function useSounds(): NotifySounds | null {
   return s;
 }
 
-/** One kind's sound: a picker (None, coool's sounds, the system's alert sounds) and a preview button. */
-function SoundRow({ attr, label, value, onChange }: { attr: string; label: string; value: string; onChange: (v: string) => void }) {
+/**
+ * One kind's sound: a preview button and a picker (None, coool's sounds, the system's alert sounds), with the preview's
+ * message under it. Settings > Notifications' rows and the onboarding's Notifications step both use it.
+ */
+export function SoundPicker({ attr, label, value, onChange, width = 260 }: { attr: string; label: string; value: string; onChange: (v: string) => void; width?: number }) {
   const sounds = useSounds();
   const [msg, setMsg] = useState<string | null>(null);
   const opts: Option<string>[] = [
@@ -297,22 +300,29 @@ function SoundRow({ attr, label, value, onChange }: { attr: string; label: strin
       .catch((e) => setMsg(errText(e)));
   };
   return (
+    <span className="flex flex-col items-end gap-1">
+      <span className="flex items-center gap-1.5">
+        <Button variant="ghost" className="h-[30px] w-[30px] px-0" disabled={value === "none"} onClick={preview} aria-label={`Play ${label.toLowerCase()}`} title="Play it" data-sound-preview={attr}>
+          <IPlay size={13} />
+        </Button>
+        <Select label={label} value={value} options={opts} width={width} onChange={onChange} />
+      </span>
+      {msg && <span className="text-small text-dim">{msg}</span>}
+    </span>
+  );
+}
+
+/** One kind's sound as a Settings row. */
+function SoundRow({ attr, label, value, onChange }: { attr: string; label: string; value: string; onChange: (v: string) => void }) {
+  const sounds = useSounds();
+  return (
     <Row
       attr={attr}
       label={label}
       desc={sounds && !sounds.bundled ? "This build has no app bundle, so macOS shows no notifications; the sound still plays here." : undefined}
       k="sound sounds chime tone preview play"
-      control={
-        <span className="flex items-center gap-1.5">
-          <Button variant="ghost" className="h-[30px] w-[30px] px-0" disabled={value === "none"} onClick={preview} aria-label={`Play ${label.toLowerCase()}`} title="Play it" data-sound-preview={attr}>
-            <IPlay size={13} />
-          </Button>
-          <Select label={label} value={value} options={opts} width={260} onChange={onChange} />
-        </span>
-      }
-    >
-      {msg && <div className="text-small text-dim">{msg}</div>}
-    </Row>
+      control={<SoundPicker attr={attr} label={label} value={value} onChange={onChange} />}
+    />
   );
 }
 

@@ -20,7 +20,6 @@ export const START_MODES: Record<Provider, StartMode[]> = {
   codex: [
     { id: "untrusted", label: "Ask me before anything that isn’t plainly safe", cli: "untrusted" },
     { id: "on-request", label: "Work on its own, ask when it needs to", cli: "on-request" },
-    { id: "on-failure", label: "Run in the sandbox, ask only if something fails", cli: "on-failure" },
   ],
 };
 

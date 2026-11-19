@@ -29,7 +29,9 @@
 // answered from the page). `why` ("What this does and why": the agent's claim at once, the AI read on the insights key,
 // a description that doesn't match its command, Allow / Deny before and after the read). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
-import { ignoreChatDefaults, setTextSize } from "./lib/prefs";
+import { glassState } from "./lib/glass";
+import { openOnboarding } from "./lib/onboarding";
+import { chatDefaultsNow, defaultCliNow, ignoreChatDefaults, setTextSize, textSizeNow } from "./lib/prefs";
 import { newChat } from "./lib/actions";
 import { api, isTauri } from "./lib/backend";
 import { chatNeeds, useChats, type Chat, type ChatItem } from "./lib/chat";
@@ -3723,8 +3725,12 @@ const onb = () => $("[data-onboarding]")?.dataset.onboarding ?? null;
 const winKey = (key: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
 const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
   async onboarding() {
-    await step("onboarding: opens by itself on a first launch, on the folder step", async () => {
-      await waitFor("the onboarding", () => onb() === "folder", 10_000);
+    await step("onboarding: opens by itself on a first launch on Make it yours; Enter continues to the folder step", async () => {
+      await waitFor("the onboarding", () => onb() === "look", 10_000);
+      await sleep(300);
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the folder step", () => onb() === "folder", 3_000);
       await waitFor("the CLI lines", () => $all("[data-onb-cli]").every((e) => e.dataset.found !== ""), 10_000);
       const env = useStore.getState().env;
       const lines = $all("[data-onb-cli]").map((e) => `${e.dataset.onbCli}=${e.dataset.found} "${textOf(e)}"`);
@@ -3775,7 +3781,7 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       await sleep(200);
       if ($("[data-onb-summary]")?.dataset.onbSummary) throw new Fail(`would set up ${$("[data-onb-summary]")?.dataset.onbSummary}`);
       $("[data-onb-next]")!.click();
-      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      await waitFor("the agents step", () => onb() === "agents", 3_000);
       await sleep(1500);
       if ((await ownSim()).length) throw new Fail("a simulator was created");
       if ((await installs()) !== before) throw new Fail("a Mac install was requested");
@@ -3798,7 +3804,7 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       const before = await installs();
       ($("#onb-title") as HTMLElement | null)?.focus();
       winKey("Enter");
-      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      await waitFor("the agents step", () => onb() === "agents", 3_000);
       let sim = "not offered";
       if (iphoneCan) {
         const end = Date.now() + 60_000;
@@ -3818,6 +3824,16 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       const gone = iphoneCan ? ((await invoke("selftest_sim_delete")) as string[]) : [];
       return `iPhone: ${sim}, deleted ${gone.length}; Mac install requests ${before} -> ${after} (stub, nothing downloaded); building=${JSON.stringify(b)}`;
     });
+    await step("onboarding: How should your agents work? says why the login switch can't work here (not pressed); Enter to Notifications", async () => {
+      const st = await waitFor("the login status", () => $("[data-onb-login]")?.dataset.onbLogin || null, 5_000);
+      const sw = $("[data-onb-login] [role=switch]") as HTMLButtonElement | null;
+      await shot("onb-3-agents");
+      if ((st === "not_found" || st === "unavailable") && !sw?.disabled) throw new Fail(`switch enabled for ${st}`);
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      return `${st}, switch ${sw?.disabled ? "disabled" : "enabled"}: ${textOf($("[data-onb-login]"))}`;
+    });
 
     await step("onboarding: Notifications says where the permission stands (not pressed)", async () => {
       const st = await waitFor("the permission", () => $("[data-onb-notify]")?.dataset.onbNotify || null, 5_000);
@@ -3829,21 +3845,12 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (st === "denied" && !$("[data-onb-open-settings]")) throw new Fail("no Open System Settings when denied");
       return `${st}: ${text}`;
     });
-    await step("onboarding: Esc skips to Open at login, which says why its switch can't work here (not pressed)", async () => {
-      winKey("Escape");
-      await waitFor("the login step", () => onb() === "login", 3_000);
-      const st = await waitFor("the login status", () => $("[data-onb-login]")?.dataset.onbLogin || null, 5_000);
-      const sw = $("[data-onb-login] [role=switch]") as HTMLButtonElement | null;
-      await shot("onb-3-login");
-      if ((st === "not_found" || st === "unavailable") && !sw?.disabled) throw new Fail(`switch enabled for ${st}`);
-      return `${st}, switch ${sw?.disabled ? "disabled" : "enabled"}: ${textOf($("[data-onb-login]"))}`;
-    });
     await step("onboarding: Esc to the finish step, Back works, Skip setup dismisses it and saves the flag", async () => {
       winKey("Escape");
       await waitFor("the finish step", () => onb() === "done", 3_000);
       await shot("onb-4-done");
       $("[data-onb-back]")!.click();
-      await waitFor("back on login", () => onb() === "login", 3_000);
+      await waitFor("back on notifications", () => onb() === "notifications", 3_000);
       $("[data-onb-dismiss]")!.click();
       await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
       await sleep(300);
@@ -3855,7 +3862,8 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       const again = await waitFor("Show onboarding again", () => $("[data-onboarding-again]"), 5_000);
       await shot("onb-5-about");
       again.click();
-      await waitFor("the folder step", () => onb() === "folder", 3_000);
+      await waitFor("Make it yours", () => onb() === "look", 3_000);
+      winKey("Escape");
       winKey("Escape");
       winKey("Escape");
       winKey("Escape");
@@ -3873,17 +3881,19 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       await sleep(200);
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-      await waitFor("the folder step", () => onb() === "folder", 3_000);
+      await waitFor("Make it yours", () => onb() === "look", 3_000);
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", metaKey: true, bubbles: true, cancelable: true }));
       await sleep(300);
       if (useStore.getState().palette) throw new Fail("⌘K opened the palette over the onboarding");
+      $("[data-onb-skip]")!.click();
+      await waitFor("folder", () => onb() === "folder", 3_000);
       $("[data-onb-skip]")!.click(); // the folder step skipped: no folder, so the end is Home
       await waitFor("build", () => onb() === "build", 3_000);
       (await waitFor("the kinds", () => $("[data-onb-kind='other']"), 3_000)).click();
       $("[data-onb-skip]")!.click(); // skipped: the answer stays as saved
-      await waitFor("notifications", () => onb() === "notifications", 3_000);
+      await waitFor("agents", () => onb() === "agents", 3_000);
       $("[data-onb-skip]")!.click();
-      await waitFor("login", () => onb() === "login", 3_000);
+      await waitFor("notifications", () => onb() === "notifications", 3_000);
       $("[data-onb-skip]")!.click();
       await waitFor("done", () => onb() === "done", 3_000);
       const label = textOf($("[data-onb-next]"));
@@ -3927,6 +3937,310 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, onboarding);
+
+// `onboarding-prefs` (no model; a fresh test folder): the personalisation steps on their own run, so they never touch
+// a simulator (What are you building? is skipped, which sets nothing up). Make it yours: every choice asserted on
+// <html> as it is clicked (theme, the real glass, the backdrop, the text scale); How should your agents work?: the
+// start CLI, per-CLI model and permissions, keep awake (the power keeper's own state), the login state (not pressed);
+// Notifications: the interrupt choice; re-opened, every step shows the current values; Skip puts a step back.
+// `onboarding-prefs-restart` (a second launch on the same folder): all of it survived, Settings > General shows it,
+// and a new chat from the New session sheet calls `start_chat` with the chosen CLI, model and mode (the call is
+// recorded and refused, nothing is launched).
+
+/** `waitFor` for an answer that takes a backend call. */
+async function poll<T>(what: string, f: () => Promise<T | null>, ms = 3_000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await f();
+    if (v) return v;
+    if (Date.now() > end) throw new Fail(`timed out waiting for ${what}`);
+    await sleep(100);
+  }
+}
+const onboardingPrefs: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async "onboarding-prefs"() {
+
+    await step("onboarding-prefs: opens by itself on a first launch, on Make it yours (1 of 6); each choice applies at once", async () => {
+      await waitFor("the onboarding", () => onb() === "look", 10_000);
+      const dots = $("[data-onb-dots]")?.dataset.onbDots;
+      if (dots !== "1/6") throw new Fail(`step indicator says ${dots}`);
+      await shot("onbp-0-look");
+      const pick = async (row: string, label: string) => {
+        const b = $all(`[data-onb-look=${row}] button`).find((e) => textOf(e).startsWith(label)) as HTMLButtonElement | undefined;
+        if (!b) throw new Fail(`no ${label} in ${row}`);
+        if (b.disabled) return false;
+        b.click();
+        await sleep(400);
+        return true;
+      };
+      const root = document.documentElement;
+      const out: string[] = [];
+      await pick("theme", "Light");
+      const theme = (): string => root.dataset.theme ?? "";
+      if (theme() !== "light") throw new Fail(`Light: data-theme=${theme()}`);
+      await pick("theme", "Dark");
+      if (theme() !== "dark") throw new Fail(`Dark: data-theme=${theme()}`);
+      await pick("window", "Solid");
+      await sleep(600);
+      if (root.dataset.glass || root.dataset.backdrop) throw new Fail(`Solid: glass=${root.dataset.glass} backdrop=${root.dataset.backdrop}`);
+      if (await pick("window", "Frosted glass")) {
+        const glass = await waitFor("the glass", () => (root.dataset.glass === "on" ? "on" : null), 3_000).catch(() => "off");
+        const rt = textOf($("[data-onb-look=window] [data-onb-look-note]"));
+        if (glass !== "on" && !/Reduce transparency/.test(rt)) throw new Fail(`Frosted: no glass and no reason ("${rt}")`);
+        out.push(`frosted: glass ${glass}`);
+        await shot("onbp-0-look-frosted");
+      } else out.push("frosted: disabled");
+      await pick("window", "Colours");
+      if (root.dataset.backdrop !== "colours" && !/Reduce transparency/.test(textOf($("[data-onb-look=window] [data-onb-look-note]")))) throw new Fail("Colours: no backdrop");
+      for (const [l, want] of [["Small", "0.93"], ["Larger", "1.14"], ["Large", "1.07"]] as const) {
+        await pick("text", l);
+        const s = getComputedStyle(root).getPropertyValue("--text-scale").trim();
+        if (s !== want) throw new Fail(`${l}: --text-scale=${s}`);
+      }
+      await shot("onbp-0-look-chosen");
+      out.push(`theme=${root.dataset.theme} backdrop=${root.dataset.backdrop} glass=${root.dataset.glass ?? "off"} scale=${getComputedStyle(root).getPropertyValue("--text-scale").trim()}`);
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the folder step", () => onb() === "folder", 3_000);
+      return out.join("; ");
+    });
+    await step("onboarding-prefs: folder, then What are you building? skipped (nothing set up), on to How should your agents work?", async () => {
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the build step", () => onb() === "build", 3_000);
+      winKey("Escape");
+      await waitFor("the agents step", () => onb() === "agents", 3_000);
+      return `dots ${$("[data-onb-dots]")?.dataset.onbDots}`;
+    });
+
+    await step("onboarding-prefs: agents step sets the start CLI, model and permissions per CLI, keep awake (power keeper), shows the login state (not pressed)", async () => {
+      const env = useStore.getState().env;
+      const both = !!env?.claude && !!env?.codex;
+      const out: string[] = [];
+      await waitFor("the agents step's body", () => $("[data-onb-cli-choice], [data-onb-cli-found]"), 3_000);
+      if (both) {
+        const b = $all("[data-onb-cli-choice] button").find((e) => textOf(e).includes("Codex"));
+        if (!b) throw new Fail("no CLI choice with both installed");
+        b.click();
+        await sleep(200);
+        if (defaultCliNow() !== "codex") throw new Fail(`start CLI ${defaultCliNow()}`);
+        out.push("start=codex");
+      } else {
+        const line = textOf($("[data-onb-cli-found]"));
+        if (!line) throw new Fail("neither a choice nor a found line");
+        out.push(`one CLI: "${line}"`);
+      }
+      const choose = async (label: string, opt: string) => {
+        const btn = $(`button[aria-label="${label}"]`);
+        if (!btn) return false;
+        btn.click();
+        await sleep(250);
+        const o = $all("[role=option]").find((e) => textOf(e).includes(opt));
+        if (!o) throw new Fail(`no "${opt}" in ${label}`);
+        o.click();
+        await sleep(250);
+        return true;
+      };
+      if (env?.claude) {
+        await choose("Claude Code model for new chats", "Haiku");
+        await choose("Claude Code permissions for new chats", "Edit files freely");
+      }
+      if (env?.codex) await choose("Codex permissions for new chats", "Ask me before anything");
+      const d = chatDefaultsNow();
+      if (env?.claude && (d.claude.model !== "haiku" || d.claude.mode !== "acceptEdits")) throw new Fail(`claude defaults ${JSON.stringify(d.claude)}`);
+      if (env?.codex && d.codex.mode !== "untrusted") throw new Fail(`codex defaults ${JSON.stringify(d.codex)}`);
+      out.push(`defaults ${JSON.stringify(d)}`);
+      const sw = await waitFor("the keep-awake switch", () => $("[data-onb-awake] [role=switch]:not([disabled])") as HTMLButtonElement | null, 5_000);
+      const before = await api().powerStatus();
+      if (sw.getAttribute("aria-checked") !== "true") sw.click();
+      const after = await poll("the keeper enabled", async () => {
+        const s = await api().powerStatus();
+        return s.enabled ? s : null;
+      });
+      out.push(`keeper enabled ${before.enabled} -> ${after.enabled}`);
+      const st = await waitFor("the login status", () => $("[data-onb-login]")?.dataset.onbLogin || null, 5_000);
+      const lsw = $("[data-onb-login] [role=switch]") as HTMLButtonElement | null;
+      if ((st === "not_found" || st === "unavailable") && !lsw?.disabled) throw new Fail(`login switch enabled for ${st}`);
+      out.push(`login ${st}, switch ${lsw?.disabled ? "disabled" : "enabled"}: ${textOf($("[data-onb-login]"))}`);
+      await shot("onbp-2-agents");
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      return out.join("; ");
+    });
+    await step("onboarding-prefs: Notifications says where the permission stands (not pressed)", async () => {
+      const st = await waitFor("the permission", () => $("[data-onb-notify]")?.dataset.onbNotify || null, 5_000);
+      const text = textOf($("[data-onb-notify]"));
+      await shot("onbp-2-notify");
+      // A self-test build has no app bundle: the honest answer is "unavailable" and no Allow button.
+      if (st === "unavailable" && $("[data-onb-allow]")) throw new Fail("an Allow button for an unavailable permission");
+      if (st === "not_determined" && !$("[data-onb-allow]")) throw new Fail("no Allow button while macOS hasn't asked");
+      if (st === "denied" && !$("[data-onb-open-settings]")) throw new Fail("no Open System Settings when denied");
+      // "Also when a turn finishes": both switches on.
+      await waitFor("the choices", () => $("[data-onb-when-option=finished]:not([disabled])"), 5_000);
+      ($("[data-onb-when-option=finished]") as HTMLElement).click();
+      const n = await poll("finished on", async () => {
+        const p = await api().prefsGet();
+        return p.notify.finished && p.notify.needs_you ? p.notify : null;
+      });
+      // Sounds: Settings' own picker; one picked turns per-kind sounds on.
+      const pickSound = async (label: string, want: string) => {
+        ($(`button[aria-label="${label}"]`) as HTMLElement).click();
+        await sleep(250);
+        const o = $all("[role=option]").find((e) => textOf(e).startsWith(want));
+        if (!o) throw new Fail(`no ${want} in ${label}`);
+        o.click();
+        await sleep(300);
+      };
+      await pickSound("Needs you sound", "Glass");
+      await pickSound("Finished sound", "Marimba");
+      const s = await poll("the sounds saved", async () => {
+        const p = (await api().prefsGet()).notify;
+        return p.sound_needs === "coool:glass" && p.sound_finished === "coool:marimba" ? p : null;
+      });
+      if (!s.sound || !s.custom_sounds) throw new Fail(`sound=${s.sound} custom=${s.custom_sounds}`);
+      ($("[data-sound-preview=onb-sound-needs]") as HTMLElement).click();
+      await sleep(300);
+      await shot("onbp-3-notify");
+      return `${st}: ${text}; when=${$("[data-onb-when]")?.dataset.onbWhen} needs_you=${n.needs_you} finished=${n.finished}; sounds ${s.sound_needs} / ${s.sound_finished} (custom on), preview: "${textOf($("[data-onb-sounds]"))}"`;
+    });
+    await step("onboarding-prefs: Continue to the finish step, Back works, Skip setup keeps the choices and saves the flag", async () => {
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the finish step", () => onb() === "done", 3_000);
+      $("[data-onb-back]")!.click();
+      await waitFor("back on notifications", () => onb() === "notifications", 3_000);
+      $("[data-onb-dismiss]")!.click();
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      await sleep(300);
+      if (!(await api().onboardingSeen())) throw new Fail("the flag wasn't saved");
+      if (document.documentElement.dataset.theme !== "dark" || textSizeNow() !== "large") throw new Fail("Skip setup undid the look");
+      return "seen=true";
+    });
+    await step("onboarding-prefs: re-opened from Settings > About, every step shows the current values; Esc walks to the end", async () => {
+      useStore.getState().openSettings("about");
+      const again = await waitFor("Show onboarding again", () => $("[data-onboarding-again]"), 5_000);
+      again.click();
+      await waitFor("Make it yours", () => onb() === "look", 3_000);
+      await sleep(200);
+      const shown = ["theme", "window", "text"].map((k) => $(`[data-onb-look=${k}]`)?.dataset.value).join(",");
+      if (shown !== "dark,colours,large") throw new Fail(`re-opened with ${shown}`);
+      winKey("Escape");
+      await waitFor("the folder step", () => onb() === "folder", 3_000);
+      winKey("Escape");
+      await waitFor("the build step", () => onb() === "build", 3_000);
+      winKey("Escape");
+      await waitFor("the agents step", () => onb() === "agents", 3_000);
+      await sleep(200);
+      const cur = $("[data-onb-defaults=claude]");
+      if (cur && (cur.dataset.model !== "haiku" || cur.dataset.mode !== "acceptEdits")) throw new Fail(`agents step shows ${cur.dataset.model} ${cur.dataset.mode}`);
+      if ($("[data-onb-awake]")?.dataset.onbAwake !== "true") throw new Fail("keep awake shows off");
+      winKey("Escape");
+      await waitFor("the notifications step", () => onb() === "notifications", 3_000);
+      await waitFor("the choice", () => $("[data-onb-when]")?.dataset.onbWhen || null, 3_000);
+      if ($("[data-onb-when]")?.dataset.onbWhen !== "finished") throw new Fail(`interrupt shows ${$("[data-onb-when]")?.dataset.onbWhen}`);
+      winKey("Escape");
+      await waitFor("the finish step", () => onb() === "done", 3_000);
+      if (document.documentElement.dataset.theme !== "dark" || textSizeNow() !== "large") throw new Fail("Esc through the steps changed the look");
+      winKey("Escape");
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      useStore.getState().closeSettings();
+      return `look ${shown}; agents haiku/acceptEdits, awake on; interrupt finished`;
+    });
+    await step("onboarding-prefs: tried on, then Skip: the look goes back", async () => {
+      openOnboarding();
+      await waitFor("Make it yours", () => onb() === "look", 3_000);
+      await sleep(200);
+      ($all("[data-onb-look=theme] button").find((e) => textOf(e) === "Light") as HTMLElement).click();
+      ($all("[data-onb-look=text] button").find((e) => textOf(e) === "Small") as HTMLElement).click();
+      await sleep(300);
+      if (document.documentElement.dataset.theme !== "light" || textSizeNow() !== "small") throw new Fail("the try-on didn't apply");
+      await shot("onbp-p-tryon");
+      $("[data-onb-skip]")!.click();
+      await waitFor("folder", () => onb() === "folder", 3_000);
+      await sleep(200);
+      const back = `${document.documentElement.dataset.theme} ${textSizeNow()}`;
+      if (back !== "dark large") throw new Fail(`Skip left ${back}`);
+      $("[data-onb-dismiss]")!.click();
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      return `back to ${back}`;
+    });
+  },
+
+  async "onboarding-prefs-restart"(ctx) {
+    await step("onboarding-prefs-restart: a second launch keeps it closed", async () => {
+      await sleep(4000);
+      if ($("[data-onboarding]")) throw new Fail("it opened again");
+      return "closed";
+    });
+
+    await step("onboarding-prefs-restart: the look, the new-chat defaults and keep awake survived, and Settings shows them", async () => {
+      const root = document.documentElement;
+      const look = `theme=${root.dataset.theme} backdrop=${root.dataset.backdrop ?? "-"} scale=${getComputedStyle(root).getPropertyValue("--text-scale").trim()}`;
+      if (root.dataset.theme !== "dark" || getComputedStyle(root).getPropertyValue("--text-scale").trim() !== "1.07") throw new Fail(look);
+      if (glassState().backdrop !== "colours") throw new Fail(`backdrop pref ${glassState().backdrop}`);
+      const env = useStore.getState().env;
+      const d = chatDefaultsNow();
+      if (env?.claude && (d.claude.model !== "haiku" || d.claude.mode !== "acceptEdits")) throw new Fail(`claude ${JSON.stringify(d.claude)}`);
+      if (env?.codex && d.codex.mode !== "untrusted") throw new Fail(`codex ${JSON.stringify(d.codex)}`);
+      if (env?.claude && env?.codex && defaultCliNow() !== "codex") throw new Fail(`start CLI ${defaultCliNow()}`);
+      const p = await api().prefsGet();
+      const power = await api().powerStatus();
+      if (!p.prevent_sleep || !power.enabled) throw new Fail(`prevent_sleep=${p.prevent_sleep} keeper enabled=${power.enabled}`);
+      if (!p.notify.finished || !p.notify.needs_you || p.notify.sound_needs !== "coool:glass" || p.notify.sound_finished !== "coool:marimba" || !p.notify.custom_sounds) throw new Fail(`notify ${JSON.stringify(p.notify)}`);
+      useStore.getState().openSettings("general");
+      const row = await waitFor("Settings > General", () => $("[data-setting=default-model-claude]"), 5_000);
+      const rows = ["default-cli", "default-model-claude", "default-mode-claude", "default-mode-codex", "prevent-sleep"].map((a) => `${a}: ${textOf($(`[data-setting=${a}] button[aria-haspopup], [data-setting=${a}] [role=switch]`)) || $(`[data-setting=${a}] [role=switch]`)?.getAttribute("aria-checked")}`);
+      if (env?.claude && !textOf(row).includes("Haiku")) throw new Fail(`model row: ${textOf(row)}`);
+      await shot("onbp-8-settings-general");
+      useStore.getState().closeSettings();
+      return `${look}; ${rows.join("; ")}; keeper enabled=${power.enabled}`;
+    });
+    await step("onboarding-prefs-restart: a new chat from the New session sheet starts with the chosen CLI, model and permission mode (start_chat options; nothing launched)", async () => {
+      ignoreChatDefaults(false);
+      const env = useStore.getState().env;
+      const b = api() as unknown as { startChat: (o: unknown) => Promise<number> };
+      const real = b.startChat;
+      let sent: Record<string, unknown> | null = null;
+      b.startChat = async (o) => {
+        sent = o as Record<string, unknown>;
+        throw new Error("self-test: start_chat recorded, not launched");
+      };
+      try {
+        useStore.getState().setSheet({ kind: "new", cwd: ctx.cfg.dir });
+        const btn = await waitFor("the sheet", () => $all("form button[type=submit]")[0] as HTMLButtonElement | undefined, 3_000);
+        await sleep(300);
+        const starts = $("[data-new-starts]")?.dataset.newStarts ?? "";
+        btn.click();
+        await waitFor("start_chat", () => sent, 3_000);
+        const want = env?.claude && env?.codex ? { provider: "codex", model: null, permission_mode: "untrusted" } : env?.codex ? { provider: "codex", model: null, permission_mode: "untrusted" } : { provider: "claude", model: "haiku", permission_mode: "acceptEdits" };
+        const got = sent as unknown as Record<string, unknown>;
+        for (const [k, v] of Object.entries(want)) if (got[k] !== v) throw new Fail(`start_chat ${k}=${String(got[k])}, want ${String(v)} (${JSON.stringify(got)})`);
+        await shot("onbp-9-new-session");
+        useStore.getState().setSheet(null);
+        // With Claude Code chosen in the sheet instead: its own defaults.
+        if (env?.claude) {
+          await waitFor("the sheet gone", () => !$("form button[type=submit]"), 3_000);
+          sent = null;
+          useStore.getState().setSheet({ kind: "new", cwd: ctx.cfg.dir, provider: "claude" });
+          const b2 = await waitFor("the sheet", () => $all("form button[type=submit]")[0] as HTMLButtonElement | undefined, 3_000);
+          await sleep(300);
+          b2.click();
+          const s2 = (await waitFor("start_chat", () => sent, 3_000)) as Record<string, unknown>;
+          if (s2.model !== "haiku" || s2.permission_mode !== "acceptEdits") throw new Fail(`claude start_chat ${JSON.stringify(s2)}`);
+          useStore.getState().setSheet(null);
+          return `sheet said "${starts}"; start_chat ${JSON.stringify(got)}; claude ${JSON.stringify(s2)}`;
+        }
+        return `sheet said "${starts}"; start_chat ${JSON.stringify(got)}`;
+      } finally {
+        b.startChat = real;
+        ignoreChatDefaults(true);
+        useStore.getState().setSheet(null);
+      }
+    });
+  },
+};
+Object.assign(scenarios, onboardingPrefs);
 
 // ---------- the sandbox Mac: a clean boot, the pilot driven directly, click-then-type ----------
 
