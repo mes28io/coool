@@ -200,7 +200,9 @@ pub fn artifact_window(app: AppHandle, core: State<'_, Arc<Core>>, url: String) 
         }
         let _ = w.unminimize();
         let _ = w.show();
-        let _ = w.set_focus();
+        if crate::selftest::windows_may_focus() {
+            let _ = w.set_focus();
+        }
         return Ok(true);
     }
     let token = src.trim_start_matches(base_url()).trim_start_matches('/').split('/').next().unwrap_or_default().to_string();
@@ -213,7 +215,7 @@ pub fn artifact_window(app: AppHandle, core: State<'_, Arc<Core>>, url: String) 
         .inner_size(size.0, size.1)
         .min_inner_size(320.0, 240.0)
         .resizable(true)
-        .focused(true)
+        .focused(crate::selftest::windows_may_focus())
         .incognito(true)
         .on_navigation(move |u| preview_navigable(u, &token))
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)

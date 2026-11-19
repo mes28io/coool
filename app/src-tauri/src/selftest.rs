@@ -28,7 +28,11 @@
 //! A run kept apart from the person's own data sets `HOME` to a throwaway folder too (the CLIs' `~/.claude` and
 //! `~/.codex`, coool's app data), with `COOOL_VM_DIR` pointing at the one sandbox Mac when a scenario uses it.
 //! - `COOOL_SELFTEST_BACKGROUND=1`: the window goes off screen, never on top or focused, and the app takes no Dock
-//!   icon (window-alone screenshots still work), so a run leaves the person's screen and keyboard alone.
+//!   icon (window-alone screenshots still work), so a run leaves the person's screen and keyboard alone. coool doesn't
+//!   activate at launch (as with the other switches), and artifact previews and browser pop-ups open unfocused. macOS
+//!   keeps a sliver of the window on a display, so windows placed relative to it (previews) land on screen.
+//!
+//! The switches combine: OFFSCREEN wins over BACKGROUND, which wins over `COOOL_SELFTEST_WINDOW` (`WindowMode`).
 //! - `COOOL_SELFTEST_OFFSCREEN=1`: keep the test out of sight: the window is fully transparent and lets every click
 //!   through (macOS moves a window placed off screen back onto a display, so it is also placed as far out as macOS
 //!   allows), never takes focus, coool doesn't activate at launch and has no Dock icon; WebKit is told not to treat
@@ -155,8 +159,8 @@ impl SelfTest {
             }
             // `COOOL_SELFTEST_BACKGROUND=1`: off screen and never focused, so a run doesn't take the person's screen
             // or keyboard (window-alone screenshots still work).
-            if std::env::var("COOOL_SELFTEST_BACKGROUND").is_ok_and(|v| v == "1") {
-                let _ = w.set_position(tauri::LogicalPosition::new(-4000.0, -3000.0));
+            if background() {
+                let _ = w.set_position(BACKGROUND_POS);
                 #[cfg(target_os = "macos")]
                 let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 return;
@@ -177,15 +181,24 @@ impl SelfTest {
         }
     }
 
-    /// The window must never take focus (`COOOL_SELFTEST_WINDOW` quiet or back).
+    /// The window must never take focus: `COOOL_SELFTEST_WINDOW` quiet, back or behind, `COOOL_SELFTEST_BACKGROUND=1`
+    /// or `COOOL_SELFTEST_OFFSCREEN=1` (coool doesn't activate at launch, the window is created unfocused).
     pub fn quiet_window(&self) -> bool {
-        matches!(std::env::var("COOOL_SELFTEST_WINDOW").as_deref(), Ok("quiet" | "back" | "behind")) || offscreen()
+        current_mode() != WindowMode::Front
     }
 
     /// Tauri config changes for a self-test run: its own web data store, and the window off screen when asked.
     pub fn adjust_config(&self, c: &mut tauri::Config) {
         for w in c.app.windows.iter_mut() {
             w.data_store_identifier = Some(*b"coool-selftest!!");
+            if background() && !offscreen() {
+                // Created off screen, so it never shows at the centre of the screen first.
+                w.center = false;
+                w.focus = false;
+                w.always_on_top = false;
+                w.x = Some(BACKGROUND_POS.x);
+                w.y = Some(BACKGROUND_POS.y);
+            }
             if offscreen() {
                 w.visible = false;
                 w.focus = false;
@@ -216,6 +229,56 @@ const OFFSCREEN: tauri::LogicalPosition<f64> = tauri::LogicalPosition { x: -3000
 /// `COOOL_SELFTEST_OFFSCREEN=1` (and a build where the self-test can run at all).
 pub fn offscreen() -> bool {
     cfg!(debug_assertions) && std::env::var("COOOL_SELFTEST_OFFSCREEN").is_ok_and(|v| v == "1")
+}
+
+/// Where the window goes with `COOOL_SELFTEST_BACKGROUND=1`.
+const BACKGROUND_POS: tauri::LogicalPosition<f64> = tauri::LogicalPosition { x: -4000.0, y: -3000.0 };
+
+/// `COOOL_SELFTEST_BACKGROUND=1` (and a build where the self-test can run at all).
+fn background() -> bool {
+    cfg!(debug_assertions) && std::env::var("COOOL_SELFTEST_BACKGROUND").is_ok_and(|v| v == "1")
+}
+
+/// How a self-test window behaves (the three switches combined; the most hidden one wins when several are set).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowMode {
+    /// None set: centred, on top and focused (as before).
+    Front,
+    /// `COOOL_SELFTEST_WINDOW=quiet`: on top, never focused.
+    Quiet,
+    /// `COOOL_SELFTEST_WINDOW=behind`: on screen behind the person's windows, never focused.
+    Behind,
+    /// `COOOL_SELFTEST_WINDOW=back`: off screen and behind, never focused.
+    Back,
+    /// `COOOL_SELFTEST_BACKGROUND=1`: off screen, never on top or focused.
+    Background,
+    /// `COOOL_SELFTEST_OFFSCREEN=1`: invisible, click-through, never focused.
+    Offscreen,
+}
+
+fn window_mode(window: Option<&str>, background: bool, offscreen: bool) -> WindowMode {
+    if offscreen {
+        return WindowMode::Offscreen;
+    }
+    if background {
+        return WindowMode::Background;
+    }
+    match window {
+        Some("quiet") => WindowMode::Quiet,
+        Some("back") => WindowMode::Back,
+        Some("behind") => WindowMode::Behind,
+        _ => WindowMode::Front,
+    }
+}
+
+/// Whether a window coool opens itself (an artifact preview, a browser pop-up) may take focus: always, except in a
+/// self-test run whose window must not (they would otherwise come up in front of the person's apps, focused).
+pub fn windows_may_focus() -> bool {
+    !cfg!(debug_assertions) || std::env::var_os("COOOL_SELFTEST").is_none() || current_mode() == WindowMode::Front
+}
+
+fn current_mode() -> WindowMode {
+    window_mode(std::env::var("COOOL_SELFTEST_WINDOW").ok().as_deref(), background(), offscreen())
 }
 
 /// WebKit takes an occluded or off-screen window as hidden (page visibility, throttled timers and animations);
@@ -535,20 +598,32 @@ pub fn selftest_probe_result(core: State<'_, Arc<Core>>) -> Result<Vec<String>, 
 
 /// Window states the page may not set itself (its capability has no such permission): `focus`, `fullscreen`,
 /// `windowed` (leaves full screen and goes back on top), `hide` (ordered out: the page goes hidden and loses focus, as
-/// when the person is in another app) and `show` (back, in front and focused).
+/// when the person is in another app) and `show` (back, in front and focused). With any of the window switches
+/// (`COOOL_SELFTEST_WINDOW`, `_BACKGROUND`, `_OFFSCREEN`) `focus` does nothing and `show` only orders the window back
+/// where its switch keeps it: a test window never takes the person's focus.
 #[tauri::command]
 pub fn selftest_window(app: AppHandle, core: State<'_, Arc<Core>>, action: String) -> Result<(), String> {
     active(&core)?;
     let w = app.get_window("main").ok_or("no window")?;
-    let r = match action.as_str() {
-        // Out of sight: never in front, never focused.
-        "focus" if offscreen() => Ok(()),
-        "show" if offscreen() => w.show(),
-        "focus" => w.set_focus(),
-        "fullscreen" => w.set_always_on_top(false).and_then(|_| w.set_fullscreen(true)),
-        "windowed" => w.set_fullscreen(false).and_then(|_| w.set_always_on_top(true)),
-        "hide" => w.hide(),
-        "show" => w.show().and_then(|_| w.set_always_on_top(true)).and_then(|_| w.set_focus()),
+    let mode = current_mode();
+    let r = match (action.as_str(), mode) {
+        // A window that must not take focus never does (any of the three switches), and `show` puts it back where its
+        // switch keeps it: only a plain run is brought in front and focused.
+        ("focus", WindowMode::Front) => w.set_focus(),
+        ("focus", _) => Ok(()),
+        ("fullscreen", _) => w.set_always_on_top(false).and_then(|_| w.set_fullscreen(true)),
+        ("windowed", m) => w.set_fullscreen(false).and_then(|_| w.set_always_on_top(matches!(m, WindowMode::Front | WindowMode::Quiet))),
+        ("hide", _) => w.hide(),
+        ("show", WindowMode::Front) => w.show().and_then(|_| w.set_always_on_top(true)).and_then(|_| w.set_focus()),
+        ("show", m) => {
+            let r = w.show();
+            #[cfg(target_os = "macos")]
+            if matches!(m, WindowMode::Back | WindowMode::Behind) {
+                order_back(&w);
+            }
+            let _ = m;
+            r
+        }
         _ => return Err(format!("unknown action {action}")),
     };
     r.map_err(|e| e.to_string())
@@ -1187,4 +1262,24 @@ pub fn selftest_device_tool(core: State<'_, Arc<Core>>, devices: State<'_, Arc<c
     active(&core)?;
     let out = crate::device::mcp::call_tool(devices.inner(), chat, &name, &args)?;
     Ok(out.iter().filter_map(|v| v["text"].as_str()).collect::<Vec<_>>().join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{window_mode, WindowMode};
+
+    #[test]
+    fn window_switches_combine() {
+        // A plain run focuses as before.
+        assert_eq!(window_mode(None, false, false), WindowMode::Front);
+        assert_eq!(window_mode(Some(""), false, false), WindowMode::Front);
+        assert_eq!(window_mode(Some("quiet"), false, false), WindowMode::Quiet);
+        assert_eq!(window_mode(Some("back"), false, false), WindowMode::Back);
+        assert_eq!(window_mode(Some("behind"), false, false), WindowMode::Behind);
+        // BACKGROUND never takes focus either (it used to let coool activate at launch, and `show` focused it).
+        assert_eq!(window_mode(None, true, false), WindowMode::Background);
+        assert_eq!(window_mode(Some("quiet"), true, false), WindowMode::Background);
+        // The most hidden switch wins.
+        assert_eq!(window_mode(Some("behind"), true, true), WindowMode::Offscreen);
+    }
 }

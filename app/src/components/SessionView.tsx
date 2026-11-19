@@ -8,6 +8,7 @@ import { BrowserPanel } from "./BrowserPanel";
 import { DevicePanel } from "./DevicePanel";
 import { MAC_UDID, MacPanel } from "./MacPanel";
 import { keysCaptured } from "../lib/macKeys";
+import { answerKeysCovered } from "../lib/answerKeys";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
@@ -289,8 +290,9 @@ export function SessionView({
     if (!p) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || keysCaptured(e)) return;
-      // A page over the panes (Settings, Needs you) has the keys: this pane is out of sight.
-      if (useStore.getState().settings !== null || useStore.getState().needsPage) return;
+      // A page over the panes (Settings, Needs you, the onboarding) or the palette or a sheet has the keys: this pane's
+      // request is out of sight.
+      if (answerKeysCovered("pane")) return;
       const inText = (e.target as HTMLElement)?.tagName === "TEXTAREA" && !!(e.target as HTMLTextAreaElement).value;
       // ⇧⌘↵ only for a this-chat-only option, the one the card marks with it.
       const quick = p.remember[0]?.scope === "chat" ? p.remember[0] : null;

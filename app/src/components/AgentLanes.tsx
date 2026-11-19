@@ -32,7 +32,11 @@ interface Lane {
   start: number | null;
 }
 
-function useLanes(sessions: Session[], now: number): Lane[] {
+/**
+ * The lanes, and the "now" they are drawn to: the 5 s clock, or the newest chat item when that is later (so a wait
+ * or a turn that began since the last tick shows at once, not up to 5 s later).
+ */
+function useLanes(sessions: Session[], tick: number): { lanes: Lane[]; now: number } {
   const logs = useLaneLog((st) => st.logs);
   // What the lanes read of each chat changes only with a new item, an answer or the chat ending (not every streamed word).
   const sig = useChats((st) =>
@@ -45,8 +49,14 @@ function useLanes(sessions: Session[], now: number): Lane[] {
   );
   return useMemo(() => {
     const chats = chatsAt(sig);
+    let now = tick;
+    for (const s of sessions) {
+      const items = s.chat != null ? chats[s.chat]?.items : undefined;
+      const last = items?.[items.length - 1];
+      if (last && last.ts > now) now = last.ts;
+    }
     const from = now - LANE_WINDOW_MS;
-    return sessions.map((s) => {
+    const lanes = sessions.map((s) => {
       const c = s.chat != null ? chats[s.chat] : undefined;
       if (c && c.items.length) {
         const top = c.items.filter((i) => !("parent" in i && i.parent));
@@ -55,12 +65,12 @@ function useLanes(sessions: Session[], now: number): Lane[] {
       const log = logs[sessionKey(s)];
       return { s, blocks: log ? blocksFromMarks(log, from, now) : [], start: log ? log.first : null };
     });
-  }, [sessions, logs, sig, now]);
+    return { lanes, now };
+  }, [sessions, logs, sig, tick]);
 }
 
 export function AgentLanes({ sessions, att }: { sessions: Session[]; att: Map<Session, Attention> }) {
-  const now = useLaneNow();
-  const lanes = useLanes(sessions, now);
+  const { lanes, now } = useLanes(sessions, useLaneNow());
   // Quiet until something happened in the window: an empty card would only push the page down.
   if (!lanes.some((l) => l.blocks.length)) return null;
   return (

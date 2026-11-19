@@ -7,6 +7,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { answerPermission } from "../../lib/actions";
+import { answerKeysCovered } from "../../lib/answerKeys";
 import { pendingPermission, useChats } from "../../lib/chat";
 import { displayTitle, folderName, projectOf } from "../../lib/format";
 import { useMotion } from "../../lib/motion";
@@ -79,7 +80,8 @@ export function NeedsPage() {
         close();
         return;
       }
-      if (mod && sel) {
+      // The onboarding over the page: its own keys run first, and ⌘⌫ (which it doesn't take) must not answer under it.
+      if (mod && sel && !answerKeysCovered("needs")) {
         const s = st.sessions.find((x) => sessionKey(x) === sel);
         const chat = s?.chat != null ? useChats.getState().chats[s.chat] : undefined;
         const p = chat?.running ? pendingPermission(chat) : null;
