@@ -338,6 +338,25 @@ export function windowScenarios(k: WindowKit): Record<string, () => Promise<void
         return `row ${a.key} stays at ${a.top}px through two resizes; pinned stays at the bottom`;
       });
 
+      await step("window: behind Settings the timeline holds still while it streams, and catches up when shown", async () => {
+        const s = el()!;
+        s.scrollTop = s.scrollHeight;
+        await settle(400);
+        const text = () => s.querySelector("[data-windowed]")?.textContent?.length ?? 0;
+        useStore.getState().openSettings("general");
+        await settle(300);
+        const before = text();
+        await stream(1500, 0, "covered");
+        const during = text();
+        useStore.getState().closeSettings();
+        await settle(800);
+        const after = text();
+        if (during !== before) throw k.fail(`the hidden timeline changed (${before} → ${during} characters)`);
+        if (after <= during) throw k.fail(`no catch-up after Settings closed (${during} → ${after})`);
+        if (gap(s) > 2) throw k.fail(`not at the bottom after catching up (${gap(s)}px)`);
+        return `${before} characters held behind Settings, ${after} after it closed, at the bottom`;
+      });
+
       useStore.setState({ tabs: [], activeTab: null });
       useChats.setState((st) => {
         const chats = { ...st.chats };

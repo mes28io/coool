@@ -41,6 +41,18 @@ rm -rf /tmp/coool-perf-1 ~/Library/WebKit/coool-perf ~/Library/Caches/coool-perf
   - `perf-stream`: a made-up coool chat of 1500 items streaming a reply for 15 s (one batch per ~16 ms, like the
     backend pump), then 20 tool steps; then the same with the chat off screen.
   - `perf-soak`: ten rounds of perf-stream into one chat, memory after each.
+  - `perf-chat` (window on screen for its CPU lines: `PERF_OFFSCREEN=0 COOOL_SELFTEST_WINDOW=quiet`): a made-up coool
+    chat at ~120, ~540 and 1500 items. Per batch, applied one at a time with style and layout forced and timed after
+    each: store updates, main-thread ms (store and React), layout ms, ms in Markdown parses and other probes
+    (`lib/perfCount.ts` `addTime`), renders by component, frames asked for; the same with the reader scrolled to the
+    top (and whether the first row moved); a turn starting and ending (`state_change_ms`); then 20 s streaming through
+    the app's own queue (as the backend's batches arrive) for CPU, wakeups and DOM mutations. At 1500 items also: CSS
+    loops paused, Motion made instant, the turn running with nothing streaming, and the shared frame at 60 and 10 Hz.
+    `perf-chat-long` is the 1500-item part alone.
+  - `perf-busy` (run with live sessions, e.g. `run.sh <out> perf-busy 1`): Home, then the busiest replayed session
+    open, then the same with Motion instant, 20 s each: CPU, wakeups, payloads, store updates, mutations, frames.
+  - `chat-window` (pass/fail, `selftestWindow.ts`; no model calls, so it runs on the synthetic home with `run.sh`):
+    the long-timeline window, see "Long timelines" below.
   - Looping animations (window on screen; `selftestAnim.tsx` has every loop of the app as the components draw it):
     `perf-anim-app` six copies of one loop at a time, everything else paused (what each costs alone);
     `perf-anim-lab` the same for bare test loops (linear vs stepped, box vs SVG content, a JS timer...);

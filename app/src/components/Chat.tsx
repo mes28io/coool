@@ -4,7 +4,7 @@
 // requests become an inline approval card.
 
 import { AnimatePresence, motion } from "motion/react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { answerPermission, answerQuestion } from "../lib/actions";
 import { type Chat, type ChatItem, chatTitle, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
@@ -140,7 +140,15 @@ export function ChatTimeline({
 }) {
   countRender("ChatTimeline");
   // The live chat: the pane above passes one that holds still while a reply streams (lib/chat.ts useChatShell).
-  const chat = useChats((s) => s.chats[given.id]) ?? given;
+  // While the pane can't be seen (Settings or Needs you over it, the window hidden) it holds still too, and catches
+  // up when shown.
+  const covered = useCovered();
+  const held = useRef<Chat | undefined>(undefined);
+  const chat =
+    useChats((s) => {
+      if (covered && held.current?.id === given.id) return held.current;
+      return (held.current = s.chats[given.id]);
+    }) ?? given;
   const { blocks, children } = useStableBlocks(chat.items);
   // Stable callbacks for the memoised blocks (the latest ones are called).
   const cbs = useRef({ onOpenTerminal, onResume });
@@ -493,6 +501,19 @@ export function ChatTimeline({
     <LaterBar chat={chat} compact={compact} />
     </div>
   );
+}
+
+/** Whether the panes can't be seen: Settings or the Needs you page over them, or the window hidden. */
+function useCovered(): boolean {
+  const over = useStore((s) => s.settings !== null || s.needsPage);
+  const hidden = useSyncExternalStore(
+    (cb) => {
+      document.addEventListener("visibilitychange", cb);
+      return () => document.removeEventListener("visibilitychange", cb);
+    },
+    () => document.hidden,
+  );
+  return over || hidden;
 }
 
 const AWAY_ROW = "\u0001away";
