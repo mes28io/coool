@@ -46,10 +46,11 @@ export const PERMISSION_MODES: Record<string, { id: string; label: string; descr
     { id: "plan", label: "Plan", description: "Read and plan only, change nothing" },
     { id: "bypassPermissions", label: "Bypass", description: "Never ask. Only in a sandbox you trust" },
   ],
+  // Codex 0.145 dropped `on-failure` (the app-server refuses it: "unknown variant"); the core maps an old saved
+  // choice to `on-request` (chat/codex.rs).
   codex: [
     { id: "untrusted", label: "Untrusted", description: "Ask before anything not known to be safe" },
     { id: "on-request", label: "On request", description: "The model decides when to ask" },
-    { id: "on-failure", label: "On failure", description: "Run in the sandbox, ask if it fails" },
     { id: "never", label: "Never ask", description: "Never ask for approval" },
   ],
 };

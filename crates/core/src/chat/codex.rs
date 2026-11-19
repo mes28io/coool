@@ -60,7 +60,13 @@ const TERMINAL_COMMANDS: &[&str] = &[
     "undo",
 ];
 
-const APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "on-failure", "never"];
+const APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
+
+/// Codex 0.145 dropped `on-failure` (the app-server refuses the thread: "unknown variant `on-failure`"); a choice saved
+/// before (Settings > General, an older coool) asks on request instead, the nearest policy that still asks.
+fn approval_policy(mode: &str) -> &str {
+    if mode == "on-failure" { "on-request" } else { mode }
+}
 const SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
 pub(crate) fn args() -> Vec<String> {
@@ -140,9 +146,11 @@ pub(crate) struct Codex {
     /// Subagent thread -> the collab tool call that spawned it.
     child_threads: HashMap<String, String>,
     last_spawn: Option<String>,
+    /// Subagent thread -> the end of the `spawnAgent` call, held until that agent's turn ends.
+    spawn_ends: HashMap<String, ChatEventKind>,
     started_tools: HashSet<String>,
-    /// fileChange item -> paths, for approval summaries.
-    file_changes: HashMap<String, Vec<String>>,
+    /// fileChange item -> its changes (`patch_changes`), for the approval that may follow it.
+    file_changes: HashMap<String, Vec<Value>>,
     user_n: u64,
     notes: Notes,
     /// The newest main-thread step of the running turn.
@@ -182,6 +190,7 @@ impl Codex {
             remember: HashMap::new(),
             child_threads: HashMap::new(),
             last_spawn: None,
+            spawn_ends: HashMap::new(),
             started_tools: HashSet::new(),
             file_changes: HashMap::new(),
             user_n: 0,
@@ -193,10 +202,11 @@ impl Codex {
             client_name: crate::origin::CLIENT_NAME.to_string(),
         };
         if let Some(m) = &opts.permission_mode {
-            if SANDBOX_MODES.contains(&m.as_str()) {
-                c.sandbox = m.clone();
+            let m = approval_policy(m);
+            if SANDBOX_MODES.contains(&m) {
+                c.sandbox = m.to_string();
             } else {
-                c.approval = m.clone();
+                c.approval = m.to_string();
             }
         }
         c
@@ -466,13 +476,18 @@ impl Codex {
                 let cmd = p["command"].as_str().map(unwrap_shell).unwrap_or_default();
                 self.perms.insert(rid.clone(), (id, PermKind::V2));
                 self.remember.insert(rid.clone(), remember);
-                perm("shell", tool_line("shell", &cmd), json!({"command": cmd, "cwd": p["cwd"], "reason": p["reason"]}))
+                let mut input = json!({"command": cmd, "cwd": p["cwd"], "reason": p["reason"]});
+                // A managed-network prompt: the host the command wants to reach.
+                if let Some(h) = p["networkApprovalContext"]["host"].as_str() {
+                    input["network_host"] = json!(h);
+                }
+                perm("shell", tool_line("shell", &cmd), input)
             }
             "item/fileChange/requestApproval" => {
-                let files = self.file_changes.get(p["itemId"].as_str().unwrap_or("")).cloned().unwrap_or_default();
+                let changes = self.file_changes.get(p["itemId"].as_str().unwrap_or("")).cloned().unwrap_or_default();
                 self.perms.insert(rid.clone(), (id, PermKind::V2));
                 self.remember.insert(rid.clone(), remember);
-                perm("apply_patch", tool_line("apply_patch", &files.join(", ")), json!({"files": files, "reason": p["reason"], "grantRoot": p["grantRoot"]}))
+                perm("apply_patch", patch_line(&changes), patch_input(changes, p))
             }
             "execCommandApproval" => {
                 let cmd = p["command"].as_array().map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
@@ -481,10 +496,10 @@ impl Codex {
                 perm("shell", tool_line("shell", &cmd), json!({"command": cmd, "cwd": p["cwd"], "reason": p["reason"]}))
             }
             "applyPatchApproval" => {
-                let files: Vec<String> = p["fileChanges"].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default();
+                let changes = legacy_patch_changes(&p["fileChanges"]);
                 self.perms.insert(rid.clone(), (id, PermKind::Legacy));
                 self.remember.insert(rid.clone(), remember);
-                perm("apply_patch", tool_line("apply_patch", &files.join(", ")), json!({"files": files, "reason": p["reason"]}))
+                perm("apply_patch", patch_line(&changes), patch_input(changes, p))
             }
             "item/tool/requestUserInput" if p["questions"].as_array().is_some_and(|q| !q.is_empty()) => {
                 let questions = parse_questions(&p["questions"]);
@@ -515,16 +530,19 @@ impl Codex {
             o.ev(ChatEventKind::Compacting { active: started });
         }
         if ty == "collabAgentToolCall" {
+            // A subagent's steps nest under the call that spawned it; `wait` / `sendInput` name it too but don't own it.
+            let spawn = item["tool"] == "spawnAgent";
             for t in item["receiverThreadIds"].as_array().into_iter().flatten().filter_map(|t| t.as_str()) {
-                self.child_threads.insert(t.to_string(), id.clone());
+                if spawn || !self.child_threads.contains_key(t) {
+                    self.child_threads.insert(t.to_string(), id.clone());
+                }
             }
             if item["tool"] == "spawnAgent" {
                 self.last_spawn = Some(id.clone());
             }
         }
         if ty == "fileChange" {
-            let paths = item["changes"].as_array().map(|a| a.iter().filter_map(|c| c["path"].as_str().map(crate::util::home_short)).collect()).unwrap_or_default();
-            self.file_changes.insert(id.clone(), paths);
+            self.file_changes.insert(id.clone(), patch_changes(&item["changes"]));
         }
         match ty {
             // A steering note reaching the agent (its clientUserMessageId comes back as clientId).
@@ -546,7 +564,9 @@ impl Codex {
                     o.ev(ChatEventKind::AssistantMessage { id, text, model: self.model.clone(), parent_tool_id: parent });
                 }
             }
-            "agentMessage" | "userMessage" | "reasoning" | "plan" | "hookPrompt" | "contextCompaction" | "enteredReviewMode" | "exitedReviewMode" => {}
+            // `subAgentActivity` only says a subagent started / was messaged / was interrupted: its spawn is already the
+            // `collabAgentToolCall` step, and its own steps nest under that.
+            "agentMessage" | "userMessage" | "reasoning" | "plan" | "hookPrompt" | "contextCompaction" | "enteredReviewMode" | "exitedReviewMode" | "subAgentActivity" => {}
             _ => {
                 let Some((name, summary, input)) = tool_view(item) else { return };
                 if started && parent.is_none() {
@@ -558,7 +578,16 @@ impl Codex {
                 }
                 if !started {
                     let (ok, output) = tool_result(item);
-                    o.ev(ChatEventKind::ToolEnd { id, ok, output: clip(&output, MAX_OUTPUT), artifact: None });
+                    let end = ChatEventKind::ToolEnd { id: id.clone(), ok, output: clip(&output, MAX_OUTPUT), artifact: None };
+                    // `spawnAgent` returns as soon as the agent starts: its card stays running until the agent's turn ends.
+                    let kids: Vec<String> = item["receiverThreadIds"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_string)).collect();
+                    if ty == "collabAgentToolCall" && item["tool"] == "spawnAgent" && ok && !kids.is_empty() {
+                        for k in kids {
+                            self.spawn_ends.insert(k, end.clone());
+                        }
+                    } else {
+                        o.ev(end);
+                    }
                 }
             }
         }
@@ -594,9 +623,16 @@ impl Codex {
                 self.turn_id = None;
                 self.perms.clear();
                 self.remember.clear();
+                self.end_spawns(None, o);
                 o.ev(ChatEventKind::TurnEnd { duration_ms: t["durationMs"].as_u64().unwrap_or(0), ok: status == "completed" });
                 self.notes_at_turn_end(status == "interrupted", o);
                 o.ev(ChatEventKind::State { state: self.state() });
+            }
+            // A subagent's turn ended: the call that spawned it is done.
+            "turn/completed" => {
+                if let Some(t) = p["threadId"].as_str() {
+                    self.end_spawns(Some(t), o);
+                }
             }
             "item/started" => self.on_item(true, p, o),
             "item/completed" => self.on_item(false, p, o),
@@ -678,6 +714,26 @@ impl Codex {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Ends the spawn calls held open for subagent `thread` (all of them: the chat's turn ended or the CLI exited).
+    fn end_spawns(&mut self, thread: Option<&str>, o: &mut Out) {
+        let ends: Vec<ChatEventKind> = match thread {
+            Some(t) => self.spawn_ends.remove(t).into_iter().collect(),
+            None => self.spawn_ends.drain().map(|(_, e)| e).collect(),
+        };
+        let mut done: HashSet<String> = HashSet::new();
+        for e in ends {
+            if let ChatEventKind::ToolEnd { id, .. } = &e {
+                if !done.insert(id.clone()) {
+                    continue;
+                }
+                // One call may have spawned several agents: the first to finish ends it.
+                let id = id.clone();
+                self.spawn_ends.retain(|_, x| !matches!(x, ChatEventKind::ToolEnd { id: i, .. } if *i == id));
+            }
+            o.ev(e);
         }
     }
 
@@ -905,6 +961,62 @@ fn unwrap_shell(cmd: &str) -> String {
     cmd.to_string()
 }
 
+/// A fileChange's `changes` (`[{path, kind: {type, move_path}, diff}]`) in one shape for every surface:
+/// `[{path, kind: "add" | "delete" | "update", move_path?, diff}]`, paths as Codex gives them (absolute).
+fn patch_changes(v: &Value) -> Vec<Value> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let path = c["path"].as_str()?;
+            let kind = c["kind"]["type"].as_str().or(c["kind"].as_str()).unwrap_or("update");
+            let mut o = json!({"path": path, "kind": kind, "diff": c["diff"].as_str().unwrap_or("")});
+            if let Some(m) = c["kind"]["move_path"].as_str() {
+                o["move_path"] = json!(m);
+            }
+            Some(o)
+        })
+        .collect()
+}
+
+/// Legacy `applyPatchApproval.fileChanges` (`{path: {type: add | delete, content} | {type: update, unified_diff,
+/// move_path}}`) in the same shape.
+fn legacy_patch_changes(v: &Value) -> Vec<Value> {
+    v.as_object()
+        .into_iter()
+        .flatten()
+        .map(|(path, c)| {
+            let kind = c["type"].as_str().unwrap_or("update");
+            let diff = c["unified_diff"].as_str().or(c["content"].as_str()).unwrap_or("");
+            let mut o = json!({"path": path, "kind": kind, "diff": diff});
+            if let Some(m) = c["move_path"].as_str() {
+                o["move_path"] = json!(m);
+            }
+            o
+        })
+        .collect()
+}
+
+/// "apply_patch · ~/w/a.rs, ~/w/b.rs".
+fn patch_line(changes: &[Value]) -> String {
+    let paths: Vec<String> = changes.iter().filter_map(|c| c["path"].as_str().map(crate::util::home_short)).collect();
+    tool_line("apply_patch", &paths.join(", "))
+}
+
+/// A patch approval's input: every file it writes (`files`, absolute, a move's target too: what the Risky rule
+/// checks) and the changes with their diffs (the Needs you page shows them, the AI read sends them).
+fn patch_input(changes: Vec<Value>, p: &Value) -> Value {
+    let mut files: Vec<String> = Vec::new();
+    for c in &changes {
+        for k in ["path", "move_path"] {
+            if let Some(f) = c[k].as_str().filter(|f| !files.iter().any(|x| x == f)) {
+                files.push(f.to_string());
+            }
+        }
+    }
+    json!({"files": files, "changes": changes, "reason": p["reason"], "grantRoot": p["grantRoot"]})
+}
+
 fn tool_line(name: &str, detail: &str) -> String {
     if detail.is_empty() { name.to_string() } else { format!("{name} · {}", crate::util::one_line(detail, 140)) }
 }
@@ -919,7 +1031,7 @@ fn tool_view(item: &Value) -> Option<(String, String, Value)> {
         }
         "fileChange" => {
             let paths: Vec<String> = item["changes"].as_array().map(|a| a.iter().filter_map(|c| c["path"].as_str().map(crate::util::home_short)).collect()).unwrap_or_default();
-            ("apply_patch".into(), tool_line("apply_patch", &paths.join(", ")), json!({"changes": item["changes"]}))
+            ("apply_patch".into(), tool_line("apply_patch", &paths.join(", ")), json!({"changes": patch_changes(&item["changes"])}))
         }
         "mcpToolCall" => {
             let name = format!("{}.{}", s("server"), s("tool"));
@@ -930,7 +1042,15 @@ fn tool_view(item: &Value) -> Option<(String, String, Value)> {
             (name.clone(), crate::util::tool_summary(&name, &item["arguments"]), item["arguments"].clone())
         }
         "collabAgentToolCall" => {
-            let name = s("tool");
+            // The rollout's names (`spawn_agent`, `wait_agent`, …), which every surface reads as sub-agent calls.
+            let name = match s("tool").as_str() {
+                "spawnAgent" => "spawn_agent".to_string(),
+                "sendInput" => "send_input".into(),
+                "resumeAgent" => "resume_agent".into(),
+                "wait" => "wait_agent".into(),
+                "closeAgent" => "close_agent".into(),
+                other => other.to_string(),
+            };
             (name.clone(), tool_line(&name, &s("prompt")), json!({"prompt": item["prompt"], "model": item["model"], "receiverThreadIds": item["receiverThreadIds"]}))
         }
         "webSearch" => ("web_search".into(), tool_line("web_search", &s("query")), item.clone()),
@@ -1085,6 +1205,7 @@ impl Backend for Codex {
     }
 
     fn set_permission_mode(&mut self, mode: &str, o: &mut Out) -> Result<()> {
+        let mode = approval_policy(mode);
         if SANDBOX_MODES.contains(&mode) {
             self.sandbox = mode.to_string();
             self.next_sandbox = Some(mode.to_string());
@@ -1159,6 +1280,7 @@ impl Backend for Codex {
 
     fn on_exit(&mut self, o: &mut Out) {
         self.perms.clear();
+        self.spawn_ends.clear();
         self.remember.clear();
         self.queue.clear();
         self.notes.unused(|_| true, o);
@@ -1335,6 +1457,8 @@ mod tests {
             &mut c,
             &[
                 r#"{"method":"item/completed","params":{"threadId":"main","turnId":"x","item":{"type":"collabAgentToolCall","id":"call1","tool":"spawnAgent","status":"completed","senderThreadId":"main","receiverThreadIds":["kid"],"prompt":"look around","model":null,"agentsStates":{}}}}"#,
+                // Waiting on the agent names it too; its steps still belong to the spawn.
+                r#"{"method":"item/started","params":{"threadId":"main","turnId":"x","item":{"type":"collabAgentToolCall","id":"call2","tool":"wait","status":"inProgress","senderThreadId":"main","receiverThreadIds":["kid"],"prompt":null,"model":null,"agentsStates":{}}}}"#,
                 r#"{"method":"item/started","params":{"threadId":"kid","turnId":"y","item":{"type":"commandExecution","id":"e1","command":"/bin/zsh -lc ls","cwd":"/w","status":"inProgress"}}}"#,
                 r#"{"method":"item/agentMessage/delta","params":{"threadId":"kid","itemId":"m1","delta":"hi"}}"#,
                 r#"{"method":"turn/completed","params":{"threadId":"kid","turn":{"id":"y","status":"completed"}}}"#,
@@ -1351,9 +1475,14 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(parents, vec![None, Some("call1".into()), Some("call1".into())]);
+        assert_eq!(parents, vec![None, None, Some("call1".into()), Some("call1".into())]);
         // A subagent's turn ending is not the chat's turn ending.
         assert!(!evs.iter().any(|e| matches!(e, ChatEventKind::TurnEnd { .. })));
+        // The spawn call ends when its agent's turn does (it returned at once), named as the rollout names it.
+        assert!(matches!(&evs[0], ChatEventKind::ToolStart { name, .. } if name == "spawn_agent"));
+        let end = evs.iter().position(|e| matches!(e, ChatEventKind::ToolEnd { id, .. } if id == "call1")).expect("the spawn ends");
+        let kid_text = evs.iter().position(|e| matches!(e, ChatEventKind::TextDelta { .. })).unwrap();
+        assert!(end > kid_text, "{evs:?}");
     }
 
     /// Shapes from `codex app-server generate-ts` (ToolRequestUserInputParams /
@@ -1382,6 +1511,56 @@ mod tests {
         c.respond_permission("13", false, false, &mut o).unwrap();
         let w: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
         assert_eq!(w["result"], json!({"answers": {}}));
+    }
+
+    /// A patch approval carries its diffs and every file it writes (absolute), from the fileChange item before it.
+    #[test]
+    fn patch_approvals_carry_their_changes() {
+        let mut c = Codex::new(&opts());
+        c.thread_id = Some("t1".into());
+        let mut o = Out::default();
+        c.on_line(r#"{"method":"item/started","params":{"threadId":"t1","turnId":"x","item":{"type":"fileChange","id":"fc1","status":"inProgress","changes":[{"path":"/work/a.txt","kind":{"type":"update","move_path":"/elsewhere/b.txt"},"diff":"@@ -1 +1 @@\n-owls\n+larks\n"},{"path":"/work/new.txt","kind":{"type":"add"},"diff":"hi\n"}]}}}"#, &mut o);
+        let ChatEventKind::ToolStart { input, .. } = &o.events[0] else { panic!("{:?}", o.events) };
+        assert_eq!(input["changes"][0], json!({"path": "/work/a.txt", "kind": "update", "move_path": "/elsewhere/b.txt", "diff": "@@ -1 +1 @@\n-owls\n+larks\n"}));
+        let mut o = Out::default();
+        c.on_line(r#"{"id":5,"method":"item/fileChange/requestApproval","params":{"threadId":"t1","turnId":"x","itemId":"fc1","startedAtMs":1,"reason":"needs write access","grantRoot":null}}"#, &mut o);
+        let ChatEventKind::PermissionRequest { tool, summary, input, remember, .. } = &o.events[0] else { panic!("{:?}", o.events) };
+        assert_eq!(tool, "apply_patch");
+        assert_eq!(summary, "apply_patch · /work/a.txt, /work/new.txt");
+        assert_eq!(input["files"], json!(["/work/a.txt", "/elsewhere/b.txt", "/work/new.txt"]));
+        assert_eq!(input["changes"][1]["kind"], "add");
+        assert_eq!(input["reason"], "needs write access");
+        assert_eq!(remember.len(), 1);
+        // The legacy request names its files itself.
+        let mut o = Out::default();
+        c.on_line(r#"{"id":6,"method":"applyPatchApproval","params":{"conversationId":"t1","callId":"c","fileChanges":{"/work/c.txt":{"type":"delete","content":"bye\n"}},"reason":null,"grantRoot":null}}"#, &mut o);
+        let ChatEventKind::PermissionRequest { input, .. } = &o.events[0] else { panic!("{:?}", o.events) };
+        assert_eq!(input["changes"], json!([{"path": "/work/c.txt", "kind": "delete", "diff": "bye\n"}]));
+        // A managed-network prompt names the host.
+        let mut o = Out::default();
+        c.on_line(r#"{"id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":"t1","turnId":"x","itemId":"e","startedAtMs":1,"environmentId":null,"command":"/bin/zsh -lc 'curl https://example.com'","networkApprovalContext":{"host":"example.com","protocol":"https"}}}"#, &mut o);
+        let ChatEventKind::PermissionRequest { input, .. } = &o.events[0] else { panic!("{:?}", o.events) };
+        assert_eq!((input["command"].as_str(), input["network_host"].as_str()), (Some("curl https://example.com"), Some("example.com")));
+    }
+
+    #[test]
+    fn on_failure_asks_on_request() {
+        let mut c = Codex::new(&ChatOptions { permission_mode: Some("on-failure".into()), ..opts() });
+        let mut o = Out::default();
+        c.start_thread(&mut o);
+        let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
+        assert_eq!(w["params"]["approvalPolicy"], "on-request");
+        c.set_permission_mode("on-failure", &mut o).unwrap();
+        assert_eq!(c.next_approval.as_deref(), Some("on-request"));
+    }
+
+    #[test]
+    fn subagent_activity_is_not_a_step() {
+        let mut c = Codex::new(&opts());
+        c.thread_id = Some("t1".into());
+        let mut o = Out::default();
+        c.on_line(r#"{"method":"item/completed","params":{"threadId":"t1","turnId":"x","item":{"type":"subAgentActivity","id":"s1","kind":"started","agentThreadId":"kid","agentPath":"/root/kid"}}}"#, &mut o);
+        assert!(o.events.is_empty(), "{:?}", o.events);
     }
 
     #[test]

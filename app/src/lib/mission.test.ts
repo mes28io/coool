@@ -107,6 +107,25 @@ test("changesFromActivity: edits coalesce per turn, failed steps and reads are s
   assert.deepEqual(again.map((r) => r.id), rows.map((r) => r.id));
 });
 
+test("changesFromActivity: a Codex rollout's patch line gives one row per file it writes", () => {
+  const root = "/Users/you/code/app";
+  const act: Activity[] = [
+    { ts: at(15, 0), kind: "prompt", text: "Rename it" },
+    tool("apply_patch · ~/code/app/src/a.rs, ~/code/app/src/b.rs", at(15, 1)),
+    tool("exec_command · git commit -am Rename", at(15, 2)),
+  ];
+  const rows = changesFromActivity("codex:t1", act, root, "main", NOW);
+  assert.deepEqual(
+    rows.map((r) => [r.action, r.object]),
+    [
+      ["Committed", "Rename"],
+      ["Edited", "src/b.rs"],
+      ["Edited", "src/a.rs"],
+    ],
+  );
+  assert.equal(new Set(rows.map((r) => r.id)).size, rows.length);
+});
+
 test("changesFromChat: line counts, before/after, patches, and only successful calls", () => {
   const root = "/Users/you/code/app";
   const t = (id: string, name: string, input: unknown, ok: boolean | null = true, output = "ok"): ItemLike => ({ kind: "tool", id, name, summary: "", input, ts: NOW - 10_000, endTs: NOW - 9_000, ok, output, parent: null });

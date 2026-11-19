@@ -21,6 +21,8 @@
 //   - a file write (Write, Edit, MultiEdit, NotebookEdit, Codex's apply_patch) outside the chat's folder; the system
 //     temp folders are not counted (agents put scratch files there all the time)
 
+import { patchFiles } from "./patch.ts";
+
 export interface Risk {
   /** Always true: there is no "safe" result, only a risk or null. */
   risky: true;
@@ -298,6 +300,8 @@ export function writePaths(tool: string, input: unknown): string[] | null {
   const out: string[] = [];
   for (const k of ["file_path", "notebook_path", "path"]) if (typeof i[k] === "string" && i[k]) out.push(i[k] as string);
   if (Array.isArray(i.files)) for (const f of i.files) if (typeof f === "string") out.push(f);
+  // Codex's patch (lib/patch.ts): each file, and where a move puts it.
+  for (const f of patchFiles(input) ?? []) out.push(f.path, ...(f.movePath ? [f.movePath] : []));
   return out;
 }
 

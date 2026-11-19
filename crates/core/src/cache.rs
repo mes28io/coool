@@ -28,7 +28,8 @@ use std::time::{Duration, SystemTime};
 /// v3: activity entries keep their full text (`Activity::full`, `shortened`).
 /// v9: parse state records `last_event` (newest real conversation event).
 /// v11: the current turn's start (`Tokens::turn_start`, Claude state `turn_open` / `turn_start`).
-pub const VERSION: u32 = 11;
+/// v12: Codex code-mode `exec` calls are read as the tool they call; apply_patch lines name their files.
+pub const VERSION: u32 = 12;
 /// Bytes fingerprinted at the start and just before the saved offset.
 const PRINT: u64 = 4096;
 /// Total size the cache is kept under.

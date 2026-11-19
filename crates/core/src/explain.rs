@@ -268,6 +268,32 @@ fn payload(input: &Value, cwd: &str, home: Option<&str>) -> String {
         }
         return p;
     }
+    // A Codex chat's patch request: `changes: [{path, kind, move_path?, diff}]` (chat/codex.rs `patch_input`).
+    if let Some(changes) = input.get("changes").and_then(|v| v.as_array()).filter(|a| !a.is_empty()) {
+        const FILES: usize = 6;
+        for ch in changes.iter().take(FILES) {
+            let g = |k: &str| ch.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            let kind = match g("kind") {
+                "add" => "creates",
+                "delete" => "deletes",
+                _ => "changes",
+            };
+            p.push_str(&format!("file it {kind}: {}\n", c(g("path"), 300)));
+            if !g("move_path").is_empty() {
+                p.push_str(&format!("and moves it to: {}\n", c(g("move_path"), 300)));
+            }
+            let diff = g("diff");
+            if credentials_like(g("path")) || credentials_like(g("move_path")) {
+                p.push_str(&format!("diff: [not sent: a credentials file, {} lines]\n", diff.lines().count()));
+            } else if !diff.is_empty() {
+                p.push_str(&format!("{}:\n{}\n", if kind == "changes" { "diff" } else { "content" }, c(diff, FIELD_MAX)));
+            }
+        }
+        if changes.len() > FILES {
+            p.push_str(&format!("and {} more files\n", changes.len() - FILES));
+        }
+        return cap(&p, PAYLOAD_MAX);
+    }
     if !s("patch").is_empty() || !s("input").is_empty() {
         // Codex's apply_patch: the patch is the payload.
         return format!("patch:\n{}\n", c(if s("patch").is_empty() { s("input") } else { s("patch") }, PAYLOAD_MAX));
@@ -592,6 +618,23 @@ mod tests {
         for f in ["src/env.ts", "README.md", "keyboard.rs", "src/secretary.ts"] {
             assert!(!credentials_like(f), "{f}");
         }
+    }
+
+    #[test]
+    fn a_codex_patch_sends_its_diffs_redacted() {
+        let changes = json!([
+            { "path": "/Users/dev/code/app/src/a.rs", "kind": "update", "diff": "@@ -1 +1 @@\n-let k = 1;\n+let api_key = \"QWERTY123456\";\n" },
+            { "path": "/Users/dev/code/app/.env", "kind": "add", "diff": "DB=x\nSTRIPE=sk_live_abcdefghijklmnop1234\n" },
+            { "path": "/Users/dev/notes.md", "kind": "update", "move_path": "/Users/dev/old.md", "diff": "" },
+        ]);
+        let r = Request { tool: "apply_patch".into(), input: json!({ "files": [], "changes": changes, "reason": null }), cwd: "/Users/dev/code/app".into(), ..Default::default() };
+        let p = build_prompt(&r, Some("/Users/dev"));
+        assert!(p.contains("file it changes: ./src/a.rs\ndiff:\n@@ -1 +1 @@\n-let k = 1;"), "{p}");
+        assert!(p.contains("api_key = [redacted]"), "{p}");
+        assert!(!p.contains("QWERTY123456"), "{p}");
+        assert!(p.contains("file it creates: ./.env\ndiff: [not sent: a credentials file, 2 lines]"), "{p}");
+        assert!(!p.contains("DB=x") && !p.contains("sk_live"), "{p}");
+        assert!(p.contains("file it changes: ~/notes.md\nand moves it to: ~/old.md"), "{p}");
     }
 
     #[test]

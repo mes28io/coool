@@ -4,6 +4,7 @@
 
 import type { ChatItem } from "./chat";
 import type { Activity, Session } from "./types";
+import { patchFiles } from "./patch.ts";
 
 type Tool = Extract<ChatItem, { kind: "tool" }>;
 
@@ -15,7 +16,8 @@ export function permKind(tool: string, input: unknown): NeedKind {
   const i = (input ?? {}) as Record<string, unknown>;
   if (i.coool_device && typeof i.coool_device === "object") return "device";
   if (tool === "ExitPlanMode") return "plan";
-  if (/^(edit|multiedit)$/i.test(tool)) return "edit";
+  // Codex's apply_patch (lib/patch.ts): shown as diffs, like an Edit.
+  if (/^(edit|multiedit)$/i.test(tool) || patchFiles(input)) return "edit";
   if (/^(write|notebookedit)$/i.test(tool) || (typeof i.file_path === "string" && typeof i.content === "string")) return "write";
   if (typeof i.command === "string" || /^(bash|shell|exec|exec_command|local_shell)$/i.test(tool)) return "command";
   if (typeof i.url === "string") return "fetch";

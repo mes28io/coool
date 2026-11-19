@@ -361,7 +361,8 @@ impl CodexSource {
             let parent = parent.unwrap_or_default();
             match out.iter_mut().find(|(s, _, _)| s.id == parent) {
                 Some((p, _, _)) => {
-                    let finished = child.status == Status::Ended;
+                    // A Codex subagent idles between messages (its thread stays open): only a turn in progress is running.
+                    let finished = child.status != Status::Busy;
                     p.agents.push(Agent {
                         id: child.id.clone(),
                         kind: if name.is_empty() { "subagent".into() } else { name },
@@ -550,17 +551,205 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
                 .as_str()
                 .and_then(|a| serde_json::from_str(a).ok())
                 .unwrap_or_else(|| p["input"].clone());
-            let sum = tool_summary(name, &input);
+            let (name, input) = code_mode_call(name, &input).unwrap_or((name.to_string(), input));
+            let sum = codex_tool_summary(&name, &input);
             push_activity(&mut s.activity, Activity::line(ts, ActivityKind::Tool, sum.clone()));
             s.current = Some(sum);
+        }
+        // A step that failed or was denied: an error row right after it, as Claude's `is_error` results give (the
+        // ledger then leaves the step out). Code mode says "Script failed"; a plain call's output carries the reason.
+        (Some("response_item"), Some("function_call_output")) | (Some("response_item"), Some("custom_tool_call_output")) => {
+            let text = match &p["output"] {
+                Value::String(t) => t.clone(),
+                o => o.as_array().map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default(),
+            };
+            let failed = text.starts_with("Script failed") || ["rejected by user", "declined by user", "patch rejected"].iter().any(|k| text.contains(k));
+            if failed {
+                let why = text.split("Script error:").nth(1).unwrap_or(&text).trim().to_string();
+                let mut a = Activity::message(ts, ActivityKind::Error, &why, 200);
+                a.step = true;
+                push_activity(&mut s.activity, a);
+            }
         }
         _ => {}
     }
 }
 
+/// A rollout tool call's "name · detail" line: an apply_patch names the files it writes (home-shortened, ", "
+/// between them), not the patch's first line.
+fn codex_tool_summary(name: &str, input: &Value) -> String {
+    if name == "apply_patch" {
+        let text = input.as_str().or(input["input"].as_str()).or(input["patch"].as_str()).unwrap_or("");
+        let files = patch_paths(text);
+        if !files.is_empty() {
+            return format!("apply_patch · {}", one_line(&files.iter().map(|f| home_short(f)).collect::<Vec<_>>().join(", "), 140));
+        }
+    }
+    tool_summary(name, input)
+}
+
+/// The files an apply_patch text writes: `*** Add File: x`, `*** Update File: x`, `*** Delete File: x`, `*** Move to: x`.
+pub(crate) fn patch_paths(patch: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in patch.lines() {
+        let p = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "].iter().find_map(|k| l.strip_prefix(k)).map(str::trim);
+        if let Some(p) = p.filter(|p| !p.is_empty() && !out.iter().any(|x| x == p)) {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+/// Codex's code mode (0.145, on by default) logs every tool call as one `exec` custom tool whose input is a short
+/// script: `const r = await tools.exec_command({cmd:"ls",workdir:"/w"}); text(r.output);`. The first `tools.<name>(…)`
+/// call in it is what the step does: its name (`multi_agent_v1__spawn_agent` -> `spawn_agent`) and its argument read
+/// as JSON (an object literal with bare keys, or a string such as the patch). None for anything else (a plain `exec`
+/// with a command, a script that calls no tool).
+pub(crate) fn code_mode_call(name: &str, input: &Value) -> Option<(String, Value)> {
+    if name != "exec" {
+        return None;
+    }
+    let code = input.as_str()?;
+    let at = code.find("tools.")?;
+    let rest = &code[at + 6..];
+    let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))?;
+    let tool = &rest[..end];
+    let after = rest[end..].trim_start();
+    if tool.is_empty() || !after.starts_with('(') {
+        return None;
+    }
+    let args = balanced(&after[1..])?;
+    let tool = match tool.rfind("__") {
+        Some(i) if tool.starts_with("multi_agent") => &tool[i + 2..],
+        _ => tool,
+    };
+    let args = args.trim();
+    let value = if args.is_empty() { Value::Null } else { serde_json::from_str(&js_to_json(args)).unwrap_or_else(|_| Value::String(args.to_string())) };
+    Some((tool.to_string(), value))
+}
+
+/// The text up to the `)` that closes an already opened `(`, skipping quoted strings; None when it never closes.
+fn balanced(s: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut esc = false;
+    for (i, c) in s.char_indices() {
+        if let Some(q) = quote {
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' | '`' => quote = Some(c),
+            '(' | '[' | '{' => depth += 1,
+            ')' if depth == 0 => return Some(&s[..i]),
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A JavaScript literal (bare keys, '…' / `…` strings, trailing commas) as JSON text; anything else is left alone
+/// (the caller falls back to the raw text when it doesn't parse).
+fn js_to_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    let cs: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    let last_sig = |out: &String| out.chars().rev().find(|c| !c.is_whitespace());
+    while i < cs.len() {
+        let c = cs[i];
+        if c == '"' || c == '\'' || c == '`' {
+            let mut text = String::new();
+            i += 1;
+            while i < cs.len() && cs[i] != c {
+                if cs[i] == '\\' && i + 1 < cs.len() {
+                    i += 1;
+                    text.push(match cs[i] {
+                        'n' => '\n',
+                        't' => '\t',
+                        'r' => '\r',
+                        o => o,
+                    });
+                } else {
+                    text.push(cs[i]);
+                }
+                i += 1;
+            }
+            i += 1;
+            out.push_str(&serde_json::to_string(&text).unwrap_or_default());
+            continue;
+        }
+        if (c.is_ascii_alphabetic() || c == '_' || c == '$') && matches!(last_sig(&out), Some('{') | Some(',')) {
+            let start = i;
+            while i < cs.len() && (cs[i].is_ascii_alphanumeric() || cs[i] == '_' || cs[i] == '$') {
+                i += 1;
+            }
+            let word: String = cs[start..i].iter().collect();
+            let mut j = i;
+            while j < cs.len() && cs[j].is_whitespace() {
+                j += 1;
+            }
+            if j < cs.len() && cs[j] == ':' {
+                out.push_str(&serde_json::to_string(&word).unwrap_or_default());
+            } else {
+                out.push_str(&word);
+            }
+            continue;
+        }
+        if (c == '}' || c == ']') && last_sig(&out) == Some(',') {
+            let cut = out.trim_end().len() - 1;
+            out.truncate(cut);
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shapes from a real codex-cli 0.145 rollout (code mode on, its default).
+    #[test]
+    fn code_mode_exec_reads_as_the_tool_it_calls() {
+        let call = |s: &str| code_mode_call("exec", &Value::String(s.into()));
+        let (n, a) = call("const r = await tools.exec_command({cmd:\"ls -la\",workdir:\"/w\",yield_time_ms:10000,max_output_tokens:2000}); text(r.output);\n").unwrap();
+        assert_eq!((n.as_str(), a["cmd"].as_str(), a["yield_time_ms"].as_u64()), ("exec_command", Some("ls -la"), Some(10000)));
+        let (n, a) = call("const r = await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /w/notes.md\\n@@\\n-owls\\n+larks\\n*** End Patch\"); text(r);\n").unwrap();
+        assert_eq!(n, "apply_patch");
+        assert_eq!(patch_paths(a.as_str().unwrap()), vec!["/w/notes.md"]);
+        let (n, a) = call("const r = await tools.multi_agent_v1__spawn_agent({message:'Run `echo kid`, then report.',fork_context:false,}); text(r);").unwrap();
+        assert_eq!((n.as_str(), a["message"].as_str(), a["fork_context"].as_bool()), ("spawn_agent", Some("Run `echo kid`, then report."), Some(false)));
+        let (n, a) = call("const r = await tools.multi_agent_v1__wait_agent({targets:[\"019\"],timeout_ms:3600000}); text(r);").unwrap();
+        assert_eq!((n.as_str(), a["targets"][0].as_str()), ("wait_agent", Some("019")));
+        // A script that calls no tool, an unparsable argument, another tool name.
+        assert!(call("const xs = ALL_TOOLS.filter(x => /agent/.test(x.name)); text(xs);").is_none());
+        assert_eq!(call("await tools.view_image({path: p})").unwrap().1, Value::String("{path: p}".into()));
+        assert!(code_mode_call("exec_command", &Value::String("tools.x()".into())).is_none());
+    }
+
+    #[test]
+    fn code_mode_steps_read_like_tool_calls() {
+        let (_, s) = run(concat!(
+            r#"{"timestamp":"2026-11-19T13:18:40Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"const r = await tools.exec_command({cmd:\"cargo test\",workdir:\"/w\"}); text(r.output);\n"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-11-19T13:18:41Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c2","input":"const r = await tools.apply_patch(\"*** Begin Patch\\n*** Add File: /w/a.txt\\n+hi\\n*** Update File: /w/b.txt\\n@@\\n-x\\n+y\\n*** End Patch\"); text(r);\n"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-11-19T13:18:41Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c2","output":[{"type":"input_text","text":"Script failed\nWall time 1.9 seconds\nOutput:\n"},{"type":"input_text","text":"Script error:\npatch rejected by user"}]}}"#,
+            "\n",
+            r#"{"timestamp":"2026-11-19T13:18:42Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"c3","input":"*** Begin Patch\n*** Delete File: /w/c.txt\n*** End Patch"}}"#,
+            "\n",
+        ));
+        let lines: Vec<(&str, bool)> = s.activity.iter().map(|a| (a.text.as_str(), a.step)).collect();
+        assert_eq!(lines, vec![("exec_command · cargo test", false), ("apply_patch · /w/a.txt, /w/b.txt", false), ("patch rejected by user", true), ("apply_patch · /w/c.txt", false)]);
+    }
 
     fn run(jsonl: &str) -> (ParseState, Fields) {
         let mut st = ParseState::default();

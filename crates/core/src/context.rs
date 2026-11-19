@@ -777,7 +777,11 @@ impl Builder {
                     Value::Null => p.get("input").or(p.get("action")).cloned().unwrap_or(Value::Null),
                     a => a.clone(),
                 };
-                let k = classify(name, &args);
+                // Code mode: the `exec` script's tool call is what the step does (a patch goes to its file).
+                let k = match crate::codex::code_mode_call(name, &args) {
+                    Some((n, a)) => classify(&n, &a),
+                    None => classify(name, &args),
+                };
                 self.bump(&k);
                 if let Some(id) = p["call_id"].as_str() {
                     self.calls.insert(id.to_string(), k.clone());
@@ -985,7 +989,7 @@ pub(crate) fn classify(name: &str, input: &Value) -> Key {
         "Grep" | "Glob" | "LS" | "grep" | "glob" | "find" | "list_dir" => key(PartKind::Tool, "Searches"),
         "ToolSearch" => key(PartKind::Tools, "Tool definitions"),
         "WebFetch" | "WebSearch" | "web_search" | "web_fetch" => key(PartKind::Tool, "Web"),
-        "Agent" | "Task" | "spawn_agent" | "wait_agent" | "followup_task" | "send_message" | "send_input" | "wait" => key(PartKind::Agent, "Sub-agents"),
+        "Agent" | "Task" | "spawn_agent" | "wait_agent" | "followup_task" | "send_message" | "send_input" | "wait" | "close_agent" | "resume_agent" => key(PartKind::Agent, "Sub-agents"),
         "Skill" => key(PartKind::Skills, "Skills"),
         "view_image" => key(PartKind::Image, "Images"),
         "Bash" | "shell" | "exec_command" | "exec" | "local_shell" | "container.exec" | "unified_exec" => {

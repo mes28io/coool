@@ -34,7 +34,7 @@ const READ = /^(read|grep|glob|ls|notebookread|toolsearch|view_image|read_file|v
 const EDIT = /^(edit|multiedit|write|notebookedit|apply_patch|str_replace_based_edit_tool)$/i;
 const SHELL = /^(bash|bashoutput|killshell|killbash|shell|exec_command|write_stdin|local_shell|unified_exec|monitor)$/i;
 const WEB = /^(webfetch|websearch|web_search|web_fetch|fetch)$/i;
-const AGENT = /^(task|agent|subagent|spawn_agent|wait_agent|send_message|followup_task)$/i;
+const AGENT = /^(task|agent|subagent|spawn_agent|wait_agent|send_message|send_input|followup_task|resume_agent|close_agent)$/i;
 
 export function toolKind(name: string): TurnKind {
   const mcp = parseMcp(name);

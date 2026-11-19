@@ -439,20 +439,27 @@ export function changesFromActivity(session: string, activity: Activity[], root:
     const ts = hmsToMs(a.ts, now) ?? now;
     const id = `${session}|${a.ts}|${a.text}`;
     const { name, detail } = split(a.text);
-    let e: Effect | null = null;
-    if (a.artifact) e = publishRow(a.artifact);
+    const effects: Effect[] = [];
+    if (a.artifact) effects.push(publishRow(a.artifact));
     else if (FILE_TOOL.test(name) && detail) {
       const create = /^write$/i.test(name);
-      const object = projectPath(detail, root);
-      e = object === null ? null : { kind: create ? "create" : "edit", action: create ? "Wrote" : "Edited", object, ...inTree(detail, root) };
-    } else if (SHELL_TOOL.test(name) && detail) e = sideEffect(detail, branch, root);
-    else if (isPilotTool(name)) e = { kind: "pilot", action: "Drove the device", object: clip(detail || "a pilot run", 64) };
-    if (!e) continue;
-    const row: Change = { id, session, ...e, times: 1, ts, step: `a:${i}` };
-    // Ids must be unique even for two identical steps in the same second.
-    if (rows.some((r) => r.id === id)) row.id = `${id}#${i}`;
-    turnOf.set(row.id, turn);
-    rows.push(row);
+      // A Codex patch's line names each file it writes ("apply_patch · ~/w/a.rs, ~/w/b.rs", crates/core/src/codex.rs).
+      for (const f of /^(apply_patch|patch)$/i.test(name) ? detail.split(", ") : [detail]) {
+        const object = projectPath(f, root);
+        if (object !== null) effects.push({ kind: create ? "create" : "edit", action: create ? "Wrote" : "Edited", object, ...inTree(f, root) });
+      }
+    } else if (SHELL_TOOL.test(name) && detail) {
+      const e = sideEffect(detail, branch, root);
+      if (e) effects.push(e);
+    } else if (isPilotTool(name)) effects.push({ kind: "pilot", action: "Drove the device", object: clip(detail || "a pilot run", 64) });
+    effects.forEach((e, k) => {
+      const base = k ? `${id}|${k}` : id;
+      const row: Change = { id: base, session, ...e, times: 1, ts, step: `a:${i}` };
+      // Ids must be unique even for two identical steps in the same second.
+      if (rows.some((r) => r.id === base)) row.id = `${base}#${i}`;
+      turnOf.set(row.id, turn);
+      rows.push(row);
+    });
   }
   return coalesce(rows, turnOf).reverse();
 }
