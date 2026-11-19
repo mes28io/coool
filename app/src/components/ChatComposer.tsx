@@ -44,6 +44,9 @@ const nativeFor = (name: string, provider: string) => {
 };
 
 /** Permission modes per provider. Names are the CLI's own, passed through untouched. */
+/** Modes in which the CLI stops to ask the person (a waiting agent does not hold a lid-closed Mac awake). */
+const ASKS = new Set(["default", "acceptEdits", "plan", "untrusted", "on-request"]);
+
 export const PERMISSION_MODES: Record<string, { id: string; label: string; description: string }[]> = {
   claude: [
     { id: "default", label: "Ask", description: "Ask before edits and commands" },
@@ -298,6 +301,15 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const model = pendingModel ?? chat.model;
   const modes = PERMISSION_MODES[chat.provider] ?? [];
   const mode = modes.find((m) => m.id === chat.permissionMode);
+  // "Keep working with the lid closed" is on (Settings > General): the mode menu says which modes pause such a run.
+  const [lidOn, setLidOn] = useState(false);
+  useEffect(() => {
+    if (pop !== "mode") return;
+    void api()
+      .lidStatus()
+      .then((l) => setLidOn(!!l?.enabled))
+      .catch(() => setLidOn(false));
+  }, [pop]);
   const seenMode = useRef<string | null>(null);
   useEffect(() => {
     if (seenMode.current === null) seenMode.current = chat.permissionMode;
@@ -445,6 +457,11 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                 <Popover open={pop === "mode"} onClose={() => setPop(null)} side="top" width={300}>
                   <div className="p-1">
                     <div className="px-2.5 pb-1 pt-1.5 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Permission mode</div>
+                    {lidOn && ASKS.has(chat.permissionMode ?? "default") && (
+                      <div className="mx-1.5 mb-1 rounded-[8px] bg-[color-mix(in_oklab,var(--busy)_12%,transparent)] px-2 py-1.5 text-small leading-[17px] text-busy-text" data-lid-mode-hint>
+                        Lid closed: this mode stops to ask, and a waiting agent lets the Mac sleep. For an unattended run, pick a mode that doesn’t ask.
+                      </div>
+                    )}
                     {modes.map((m) => (
                       <button
                         key={m.id}

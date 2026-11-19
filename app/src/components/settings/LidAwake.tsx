@@ -68,7 +68,7 @@ export function LidAwakeRow() {
     <Row
       attr="lid-awake"
       label="Keep working with the lid closed"
-      desc="Agents keep running when you close the lid. Normal sleep comes back as soon as they stop, wait on you, or a limit below is reached."
+      desc="Agents keep running when you close the lid. Normal sleep comes back as soon as they stop, wait on you (a permission prompt pauses the run), or a limit below is reached."
       k="lid closed clamshell sleep awake battery helper pmset disablesleep amphetamine bag heat"
       control={<Switch label="Keep working with the lid closed" on={p.enabled} disabled={off} onChange={(v) => save({ enabled: v })} />}
     >
@@ -145,6 +145,17 @@ export function LidAwakeRow() {
             </div>
             {p.max_hours === 0 && <Note tone="warn">No limit: a stuck agent can keep a closed Mac awake until the battery or the heat limit stops it.</Note>}
           </div>
+
+          {/* The trap of an unattended run: the hold ends when the last working agent stops to ask. */}
+          <Note tone="warn" data-lid-ask-note>
+            <span className="flex items-start gap-2">
+              <IAlert size={13} className="mt-[2px] shrink-0 text-busy-text" />
+              <span>
+                An agent that stops to ask you something (a permission or a question) no longer counts as working. When every agent is waiting, coool lets the Mac sleep, and nothing more happens until you open the lid.
+                Before you close it on a long task, pick a permission mode that doesn’t stop to ask, or allow what the task needs first.
+              </span>
+            </span>
+          </Note>
 
           <Note tone="warn">
             <span className="flex items-start gap-2">
