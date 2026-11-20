@@ -735,8 +735,11 @@ impl Engine {
             self.reply(relay, device_id, &env.id, t, Err("rate_limited".into()), now);
             return false;
         }
-        let session = match self.known_chat(host, b.get("session").and_then(Value::as_str)) {
+        let raw = b.get("session").and_then(Value::as_str).unwrap_or("");
+        let session = match self.known_chat(host, Some(raw)) {
             Ok(s) => s,
+            // A chat started a moment ago is `chat:<n>` until the Mac lists it; the app checks it is one it runs.
+            Err(_) if raw.strip_prefix("chat:").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) => raw.to_string(),
             Err(e) => {
                 self.reply(relay, device_id, &env.id, t, Err(e), now);
                 return false;

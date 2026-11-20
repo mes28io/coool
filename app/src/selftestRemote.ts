@@ -6,10 +6,14 @@
 //
 // 1. Settings > Remote: on, Pair an iPhone shows a QR code; the phone claims it; the confirm shows the phone's
 //    code; Pair. 2. The phone's snapshot holds only the test's own sessions and the invented ones (checked on both
-//    sides: never a title of the person's). 3. A Haiku chat in Ask mode asks to run a command; the phone allows it
-//    once; the command runs and the chat says "Allowed Bash from <phone>". 4. The phone sends a message (a long
-//    count) and stops the chat mid-turn. 5. The phone starts a chat in the test's folder while the default mode
-//    here is Bypass: it starts in the asking mode. 6. Settings > Remote: Remove; the phone is refused.
+//    sides: never a title of the person's). 3. A Haiku chat in Ask mode writes a file and runs a command; the
+//    phone, watching the chat live, sees the write as a diff and allows both once; the chat says "Allowed Write /
+//    Bash from <phone>". 3b. (minor 1, with COOOL_SELFTEST_SITE) the chat's Browser panel opens a local invented
+//    page (no model); the phone watches it as pictures. 4. The phone sends a message (a long count) and stops the
+//    chat mid-turn. 5. The phone asks for a chat in Bypass (refused), then starts one in the test's folder with a
+//    model and mode it chose (Haiku, acceptEdits) and an invented picture; the agent describes the picture.
+//    With an older phone (no `minor`), the start has no model or mode: the Bypass default here gives way to the
+//    asking mode. 6. Settings > Remote: Remove; the phone is refused.
 //
 // Three short Haiku turns, nothing else reaches a model.
 
@@ -53,11 +57,16 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
   return {
     async remote(ctx) {
       const dir = ctx.cfg.dir;
+      const site = (ctx.cfg as { site?: string | null }).site ?? null;
+      // Whether the phone speaks minor 1 (it says so in its folder as it starts); an older phone writes nothing.
+      let minor = 0;
       let deviceId = "";
       let deviceName = "";
       let chatId = -1;
       // A remote start must not take the default mode when it is Bypass (rules::start_mode).
-      await h.invoke("remote_set_defaults", { defaults: { claude: { model: "haiku", mode: "bypassPermissions" }, codex: { model: null, mode: "danger-full-access" } } });
+      await h.invoke("remote_set_defaults", {
+        defaults: { claude: { model: "haiku", mode: "bypassPermissions" }, codex: { model: null, mode: "danger-full-access" }, models: { claude: [{ id: "haiku", label: "Haiku (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }], codex: [] } },
+      });
 
       await h.step("remote: turned on in Settings, connected to the relay", async () => {
         useStore.getState().openSettings("remote");
@@ -101,6 +110,7 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
 
       await h.step("remote: the phone's snapshot holds only this test's sessions and invented ones", async () => {
         const snap = JSON.parse(await phone("remote-phone-snapshot.txt")) as { sessions: { id: string; title: string; project: string }[] };
+        minor = Number((await read("remote-phone-minor.txt"))?.trim() ?? "0") || 0;
         const base = dir.split("/").filter(Boolean).pop()!;
         const own = new Set([base, "invented-project"]);
         const foreign = snap.sessions.filter((s) => !own.has(s.project));
@@ -115,20 +125,39 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
         return `${snap.sessions.length} sessions: ${snap.sessions.map((s) => s.title).join(" | ").slice(0, 160)}`;
       });
 
-      await h.step("remote: a Haiku chat's permission request is allowed once from the phone, and the chat says so", async () => {
+      await h.step("remote: a Haiku chat writes a file and runs a command; the phone watches it live, sees the diff, allows both once", async () => {
         chatId = await h.startIn(dir, "default");
         await write("remote-app-chat.txt", String(chatId));
-        await h.send(chatId, "Run exactly this one Bash command and nothing else: echo coool-remote-ok > remote-ok.txt . Then reply with one word: done");
-        await h.waitFor("the pending command", () => chat(chatId)?.pendingPermission, 90_000);
-        const answered = await phone("remote-phone-answered.txt");
-        await h.waitFor("the turn to end", () => (chat(chatId)?.items ?? []).some((i) => i.kind === "turn"), 120_000);
-        const tool = ((chat(chatId)?.items ?? []).filter((i) => i.kind === "tool") as Tool[]).find((t) => t.name === "Bash");
-        if (!tool || tool.ok === false || !/coool-remote-ok/.test(JSON.stringify(tool))) throw h.fail(`the command didn't run: ${tool?.output.slice(0, 160)}`);
-        const words = `Allowed Bash from ${deviceName}`;
-        await h.waitFor(`"${words}" in the chat`, () => notices(chatId).includes(words), 10_000);
+        await h.send(
+          chatId,
+          "Do exactly these two steps and nothing else. 1. Use the Write tool to create the file notes.txt containing exactly this one line: hello from coool remote . 2. Run exactly this one Bash command: echo coool-remote-ok > remote-ok.txt . Then reply with one word: done",
+        );
+        await h.waitFor("the pending request", () => chat(chatId)?.pendingPermission, 90_000);
+        const answered = await phone("remote-phone-answered.txt", 240_000);
+        await h.waitFor("the turn to end", () => (chat(chatId)?.items ?? []).some((i) => i.kind === "turn"), 180_000);
+        const tools = (chat(chatId)?.items ?? []).filter((i) => i.kind === "tool") as Tool[];
+        const bash = tools.find((t) => t.name === "Bash");
+        if (!bash || bash.ok === false || !/coool-remote-ok/.test(JSON.stringify(bash))) throw h.fail(`the command didn't run: ${bash?.output.slice(0, 160)}`);
+        const wrote = tools.find((t) => t.name === "Write");
+        if (!wrote || wrote.ok === false) throw h.fail(`the file wasn't written: ${tools.map((t) => t.name).join(", ")}`);
+        for (const w of [`Allowed Write from ${deviceName}`, `Allowed Bash from ${deviceName}`]) await h.waitFor(`"${w}" in the chat`, () => notices(chatId).includes(w), 10_000);
         await h.shot("remote-allowed");
-        return `${answered.trim()}; ran: ${tool.summary ?? "Bash"}`;
+        const live = minor ? await phone("remote-phone-live.txt", 60_000) : "an older phone: no live view";
+        return `${answered.trim()}; ran: Write, ${bash.summary ?? "Bash"}; ${live.trim()}`;
       });
+
+      if (minor && site) {
+        await h.step("remote: the chat's Browser panel opens a local page; the phone watches it as pictures (view only)", async () => {
+          const r = (await h.invoke("selftest_browser_tool", { chat: chatId, name: "browser_navigate", args: { url: `${site}/remote.html` } })) as { type: string; text?: string }[];
+          const text = r.find((o) => o.type === "text")?.text ?? "";
+          if (!/Remote frame test/.test(text)) throw h.fail(`the page didn't open: ${text.slice(0, 160)}`);
+          await write("remote-app-browser.txt", "open");
+          const frames = await phone("remote-phone-frames.txt", 120_000);
+          const s = await status();
+          if (!s.actions.some((a) => a.kind === "watch" && /Browser panel/.test(a.detail))) throw h.fail("the watch isn't recorded");
+          return `${frames.trim()}; recorded: watched the Browser panel`;
+        });
+      }
 
       await h.step("remote: the phone sends a message, then stops the chat mid-turn", async () => {
         const stopped = await phone("remote-phone-stopped.txt", 180_000);
@@ -141,11 +170,12 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
         return stopped.trim();
       });
 
-      await h.step("remote: the phone starts a chat in this folder, in the asking mode (not the Bypass default)", async () => {
-        const started = JSON.parse(await phone("remote-phone-started.txt", 180_000)) as { session: string; mode: string };
+      await h.step(minor ? "remote: Bypass from the phone is refused; it starts a chat with the model and mode it chose (Haiku, acceptEdits) and a picture the agent describes" : "remote: the phone starts a chat in this folder, in the asking mode (not the Bypass default)", async () => {
+        const started = JSON.parse(await phone("remote-phone-started.txt", 240_000)) as { session: string; mode: string; model?: string; reply?: string };
         const id = Number(started.session.replace("chat:", ""));
         const c = await h.waitFor("the started chat", () => chat(id), 20_000);
-        if (started.mode !== "default") throw h.fail(`started in ${started.mode}`);
+        const want = minor ? "acceptEdits" : "default";
+        if (started.mode !== want) throw h.fail(`started in ${started.mode}`);
         const launch = (await h.invoke("selftest_chat_launch", { chat: id })) as { args: string[]; ps: string };
         const all = `${launch.args.join(" ")} ${launch.ps}`;
         // Every coool chat gets `--allow-dangerously-skip-permissions` (it only lets the person switch to Bypass from the
@@ -153,12 +183,22 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
         // Bypass itself: the mode, or the switch that starts in it.
         if (/bypassPermissions|(^|\s)--dangerously-skip-permissions/.test(all)) throw h.fail(`launched in bypass: ${all.slice(0, 200)}`);
         const mode = await h.waitFor("the chat's mode as its CLI reports it", () => chat(id)?.permissionMode, 60_000);
-        if (mode !== "default") throw h.fail(`the CLI reports mode ${mode}`);
+        if (mode !== want) throw h.fail(`the CLI reports mode ${mode}`);
         if (!c.cwd.endsWith(dir.split("/").pop()!)) throw h.fail(`started in ${c.cwd}`);
         await h.waitFor(`"Started from ${deviceName}"`, () => notices(id).includes(`Started from ${deviceName}`), 20_000);
         await h.waitFor("its turn to end", () => (chat(id)?.items ?? []).some((i) => i.kind === "turn"), 120_000);
         const refusals = await phone("remote-phone-refusals.txt");
-        return `chat ${id} in ${c.cwd.split("/").pop()} (${started.mode}); refused as expected: ${refusals.trim()}`;
+        if (!minor) return `chat ${id} in ${c.cwd.split("/").pop()} (${started.mode}); refused as expected: ${refusals.trim()}`;
+        if (!/--model\s+haiku/.test(launch.args.join(" "))) throw h.fail(`not started on haiku: ${launch.args.join(" ").slice(0, 200)}`);
+        const prompt = (chat(id)?.items ?? []).find((i) => i.kind === "prompt") as { attachments?: { kind: string; mime: string }[] } | undefined;
+        const img = prompt?.attachments?.find((a) => a.kind === "image");
+        if (!img) throw h.fail("the picture didn't arrive with the prompt");
+        const replies = (chat(id)?.items ?? []).filter((i) => i.kind === "text").map((i) => (i as { text?: string }).text ?? "").join(" ");
+        if (!/yellow|circle|blue|sun|ball|dot/i.test(replies)) throw h.fail(`the agent didn't describe the picture: ${replies.slice(0, 160)}`);
+        const s = await status();
+        if (!s.actions.some((a) => a.kind === "start" && !a.ok && /can't use that mode/.test(a.detail))) throw h.fail("the Bypass start isn't recorded as refused");
+        if (!s.actions.some((a) => a.kind === "upload" && a.ok)) throw h.fail("the picture isn't recorded");
+        return `chat ${id} (${started.mode}, ${started.model ?? "?"}) with a ${img.mime} picture; it said: ${replies.trim().slice(0, 80)}; refused as expected: ${refusals.trim()}`;
       });
 
       await h.step("remote: Remove in Settings; the phone is refused at the relay", async () => {

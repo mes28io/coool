@@ -8,6 +8,7 @@ import ConvexMobile
 import Foundation
 import Observation
 import RemoteProtocol
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -46,8 +47,25 @@ final class RemoteStore {
   /// A demo store (screenshots, previews): commands answer at once, nothing reaches a relay.
   var demo = false
 
+  // Minor 1 (docs/REMOTE.md "Minor 1"): what a newer Mac also sends.
+  /// Each watched chat's live items, by session.
+  var logs: [String: LiveLog] = [:]
+  var overview: Overview?
+  var options: StartOptions?
+  /// The Mac speaks minor 1 (it sent an overview, options or a live chat).
+  var macMinor = 0
+  /// Images of chats, by key, as they arrive; the newest device frame per session and panel.
+  var images: [String: UIImage] = [:]
+  var frames: [String: (image: UIImage, seq: Int, at: Date)] = [:]
+  var frameErrors: [String: String] = [:]
+  /// When each item key was first seen here (for the live view's entrance animation).
+  @ObservationIgnored private var imageJoin = ChunkJoin()
+  @ObservationIgnored private var askedImages: Set<String> = []
+  @ObservationIgnored private var uploadWaiters: [String: CheckedContinuation<CommandResult?, Never>] = [:]
+  @ObservationIgnored private var uploadOf: [String: String] = [:]
+
   @ObservationIgnored private var relay: RelayClient?
-  @ObservationIgnored private var link: Link?
+  @ObservationIgnored private var link: RemoteProtocol.Link?
   @ObservationIgnored private var sub: AnyCancellable?
   @ObservationIgnored private var waiters: [String: CheckedContinuation<CommandResult?, Never>] = [:]
   @ObservationIgnored private var results: [String: CommandResult] = [:]
@@ -59,7 +77,7 @@ final class RemoteStore {
   @ObservationIgnored private var pendingStarts: [String: (project: String, cli: Cli, at: Date)] = [:]
 
   init() {
-    if let m = Vault.load(), let l = try? Link(m, recvHighWater: Vault.recvHighWater, sendCounter: Vault.sendCounter) {
+    if let m = Vault.load(), let l = try? RemoteProtocol.Link(m, recvHighWater: Vault.recvHighWater, sendCounter: Vault.sendCounter) {
       mac = m
       link = l
       phase = .paired
@@ -160,7 +178,7 @@ final class RemoteStore {
 
   private func complete(_ paired: PairedMac, _ relay: RelayClient) {
     Vault.forget()
-    guard Vault.save(paired), let l = try? Link(paired) else {
+    guard Vault.save(paired), let l = try? RemoteProtocol.Link(paired) else {
       claimState = .failed("This iPhone couldn't store the pairing keys.")
       return
     }
@@ -201,6 +219,12 @@ final class RemoteStore {
     needs = []
     projects = []
     tails = [:]
+    logs = [:]
+    overview = nil
+    options = nil
+    macMinor = 0
+    images = [:]
+    frames = [:]
     unseen = []
     knownNeeds = []
     macLastSeen = nil
@@ -321,7 +345,28 @@ final class RemoteStore {
     case .result(let r):
       results[r.of] = r
       if let w = waiters.removeValue(forKey: r.of) { w.resume(returning: r) }
+      if let up = uploadOf.removeValue(forKey: r.of), let w = uploadWaiters.removeValue(forKey: up) { w.resume(returning: r) }
     case .projects(let p): projects = p
+    case .chat(let u):
+      macMinor = max(macMinor, 1)
+      var l = logs[u.session] ?? LiveLog()
+      l.apply(u)
+      logs[u.session] = l
+    case .overview(let o):
+      macMinor = max(macMinor, 1)
+      withAnimation(Theme.calm) { overview = o }
+    case .options(let o):
+      macMinor = max(macMinor, 1)
+      options = o
+    case .image(let c):
+      if let d = imageJoin.take(key: c.key, part: c.part, parts: c.parts, size: c.size, data: c.data), let img = UIImage(data: d) { images[c.key] = img }
+    case .frame(let f):
+      let k = "\(f.session)|\(f.device)"
+      if let e = f.error { frameErrors[k] = e }
+      if let b = f.data, let d = try? B64U.decode(b), imageType(d) != nil, let img = UIImage(data: d) {
+        frameErrors[k] = nil
+        frames[k] = (img, f.seq ?? 0, Date())
+      }
     case .unknown, .malformed: break  // either side can be newer
     }
   }
@@ -398,6 +443,121 @@ final class RemoteStore {
   func requestTail(_ session: String) async {
     guard !demo else { return }
     _ = try? await send(.getChat(session: session, n: 40))
+  }
+
+  // ---------------------------------------------------------------- minor 1
+
+  /// Keeps a chat's live view coming while `body` runs (the view is on screen): a lease renewed every 10 s. A Mac
+  /// that doesn't know `watch` ignores it; then the tail is polled as before.
+  func watch(_ session: String) async {
+    guard !demo else { return }
+    var first = true
+    while !Task.isCancelled {
+      _ = try? await send(.watch(session: session, reset: first && logs[session] != nil))
+      first = false
+      // An older Mac: no live view comes, so ask for the tail now and then.
+      if macMinor == 0 { await requestTail(session) }
+      try? await Task.sleep(for: .seconds(macMinor == 0 ? 4 : 10))
+    }
+    _ = try? await send(.unwatch)
+  }
+
+  /// Device frames for one panel while its view is open (a lease renewed every 10 s; the Mac sends one every 2.5 s at most).
+  func watchDevice(_ session: String, _ device: String) async {
+    guard !demo else { return }
+    while !Task.isCancelled {
+      _ = try? await send(.watchDevice(session: session, device: device))
+      try? await Task.sleep(for: .seconds(10))
+    }
+    _ = try? await send(.unwatchDevice)
+  }
+
+  func frame(_ session: String, _ device: String) -> (image: UIImage, seq: Int, at: Date)? { frames["\(session)|\(device)"] }
+  func frameError(_ session: String, _ device: String) -> String? { frameErrors["\(session)|\(device)"] }
+
+  /// Asks the Mac once for an image of a chat (an attachment, by its key).
+  func wantImage(_ session: String, _ key: String) {
+    guard !demo, images[key] == nil, !askedImages.contains(key) else { return }
+    askedImages.insert(key)
+    Task { _ = try? await send(.getImage(session: session, key: key)) }
+  }
+
+  enum UploadError: LocalizedError {
+    case tooLarge, noAnswer, refused(String)
+    var errorDescription: String? {
+      switch self {
+      case .tooLarge: "That picture is too large to send, even scaled down."
+      case .noAnswer: "Your Mac didn't take the picture. It may be asleep, or coool isn't running."
+      case .refused(let e): "Your Mac refused the picture: \(e)"
+      }
+    }
+  }
+
+  /// Sends pictures to the Mac (scaled down first, encrypted like everything else); returns their upload ids.
+  func upload(_ pics: [UIImage]) async throws -> [String] {
+    if demo { return pics.map { _ in randomId() } }
+    var ids: [String] = []
+    for p in pics.prefix(Remote.maxAttach) {
+      guard let data = Self.shrink(p) else { throw UploadError.tooLarge }
+      let id = randomId()
+      let r: CommandResult? = await withCheckedContinuation { c in
+        uploadWaiters[id] = c
+        Task {
+          do {
+            for part in uploadParts(id: id, data) {
+              let env = try await self.send(.upload(part))
+              self.uploadOf[env] = id
+            }
+          } catch {
+            if let w = self.uploadWaiters.removeValue(forKey: id) { w.resume(returning: nil) }
+            return
+          }
+          try? await Task.sleep(for: .seconds(45))
+          if let w = self.uploadWaiters.removeValue(forKey: id) { w.resume(returning: nil) }
+        }
+      }
+      guard let r else { throw UploadError.noAnswer }
+      guard r.ok else { throw UploadError.refused(r.error ?? "unknown") }
+      ids.append(id)
+    }
+    return ids
+  }
+
+  /// JPEG, 1600 px on the long side at most, under the protocol's limit.
+  nonisolated static func shrink(_ img: UIImage) -> Data? {
+    for (edge, q) in [(1600.0, 0.72), (1280.0, 0.65), (1024.0, 0.6), (800.0, 0.55)] {
+      let s = img.size
+      let k = min(1, edge / max(s.width, s.height, 1))
+      let size = CGSize(width: (s.width * k).rounded(), height: (s.height * k).rounded())
+      let f = UIGraphicsImageRendererFormat.default()
+      f.scale = 1
+      let out = UIGraphicsImageRenderer(size: size, format: f).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
+      if let d = out.jpegData(compressionQuality: q), d.count <= Remote.maxUpload { return d }
+    }
+    return nil
+  }
+
+  /// Recent prompts started from this phone (newest first), to start again or duplicate.
+  struct Recent: Codable, Equatable, Identifiable {
+    var text: String
+    var project: String
+    var projectName: String
+    var cli: Cli
+    var model: String?
+    var mode: String?
+    var at: Double
+    var id: String { "\(at)" }
+  }
+
+  var recents: [Recent] {
+    get { (UserDefaults.standard.data(forKey: "recents")).flatMap { try? JSONDecoder().decode([Recent].self, from: $0) } ?? [] }
+    set { UserDefaults.standard.set(try? JSONEncoder().encode(Array(newValue.prefix(12))), forKey: "recents") }
+  }
+
+  func remember(_ r: Recent) {
+    var all = recents.filter { $0.text != r.text || $0.project != r.project }
+    all.insert(r, at: 0)
+    recents = all
   }
 
   func refresh() async {
