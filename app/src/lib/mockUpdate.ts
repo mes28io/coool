@@ -23,7 +23,7 @@ const base = (): UpdateStatus => ({
     { id: "codex", name: "Codex", current: "0.171.0", latest: "0.171.0", state: "current", detail: null, command: null, method: "standalone installer", progress: null },
   ],
   auto_app: true,
-  auto_cli: true,
+  auto_cli: false,
   gate_open: true,
   checked_at: Date.now() - 4 * 60_000,
   blocked: null,
