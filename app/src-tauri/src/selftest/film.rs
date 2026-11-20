@@ -42,8 +42,12 @@ pub fn selftest_film(app: AppHandle, core: State<'_, Arc<Core>>, action: String,
             }
             // How many times slower than real time the scene plays while it is filmed (`COOOL_FILM_SLOW`, film.sh).
             let slow = std::env::var("COOOL_FILM_SLOW").ok().and_then(|v| v.parse::<f64>().ok()).filter(|s| *s >= 1.0).unwrap_or(1.0);
-            t.log(&format!("FILM slow {slow}"));
-            Ok(serde_json::json!({ "slow": slow }))
+            // What slows down: `animations` (default: CSS / Web Animations) or `all` (also the page's clock, which keeps a chat's last reply from showing).
+            let dilate = std::env::var("COOOL_FILM_DILATE").unwrap_or_else(|_| "animations".into());
+            t.log(&format!("FILM slow {slow} {dilate}"));
+            // `COOOL_FILM_MAC=1` (film.sh FILM_MAC=1, with COOOL_VM_DIR at the one sandbox Mac): film the Mac panel too.
+            let mac = std::env::var("COOOL_FILM_MAC").is_ok_and(|v| v == "1");
+            Ok(serde_json::json!({ "slow": slow, "dilate": dilate, "mac": mac }))
         }
         "start" => {
             if no_shots() {
