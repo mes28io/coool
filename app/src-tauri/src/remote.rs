@@ -440,11 +440,9 @@ impl coool_remote::Host for AppHost {
     fn chat_view(&self, session: &str, since: Option<u64>) -> Result<ChatView, String> {
         let core = self.core()?;
         let chat = self.chat_of(&core, session).ok_or("only chats coool runs can be shown on the phone")?;
-        let (handle, cwd) = {
-            let chats = core.chats.lock().unwrap();
-            let c = chats.get(&chat).ok_or("no such chat")?;
-            (c.handle.clone(), core.hub.lock().unwrap().chats().into_iter().find(|x| x.id == chat).map(|x| x.cwd).unwrap_or_default())
-        };
+        // One lock at a time (never `chats` and `hub` together: the app takes them in its own order).
+        let handle = core.chats.lock().unwrap().get(&chat).map(|c| c.handle.clone()).ok_or("no such chat")?;
+        let cwd = core.hub.lock().unwrap().chats().into_iter().find(|x| x.id == chat).map(|x| x.cwd).unwrap_or_default();
         let (events, _) = handle.events_since(0);
         let mut v = build_view(&events, &cwd, since);
         let devices = self.app.state::<Arc<crate::device::Devices>>();

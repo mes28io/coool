@@ -17,6 +17,7 @@
 //
 // Three short Haiku turns, nothing else reaches a model.
 
+import { answerPermission } from "./lib/actions";
 import { useChats, type ChatItem } from "./lib/chat";
 import { remoteApi, type RemoteStatus } from "./lib/remote";
 import { useStore } from "./store";
@@ -84,7 +85,7 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
       });
 
       await h.step("remote: Pair an iPhone shows a QR code; the phone's claim shows its code; Pair adds it", async () => {
-        const btn = await h.waitFor("Pair an iPhone", () => $("[data-remote-pair-start]") as HTMLButtonElement | null, 10_000);
+        const btn = await h.waitFor("Pair an iPhone, enabled", () => $("[data-remote-pair-start]:not([disabled])") as HTMLButtonElement | null, 20_000);
         btn.click();
         await h.waitFor("the QR code", () => $("[data-remote-qr]"), 10_000);
         await h.shot("remote-qr");
@@ -148,7 +149,12 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
 
       if (minor && site) {
         await h.step("remote: the chat's Browser panel opens a local page; the phone watches it as pictures (view only)", async () => {
-          const r = (await h.invoke("selftest_browser_tool", { chat: chatId, name: "browser_navigate", args: { url: `${site}/remote.html` } })) as { type: string; text?: string }[];
+          // The chat asks before each change, so the device gate asks here (on the Mac) before the page opens: allowed
+          // once here; the phone isn't involved in that.
+          const nav = h.invoke("selftest_browser_tool", { chat: chatId, name: "browser_navigate", args: { url: `${site}/remote.html` } }) as Promise<{ type: string; text?: string }[]>;
+          const ask = await Promise.race([nav.then(() => null), h.waitFor("the gate's ask", () => chat(chatId)?.pendingPermission, 20_000).catch(() => null)]);
+          if (ask) answerPermission(chatId, ask, "allow");
+          const r = await nav;
           const text = r.find((o) => o.type === "text")?.text ?? "";
           if (!/Remote frame test/.test(text)) throw h.fail(`the page didn't open: ${text.slice(0, 160)}`);
           await write("remote-app-browser.txt", "open");

@@ -14,8 +14,12 @@ struct DiffLine: Equatable {
 
 /// A line diff (LCS) of `before` -> `after`, with unchanged runs folded to two lines of context.
 func lineDiff(_ before: String, _ after: String, context: Int = 2) -> [DiffLine] {
-  let a = before.isEmpty ? [] : before.components(separatedBy: "\n").prefix(400).map { $0 }
-  let b = after.isEmpty ? [] : after.components(separatedBy: "\n").prefix(400).map { $0 }
+  func lines(_ t: String) -> [String] {
+    var l = t.isEmpty ? [] : t.components(separatedBy: "\n")
+    if l.last == "" { l.removeLast() }  // a final newline is not a line of its own
+    return Array(l.prefix(400))
+  }
+  let a = lines(before), b = lines(after)
   var t = Array(repeating: Array(repeating: 0, count: b.count + 1), count: a.count + 1)
   for i in stride(from: a.count - 1, through: 0, by: -1) {
     for j in stride(from: b.count - 1, through: 0, by: -1) {
@@ -144,6 +148,7 @@ struct DiffView: View {
           }
         }
         .padding(.vertical, 6)
+        .frame(minWidth: UIScreen.main.bounds.width - 64, alignment: .leading)
         .textSelection(.enabled)
       }
       if lines.count > maxLines || diff.cut == true {

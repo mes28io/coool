@@ -46,14 +46,14 @@ final class EndToEndTests: XCTestCase {
 
     // 1. Pair with the pasted link; the code goes to the Mac's side, which clicks Pair.
     guard let qr = waitFile("remote-pair-url.txt", 180)?.trimmingCharacters(in: .whitespacesAndNewlines) else { return try step("the Mac's pairing link", false) }
-    let name = app.textFields["pair.name"]
-    XCTAssertTrue(name.waitForExistence(timeout: 10))
-    name.tap()
-    name.press(forDuration: 1.0)
-    if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap() }
-    name.typeText("coool sim iPhone")
+    // The device keeps its default name ("iPhone"); on an iPhone SE-sized screen the fields sit low, so each is
+    // brought into view and typed into only once the keyboard is up.
     let field = app.textFields["pair.link"]
+    XCTAssertTrue(field.waitForExistence(timeout: 10))
+    if !field.isHittable { app.swipeUp() }
     field.tap()
+    if !app.keyboards.firstMatch.waitForExistence(timeout: 5) { field.tap() }
+    _ = app.keyboards.firstMatch.waitForExistence(timeout: 5)
     field.typeText(qr)
     shot(shots, "e2e-1-pairing")
     app.buttons["pair.submit"].tap()
@@ -91,7 +91,8 @@ final class EndToEndTests: XCTestCase {
     // The live view: steps appear while the turn runs (no pull, no reload).
     let state = app.descendants(matching: .any)["chat.state"]
     try step("the chat view", state.waitForExistence(timeout: 20))
-    let items = { self.elements(self.app, "chat.item|").count }
+    // Steps and replies on screen: what arrives after the Bash allow (its result, the reply) arrives live.
+    let items = { self.elements(self.app, "chat.item|").count + self.elements(self.app, "chat.assistant").count }
     _ = wait("the live view's first items", timeout: 30) { items() > 0 }
     let before = items()
     let bashCard = elements(app, "chat.need|").firstMatch
@@ -106,6 +107,7 @@ final class EndToEndTests: XCTestCase {
     put("remote-phone-answered.txt", "allowed Write (seen as a diff) and Bash once from the app (the app has no always-allow)")
     try step("the chat view again", state.waitForExistence(timeout: 20))
     try step("the chat idle again", wait("idle", timeout: 120) { (state.value as? String) == "idle" })
+    _ = wait("the reply, live", timeout: 60) { self.elements(self.app, "chat.assistant").count > 0 }
     let after = items()
     let diffInChat = elements(app, "diff|notes.txt").count > 0 || elements(app, "diff|").count > 0
     shot(shots, "e2e-8-live-done")
@@ -130,7 +132,7 @@ final class EndToEndTests: XCTestCase {
     Thread.sleep(forTimeInterval: 3)
     let input = app.textFields["chat.input"]
     input.tap()
-    input.typeText("Count from 1 to 400, one number per line, nothing else.")
+    typeInto(input, "Count from 1 to 400, one number per line, nothing else.")
     app.buttons["chat.send"].tap()
     let stop = app.buttons["chat.stop"]
     try step("the chat working after the message", stop.waitForExistence(timeout: 60))
@@ -151,7 +153,7 @@ final class EndToEndTests: XCTestCase {
     proj.tap()
     let prompt = app.textFields["new.prompt"]
     prompt.tap()
-    prompt.typeText("What is in the attached picture? Answer in at most eight words.")
+    typeInto(prompt, "What is in the attached picture? Answer in at most eight words.")
     app.swipeDown()
     let forbidden = app.buttons["new.forbidden"]
     if !forbidden.isHittable { app.swipeUp() }
@@ -198,5 +200,14 @@ final class EndToEndTests: XCTestCase {
     shot(shots, "e2e-15-revoked")
     put("remote-phone-refused.txt", "revoked: the app returned to the pairing screen (\(revoked.label.prefix(80)))")
     log("done")
+  }
+}
+
+extension EndToEndTests {
+  /// Types into a field once the keyboard is up (on a small screen the first tap can land before focus does).
+  func typeInto(_ el: XCUIElement, _ text: String) {
+    if !app.keyboards.firstMatch.waitForExistence(timeout: 3) { el.tap() }
+    _ = app.keyboards.firstMatch.waitForExistence(timeout: 5)
+    el.typeText(text)
   }
 }
