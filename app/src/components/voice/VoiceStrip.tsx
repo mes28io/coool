@@ -61,21 +61,21 @@ export function VoiceStrip({ target, compact, floating }: { target: string; comp
         >
           <div
             className={cx(
-              "flex min-h-[44px] flex-wrap items-center gap-x-2.5 gap-y-1 px-3.5 py-2",
+              "flex min-h-[44px] flex-wrap items-center gap-x-3 gap-y-1.5 px-3.5 py-2",
               !floating && "border-b border-hairline",
               live && "bg-[color-mix(in_oklab,var(--error)_6%,transparent)]",
             )}
           >
-            {live ? (
-              <span className="relative flex size-[9px] shrink-0 rounded-full bg-[var(--error)]" title="The microphone is on" data-voice-dot />
-            ) : v.kind === "working" || v.kind === "starting" ? (
-              <Spinner />
-            ) : (
-              <IMic size={14} className={cx("shrink-0", tone)} />
-            )}
-            <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex min-w-[min(100%,280px)] flex-1 flex-col">
               <span className="flex min-w-0 items-center gap-2">
-                <span className={cx("shrink-0 text-small font-medium", v.kind === "listening" ? "text-fg" : v.kind === "quiet" ? "text-busy-text" : "text-fg/90")} data-voice-title>
+                {live ? (
+                  <span className="relative flex size-[9px] shrink-0 rounded-full bg-[var(--error)]" title="The microphone is on" data-voice-dot />
+                ) : v.kind === "working" || v.kind === "starting" ? (
+                  <Spinner />
+                ) : (
+                  <IMic size={14} className={cx("shrink-0", tone)} />
+                )}
+                <span className={cx("min-w-0 text-small font-medium", v.meter && "shrink-0", v.kind === "listening" ? "text-fg" : v.kind === "quiet" ? "text-busy-text" : "text-fg/90")} data-voice-title>
                   {v.title}
                 </span>
                 {v.meter && <Meter levels={levels} bars={compact ? 18 : 30} tone={v.kind === "quiet" ? "var(--status-needs)" : "var(--error)"} />}
@@ -86,7 +86,7 @@ export function VoiceStrip({ target, compact, floating }: { target: string; comp
                 )}
               </span>
               {(v.detail || v.kind === "working") && (
-                <span className="min-w-0 truncate text-small text-dim" data-voice-detail>
+                <span className={cx("min-w-0 text-small text-dim", v.kind === "working" ? "truncate" : "break-words")} data-voice-detail>
                   {v.kind === "working" && partial ? <span className="text-fg/75">{partial}</span> : v.detail}
                 </span>
               )}

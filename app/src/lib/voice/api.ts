@@ -1,6 +1,6 @@
 // Voice's calls into the backend (app/src-tauri/src/voice): the Tauri commands and events, or a browser mock for
-// `pnpm dev` (knobs: `?voice=demo` starts with a model ready; `&mic=denied|not_determined|authorized|restricted`;
-// `&model=none|downloading`). Kept apart from lib/backend.ts so voice stays in its own files.
+// `pnpm dev` (knobs: `?voice=demo` starts with a model ready; `&mic=denied|not_determined|authorized|restricted|nodevice`;
+// `&model=none|downloading`; `&level=flat`: a microphone that hears nothing; `&voicestate=…`: see demo.ts). Kept apart from lib/backend.ts so voice stays in its own files.
 
 import { isTauri } from "../backend";
 import type { AiFix } from "./aiFix.ts";
@@ -217,7 +217,7 @@ const CATALOG: Omit<ModelRow, "path" | "partial" | "download">[] = [
 
 function mockVoice(): VoiceApi {
   const demo = knob("voice") === "demo";
-  let perm: MicPermission = (knob("mic") as MicPermission | null) ?? (demo ? "authorized" : "not_determined");
+  let perm: MicPermission = knob("mic") === "nodevice" ? "authorized" : ((knob("mic") as MicPermission | null) ?? (demo ? "authorized" : "not_determined"));
   const dir = "~/Library/Application Support/sh.coool.app/voice/models";
   const have = new Map<string, string>();
   if (demo && knob("model") !== "none") have.set("medium-q5_0", `${dir}/ggml-medium-q5_0.bin`);
@@ -259,12 +259,14 @@ function mockVoice(): VoiceApi {
     ],
     start: async () => {
       if (perm !== "authorized") throw new Error(`permission:${perm}`);
+      if (knob("mic") === "nodevice") throw new Error("no-device: No microphone found.");
+      const flat = knob("level") === "flat";
       const t0 = performance.now();
       const timer = setInterval(() => {
         const s = (performance.now() - t0) / 1000;
         // Speech-like: syllable bursts over a slow swell, with short pauses.
         const level = Math.max(0, 0.25 + 0.45 * Math.abs(Math.sin(s * 7.3)) * (0.6 + 0.4 * Math.sin(s * 1.7)) - (Math.sin(s * 2.1) > 0.92 ? 0.4 : 0));
-        levelCbs.forEach((f) => f({ level: Math.min(1, level), secs: s }));
+        levelCbs.forEach((f) => f({ level: flat ? 0.04 : Math.min(1, level), secs: s }));
       }, 40);
       listening = { t0, timer };
       return { device: "MacBook Pro Microphone", format: "48000 Hz, 1 ch, F32" };

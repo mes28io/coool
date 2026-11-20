@@ -150,6 +150,7 @@ function MicRow({ perm }: { perm: MicPermission | null }) {
 }
 
 const TEST_SECS = 5;
+const NO_LEVELS: number[] = [];
 const NOTHING_TEXT: Record<string, string> = {
   silence: "No speech reached coool. Check the input above, move closer, or speak up.",
   unclear: "Something was heard, but not clearly enough to write down.",
@@ -163,7 +164,7 @@ function MicTest({ perm }: { perm: MicPermission | null }) {
   const p = useVoicePrefs();
   const mine = useVoice((s) => s.target === TEST_TARGET);
   const phase = useVoice((s) => (s.target === TEST_TARGET ? s.phase : "idle"));
-  const levels = useVoice((s) => (s.target === TEST_TARGET ? s.levels : []));
+  const levels = useVoice((s) => (s.target === TEST_TARGET ? s.levels : NO_LEVELS));
   const secs = useVoice((s) => (s.target === TEST_TARGET ? s.secs : 0));
   const error = useVoice((s) => (s.target === TEST_TARGET ? s.error : null));
   const device = useVoice((s) => (s.target === TEST_TARGET ? s.device : null));
@@ -259,7 +260,7 @@ function KeepRecordingRow() {
       label="Keep the last recording"
       desc={
         <>
-          For troubleshooting: what the microphone captured last is saved as a sound file{st ? <> at <Mono>{homeShort(st.path)}</Mono></> : null}, replaced each time. It stays on this Mac and is never sent anywhere.
+          For troubleshooting: what the microphone captured last is saved as <Mono>last-recording.wav</Mono> in <span title={st?.path}>coool&rsquo;s voice folder</span> (Show in Finder, once there is one), replaced each time. It stays on this Mac and is never sent anywhere.
         </>
       }
       k="keep recording save audio wav troubleshoot debug"

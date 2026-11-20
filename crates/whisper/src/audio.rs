@@ -194,9 +194,19 @@ pub const MIN_SPEECH_FRAMES: usize = 10;
 
 const FRAME: usize = (SAMPLE_RATE as usize * 30) / 1000;
 
-/// The noise floor of a recording: the 10th percentile of its 30 ms frame levels.
+/// Below this (-80 dBFS) a frame is digital silence: a device that was just opened or closed, padding, a muted input.
+/// No microphone's room tone is that low, so those frames say nothing about the noise floor and are left out of it.
+const DIGITAL_SILENCE: f32 = 1e-4;
+
+/// The noise floor of a recording: the 10th percentile of its 30 ms frame levels, with digital silence at the start
+/// and end left out (found with the self-test: steady noise followed by the zeros of a closing stream read as a floor
+/// of 0, and the noise as speech). Digital silence inside the recording still counts (synthesized speech has it
+/// between words).
 pub fn noise_floor(samples: &[f32]) -> f32 {
-    let mut r: Vec<f32> = samples.chunks(FRAME).map(rms).collect();
+    let all: Vec<f32> = samples.chunks(FRAME).map(rms).collect();
+    let a = all.iter().position(|&x| x >= DIGITAL_SILENCE).unwrap_or(all.len());
+    let b = all.iter().rposition(|&x| x >= DIGITAL_SILENCE).map_or(a, |i| i + 1);
+    let mut r = all[a..b.max(a)].to_vec();
     if r.is_empty() {
         return 0.0;
     }
@@ -529,6 +539,11 @@ mod tests {
         }
         let (a, b) = speech_bounds(&x, 0).unwrap();
         assert!(a.abs_diff(16_000) < 800 && b.abs_diff(48_000) < 3_000, "{a}..{b}");
+        // Noise with digital silence around it (a stream opening and closing) is still not speech.
+        let mut padded = vec![0.0; 8_000];
+        padded.extend(noise(64_000, 0.01, 5));
+        padded.extend(vec![0.0; 16_000]);
+        assert!(speech_bounds(&padded, 200).is_none());
     }
 
     #[test]

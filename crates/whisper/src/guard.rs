@@ -97,6 +97,10 @@ const BOILERPLATE: &[&str] = &[
     "abone olmayı unutmayın",
     "teşekkür ederim",
     "teşekkürler",
+    "see you in the next video",
+    "see you next time",
+    "bir sonraki videoda görüşmek üzere",
+    "abone olmayı unutmayın",
 ];
 
 /// A stock subtitle line. Only thrown away when the evidence for speech is weak (see `judge`).
@@ -171,6 +175,8 @@ mod tests {
     fn boilerplate_only_goes_when_the_evidence_is_weak() {
         assert_eq!(judge(&[seg("Thank you for watching!", 0.3, -0.5)], &[], 0.8), Err(Reason::Boilerplate));
         assert_eq!(judge(&[seg("Altyazı M.K.", 0.1, -0.4)], &[], 1.0), Err(Reason::Boilerplate));
+        // What the compact model said to 4 s of white noise when it slipped past the speech check (self-test).
+        assert_eq!(judge(&[seg("See you in the next video.", 0.1, -0.3)], &[], 0.0), Err(Reason::Boilerplate));
         // Said clearly, at length: kept.
         assert_eq!(judge(&[seg("Thank you.", 0.01, -0.1)], &[], 2.5).as_deref(), Ok("Thank you."));
     }
