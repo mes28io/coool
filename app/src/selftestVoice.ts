@@ -307,7 +307,7 @@ export function voiceScenarios(h: H, invoke: Inv): Record<string, () => Promise<
         replaceRange(el, 0, el.value.length, "");
         await dictate("en-terms.wav", el);
         const heard1 = el.value;
-        const tauri = /\b(Tori|Tory|Tauri)\b/.exec(heard1)?.[1];
+        const tauri = /\b(Torii|Tori|Tory|Towery|Tauri)\b/.exec(heard1)?.[1];
         const zus = /\b(Zust\w*|susten|Zustand)\b/i.exec(heard1)?.[1];
         notes.push(`round 1 heard "${heard1}"`);
         if (!tauri || !zus) throw fail(`unexpected transcript: ${heard1}`);
@@ -326,7 +326,7 @@ export function voiceScenarios(h: H, invoke: Inv): Record<string, () => Promise<
         await shot("voice-suggestions", undefined, 300);
         for (const s of [...offered].sort((a, b) => b.from - a.from)) acceptSuggestion(id, s);
         // Whatever is still misheard, the person fixes by hand (whisper may hear a word differently each time).
-        fixed = el.value.replace(/\b(Tori|Tory)\b/, "Tauri").replace(/\b(Zust(?!and\b)\w*|susten)\b/i, "Zustand");
+        fixed = el.value.replace(/\b(Torii|Tori|Tory|Towery)\b/, "Tauri").replace(/\b(Zust(?!and\b)\w*|susten)\b/i, "Zustand");
         if (fixed !== el.value) replaceRange(el, 0, el.value.length, fixed);
         noteSent(id, fixed);
         answerOffer(false);
