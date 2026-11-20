@@ -77,7 +77,9 @@ export function VoiceHost() {
     };
     // Leaving the window while holding: what was said so far is inserted (as 2relay does on resign-active).
     const onBlur = () => release();
-    const offFn = voiceApi().onFn((down) => {
+    const offFn = voiceApi().onKey((k) => {
+      if (k.kind !== "hold") return;
+      const down = k.down;
       const p = getVoicePrefs();
       if (p.hold !== "Fn" || !voiceReady(p)) return;
       if (down) {

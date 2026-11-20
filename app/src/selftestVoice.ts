@@ -77,7 +77,7 @@ export function voiceScenarios(h: H, invoke: Inv): Record<string, () => Promise<
       await step("voice: the engine transcribes and translates the fixtures (no microphone)", async () => {
         const out: string[] = [];
         const run = async (file: string, task: "transcribe" | "translate") => {
-          const r = (await invoke("voice_selftest_transcribe", { path: fx(file), req: { model: env.model, task, language: null, prompt: null } })) as Transcript;
+          const r = (await invoke("voice_selftest_transcribe", { path: fx(file), req: { model: env.model, task, language: null } })) as Transcript;
           out.push(`${file}/${task}: [${r.language}] ${r.ms} ms${r.load_ms ? ` (+${r.load_ms} ms load)` : ""} for ${r.secs.toFixed(1)} s: "${r.text}"`);
           return r;
         };

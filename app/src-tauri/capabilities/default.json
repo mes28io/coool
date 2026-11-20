@@ -40,7 +40,7 @@
     "allow-voice-models", "allow-voice-model-download", "allow-voice-model-pause", "allow-voice-model-cancel",
     "allow-voice-model-delete", "allow-voice-model-check", "allow-voice-memory-read", "allow-voice-memory-write",
     "allow-voice-memory-clear", "allow-voice-reveal", "allow-voice-project-words", "allow-voice-spell",
-    "allow-voice-polish", "allow-voice-selftest-inject", "allow-voice-selftest-counters",
+    "allow-voice-polish", "allow-voice-selftest-inject", "allow-voice-selftest-keys", "allow-voice-keys", "allow-voice-selftest-counters",
     "allow-voice-selftest-transcribe", "allow-voice-selftest-env",
     "allow-login-status", "allow-login-set", "allow-apps-installed", "allow-open-path", "allow-open-system-settings",
     "allow-onboarding-seen", "allow-onboarding-set-seen", "allow-cli-status", "allow-connections",

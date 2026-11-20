@@ -63,14 +63,17 @@ static bool on_abort(void *user) {
 // Runs one utterance. `language`: a whisper language code, or NULL / "" / "auto" to detect it. `translate`: English
 // out whatever went in. `audio_ctx`: 0 for whisper's full 30 s window, or fewer encoder frames for a short clip.
 // Returns 0 on success; the text is then read with coool_whisper_n_segments / coool_whisper_segment.
+// `timestamps`: decode with timestamp tokens. Off is faster for one short sentence, but on anything longer whisper then
+// ends a 30 s window after its first sentence and skips the rest of it (seen with coool's own Turkish fixtures), so coool
+// keeps them on; the text read back never contains them.
 int coool_whisper_run(struct whisper_context *ctx, const float *samples, int n_samples, const char *language, int translate,
-                      int threads, const char *initial_prompt, int audio_ctx, coool_segment_cb cb, void *user,
+                      int threads, const char *initial_prompt, int audio_ctx, int timestamps, coool_segment_cb cb, void *user,
                       volatile int *abort_flag) {
     struct whisper_full_params p = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     p.n_threads = threads > 0 ? threads : 4;
     p.translate = translate != 0;
     p.no_context = true;
-    p.no_timestamps = true;
+    p.no_timestamps = timestamps == 0;
     p.single_segment = false;
     p.print_special = false;
     p.print_progress = false;
@@ -98,6 +101,24 @@ int coool_whisper_run(struct whisper_context *ctx, const float *samples, int n_s
 int coool_whisper_n_segments(struct whisper_context *ctx) { return whisper_full_n_segments(ctx); }
 
 const char *coool_whisper_segment(struct whisper_context *ctx, int i) { return whisper_full_get_segment_text(ctx, i); }
+
+// How sure whisper was of segment `i`: the probability that its window held no speech, the mean log probability of its
+// text tokens, and how many text tokens it has (timestamps and other special tokens left out).
+void coool_whisper_segment_stats(struct whisper_context *ctx, int i, float *no_speech, float *avg_logprob, int *n_text) {
+    *no_speech = whisper_full_get_segment_no_speech_prob(ctx, i);
+    const whisper_token eot = whisper_token_eot(ctx);
+    const int n = whisper_full_n_tokens(ctx, i);
+    double sum = 0.0;
+    int k = 0;
+    for (int j = 0; j < n; j++) {
+        const whisper_token_data d = whisper_full_get_token_data(ctx, i, j);
+        if (d.id >= eot) continue;
+        sum += d.plog;
+        k++;
+    }
+    *avg_logprob = k ? (float)(sum / k) : 0.0f;
+    *n_text = k;
+}
 
 // The language whisper heard in the last run ("tr", "de" …), or "" when unknown.
 const char *coool_whisper_detected_language(struct whisper_context *ctx) {

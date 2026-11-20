@@ -40,6 +40,8 @@ export interface VoicePrefs {
   fixTyped: boolean;
   /** Optional AI polish of dictated text (only acts with AI insights on). */
   aiPolish: boolean;
+  /** Keep the last recording as a WAV file in coool's voice folder, for troubleshooting (off by default). */
+  keepRecording: boolean;
 }
 
 export const DEFAULT_TOGGLE: Chord = { code: "Space", meta: false, ctrl: false, alt: true, shift: false };
@@ -58,6 +60,7 @@ export const DEFAULTS: VoicePrefs = {
   spell: true,
   fixTyped: false,
   aiPolish: true,
+  keepRecording: false,
 };
 
 const KEY = "coool.voice";

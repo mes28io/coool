@@ -5,7 +5,7 @@
 //! - `engine`: the whisper worker (model kept loaded between utterances, dropped after 10 idle minutes).
 //! - `models`: the model catalogue, downloads from the official whisper.cpp host on request only, checksum, files
 //!   already on disk.
-//! - `native`: the microphone permission, macOS's spell/grammar checker, the Fn key.
+//! - `native` + `keys`: the microphone permission, macOS's spell/grammar checker, voice's keys (an AppKit monitor).
 //! - `project`: words a project uses, on request, for the words library.
 //! - memory: the words library and learned corrections live in one JSON file (`memory.json`) that the frontend reads
 //!   and writes whole (app/src/lib/voice/memory.ts owns its shape).
@@ -14,6 +14,7 @@
 
 pub mod capture;
 pub mod engine;
+pub mod keys;
 pub mod models;
 pub mod native;
 pub mod project;
@@ -39,7 +40,9 @@ pub struct Voice {
     generation: Arc<AtomicU64>,
     downloads: Mutex<HashMap<String, models::Download>>,
     /// Self-test only: the next capture plays this fixture instead of opening the microphone.
-    inject: Mutex<Option<Vec<f32>>>,
+    inject: Mutex<Option<coool_whisper::audio::RawWav>>,
+    /// The page's key settings and state, read by the key monitor (`keys`).
+    pub keys: Arc<Mutex<keys::Config>>,
     selftest: OnceLock<bool>,
     /// For the self-test: how often the checker and the AI polish were asked (memory hits must ask neither).
     pub spell_calls: AtomicU64,
@@ -58,6 +61,7 @@ impl Voice {
             generation: Arc::new(AtomicU64::new(0)),
             downloads: Mutex::new(HashMap::new()),
             inject: Mutex::new(None),
+            keys: Arc::new(Mutex::new(keys::Config::default())),
             selftest: OnceLock::new(),
             spell_calls: AtomicU64::new(0),
             polish_calls: AtomicU64::new(0),
@@ -75,13 +79,17 @@ impl Voice {
     fn memory_path(&self) -> Res<PathBuf> {
         Ok(self.dir()?.join("memory.json"))
     }
+    /// "Keep the last recording" (off unless the person turns it on): one WAV, replaced each time.
+    fn recording_path(&self) -> Res<PathBuf> {
+        Ok(self.dir()?.join("last-recording.wav"))
+    }
     fn is_selftest(&self) -> bool {
         self.selftest.get().copied().unwrap_or(false)
     }
 }
 
-/// Called from setup: where voice keeps its files (the app data folder, or the self-test's own folder), and the Fn
-/// key watcher (its events go to the page as `voice-fn`).
+/// Called from setup (on the main thread): where voice keeps its files (the app data folder, or the self-test's own
+/// folder), and the key monitor (its events go to the page as `voice-key`).
 pub fn init(app: &AppHandle, selftest_dir: Option<&Path>) {
     let v = app.state::<Arc<Voice>>();
     let dir = match selftest_dir {
@@ -94,9 +102,12 @@ pub fn init(app: &AppHandle, selftest_dir: Option<&Path>) {
         coool_whisper::set_verbose(true);
     }
     let h = app.clone();
-    native::watch_fn(Box::new(move |down| {
-        let _ = h.emit("voice-fn", down);
-    }));
+    native::watch_keys(
+        v.keys.clone(),
+        Box::new(move |k| {
+            let _ = h.emit("voice-key", k);
+        }),
+    );
 }
 
 // ---------------------------------------------------------------- status
@@ -111,6 +122,9 @@ pub struct Status {
     listening: bool,
     models_dir: String,
     memory_path: String,
+    /// Where "Keep the last recording" writes, and whether there is one now.
+    recording_path: String,
+    recording: bool,
 }
 
 #[tauri::command(async)]
@@ -122,6 +136,8 @@ pub fn voice_status(v: State<'_, Arc<Voice>>) -> Res<Status> {
         listening: v.capture.lock().unwrap().is_some(),
         models_dir: v.models_dir()?.to_string_lossy().into_owned(),
         memory_path: v.memory_path()?.to_string_lossy().into_owned(),
+        recording_path: v.recording_path()?.to_string_lossy().into_owned(),
+        recording: v.recording_path()?.is_file(),
     })
 }
 
@@ -154,18 +170,33 @@ pub fn voice_devices() -> Vec<capture::Device> {
 struct Level {
     level: f32,
     secs: f32,
+    /// The loudest sample so far (0..1): stays near 0 when the microphone sends nothing usable.
+    peak: f32,
+}
+
+/// The page's key settings and whether voice is busy, for the key monitor (called whenever either changes).
+#[tauri::command(async)]
+pub fn voice_keys(v: State<'_, Arc<Voice>>, cfg: keys::Config) {
+    *v.keys.lock().unwrap() = cfg;
+}
+
+#[derive(Serialize)]
+pub struct Started {
+    device: String,
+    /// What the device delivers, e.g. "48000 Hz, 1 ch, F32".
+    format: String,
 }
 
 /// Opens the microphone (or the self-test's fixture) and starts sending `voice-level` events (~25 a second) until
 /// stop or cancel. Refuses unless macOS already allows the microphone (the page asks first, on first use only).
 #[tauri::command(async)]
-pub fn voice_start(app: AppHandle, v: State<'_, Arc<Voice>>, device: Option<String>, model: Option<String>) -> Res<String> {
+pub fn voice_start(app: AppHandle, v: State<'_, Arc<Voice>>, device: Option<String>, model: Option<String>) -> Res<Started> {
     if let Some(m) = model.filter(|m| !m.is_empty()) {
         v.engine.preload(PathBuf::from(crate::expand_tilde(&m)));
     }
     let injected = v.inject.lock().unwrap().take();
     let cap = match injected {
-        Some(samples) => capture::Capture::start_injected(samples),
+        Some(wav) => capture::Capture::start_injected(wav),
         None => {
             let p = native::permission();
             if p != native::MicPermission::Authorized {
@@ -174,24 +205,22 @@ pub fn voice_start(app: AppHandle, v: State<'_, Arc<Voice>>, device: Option<Stri
             capture::Capture::start(device.as_deref().filter(|d| !d.is_empty()))?
         }
     };
-    let name = cap.device.clone();
-    let level = cap.level.clone();
-    let samples = cap.samples.clone();
+    let started = Started { device: cap.device.clone(), format: cap.format.clone() };
+    let sink = cap.sink.clone();
     let failed = cap.failed.clone();
     *v.capture.lock().unwrap() = Some(cap);
     let g = v.generation.fetch_add(1, Ordering::SeqCst) + 1;
     let generation = v.generation.clone();
     std::thread::spawn(move || {
         while generation.load(Ordering::SeqCst) == g {
-            let secs = samples.lock().unwrap().len() as f32 / 16_000.0;
-            let _ = app.emit("voice-level", Level { level: f32::from_bits(level.load(Ordering::Relaxed)), secs });
+            let _ = app.emit("voice-level", Level { level: sink.level(), secs: sink.secs(), peak: sink.peak() });
             if let Some(e) = failed.lock().unwrap().take() {
                 let _ = app.emit("voice-error", e);
             }
             std::thread::sleep(std::time::Duration::from_millis(40));
         }
     });
-    Ok(name)
+    Ok(started)
 }
 
 #[derive(Deserialize)]
@@ -202,9 +231,13 @@ pub struct StopReq {
     /// A whisper language code, or "auto" / empty.
     #[serde(default)]
     language: Option<String>,
-    /// The words-library bias (whisper's initial prompt).
+    /// The person's words: only to recognise whisper reading them back (never given to whisper; see
+    /// coool_whisper::dictate for why).
     #[serde(default)]
-    prompt: Option<String>,
+    vocabulary: Vec<String>,
+    /// "Keep the last recording": write what was captured to `last-recording.wav` (replacing the previous one).
+    #[serde(default)]
+    keep: bool,
 }
 
 fn task(s: &str) -> coool_whisper::Task {
@@ -217,8 +250,13 @@ fn task(s: &str) -> coool_whisper::Task {
 pub fn voice_stop(app: AppHandle, v: State<'_, Arc<Voice>>, req: StopReq) -> Res<engine::Transcript> {
     v.generation.fetch_add(1, Ordering::SeqCst);
     let cap = v.capture.lock().unwrap().take().ok_or("not listening")?;
-    let samples = cap.finish();
-    let _ = app.emit("voice-level", Level { level: 0.0, secs: 0.0 });
+    let samples = cap.finish(capture::TAIL);
+    let _ = app.emit("voice-level", Level { level: 0.0, secs: 0.0, peak: 0.0 });
+    if req.keep
+        && let Ok(p) = v.recording_path()
+    {
+        let _ = std::fs::write(p, coool_whisper::audio::wav_bytes(&samples));
+    }
     transcribe(&app, &v, samples, &req)
 }
 
@@ -234,7 +272,7 @@ fn transcribe(app: &AppHandle, v: &Voice, samples: Vec<f32>, req: &StopReq) -> R
             samples,
             task: task(&req.task),
             language: req.language.clone().filter(|l| !l.is_empty() && l != "auto"),
-            prompt: req.prompt.clone().filter(|p| !p.trim().is_empty()),
+            vocabulary: req.vocabulary.clone(),
         },
         move |s| {
             let _ = h.emit("voice-partial", s.to_string());
@@ -249,7 +287,7 @@ pub fn voice_cancel(app: AppHandle, v: State<'_, Arc<Voice>>) {
     let cap = v.capture.lock().unwrap().take();
     drop(cap);
     v.engine.abort();
-    let _ = app.emit("voice-level", Level { level: 0.0, secs: 0.0 });
+    let _ = app.emit("voice-level", Level { level: 0.0, secs: 0.0, peak: 0.0 });
 }
 
 /// Loads the model ahead of the first utterance (the person started holding the key, or opened Settings > Voice).
@@ -423,7 +461,11 @@ pub fn voice_memory_clear(v: State<'_, Arc<Voice>>) -> Res<()> {
 /// Shows the memory file (or the models folder) in Finder.
 #[tauri::command(async)]
 pub fn voice_reveal(v: State<'_, Arc<Voice>>, what: String) -> Res<()> {
-    let p = if what == "models" { v.models_dir()? } else { v.memory_path()? };
+    let p = match what.as_str() {
+        "models" => v.models_dir()?,
+        "recording" => v.recording_path()?,
+        _ => v.memory_path()?,
+    };
     let target = if p.exists() { p } else { p.parent().map(Path::to_path_buf).ok_or("no folder")? };
     if target.is_dir() {
         std::fs::create_dir_all(&target).ok();
@@ -469,15 +511,16 @@ pub fn voice_polish(core: State<'_, Arc<Core>>, v: State<'_, Arc<Voice>>, req: p
 
 // ---------------------------------------------------------------- self-test
 
-/// The next `voice_start` plays this WAV fixture instead of opening the microphone (self-test runs only).
+/// The next `voice_start` plays this WAV fixture instead of opening the microphone (self-test runs only), in the
+/// file's own rate, channels and sample format, through the same converter a microphone's callbacks go through.
 #[tauri::command(async)]
 pub fn voice_selftest_inject(v: State<'_, Arc<Voice>>, path: String) -> Res<f32> {
     if !v.is_selftest() {
         return Err("self-test mode is off".into());
     }
-    let s = coool_whisper::audio::read_wav(Path::new(&path))?;
-    let secs = s.len() as f32 / 16_000.0;
-    *v.inject.lock().unwrap() = Some(s);
+    let w = coool_whisper::audio::read_wav_raw(Path::new(&path))?;
+    let secs = w.samples.len() as f32 / w.channels as f32 / w.rate as f32;
+    *v.inject.lock().unwrap() = Some(w);
     Ok(secs)
 }
 
@@ -520,4 +563,50 @@ pub fn voice_selftest_transcribe(app: AppHandle, v: State<'_, Arc<Voice>>, path:
     }
     let s = coool_whisper::audio::read_wav(Path::new(&path))?;
     transcribe(&app, &v, s, &req)
+}
+
+#[derive(Deserialize)]
+pub struct KeyStep {
+    /// "down", "up" or "flags" (a modifier key changed).
+    kind: String,
+    /// The macOS virtual key code.
+    code: u16,
+    /// NSEventModifierFlags after the event (with the right/left device bits for modifiers).
+    #[serde(default)]
+    flags: usize,
+    #[serde(default)]
+    chars: String,
+    /// Pause after this step.
+    #[serde(default)]
+    wait_ms: u64,
+}
+
+/// Real key events into coool's main window, through AppKit as the keyboard delivers them (self-test runs only; see
+/// `native::post_key`: no permission, nothing posted system-wide).
+#[tauri::command(async)]
+pub fn voice_selftest_keys(app: AppHandle, v: State<'_, Arc<Voice>>, steps: Vec<KeyStep>) -> Res<()> {
+    if !v.is_selftest() {
+        return Err("self-test mode is off".into());
+    }
+    let win = app.get_window("main").ok_or("no window")?;
+    let ns = win.ns_window().map_err(|e| e.to_string())? as usize;
+    for s in steps {
+        let kind = match s.kind.as_str() {
+            "down" => 10usize,
+            "up" => 11,
+            "flags" => 12,
+            k => return Err(format!("unknown key step {k}")),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (code, flags, chars) = (s.code, s.flags, s.chars.clone());
+        app.run_on_main_thread(move || {
+            let _ = tx.send(native::post_key(ns as *mut std::ffi::c_void, kind, code, flags, &chars));
+        })
+        .map_err(|e| e.to_string())?;
+        rx.recv_timeout(std::time::Duration::from_secs(3)).map_err(|e| e.to_string())??;
+        if s.wait_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(s.wait_ms));
+        }
+    }
+    Ok(())
 }

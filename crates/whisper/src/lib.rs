@@ -9,6 +9,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 pub mod audio;
+pub mod dictate;
+pub mod guard;
 
 /// Whisper's input rate.
 pub const SAMPLE_RATE: u32 = 16_000;
@@ -36,12 +38,14 @@ mod ffi {
             threads: c_int,
             initial_prompt: *const c_char,
             audio_ctx: c_int,
+            timestamps: c_int,
             cb: Option<SegmentCb>,
             user: *mut c_void,
             abort: *const AtomicI32,
         ) -> c_int;
         pub fn coool_whisper_n_segments(ctx: *mut Ctx) -> c_int;
         pub fn coool_whisper_segment(ctx: *mut Ctx, i: c_int) -> *const c_char;
+        pub fn coool_whisper_segment_stats(ctx: *mut Ctx, i: c_int, no_speech: *mut f32, avg_logprob: *mut f32, n_text: *mut c_int);
         pub fn coool_whisper_detected_language(ctx: *mut Ctx) -> *const c_char;
         pub fn coool_whisper_system_info() -> *const c_char;
     }
@@ -87,13 +91,17 @@ pub struct Options<'a> {
     /// Words to bias the decoder towards (whisper's initial prompt); kept short by the caller.
     pub prompt: Option<&'a str>,
     pub threads: usize,
-    /// Encoder frames to use (0 = whisper's full 30 s window). A short clip can use fewer, which is much faster.
+    /// Encoder frames to use (0 = whisper's full 30 s window). A short clip can use fewer, which is faster but less
+    /// accurate (coool's dictation uses the full window; see `dictate`).
     pub audio_ctx: usize,
+    /// Decode with timestamp tokens (never shown). Needed for anything past one sentence: without them whisper ends
+    /// each 30 s window after its first sentence and the rest of that window is lost.
+    pub timestamps: bool,
 }
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Options { task: Task::Transcribe, language: None, prompt: None, threads: default_threads(), audio_ctx: 0 }
+        Options { task: Task::Transcribe, language: None, prompt: None, threads: default_threads(), audio_ctx: 0, timestamps: true }
     }
 }
 
@@ -105,8 +113,21 @@ pub fn default_threads() -> usize {
 #[derive(Debug, Clone, Default)]
 pub struct Output {
     pub text: String,
+    /// The pieces whisper decoded, with how sure it was of each.
+    pub segments: Vec<Segment>,
     /// The language whisper detected (or was told), e.g. "tr".
     pub language: String,
+}
+
+/// One decoded piece of text and whisper's confidence in it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Segment {
+    pub text: String,
+    /// Probability that the window held no speech (whisper's `<|nospeech|>` token), 0..1.
+    pub no_speech: f32,
+    /// Mean log probability of the text tokens (0 is certain; below about -1 whisper is guessing).
+    pub avg_logprob: f32,
+    pub tokens: usize,
 }
 
 #[derive(Debug)]
@@ -187,6 +208,7 @@ impl Model {
                     o.threads.max(1) as c_int,
                     prompt.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
                     o.audio_ctx as c_int,
+                    o.timestamps as c_int,
                     Some(tramp),
                     &mut cb as *mut &mut dyn FnMut(&str) as *mut c_void,
                     abort.map_or(std::ptr::null(), |a| a as *const AtomicI32),
@@ -200,14 +222,20 @@ impl Model {
             }
             let n = unsafe { ffi::coool_whisper_n_segments(self.ctx) };
             let mut text = String::new();
+            let mut segments = Vec::new();
             for i in 0..n {
                 let p = unsafe { ffi::coool_whisper_segment(self.ctx, i) };
-                if !p.is_null() {
-                    text.push_str(&unsafe { CStr::from_ptr(p) }.to_string_lossy());
+                if p.is_null() {
+                    continue;
                 }
+                let t = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+                let (mut ns, mut lp, mut k) = (0f32, 0f32, 0 as c_int);
+                unsafe { ffi::coool_whisper_segment_stats(self.ctx, i, &mut ns, &mut lp, &mut k) };
+                text.push_str(&t);
+                segments.push(Segment { text: t.trim().to_string(), no_speech: ns, avg_logprob: lp, tokens: k.max(0) as usize });
             }
             let language = unsafe { CStr::from_ptr(ffi::coool_whisper_detected_language(self.ctx)) }.to_string_lossy().into_owned();
-            Ok(Output { text: text.trim().to_string(), language })
+            Ok(Output { text: text.trim().to_string(), segments, language })
         }
     }
 }

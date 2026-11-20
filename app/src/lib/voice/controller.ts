@@ -14,7 +14,7 @@ import { voiceApi, type MicPermission, type SpellHit } from "./api.ts";
 import { aiCacheKey, cacheFixes, cachedFixes, validateAiFixes, type AiFix } from "./aiFix.ts";
 import { cleanTranscript } from "./clean.ts";
 import { learnFromEdit, singleWordFix, type Pair } from "./learn.ts";
-import { applyMemory, initialPrompt, recordAccept, recordAlways, recordDismiss, recordNever, recordUse, type Applied } from "./memory.ts";
+import { applyMemory, echoWords, recordAccept, recordAlways, recordDismiss, recordNever, recordUse, type Applied } from "./memory.ts";
 import { getMemory, getVoicePrefs, loadMemory, updateMemory } from "./prefs.ts";
 import { aiNeeded, applySuggestion, check, type Suggestion } from "./suggest.ts";
 import { overlaps, tokenize } from "./text.ts";
@@ -200,7 +200,7 @@ export async function stopListening() {
   unsubLevel = null;
   unsubPartial = voiceApi().onPartial((x) => set((st) => ({ partial: (st.partial + x).trimStart() })));
   try {
-    const r = await voiceApi().stop({ model: p.model!, task: p.task, language: p.language === "auto" ? null : p.language, prompt: initialPrompt(mem) || null });
+    const r = await voiceApi().stop({ model: p.model!, task: p.task, language: p.language === "auto" ? null : p.language, vocabulary: echoWords(mem), keep: p.keepRecording });
     stopEvents();
     if (get().phase !== "transcribing") return; // cancelled meanwhile
     set({ phase: "idle", partial: "" });
