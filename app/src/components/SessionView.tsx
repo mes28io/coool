@@ -108,6 +108,8 @@ export function SessionView({
   const setStack = useLayout((s) => s.setStack);
   // Jobs and Models want a wide pane beside the chat; stacked above it, any pane will do.
   const wide = paneW >= 900 || axisOf("agents") === "y";
+  // Opening Jobs by itself takes room from the chat: stacked, only in a pane tall enough to spare it (not a short split).
+  const roomy = paneW >= 900 || (axisOf("agents") === "y" && bodyH >= 1100);
   // The browser panel fits a narrower pane: it only needs room for itself and a readable chat beside it (or, stacked,
   // the pane's width).
   const browserFits = paneW >= BROWSER_MIN + (axisOf("browser") === "y" ? 0 : BROWSER_CHAT_MIN);
@@ -127,8 +129,8 @@ export function SessionView({
   const liveCards = cards.filter(isLive).length + shells.filter((s) => s.background).length;
   // First time something runs while the session is on screen: open it. Closing it is remembered.
   useEffect(() => {
-    if (panelKey && wide && liveCards > 0 && panelState === undefined) setRightPanel(panelKey, "agents");
-  }, [panelKey, wide, liveCards, panelState, setRightPanel]);
+    if (panelKey && roomy && liveCards > 0 && panelState === undefined) setRightPanel(panelKey, "agents");
+  }, [panelKey, roomy, liveCards, panelState, setRightPanel]);
   const hasAgents = cards.length > 0 || shells.length > 0;
   const panelOn = wide && hasAgents;
   const tabs = useStore((st) => (panelKey ? st.browser[panelKey] : undefined));
