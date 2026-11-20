@@ -7,7 +7,8 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { useLayoutMode } from "./layout";
 
-type Anchor = { el: Element; off: number };
+/** `stuck`: the timeline was pinned to the bottom when the reader left it there. */
+type Anchor = { el: Element; off: number; stuck?: boolean };
 
 /**
  * What the reader sees first: going down a few levels, the first element that reaches into the view, until one is
@@ -57,10 +58,18 @@ export function useKeepReadingPlace(scroller: RefObject<HTMLElement | null>, sti
     const el = scroller.current;
     if (!el) return;
     let raf = 0;
+    let size = "";
     const record = () => {
       raf = 0;
       if (performance.now() < restoringUntil.current) return;
-      anchor.current = pick(el);
+      // A scroll that comes with a new size is the layout's (the view got taller and the top clamped), not the
+      // reader's: the place they left stays the one to go back to.
+      const now = `${el.clientWidth}x${el.clientHeight}`;
+      const resized = size !== "" && now !== size;
+      size = now;
+      if (resized) return;
+      const a = pick(el);
+      anchor.current = a && { ...a, stuck: !!stick.current };
     };
     const onScroll = () => {
       if (!raf) raf = requestAnimationFrame(record);
@@ -78,7 +87,10 @@ export function useKeepReadingPlace(scroller: RefObject<HTMLElement | null>, sti
     shown.current = mode;
     const el = scroller.current;
     const a = anchor.current;
-    if (!el || !a || stick.current || !a.el.isConnected) return;
+    // Pinned to the bottom when the reader left it: it stays pinned (the timeline does that). Otherwise the place comes
+    // back, even if a view tall enough to show everything counted as "at the bottom" in between.
+    if (!el || !a || a.stuck || !a.el.isConnected) return;
+    stick.current = false;
     restoringUntil.current = performance.now() + SETTLE_MS;
     const align = () => {
       const d = a.el.getBoundingClientRect().top - el.getBoundingClientRect().top - a.off;

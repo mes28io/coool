@@ -20,6 +20,8 @@
 //!   `http://127.0.0.1:8741/`, serving the pages that scenario names).
 //! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
 //!   frosted glass shows what is behind it (the `glass` scenario).
+//! - `COOOL_SELFTEST_SIZE`: the window's size in points, `<width>x<height>` (default `1440x900`), e.g. `1080x1920` for
+//!   a portrait screen (the `portrait` scenario). A scenario can also resize later (`selftest_resize`).
 //! - `COOOL_SELFTEST_WINDOW`: `quiet` (on top, never focused, no Dock icon) or `back` (never focused, behind the
 //!   person's windows and off screen: checks that need no picture of the window, like `mac-cycles` and `mac-idle`)
 //!   or `behind` (never focused, on screen but behind the person's windows: window-only shots of the glass with a
@@ -141,7 +143,8 @@ impl SelfTest {
         // `get_window`, not `get_webview_window`: once the in-app browser adds a child webview, `main` is a window
         // with several webviews and no longer counts as a webview window.
         if let Some(w) = app.get_window("main") {
-            let _ = w.set_size(tauri::LogicalSize::new(1440.0, 900.0));
+            let (width, height) = window_size(std::env::var("COOOL_SELFTEST_SIZE").ok().as_deref());
+            let _ = w.set_size(tauri::LogicalSize::new(width, height));
             if offscreen() {
                 #[cfg(target_os = "macos")]
                 let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -234,6 +237,19 @@ impl SelfTest {
 const OFFSCREEN: tauri::LogicalPosition<f64> = tauri::LogicalPosition { x: -30000.0, y: 200.0 };
 
 /// `COOOL_SELFTEST_OFFSCREEN=1` (and a build where the self-test can run at all).
+/// The window size a run starts at: `COOOL_SELFTEST_SIZE` as `<width>x<height>` in points, else 1440 x 900. Anything
+/// unreadable or out of range (under 400 or over 8000 a side) falls back to the default.
+fn window_size(v: Option<&str>) -> (f64, f64) {
+    const DEFAULT: (f64, f64) = (1440.0, 900.0);
+    let Some((w, h)) = v.map(str::trim).and_then(|v| v.split_once(['x', 'X'])) else {
+        return DEFAULT;
+    };
+    match (w.trim().parse::<f64>(), h.trim().parse::<f64>()) {
+        (Ok(w), Ok(h)) if (400.0..=8000.0).contains(&w) && (400.0..=8000.0).contains(&h) => (w, h),
+        _ => DEFAULT,
+    }
+}
+
 pub fn offscreen() -> bool {
     cfg!(debug_assertions) && std::env::var("COOOL_SELFTEST_OFFSCREEN").is_ok_and(|v| v == "1")
 }
@@ -1460,7 +1476,7 @@ pub fn selftest_notify_post(core: State<'_, Arc<Core>>, chat: Option<usize>, kin
 
 #[cfg(test)]
 mod tests {
-    use super::{window_mode, WindowMode};
+    use super::{window_mode, window_size, WindowMode};
 
     #[test]
     fn window_switches_combine() {
@@ -1475,5 +1491,18 @@ mod tests {
         assert_eq!(window_mode(Some("quiet"), true, false), WindowMode::Background);
         // The most hidden switch wins.
         assert_eq!(window_mode(Some("behind"), true, true), WindowMode::Offscreen);
+    }
+
+    #[test]
+    fn window_size_from_the_switch() {
+        assert_eq!(window_size(None), (1440.0, 900.0));
+        assert_eq!(window_size(Some("1080x1920")), (1080.0, 1920.0));
+        assert_eq!(window_size(Some(" 1200X1920 ")), (1200.0, 1920.0));
+        assert_eq!(window_size(Some("1440 x 2560")), (1440.0, 2560.0));
+        // Unreadable or out of range: the default.
+        assert_eq!(window_size(Some("portrait")), (1440.0, 900.0));
+        assert_eq!(window_size(Some("1080")), (1440.0, 900.0));
+        assert_eq!(window_size(Some("100x1920")), (1440.0, 900.0));
+        assert_eq!(window_size(Some("1080x99999")), (1440.0, 900.0));
     }
 }

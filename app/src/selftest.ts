@@ -54,6 +54,7 @@ import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
 import { windowScenarios } from "./selftestWindow";
 import { readmeScenarios } from "./selftestReadme";
+import { portraitScenarios } from "./selftestPortrait";
 import { filmScenarios } from "./selftestFilm";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
@@ -7668,6 +7669,10 @@ Object.assign(scenarios, codexScenarios);
 // `readme-shots` (selftestReadme.ts): the README's screenshots on the invented workspace of app/scripts/readme-shots;
 // no model calls (the chats talk to a stand-in CLI). Not in `all`.
 scenarios["readme-shots"] = (c: Ctx) => readmeScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) })["readme-shots"]();
+
+// `portrait` (selftestPortrait.ts): coool on a portrait screen (COOOL_SELFTEST_SIZE=1080x1920) on the same invented
+// workspace, then resized to landscape and back. No model calls. Not in `all`.
+scenarios.portrait = (c: Ctx) => portraitScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) }).portrait();
 
 // `film` / `film-measure` (selftestFilm.ts): motion footage for the launch film on the same invented workspace
 // (app/scripts/readme-shots/film.sh). No model calls. Not in `all`.
