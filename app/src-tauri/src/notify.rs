@@ -606,8 +606,14 @@ mod sys {
     pub fn sound_file(name: &str) -> Option<std::path::PathBuf> {
         let file = format!("coool-{name}.wav");
         let in_bundle = NSBundle::mainBundle().resourcePath().map(|r| std::path::PathBuf::from(r.to_string()).join(&file));
-        let in_tree = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sounds").join(&file);
-        in_bundle.filter(|p| p.is_file()).or_else(|| in_tree.is_file().then_some(in_tree))
+        let found = in_bundle.filter(|p| p.is_file());
+        // Debug builds only: a release binary must not carry the path of the Mac it was built on.
+        #[cfg(debug_assertions)]
+        let found = found.or_else(|| {
+            let in_tree = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sounds").join(&file);
+            in_tree.is_file().then_some(in_tree)
+        });
+        found
     }
 
     thread_local! {

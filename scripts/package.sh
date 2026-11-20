@@ -9,7 +9,16 @@ root=$(pwd)
 target="${CARGO_TARGET_DIR:-$root/target}"
 [ "$(uname -m)" = "arm64" ] || { echo "package.sh: build on an Apple silicon Mac" >&2; exit 1; }
 
+# Keep this Mac's home folder (and so the account name) out of the binary: panic messages and C asserts embed
+# source paths otherwise.
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=~"
+export CFLAGS="${CFLAGS:-} -ffile-prefix-map=$HOME=~"
+export CXXFLAGS="${CXXFLAGS:-} -ffile-prefix-map=$HOME=~"
 pnpm -C app tauri build --bundles app
+if strings "$target/release/bundle/macos/coool.app/Contents/MacOS/coool" | grep -q "$HOME"; then
+  echo "package.sh: the binary still contains $HOME" >&2
+  exit 1
+fi
 app="$target/release/bundle/macos/coool.app"
 [ -d "$app" ] || { echo "package.sh: $app is missing" >&2; exit 1; }
 # One signature over the whole bundle, so the installer's `codesign --verify --deep` has something to check.
