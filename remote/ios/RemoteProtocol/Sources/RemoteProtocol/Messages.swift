@@ -138,6 +138,12 @@ public struct Question: Codable, Equatable, Sendable {
   public var options: [String]
   public var multi: Bool
   public var allowOther: Bool
+  public init(question: String, options: [String], multi: Bool, allowOther: Bool) {
+    self.question = question
+    self.options = options
+    self.multi = multi
+    self.allowOther = allowOther
+  }
 }
 
 /// A pending request: kind "permission", "plan" or "question".
@@ -208,6 +214,14 @@ public struct CommandResult: Codable, Equatable, Sendable {
   public var error: String?
   public var session: String?
   public var mode: String?
+  public init(of: String, t: String, ok: Bool, error: String? = nil, session: String? = nil, mode: String? = nil) {
+    self.of = of
+    self.t = t
+    self.ok = ok
+    self.error = error
+    self.session = session
+    self.mode = mode
+  }
 }
 
 /// A message from the Mac, typed. Unknown types are ignored (`unknown`), so the Mac can be newer.
