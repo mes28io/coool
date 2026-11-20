@@ -1,4 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
+import { MessageAttachments } from "./Attachments";
+import type { Attachment } from "../lib/attachRules";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, ArtifactInfo, Session } from "../lib/types";
 import { fmtElapsed, fmtTokens, homeShort, isThinking, shortDetail, splitTool, tsToMs } from "../lib/format";
@@ -390,14 +392,15 @@ function ActivityText({ a }: { a: Activity }) {
 }
 
 function PromptBlock({ a }: { a: Activity }) {
-  return <PromptBubble text={bodyOf(a)} stamp={a.ts} shortened={shortenedOf(a)} />;
+  return <PromptBubble text={bodyOf(a)} stamp={a.ts} shortened={shortenedOf(a)} attachments={a.attachments} scope={`h:${a.ts}:${a.text.slice(0, 24)}`} />;
 }
 
 /** `unsent`: shown as sent but it never reached the agent (the chat couldn't be opened): drawn dashed and dimmed. */
-export function PromptBubble({ text, stamp, shortened, unsent }: { text: string; stamp?: string; shortened?: boolean; unsent?: boolean }) {
+export function PromptBubble({ text, stamp, shortened, unsent, attachments, scope }: { text: string; stamp?: string; shortened?: boolean; unsent?: boolean; attachments?: Attachment[]; scope?: string }) {
   return (
     <div className="flex flex-col items-end gap-1 pt-1" data-prompt-unsent={unsent || undefined}>
-      <div
+      {!!attachments?.length && <MessageAttachments atts={attachments} scope={scope ?? stamp ?? ""} />}
+      {(text.trim() || !attachments?.length) && <div
         className={cx(
           "selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[18px] rounded-br-[6px] border px-4 py-3 text-prose",
           unsent ? "border-dashed border-line bg-transparent text-dim" : "border-hairline bg-raised text-fg shadow-card",
@@ -405,7 +408,7 @@ export function PromptBubble({ text, stamp, shortened, unsent }: { text: string;
       >
         {text}
         {shortened && <div className="mt-1 text-small text-faint">… shortened</div>}
-      </div>
+      </div>}
       {stamp && <span className="pr-1 font-mono text-mono-small text-faint tnum">{stamp}</span>}
     </div>
   );

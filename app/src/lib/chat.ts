@@ -1,3 +1,4 @@
+import type { Attachment } from "./attachRules";
 // Chat state, reduced from CHAT_SPEC events. One entry per chat id, kept for
 // every chat the backend reports (not only open ones) so the sidebar, tabs and
 // Mission control can show "Needs you" without the chat view being mounted.
@@ -26,7 +27,7 @@ export interface OpenFailed {
 }
 
 export type ChatItem =
-  | { kind: "prompt"; key: string; id: string; text: string; ts: number; unsent?: boolean }
+  | { kind: "prompt"; key: string; id: string; text: string; ts: number; unsent?: boolean; attachments?: Attachment[] }
   | { kind: "text"; key: string; id: string; text: string; ts: number; streaming: boolean; parent: string | null; model: string | null }
   | { kind: "thinking"; key: string; id: string; text: string; ts: number; endTs: number | null; parent: string | null }
   | {
@@ -295,7 +296,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           c = { ...c, notes: c.notes.map((x) => (x === n ? { ...x, echoed: true } : x)) };
           if (!n.asPrompt && e.steer !== false) break;
         }
-        its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts });
+        its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts, ...(e.attachments?.length ? { attachments: e.attachments } : {}) });
         c = { ...c, prompts: c.prompts[c.prompts.length - 1] === e.text ? c.prompts : [...c.prompts, e.text].slice(-200), turnStart: c.turnStart ?? e.ts, turnOut0: c.turnStart === null ? c.tokens.output : c.turnOut0 };
         break;
       }

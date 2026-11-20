@@ -1,3 +1,4 @@
+import type { Attachment } from "./attachRules";
 // Serde form of coool_core::model (crates/core/src/model.rs).
 
 export type Provider = "claude" | "codex";
@@ -17,6 +18,8 @@ export interface Activity {
   step?: boolean;
   /** A step that published a page to claude.ai (Claude Code's Artifact tool). */
   artifact?: ArtifactInfo;
+  /** A prompt's images and files (crates/core/src/attach.rs). */
+  attachments?: Attachment[];
 }
 
 /** One published version of an artifact (crates/core/src/artifact.rs). Publishes with the same `url` are versions of one artifact. */
@@ -356,7 +359,7 @@ export type ChatEvent = Ev &
         agents: string[];
         context_window: number | null;
       }
-    | { type: "user_message"; id: string; text: string; steer?: boolean; note_id?: string | null }
+    | { type: "user_message"; id: string; text: string; steer?: boolean; note_id?: string | null; attachments?: Attachment[] }
     | { type: "text_delta"; message_id: string; text: string; parent_tool_id: string | null }
     | { type: "thinking_delta"; message_id: string; text: string; parent_tool_id: string | null }
     | { type: "assistant_message"; id: string; text: string; model: string | null; parent_tool_id: string | null }
