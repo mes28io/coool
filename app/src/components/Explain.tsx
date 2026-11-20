@@ -156,7 +156,7 @@ function ClaimBlock({ who, claim }: { who: string; claim: Claim }) {
 
 function AiTag({ model }: { model?: string }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-[6px] bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] px-1.5 text-small font-medium text-accent-text" title={aiTitle(model ?? "claude-haiku-5-5")} data-explain-ai-tag>
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-[6px] bg-hover px-1.5 text-small font-medium text-dim" title={aiTitle(model ?? "claude-haiku-5-5")} data-explain-ai-tag>
       <ISpark size={11} />
       Second read
     </span>
