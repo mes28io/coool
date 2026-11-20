@@ -8,4 +8,4 @@
 //! `sh scripts/release-key.sh`, which also writes its public key here. Back it up offline. While this list is empty,
 //! no update can be verified, so none is installed.
 
-pub const PINNED: &[&str] = &[];
+pub const PINNED: &[&str] = &["RWROxc9VH08BRPb9y5Kh3HgUpdVtMSV6ENTKOlfQUqRZFezk5u8U1TlA"];

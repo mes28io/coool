@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "coool"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "coool-core",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "coool-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "coool-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "coool-whisper"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cc",
 ]
