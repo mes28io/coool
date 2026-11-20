@@ -49,6 +49,7 @@ import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
 import { windowScenarios } from "./selftestWindow";
+import { readmeScenarios } from "./selftestReadme";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
 import { voiceScenarios } from "./selftestVoice";
@@ -822,7 +823,95 @@ async function inspo(ctx: Ctx, name: string) {
   if (key) useStore.getState().closeBrowser(key);
 }
 
+/** The updater's report (app/src-tauri/src/update/). */
+interface UpdSt {
+  items: { id: string; state: string; current: string | null; latest: string | null; detail: string | null; command: string | null; method: string | null }[];
+  gate_open: boolean;
+  gate_ms: number | null;
+}
+const updLine = (s: UpdSt) => s.items.map((i) => `${i.id}=${i.state}${i.current ? ` ${i.current}` : ""}${i.latest ? `→${i.latest}` : ""}${i.method ? ` (${i.method})` : ""}${i.detail ? ` "${i.detail}"` : ""}`).join("; ");
+/** Starts a chat through the backend (the launch gate holds it) and returns its id, how long the start took and its pid. */
+async function gatedChat(ctx: Ctx): Promise<{ id: number; ms: number; pid: number | null }> {
+  const t = performance.now();
+  const id = (await invoke("start_chat", { opts: { provider: "claude", cwd: ctx.cfg.dir, resume: null, model: null, permission_mode: null, ladder: null } })) as number;
+  const ms = Math.round(performance.now() - t);
+  const l = (await invoke("selftest_chat_launch", { chat: id })) as { pid: number | null };
+  await invoke("chat_stop", { id }).catch(() => {});
+  return { id, ms, pid: l.pid };
+}
+
+const updateScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  /**
+   * The updater's launch gate: chats wait for the launch step, at most GATE_MAX, then start whatever the checks did
+   * (answered, unreachable, hanging). Run with COOOL_UPDATE_BASE (a loopback server, or a closed port) and
+   * COOOL_UPDATE_CLI_DIR (stand-in CLIs). No model calls: the chat is stopped as soon as its process runs.
+   */
+  async "update-gate"(ctx) {
+    const st = async () => (await invoke("update_status")) as UpdSt;
+    await step("update-gate: a chat started during launch waits for the gate, then starts", async () => {
+      const before = await st();
+      const c = await gatedChat(ctx);
+      const after = await st();
+      if (!after.gate_open) throw new Fail("the gate is still closed after the chat started");
+      if (!c.pid) throw new Fail(`chat ${c.id} has no process`);
+      return `gate ${before.gate_open ? "open" : "closed"} when asked; start_chat took ${c.ms} ms; gate opened ${after.gate_ms} ms after launch; chat ${c.id} pid ${c.pid}; ${updLine(after)}`;
+    });
+    await step("update-gate: the CLI updates settle (updated, held, or left as they were)", async () => {
+      const s = await poll("the CLI updates to finish", async () => {
+        const s = await st();
+        return s.items.some((i) => ["checking", "installing", "downloading"].includes(i.state)) ? null : s;
+      }, 60_000);
+      return updLine(s);
+    });
+  },
+  /**
+   * coool updated while in use (run from a test bundle, COOOL_UPDATE_BASE serving a newer release): "Check now"
+   * downloads and installs it beside the running app; the running app keeps working (bundle untouched, a chat starts,
+   * its sounds are still bundled); Restart swaps it in and quits (a self-test never relaunches).
+   */
+  async "update-bg"(ctx) {
+    const st = async () => (await invoke("update_status")) as UpdSt;
+    await step("update-bg: an update found in use is installed in the background, with no restart", async () => {
+      await invoke("update_check");
+      const s = await poll("the update to be installed", async () => {
+        const s = await st();
+        return s.items[0].state === "staged" ? s : null;
+      }, 120_000);
+      const label = $("[data-update-button]")?.getAttribute("data-update-button");
+      await shot("update-bg-staged");
+      return `${updLine(s)}; rail icon ${label}`;
+    });
+    await step("update-bg: the running app still works (a chat starts, sounds are bundled)", async () => {
+      const c = await gatedChat(ctx);
+      const sounds = (await invoke("notify_sounds")) as { bundled: boolean };
+      if (!c.pid) throw new Fail("no chat process");
+      if (!sounds.bundled) throw new Fail("the app's sounds are no longer found");
+      return `chat ${c.id} pid ${c.pid} in ${c.ms} ms; sounds bundled`;
+    });
+    await step("update-bg: Restart swaps the new version in and quits", async () => {
+      await log("RESTARTING");
+      await invoke("update_restart");
+      await sleep(5000);
+      throw new Fail("still running 5 s after Restart");
+    });
+  },
+  /** An update installed while coool ran goes in when it quits normally (no Restart click). Run from a test bundle. */
+  async "update-quit"() {
+    await step("update-quit: an installed update is applied by a normal quit", async () => {
+      const s = await poll("an installed update", async () => {
+        const s = (await invoke("update_status")) as UpdSt;
+        return s.items[0].state === "staged" ? s : null;
+      }, 120_000);
+      await log(`QUITTING with ${updLine(s)}`);
+      await invoke("selftest_request_quit");
+      await sleep(8000);
+      throw new Fail("still running 8 s after Quit");
+    });
+  },
+};
+
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  ...updateScenarios,
   /**
    * The browser panel: an artifact preview window, then https://example.com in a tab's native child webview, which
    * follows the panel through a window resize and a panel resize, hides under the palette, when the panel switches
@@ -7433,6 +7522,10 @@ const codexScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, codexScenarios);
+
+// `readme-shots` (selftestReadme.ts): the README's screenshots on the invented workspace of app/scripts/readme-shots;
+// no model calls (the chats talk to a stand-in CLI). Not in `all`.
+scenarios["readme-shots"] = (c: Ctx) => readmeScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) })["readme-shots"]();
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

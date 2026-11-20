@@ -11,6 +11,7 @@ import { resetText, toneColor, usageHighest, usageTone, useUsageProviders } from
 import { countRender } from "../lib/perfCount";
 import { useNotifyClicks } from "../lib/notifyRoute";
 import { sessionKey } from "../lib/types";
+import { UpdateButton } from "./UpdatePanel";
 
 /**
  * One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. `tip` replaces the
@@ -28,6 +29,7 @@ function RailButton({
   tip,
   tipInline,
   onRich,
+  tint,
 }: {
   label: string;
   shortcut?: string;
@@ -43,6 +45,8 @@ function RailButton({
   tipInline?: boolean;
   /** The pointer (or keyboard focus) came onto / left the button. */
   onRich?: (on: boolean) => void;
+  /** A soft running-blue fill (the updater's icon when it has something to show). */
+  tint?: boolean;
 }) {
   const [rich, setRichState] = useState(false);
   const setRich = (on: boolean) => {
@@ -67,7 +71,11 @@ function RailButton({
         }}
         className={cx(
           "relative flex size-[40px] items-center justify-center rounded-[11px] transition-colors duration-150",
-          active ? "bg-raised text-fg shadow-card" : "text-dim hover:bg-hover hover:text-fg",
+          active
+            ? "bg-raised text-fg shadow-card"
+            : tint
+              ? "bg-[color-mix(in_oklab,var(--status-running)_14%,transparent)] text-running hover:bg-[color-mix(in_oklab,var(--status-running)_22%,transparent)]"
+              : "text-dim hover:bg-hover hover:text-fg",
         )}
       >
         {children}
@@ -355,6 +363,14 @@ export function Rail() {
       </AnimatePresence>
 
       <div className="mt-auto flex flex-col items-center gap-1.5">
+        {/* The updater (UpdatePanel.tsx): shown only while it works or something needs you. */}
+        <UpdateButton>
+          {(p) => (
+            <RailButton label={p.label} onClick={p.onClick} active={p.active} dot={p.dot} hideTip={p.active} tint={p.tint}>
+              {p.icon}
+            </RailButton>
+          )}
+        </UpdateButton>
         <UsageButton />
         <RailButton label={`${theme === "dark" ? "Light" : "Dark"} theme`} shortcut="⌘⇧L" onClick={toggleTheme}>
           <AnimatePresence mode="popLayout" initial={false}>

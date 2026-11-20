@@ -12,6 +12,7 @@ import { IAlert, ICheck, IPlay } from "../icons";
 import { BUILD_KINDS } from "../onboarding/BuildStep";
 import { Button, cx, ProviderMark } from "../primitives";
 import { LidAwakeRow } from "./LidAwake";
+import { UpdatesGroup } from "./Updates";
 import { ErrorLine, errText, Group, Note, Row, Select, Switch, type Option } from "./ui";
 
 /** The "CLI default" choice in a Select (stored as null). */
@@ -246,6 +247,7 @@ export function General() {
           control={<Switch label="Show runs started by other tools" on={showAutomation} onChange={setShowAutomation} />}
         />
       </Group>
+      <UpdatesGroup />
       {unavailable && <p className="px-1 pt-3 text-small text-faint">This build of coool can’t save these options yet.</p>}
       <div className="px-1 pt-2">
         <ErrorLine>{err ?? loginErr}</ErrorLine>

@@ -7,6 +7,7 @@ import type { ChatEvent, ChatOptions, ContextMap, Environment, GitTrail, Insight
 import type { MotionHints } from "./motion";
 import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
+import type { UpdateStatus } from "./updateView";
 
 export interface PtyChunk {
   id: number;
@@ -55,6 +56,20 @@ export interface Backend extends SettingsBackend {
   /** What fills a session's (or one of its subagents') context window, for the open Models panel only (crates/core/src/context.rs). */
   contextMap(a: { provider: Provider; sessionId: string; agentId?: string | null; cwd?: string }): Promise<ContextMap>;
   quit(): Promise<void>;
+  // ---- the updater (app/src-tauri/src/update/, lib/update.ts) ----
+  /** What the updater knows (no network); null when this backend has no updater. */
+  updateStatus(): Promise<UpdateStatus | null>;
+  /** Checks coool, Claude Code and Codex now; installs what the switches allow, in the background. */
+  updateCheck(): Promise<UpdateStatus | null>;
+  /** Settings: keep coool (app) / the CLIs (cli) up to date. */
+  updateSetAuto(o: { app?: boolean; cli?: boolean }): Promise<void>;
+  /** Downloads and installs coool's newer version beside the running app (automatic updates off). */
+  updateInstall(): Promise<void>;
+  /** Updates one CLI now (it waits while its sessions run). */
+  updateCliNow(provider: Provider): Promise<void>;
+  /** Restarts into the installed update (stops what coool runs, as Quit does). */
+  updateRestart(): Promise<void>;
+  onUpdateState(cb: (s: UpdateStatus) => void): Unlisten;
   onSessions(cb: (s: Snapshot) => void): Unlisten;
   onPtyOutput(cb: (c: PtyChunk) => void): Unlisten;
   onPtyExit(cb: (id: number) => void): Unlisten;
@@ -575,6 +590,13 @@ async function tauriBackend(): Promise<Backend> {
     gitTrail: (path) => invoke("git_trail", { path }),
     contextMap: ({ provider, sessionId, agentId, cwd }) => soft("context_map", { provider, sessionId, agentId: agentId ?? null, cwd: cwd ?? null }),
     quit: () => invoke("quit_app"),
+    updateStatus: () => soft<UpdateStatus>("update_status").catch(() => null),
+    updateCheck: () => soft<UpdateStatus>("update_check").catch(() => null),
+    updateSetAuto: ({ app, cli }) => soft("update_set_auto", { app: app ?? null, cli: cli ?? null }),
+    updateInstall: () => soft("update_install"),
+    updateCliNow: (provider) => soft("update_cli_now", { provider }),
+    updateRestart: () => soft("update_restart"),
+    onUpdateState: (cb) => sub<UpdateStatus>("update-state", cb),
     usageRefresh: (provider) => invoke("usage_refresh", { provider }),
     usageResetCodex: (idempotencyKey) => invoke("usage_reset_codex", { idempotencyKey }),
     onSessions,
