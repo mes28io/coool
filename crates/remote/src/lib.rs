@@ -31,6 +31,7 @@ pub struct Remote {
     host: Arc<dyn Host>,
     dir: PathBuf,
     default_relay: String,
+    access: Option<String>,
     transport: Mutex<Option<relay::Transport>>,
     stop: Mutex<Option<Arc<AtomicBool>>>,
     /// Wakes the worker for an early tick (the app saw a change).
@@ -40,7 +41,13 @@ pub struct Remote {
 impl Remote {
     /// Loads the saved state from `dir` (nothing touches the key store or the network unless Remote was left on).
     pub fn new(dir: PathBuf, keystore: Box<dyn keystore::KeyStore>, host: Arc<dyn Host>, default_relay: &str) -> Arc<Remote> {
-        let r = Arc::new(Remote { engine: Mutex::new(None), keystore, host, dir, default_relay: default_relay.into(), transport: Mutex::new(None), stop: Mutex::new(None), nudge: Mutex::new(None) });
+        // `relay.json` beside the saved state names this Mac's relay and, for a private relay, its access key:
+        // {"relay": "https://….convex.cloud", "access": "…"}. The app ships with no relay of its own.
+        let own = std::fs::read_to_string(dir.join("relay.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        let from = |k: &str| own.as_ref().and_then(|v| v.get(k)).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let default_relay = from("relay").unwrap_or_else(|| default_relay.to_string());
+        let access = from("access");
+        let r = Arc::new(Remote { engine: Mutex::new(None), keystore, host, dir, default_relay, access, transport: Mutex::new(None), stop: Mutex::new(None), nudge: Mutex::new(None) });
         if Engine::load_saved(&r.dir).enabled {
             let _ = r.ensure_engine();
             r.start_worker();
@@ -69,7 +76,8 @@ impl Remote {
                 id
             }
         };
-        let eng = Engine::new(saved, identity, Some(self.dir.clone()));
+        let mut eng = Engine::new(saved, identity, Some(self.dir.clone()));
+        eng.access = self.access.clone();
         eng.save();
         *e = Some(eng);
         Ok(())
@@ -91,6 +99,9 @@ impl Remote {
     }
 
     pub fn set_enabled(self: &Arc<Self>, on: bool) -> Result<Status> {
+        if on && self.status().relay.is_empty() {
+            anyhow::bail!("Remote needs a relay of your own. See docs/REMOTE.md.");
+        }
         if on {
             self.with(|e| {
                 e.saved.enabled = true;

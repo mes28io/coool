@@ -193,7 +193,7 @@ export function RemoteSettings() {
           ))}
         </Group>
       )}
-      <Group label="Privacy" footer="The relay is coool's own Convex project. It never sees your sessions: it only knows which Mac talks to which phone, when, and how much.">
+      <Group label="Privacy" footer="The relay is the one this Mac's relay.json names. It never sees your sessions: it only knows which Mac talks to which phone, when, and how much.">
         <Row label="End-to-end encrypted" desc="Titles, prompts, commands and answers are encrypted on this Mac and on the phone." k="encryption privacy" />
         <Row label="Allow once or deny" desc="A phone can never choose “always allow”, change a permission mode, or start a chat in Bypass or full access." k="always allow bypass" />
       </Group>

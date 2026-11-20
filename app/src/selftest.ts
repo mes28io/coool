@@ -54,6 +54,7 @@ import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
 import { windowScenarios } from "./selftestWindow";
 import { readmeScenarios } from "./selftestReadme";
+import { filmScenarios } from "./selftestFilm";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
 import { voiceScenarios } from "./selftestVoice";
@@ -7532,6 +7533,12 @@ Object.assign(scenarios, codexScenarios);
 // `readme-shots` (selftestReadme.ts): the README's screenshots on the invented workspace of app/scripts/readme-shots;
 // no model calls (the chats talk to a stand-in CLI). Not in `all`.
 scenarios["readme-shots"] = (c: Ctx) => readmeScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) })["readme-shots"]();
+
+// `film` / `film-measure` (selftestFilm.ts): motion footage for the launch film on the same invented workspace
+// (app/scripts/readme-shots/film.sh). No model calls. Not in `all`.
+for (const n of ["film", "film-measure"]) {
+  scenarios[n] = (c: Ctx) => filmScenarios({ dir: c.cfg.dir, site: c.cfg.site, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })[n]();
+}
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

@@ -75,7 +75,7 @@ export function UpdatesGroup() {
         k="cli claude codex npm update"
         desc={
           <>
-            Updates each CLI the way it was installed, never while one of its sessions is running.
+            Off: new versions show in the updater and you choose when to install. On: coool installs them itself, the way each CLI was installed and never while one of its sessions is running. A brand-new CLI version may not have been tried with coool yet.
             {clis.length > 0 && (
               <span className="text-faint">
                 {" "}

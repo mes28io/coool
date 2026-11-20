@@ -76,10 +76,14 @@ async function touchPresence(ctx: MutationCtx, macId: string, now: number) {
 
 /** Fields signed: macId, signPub, boxPub. The first registration of a Mac id wins; later ones must match it. */
 export const registerMac = mutation({
-  args: { macId: v.string(), signPub: v.string(), boxPub: v.string(), ts: v.number(), sig: v.string() },
+  args: { macId: v.string(), signPub: v.string(), boxPub: v.string(), ts: v.number(), sig: v.string(), access: v.optional(v.string()) },
   handler: async (ctx, a) => {
     const now = Date.now();
     if (!isId(a.macId) || !isB64Bytes(a.signPub, 32) || !isB64Bytes(a.boxPub, 32)) return refuse("bad_args");
+    // A private relay: when the deployment sets RELAY_ACCESS, a Mac the relay hasn't seen must present it. Without
+    // the variable (a development deployment) any Mac may register.
+    const want = process.env.RELAY_ACCESS;
+    if (want && !(await macRow(ctx, a.macId)) && a.access !== want) return refuse("not_allowed");
     if (!fresh(a.ts, now)) return refuse("stale");
     if (!verifySig(a.signPub, a.sig, signedBytes("registerMac", [a.macId, a.signPub, a.boxPub], a.ts))) return refuse("bad_signature");
     if (!(await hit(ctx, `register:${a.macId}`, 3_600_000, 30, now))) return refuse("rate_limited");

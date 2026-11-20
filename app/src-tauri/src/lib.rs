@@ -1488,8 +1488,10 @@ mod settings {
         /// Look for a newer coool at launch and a few times a day (update.rs). Installing always waits for a click.
         #[serde(default = "yes")]
         pub update_checks: bool,
-        /// Keep Claude Code and Codex up to date (update/cli.rs): never while one of their processes runs.
-        #[serde(default = "yes")]
+        /// Keep Claude Code and Codex up to date (update/cli.rs): never while one of their processes runs. Off unless
+        /// the person turns it on: a brand-new CLI version is one coool hasn't been tried with. Their updates still
+        /// show in the updater, with a button.
+        #[serde(default)]
         pub update_clis: bool,
     }
 
@@ -1503,7 +1505,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new(), update_checks: true, update_clis: true }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new(), update_checks: true, update_clis: false }
         }
     }
 
@@ -1932,6 +1934,7 @@ pub fn run() {
             selftest::selftest_log,
             selftest::selftest_chat_launch,
             selftest::selftest_shot,
+            selftest::film::selftest_film,
             selftest::selftest_window,
             selftest::selftest_perf_stats,
             selftest::selftest_request_quit,

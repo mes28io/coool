@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// The relay the app talks to unless its saved state names another: the `coool-remote` project's deployment.
-/// A Convex deployment URL is a public client address (like any web app's backend URL), not a secret.
-pub const DEFAULT_RELAY: &str = "https://giddy-ox-164.eu-west-1.convex.cloud";
+/// The app ships with no relay: Remote appears only on a Mac whose `relay.json` (in Remote's state folder,
+/// `~/Library/Application Support/coool/remote/`) names one. See docs/REMOTE.md, "Your own relay".
+pub const DEFAULT_RELAY: &str = "";
 
 /// What the refresher and the chat pump last saw, for the engine's thread to read without taking the Hub.
 #[derive(Default)]

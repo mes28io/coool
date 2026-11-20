@@ -49,6 +49,8 @@
 //! Codex chats introduce themselves as `coool-selftest`, so a later normal launch
 //! never counts them as the person's.
 
+pub mod film;
+
 use crate::Core;
 use serde::Serialize;
 use std::io::Write;

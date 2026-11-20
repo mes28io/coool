@@ -264,6 +264,9 @@ SESSIONS = [
          None)]),
 ]
 
+# The film (film.sh): sessions whose edit of a file is left out of the build and made live on cue instead.
+FILM_LATER_EDITS = {"Make limiter budgets follow config reloads": "src/config.rs"}
+
 # ------------------------------------------------------------------------------------------------ build
 
 
@@ -458,7 +461,7 @@ def codex_rollout(home: Path, s: dict, now: float, live: list):
         live.append({"provider": "codex", "sessionId": cid, "cwd": str(cwd), "path": str(p), "state": s["state"], "model": s["model"], "open": open_turn})
 
 
-def build(root: Path):
+def build(root: Path, film: bool = False):
     if root.exists():
         sys.exit(f"{root} exists; remove it first")
     home = root / "home"
@@ -473,6 +476,9 @@ def build(root: Path):
     build_repos(root, home, now)
     live = []
     for s in SESSIONS:
+        if film and s["title"] in FILM_LATER_EDITS:
+            # The film makes this session's edit of a shared file happen on cue (the overlap warning appearing).
+            s = {**s, "turns": [(pr, [st for st in steps if not (st[0] == "Edit" and st[1]["file_path"] == FILM_LATER_EDITS[s["title"]])], rep) for pr, steps, rep in s["turns"]]}
         (codex_rollout if s.get("provider") == "codex" else claude_transcript)(home, s, now, live)
     (root / "live.json").write_text(json.dumps(live, indent=1))
     print(f"{len(SESSIONS)} sessions in {len(HISTORY)} projects, {len(live)} live -> {root}")
@@ -569,9 +575,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["build", "live"])
     ap.add_argument("--root", required=True)
+    ap.add_argument("--film", action="store_true", help="the launch film's variant (film.sh): moments happen on cue")
+    ap.add_argument("--cues", help="live --film: the self-test log to watch for `CUE <name>` lines")
     a = ap.parse_args()
     root = Path(a.root).resolve()
-    build(root) if a.cmd == "build" else live(root)
+    if a.cmd == "build":
+        build(root, a.film)
+    elif a.film:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))  # (-I leaves this folder off the path)
+        import film_live
+        film_live.run(root, Path(a.cues), sys.modules[__name__])
+    else:
+        live(root)
 
 
 if __name__ == "__main__":
