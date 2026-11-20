@@ -8,27 +8,45 @@ use std::time::{Duration, Instant};
 pub struct Gate {
     m: Mutex<Inner>,
     cv: Condvar,
+    made: Instant,
     deadline: Instant,
 }
 
 struct Inner {
     open: bool,
+    opened_at: Option<Instant>,
     /// Per CLI (Claude Code, Codex): an update is running.
     busy: [bool; 2],
 }
 
 impl Gate {
     pub fn new(max: Duration) -> Gate {
-        Gate { m: Mutex::new(Inner { open: false, busy: [false; 2] }), cv: Condvar::new(), deadline: Instant::now() + max }
+        let made = Instant::now();
+        Gate { m: Mutex::new(Inner { open: false, opened_at: None, busy: [false; 2] }), cv: Condvar::new(), made, deadline: made + max }
     }
 
     pub fn open(&self) {
-        self.m.lock().unwrap().open = true;
+        let mut g = self.m.lock().unwrap();
+        if !g.open {
+            g.open = true;
+            g.opened_at = Some(Instant::now());
+        }
+        drop(g);
         self.cv.notify_all();
     }
 
     pub fn is_open(&self) -> bool {
         self.m.lock().unwrap().open || Instant::now() >= self.deadline
+    }
+
+    /// How long after it was made the gate opened (or timed out); `None` while it holds.
+    pub fn opened_after(&self) -> Option<Duration> {
+        let g = self.m.lock().unwrap();
+        match g.opened_at {
+            Some(t) if t < self.deadline => Some(t - self.made),
+            _ if Instant::now() >= self.deadline => Some(self.deadline - self.made),
+            _ => None,
+        }
     }
 
     pub fn set_busy(&self, cli: usize, on: bool) {

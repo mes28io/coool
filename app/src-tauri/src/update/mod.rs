@@ -623,6 +623,8 @@ pub struct Status {
     auto_cli: bool,
     /// Chats may start (the launch step finished or timed out).
     gate_open: bool,
+    /// How long after launch chats were let through (the step ended, or its time ran out).
+    gate_ms: Option<u64>,
     /// Epoch ms of the last check.
     checked_at: Option<u64>,
     /// Why this copy of coool can't update itself, if so.
@@ -683,7 +685,7 @@ impl Updater {
         let s = crate::settings::load(core.selftest.as_ref());
         let mut items = self.items.lock().unwrap().to_vec();
         items[0].current = Some(app.package_info().version.to_string());
-        Status { items, auto_app: s.update_checks, auto_cli: s.update_clis, gate_open: self.gate.is_open(), checked_at: *self.checked_at.lock().unwrap(), blocked: blocked() }
+        Status { items, auto_app: s.update_checks, auto_cli: s.update_clis, gate_open: self.gate.is_open(), gate_ms: self.gate.opened_after().map(|d| d.as_millis() as u64), checked_at: *self.checked_at.lock().unwrap(), blocked: blocked() }
     }
 }
 
