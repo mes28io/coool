@@ -11,12 +11,14 @@
 //! live query on the relay, handles what arrives, and sends what changed about once a second.
 
 pub mod keystore;
+pub mod live;
 pub mod mac;
+pub mod overview;
 pub mod proto;
 pub mod relay;
 pub mod rules;
 
-pub use mac::{Action, Device, DeviceView, Engine, Host, PairingView, Status};
+pub use mac::{Action, ChatView, Device, DeviceView, Engine, Host, PairingView, Status};
 
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;

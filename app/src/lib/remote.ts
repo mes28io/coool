@@ -3,7 +3,7 @@
 // (`?remote=demo`: a pairing in progress with its QR code, then the confirm, and two paired devices).
 
 import { isTauri } from "./backend";
-import { chatDefaultsNow } from "./prefs";
+import { chatDefaultsNow, seenModelsNow } from "./prefs";
 
 export interface RemoteDevice {
   id: string;
@@ -83,16 +83,40 @@ export async function remoteApi(): Promise<RemoteApi> {
 // A remote `start` uses the same model as a new chat here, and the same mode when it is one that asks (the backend
 // replaces Bypass and full access with the asking mode itself, whatever this says). Kept in step from the page.
 let lastDefaults = "";
+// Claude Code's `--model` aliases always work (Settings > General lists them first); the rest are what chats reported.
+const CLAUDE_ALIASES = [
+  { id: "opus", label: "Opus (latest)" },
+  { id: "sonnet", label: "Sonnet (latest)" },
+  { id: "haiku", label: "Haiku (latest)" },
+];
 function syncDefaults() {
   const d = chatDefaultsNow();
-  const s = JSON.stringify(d);
+  // Minor 1: the models a phone may start a chat on, the same list Settings > General offers.
+  const seen = seenModelsNow();
+  const models = {
+    claude: [...CLAUDE_ALIASES, ...seen.claude.filter((m) => !CLAUDE_ALIASES.some((a) => a.id === m.id))],
+    codex: seen.codex,
+  };
+  const s = JSON.stringify({ d, models });
   if (s === lastDefaults) return;
   lastDefaults = s;
-  import("@tauri-apps/api/core").then(({ invoke }) => invoke("remote_set_defaults", { defaults: d }).catch(() => (lastDefaults = "")));
+  import("@tauri-apps/api/core").then(({ invoke }) => invoke("remote_set_defaults", { defaults: { ...d, models } }).catch(() => (lastDefaults = "")));
+}
+// Minor 1: the Needs-you page's words, risk tags and AI reads for the pending requests, so the phone shows them too.
+let lastNotes = "";
+function syncNotes() {
+  import("./remoteNotes").then(({ needNotes }) => {
+    const n = needNotes();
+    const s = JSON.stringify(n);
+    if (s === lastNotes) return;
+    lastNotes = s;
+    import("@tauri-apps/api/core").then(({ invoke }) => invoke("remote_set_need_notes", { notes: n }).catch(() => (lastNotes = "")));
+  });
 }
 if (isTauri && typeof window !== "undefined") {
   syncDefaults();
   setInterval(syncDefaults, 5_000);
+  setInterval(syncNotes, 1_500);
 }
 
 /** "Seen 3 min ago" style words for a device's last-seen time. */

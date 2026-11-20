@@ -33,6 +33,62 @@ pub struct SessionInfo {
     pub last_activity: u64,
     /// A chat coool runs: one a `send` or `stop` can reach.
     pub chat: bool,
+    /// Minor 1: the step in progress ("Edit src/lib.rs"), while working.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    /// Minor 1: sub-agents still running.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub agents: u32,
+    /// Minor 1: steps taken in the turn so far.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub steps: u32,
+    /// Minor 1: when the turn in progress started (epoch ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started: Option<u64>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl SessionInfo {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(id: &str, title: &str, project: &str, cli: Cli, state: &str, model: &str, last_activity: u64, chat: bool) -> Self {
+        SessionInfo { id: id.into(), title: title.into(), project: project.into(), cli, state: state.into(), model: model.into(), last_activity, chat, step: None, agents: 0, steps: 0, turn_started: None }
+    }
+}
+
+/// Minor 1: a change to one file, as the phone shows it (an Edit's old and new text, or a new file's text). Only ever
+/// built from a request or a step of a session the Mac shows: never from a path the phone names.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Diff {
+    pub path: String,
+    pub before: String,
+    pub after: String,
+    /// Either side was cut at [`MAX_DIFF_SIDE`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+}
+
+/// Characters kept per side of a [`Diff`].
+pub const MAX_DIFF_SIDE: usize = 6_000;
+/// Characters of a plan kept for the phone.
+pub const MAX_PLAN: usize = 16_000;
+
+impl Diff {
+    pub fn new(path: &str, before: &str, after: &str) -> Self {
+        let cut = before.chars().count() > MAX_DIFF_SIDE || after.chars().count() > MAX_DIFF_SIDE;
+        Diff { path: path.chars().take(400).collect(), before: before.chars().take(MAX_DIFF_SIDE).collect(), after: after.chars().take(MAX_DIFF_SIDE).collect(), cut }
+    }
+}
+
+/// Minor 1: the AI read the Mac's Needs-you page shows for a request (when it has one).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Read {
+    pub what: String,
+    pub why: String,
+    #[serde(default)]
+    pub check: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -60,6 +116,24 @@ pub struct Need {
     pub explanation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk: Option<String>,
+    /// Minor 1: the page's first line for it ("Run a command", "Edit a file", "Approve a plan").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub what: Option<String>,
+    /// Minor 1: an edit or new file it asks to make.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<Diff>,
+    /// Minor 1: a plan to approve, as Markdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Minor 1: the AI read, when the Mac has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<Read>,
+}
+
+impl Need {
+    pub fn new(id: &str, session: &str, kind: &str, tool: &str, summary: &str) -> Self {
+        Need { id: id.into(), session: session.into(), kind: kind.into(), tool: tool.into(), summary: summary.into(), command: None, questions: vec![], explanation: None, risk: None, what: None, diff: None, plan: None, read: None }
+    }
 }
 
 /// A folder a chat can start in (`projects`). `id` is opaque: the phone never sees or sends a path.
@@ -78,6 +152,9 @@ pub enum Answer {
     Deny,
     /// A question's picks: per question, the chosen option labels and/or typed text.
     Picks(Vec<Vec<String>>),
+    /// Minor 1, a plan only: don't approve; the agent keeps planning, with the person's note if there is one (the
+    /// Mac's "Keep planning"). The permission mode stays as it is.
+    KeepPlanning(Option<String>),
 }
 
 /// The opaque id of a project folder: 128 bits of SHA-256 of its path.
@@ -94,6 +171,13 @@ pub fn check_answer(need: &Need, body: &Value) -> Result<Answer, String> {
     match (need.kind.as_str(), choice) {
         (_, "deny") => Ok(Answer::Deny),
         ("permission" | "plan", "allow_once") => Ok(Answer::AllowOnce),
+        ("plan", "keep_planning") => {
+            let note = body.get("note").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty());
+            if note.is_some_and(|t| t.len() > MAX_TEXT) {
+                return Err("note too long".into());
+            }
+            Ok(Answer::KeepPlanning(note.map(str::to_string)))
+        }
         ("permission" | "plan", _) => Err("a remote answer can only allow once or deny".into()),
         ("question", "option") => {
             let label = body.get("option").and_then(Value::as_str).ok_or("missing option")?;
@@ -142,16 +226,54 @@ pub fn start_mode(cli: Cli, default: Option<&str>) -> &'static str {
     default.and_then(|d| allowed.iter().find(|m| **m == d).copied()).unwrap_or(allowed[0])
 }
 
-/// A checked `start`: a project from the Mac's list, a CLI, the text.
+/// The modes a phone may choose for a new chat (`options`), per CLI: the asking ones, never Bypass or full access.
+pub fn start_modes(cli: Cli) -> &'static [&'static str] {
+    match cli {
+        Cli::Claude => &CLAUDE_ASKING,
+        Cli::Codex => &CODEX_ASKING,
+    }
+}
+
+/// A checked `start`: a project from the Mac's list, a CLI, the text; minor 1: the model (one the Mac offers for
+/// that CLI, else the Mac's default) and the upload ids of images sent first.
 #[derive(Debug, PartialEq)]
 pub struct Start {
     pub project: Project,
     pub cli: Cli,
     pub mode: &'static str,
     pub text: String,
+    pub model: Option<String>,
+    pub attachments: Vec<String>,
 }
 
+/// Images per message from the phone.
+pub const MAX_ATTACH: usize = 4;
+
+/// Upload ids a `send` or `start` names (`attachments`): at most [`MAX_ATTACH`], each an id.
+pub fn check_attachments(body: &Value) -> Result<Vec<String>, String> {
+    let Some(a) = body.get("attachments") else { return Ok(vec![]) };
+    let a = a.as_array().ok_or("attachments is a list of upload ids")?;
+    if a.len() > MAX_ATTACH {
+        return Err(format!("at most {MAX_ATTACH} images per message"));
+    }
+    let mut out: Vec<String> = Vec::new();
+    for x in a {
+        let id = x.as_str().filter(|s| crate::proto::is_id(s)).ok_or("not an upload id")?;
+        if !out.iter().any(|o| o == id) {
+            out.push(id.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// `check_start` before minor 1 (no model or mode choice, so no model is accepted).
 pub fn check_start(body: &Value, projects: &[Project], default_mode: impl Fn(Cli) -> Option<String>) -> Result<Start, String> {
+    check_start_with(body, projects, default_mode, |_| Vec::new())
+}
+
+/// `models`: the ids the Mac offers for a CLI (Settings > General's list). A `mode` the phone names must be one of
+/// [`start_modes`]: anything else (Bypass, full access, `never`, unknown) is refused, not swapped for another.
+pub fn check_start_with(body: &Value, projects: &[Project], default_mode: impl Fn(Cli) -> Option<String>, models: impl Fn(Cli) -> Vec<String>) -> Result<Start, String> {
     // Only an id from the list: a body that names a path is refused outright, whatever else it says.
     if ["path", "cwd", "dir", "folder"].iter().any(|k| body.get(k).is_some()) {
         return Err("a remote start takes a project id, never a path".into());
@@ -164,13 +286,49 @@ pub fn check_start(body: &Value, projects: &[Project], default_mode: impl Fn(Cli
         _ => return Err("unknown CLI".into()),
     };
     let text = check_text(body)?;
-    let mode = start_mode(cli, default_mode(cli).as_deref());
-    Ok(Start { project: project.clone(), cli, mode, text })
+    let mode = match body.get("mode") {
+        None | Some(Value::Null) => start_mode(cli, default_mode(cli).as_deref()),
+        Some(m) => {
+            let m = m.as_str().unwrap_or("");
+            start_modes(cli).iter().find(|x| **x == m).copied().ok_or("a chat started from the phone can't use that mode")?
+        }
+    };
+    let model = match body.get("model") {
+        None | Some(Value::Null) => None,
+        Some(m) => {
+            let m = m.as_str().unwrap_or("");
+            if m.is_empty() || !models(cli).iter().any(|x| x == m) {
+                return Err("not a model this Mac offers".into());
+            }
+            Some(m.to_string())
+        }
+    };
+    let attachments = check_attachments(body)?;
+    Ok(Start { project: project.clone(), cli, mode, text, model, attachments })
+}
+
+/// How a `send` goes in (minor 1, `when`): as a message (`send`, the old behaviour), as a note the agent takes in at
+/// its next step (`next`), or by interrupting the step in progress (`interrupt`), as the Mac's composer does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Send,
+    Next,
+    Interrupt,
+}
+
+pub fn check_delivery(body: &Value) -> Result<Delivery, String> {
+    match body.get("when").and_then(Value::as_str) {
+        None | Some("send") => Ok(Delivery::Send),
+        Some("next") => Ok(Delivery::Next),
+        Some("interrupt") => Ok(Delivery::Interrupt),
+        Some(_) => Err("unknown delivery".into()),
+    }
 }
 
 pub fn check_text(body: &Value) -> Result<String, String> {
     let t = body.get("text").and_then(Value::as_str).unwrap_or("");
-    if t.trim().is_empty() {
+    let images = body.get("attachments").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+    if t.trim().is_empty() && !images {
         return Err("empty message".into());
     }
     if t.len() > MAX_TEXT {
@@ -192,12 +350,16 @@ pub struct Limiter {
 }
 
 impl Limiter {
-    /// Per minute: answers 30, sends 20, stops 20, starts 5.
+    /// Per minute: answers 30, sends 20, stops 20, starts 5; minor 1: image parts from the phone 90, images asked
+    /// for 12, watch renewals 30.
     pub fn allow(&mut self, device: &str, kind: &'static str, now: u64) -> bool {
         let max = match kind {
             "answer" => 30,
             "send" | "stop" => 20,
             "start" => 5,
+            "upload" => 90,
+            "get_image" => 12,
+            "watch" => 30,
             _ => 60,
         };
         let q = self.hits.entry((device.to_string(), kind)).or_default();
@@ -218,7 +380,7 @@ mod tests {
     use serde_json::json;
 
     fn permission() -> Need {
-        Need { id: "n1".into(), session: "s".into(), kind: "permission".into(), tool: "Bash".into(), summary: "Run npm test".into(), command: Some("npm test".into()), questions: vec![], explanation: None, risk: None }
+        Need { command: Some("npm test".into()), ..Need::new("n1", "s", "permission", "Bash", "Run npm test") }
     }
 
     #[test]

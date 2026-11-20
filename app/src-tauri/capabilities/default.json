@@ -66,7 +66,8 @@
     "allow-selftest-pilot", "allow-selftest-vm", "allow-selftest-mac-tool", "allow-selftest-vm-helper",
     "allow-selftest-device-tool", "allow-selftest-notify", "allow-selftest-notify-click", "allow-selftest-notify-post", "allow-update-status", "allow-update-check", "allow-update-set-auto", "allow-update-install", "allow-update-cli-now", "allow-update-restart",
     "allow-remote-status", "allow-remote-set-enabled", "allow-remote-pair-start", "allow-remote-pair-confirm",
-    "allow-remote-pair-cancel", "allow-remote-remove-device", "allow-remote-set-defaults", "allow-remote-selftest-read",
+    "allow-remote-pair-cancel", "allow-remote-remove-device", "allow-remote-set-defaults",
+    "allow-remote-set-need-notes", "allow-remote-selftest-read",
     "allow-remote-selftest-write"
   ]
 }
