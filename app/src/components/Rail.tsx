@@ -11,6 +11,7 @@ import { resetText, toneColor, usageHighest, usageTone, useUsageProviders } from
 import { countRender } from "../lib/perfCount";
 import { useNotifyClicks } from "../lib/notifyRoute";
 import { sessionKey } from "../lib/types";
+import { UpdateButton } from "./UpdatePanel";
 
 /**
  * One rail button: a real button with an accessible name; the tooltip fades in on hover/focus. `tip` replaces the
@@ -355,6 +356,14 @@ export function Rail() {
       </AnimatePresence>
 
       <div className="mt-auto flex flex-col items-center gap-1.5">
+        {/* The updater (UpdatePanel.tsx): shown only while it works or something needs you. */}
+        <UpdateButton>
+          {(p) => (
+            <RailButton label={p.label} onClick={p.onClick} active={p.active} dot={p.dot} hideTip={p.active}>
+              {p.icon}
+            </RailButton>
+          )}
+        </UpdateButton>
         <UsageButton />
         <RailButton label={`${theme === "dark" ? "Light" : "Dark"} theme`} shortcut="⌘⇧L" onClick={toggleTheme}>
           <AnimatePresence mode="popLayout" initial={false}>

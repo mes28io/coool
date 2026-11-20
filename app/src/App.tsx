@@ -7,6 +7,7 @@ import { chatQueue, rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
 import { keysCaptured } from "./lib/macKeys";
 import { useMotion } from "./lib/motion";
+import { watchUpdates } from "./lib/update";
 import { matchShortcut } from "./lib/shortcuts";
 import { syncWindow } from "./lib/boot";
 import { glassActive, useGlassHoles } from "./lib/glass";
@@ -195,6 +196,8 @@ function useBackendEvents() {
         chatQueue.push(id, events);
       }),
       b.onPtyExit((id) => useStore.getState().markExited(id)),
+      // The updater (lib/update.ts): the rail's update icon and its panel.
+      watchUpdates(),
       b.onConfirmQuit(() => {
         const s = useStore.getState();
         const ptys = Object.values(s.ptys).filter((p) => p.running && !s.exited[p.id]).length;

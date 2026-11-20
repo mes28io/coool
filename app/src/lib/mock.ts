@@ -10,6 +10,7 @@ import { MockChat, mockModels, type ChatHost } from "./mockChat";
 import { SessionsMerge } from "./sessionsMerge";
 import { mockHints } from "./motion";
 import { mockSettings } from "./mockSettings";
+import { mockUpdate } from "./mockUpdate";
 import { mockSim } from "./mockSim";
 import { onMockBrowserActivity, presenceDemo, runPresenceDemo } from "./mockPresence";
 
@@ -1797,6 +1798,7 @@ export function mockBackend(): Backend {
     ...mockMac(),
     // The Settings page (lib/mockSettings.ts).
     ...mockSettings({ shutdown: (udid) => sim.simShutdown(udid) }),
+    ...mockUpdate(),
 
     // ---------- chats ----------
     async startChat({ provider, cwd, resume, model, permission_mode }) {
