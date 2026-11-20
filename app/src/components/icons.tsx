@@ -284,3 +284,35 @@ export const IClock = mk(
     <path d="M8 4.75V8l2.25 1.5" />
   </>,
 );
+/** Attach: a paper clip (the composer's attach button). */
+export const IClip = mk(<path d="M13.25 7.5l-5.5 5.5a3.18 3.18 0 01-4.5-4.5l5.75-5.75a2.12 2.12 0 013 3l-5.5 5.5a1.06 1.06 0 01-1.5-1.5l5-5" />);
+/** A picture: a frame with a sun and a hill. */
+export const IImage = mk(
+  <>
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+    <circle cx="5.75" cy="6.25" r="1.25" />
+    <path d="M1.75 11.25l3.5-3 3 2.5 2.25-1.75 3.75 3" />
+  </>,
+);
+/** Zoom in / out: a lens with a plus or a minus. */
+export const IZoomIn = mk(
+  <>
+    <circle cx="6.75" cy="6.75" r="5" />
+    <path d="M10.5 10.5l3.75 3.75M4.75 6.75h4M6.75 4.75v4" />
+  </>,
+);
+export const IZoomOut = mk(
+  <>
+    <circle cx="6.75" cy="6.75" r="5" />
+    <path d="M10.5 10.5l3.75 3.75M4.75 6.75h4" />
+  </>,
+);
+/** Fit to the window: four corners pointing out. */
+export const IFit = mk(<path d="M2.25 6V2.25H6M10 2.25h3.75V6M13.75 10v3.75H10M6 13.75H2.25V10" />);
+/** Copy: two overlapping sheets. */
+export const ICopy = mk(
+  <>
+    <rect x="5.25" y="5.25" width="9" height="9" rx="1.5" />
+    <path d="M10.75 2.75v-.25a.75.75 0 00-.75-.75H2.5a.75.75 0 00-.75.75V10a.75.75 0 00.75.75h.25" />
+  </>,
+);

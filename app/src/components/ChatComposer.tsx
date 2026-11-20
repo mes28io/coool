@@ -28,6 +28,8 @@ import { FixCount, FixLayer, FixOffer, fixKey } from "./voice/FixLayer";
 import { VoiceButton } from "./voice/VoiceButton";
 import { useVoiceField } from "./voice/VoiceHost";
 import { VoiceStrip } from "./voice/VoiceStrip";
+import { AttachButton, AttachTray } from "./Attachments";
+import { addFiles, listenDrops, readyAttachments, useAttach, useDrafts } from "../lib/attach";
 
 type Native = "model" | "clear" | "context" | "status" | "usage" | "mode" | "changes";
 /** Handled here and never sent (CHAT_SPEC "Slash commands"). `only`: for one provider. */
@@ -137,6 +139,11 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const off = failed ? `This chat couldn't ${failed.resumed ? "be opened" : "start"}, so there's nothing to change here` : !chat.running ? "This chat has ended" : null;
   // Voice (APP_SPEC "Voice"): this textarea is a dictation target; "send when I release" sends through `send`.
   const sendRef = useRef<() => void>(() => {});
+  // Attachments (paste, drop, the attach button): lib/attach.ts.
+  const drafts = useDrafts(chat.id);
+  const readyN = drafts.filter((d) => d.state === "ready").length;
+  const readingN = drafts.filter((d) => d.state === "reading").length;
+  useEffect(() => void listenDrops().catch(() => {}), []);
   const voiceId = useVoiceField(ta, { inline: true, send: () => sendRef.current() });
 
   useLayoutEffect(() => {
@@ -223,10 +230,27 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
 
   const send = (raw?: string, now = false) => {
     const t = (raw ?? text).trim();
-    if (!t || disabled) return;
+    const { atts, reading } = raw === undefined ? readyAttachments(chat.id) : { atts: [], reading: false };
+    if ((!t && !atts.length) || disabled || reading) return;
     const m = /^\/(\S+)\s*$/.exec(t);
-    const native = m ? nativeByKey.get(m[1].toLowerCase()) : undefined;
+    const native = m && !atts.length ? nativeByKey.get(m[1].toLowerCase()) : undefined;
     if (native) return runNative(native);
+    if (atts.length) {
+      // While a turn runs, they go with a steering note (both CLIs take images mid-turn); else a message of their own.
+      if (working && (chat.pendingPermission || chat.pendingQuestion)) return;
+      hist.current = { i: null, draft: "" };
+      noteSent(voiceId, t);
+      setText("");
+      const kept = useAttach.getState().drafts[chat.id] ?? [];
+      useAttach.getState().clear(chat.id);
+      const sent = working ? steer(chat, t, now, atts) : chatCall(chat.id, () => api().chatSend(chat.id, t, atts));
+      void sent.then((ok) => {
+        if (ok) return;
+        // Not sent: the attachments come back to the composer.
+        for (const d of kept) useAttach.getState().put(chat.id, d);
+      });
+      return;
+    }
     hist.current = { i: null, draft: "" };
     // While a turn runs, plain text steers it (a slash command still goes to the CLI as before).
     if (working && !t.startsWith("/")) {
@@ -298,7 +322,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     }
   };
 
-  const can = !!text.trim() && !disabled && !(working && (chat.pendingPermission || chat.pendingQuestion) && !text.trim().startsWith("/"));
+  const can = (!!text.trim() || readyN > 0) && readingN === 0 && !disabled && !(working && (chat.pendingPermission || chat.pendingQuestion) && !text.trim().startsWith("/"));
   // Fallback (no chat_steer in the backend): held notes go out as one prompt when the turn ends.
   useEffect(() => {
     if (!working) flushLocal(chat);
@@ -404,6 +428,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
         >
           <SteerStrip chat={chat} />
           <VoiceStrip target={voiceId} compact={compact} />
+          <AttachTray chat={chat.id} />
           <div className="relative">
           <FixLayer target={voiceId} ta={ta} text={text} />
           <textarea
@@ -418,6 +443,13 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
               if (hist.current.i !== null && e.target.value !== chat.prompts[hist.current.i]) hist.current.i = null;
             }}
             onKeyDown={onKey}
+            onPaste={(e) => {
+              // Pasted images and files (a screenshot, files copied in Finder) are attached, not typed.
+              const files = [...(e.clipboardData?.files ?? [])];
+              if (!files.length || disabled) return;
+              e.preventDefault();
+              void addFiles(chat.id, files);
+            }}
             className="selectable relative block max-h-[200px] min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-prose outline-none placeholder:text-faint"
           />
           </div>
@@ -426,6 +458,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
               panel), not the window's. */}
           <div className="@container flex items-end gap-1 px-2 pb-2" data-composer-row>
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" data-composer-chips>
+            <AttachButton chat={chat.id} disabled={off} provider={chat.provider} />
             {/* model */}
             <div className="relative">
               <Chip active={pop === "model"} onClick={() => openPop(pop === "model" ? null : "model")} title={off ?? "Model (/model)"} disabled={!!off}>
@@ -589,7 +622,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                       ? "Send to the agent while it works.\nEnter: it reads this when it finishes its current step.\n⌘Enter: it stops that step and reads this now."
                       : failed
                         ? "This chat can't take messages"
-                        : "Send (Enter)"
+                        : readingN > 0
+                          ? "Wait for the attachments to be read"
+                          : "Send (Enter)"
                   }
                 >
                   <IArrowUp size={17} strokeWidth={1.9} />

@@ -15,6 +15,7 @@ import { useStore } from "../store";
 import { chatCall } from "./actions";
 import { api, isNotAvailable } from "./backend";
 import { type Chat, useChats } from "./chat";
+import type { Attachment } from "./attachRules";
 
 let missing = false;
 let n = 0;
@@ -41,33 +42,44 @@ function whenIdle(id: number, f: () => void) {
   });
 }
 
-export async function steer(chat: Chat, text: string, now: boolean): Promise<void> {
+/**
+ * A note for the running turn, with any attachments. Both CLIs take a whole message mid-turn, so the attachments go
+ * in with the note at the next step (images as images). Without chat_steer (the fallback), the note and its
+ * attachments are held and sent as the next message when the turn ends; the strip says which. False: not sent (the
+ * caller keeps the attachments).
+ */
+export async function steer(chat: Chat, text: string, now: boolean, atts: Attachment[] = []): Promise<boolean> {
   const t = text.trim();
-  if (!t) return;
+  if (!t && !atts.length) return false;
   const st = useChats.getState();
+  const extra = atts.length ? { attachments: atts } : {};
   if (!missing) {
     try {
-      const id = await api().chatSteer(chat.id, t, now);
+      const id = await api().chatSteer(chat.id, t, now, atts);
       // The events decide the state (a `now` note acts like a queued one while an approval is pending).
-      st.noteAdd(chat.id, { id, text: t, state: "queued", toolId: null, ts: Date.now() });
-      return;
+      st.noteAdd(chat.id, { id, text: t, state: "queued", toolId: null, ts: Date.now(), ...extra });
+      return true;
     } catch (e) {
       if (!isNotAvailable(e)) {
         useStore.getState().toast(String(e), "error");
-        return;
+        return false;
       }
       missing = true;
     }
   }
   const id = `local:${++n}`;
   if (!now) {
-    st.noteAdd(chat.id, { id, text: t, state: "queued", toolId: null, ts: Date.now(), local: true });
-    return;
+    st.noteAdd(chat.id, { id, text: t, state: "queued", toolId: null, ts: Date.now(), local: true, ...extra });
+    return true;
   }
-  st.noteAdd(chat.id, { id, text: t, state: "interrupted", toolId: toolNow(chat), ts: Date.now(), local: true });
+  st.noteAdd(chat.id, { id, text: t, state: "interrupted", toolId: toolNow(chat), ts: Date.now(), local: true, ...extra });
   await chatCall(chat.id, () => api().chatInterrupt(chat.id));
-  whenIdle(chat.id, () => void chatCall(chat.id, () => api().chatSend(chat.id, t)));
+  whenIdle(chat.id, () => void chatCall(chat.id, () => api().chatSend(chat.id, t, atts)));
+  return true;
 }
+
+/** The notes' text and attachments as one message. */
+const joined = (notes: { text: string; attachments?: Attachment[] }[]) => ({ text: notes.map((x) => x.text).filter(Boolean).join("\n\n"), atts: notes.flatMap((x) => x.attachments ?? []) });
 
 /** Withdraw a note. False when the backend refused (the note stays queued and a toast says why). */
 export async function cancelNote(chat: Chat, noteId: string): Promise<boolean> {
@@ -96,7 +108,7 @@ export async function noteNow(chat: Chat, noteId: string) {
   const note = chat.notes.find((x) => x.id === noteId);
   if (!note) return;
   if (!(await cancelNote(chat, noteId))) return;
-  await steer(chat, note.text, true);
+  await steer(chat, note.text, true, note.attachments);
 }
 
 /** Notes the turn ended without using: send them now as the next prompt, or discard. */
@@ -104,7 +116,8 @@ export function sendUnused(chat: Chat) {
   const un = chat.notes.filter((x) => x.state === "unused");
   if (!un.length) return;
   for (const x of un) useChats.getState().noteDrop(chat.id, x.id);
-  void chatCall(chat.id, () => api().chatSend(chat.id, un.map((x) => x.text).join("\n\n")));
+  const m = joined(un);
+  void chatCall(chat.id, () => api().chatSend(chat.id, m.text, m.atts));
 }
 export function discardUnused(chat: Chat) {
   for (const x of chat.notes) if (x.state === "unused") useChats.getState().noteDrop(chat.id, x.id);
@@ -115,5 +128,6 @@ export function flushLocal(chat: Chat) {
   const held = chat.notes.filter((x) => x.local && x.state === "queued");
   if (!held.length) return;
   for (const x of held) useChats.getState().noteDrop(chat.id, x.id);
-  void chatCall(chat.id, () => api().chatSend(chat.id, held.map((x) => x.text).join("\n\n")));
+  const m = joined(held);
+  void chatCall(chat.id, () => api().chatSend(chat.id, m.text, m.atts));
 }

@@ -1,4 +1,5 @@
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { AttachViewer } from "./components/Attachments";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { api } from "./lib/backend";
 import { useNativeRects } from "./lib/browser";
@@ -295,6 +296,7 @@ export default function App() {
       <Onboarding />
       <VoiceHost />
       <Toasts />
+      <AttachViewer />
     </MotionConfig>
   );
 }

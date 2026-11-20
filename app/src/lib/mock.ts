@@ -1382,6 +1382,7 @@ export function mockBackend(): Backend {
       if (!location.search.includes("live=0")) setTimeout(() => c.send("Now check the sign-in flow again on a fresh page (device demo)"), 1500);
     });
   }
+  if (location.search.includes("attach=")) void import("./mockAttach").then((m) => m.runAttachDemo(newChat("claude", `${HOME}/code/invoices`, {}, 0))); // see mockAttach.ts
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
 
   // `?presence=iphone|mac|browser`: an agent drives that panel on a loop (lib/mockPresence.ts).
@@ -1828,12 +1829,17 @@ export function mockBackend(): Backend {
       emitSessions();
       return chats.length - 1;
     },
-    async chatSend(id, text) {
+    async chatSend(id, text, attachments) {
       const c = chats[id];
       if (!c) throw new Error("no such chat");
       await chatReady.get(id);
-      c.send(text);
+      c.send(text, attachments);
     },
+    attachPaths: (paths) => import("./mockAttach").then((m) => m.mockAttachPaths(paths)),
+    attachBytes: (name, data) => import("./mockAttach").then((m) => m.mockAttachBytes(name, data)),
+    attachImage: (key) => import("./mockAttach").then((m) => m.mockAttachImage(key)),
+    attachPreview: (path, imagesOnly, root) => import("./mockAttach").then((m) => m.mockAttachPreview(path, imagesOnly, root)),
+    attachReveal: async () => {},
     async chatInterrupt(id) {
       chats[id]?.interrupt();
     },

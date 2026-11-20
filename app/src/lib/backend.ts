@@ -8,6 +8,7 @@ import type { MotionHints } from "./motion";
 import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
 import type { UpdateStatus } from "./updateView";
+import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
 
 export interface PtyChunk {
   id: number;
@@ -84,10 +85,21 @@ export interface Backend extends SettingsBackend {
 
   // ---- chat sessions (CHAT_SPEC "Tauri contract additions") ----
   startChat(opts: ChatOptions): Promise<number>;
-  chatSend(id: number, text: string): Promise<void>;
+  /** A prompt; `attachments` (already added with `attachPaths` / `attachBytes`) go with it (crates/core/src/attach.rs). */
+  chatSend(id: number, text: string, attachments?: Attachment[]): Promise<void>;
+  /** Dropped or picked files: each one's attachment, or why it can't be added. */
+  attachPaths(paths: string[]): Promise<AttachAdded[]>;
+  /** Pasted content (base64) without a path of its own. */
+  attachBytes(name: string, data: string): Promise<Attachment>;
+  /** An attached image as a `data:` URL, by key: coool's store, else that session's transcript. */
+  attachImage(key: string, provider?: Provider | null, session?: string | null): Promise<string>;
+  /** A preview of a file the person clicked; `imagesOnly` for paths an agent wrote. */
+  attachPreview(path: string, imagesOnly?: boolean, root?: string | null): Promise<AttachPreview>;
+  /** Shows a file in Finder. */
+  attachReveal(path: string): Promise<void>;
   chatInterrupt(id: number): Promise<void>;
   /** Steer a running turn: `now: false` delivers at the next step boundary, `now: true` interrupts the current step. Returns the note id. */
-  chatSteer(id: number, text: string, now: boolean): Promise<string>;
+  chatSteer(id: number, text: string, now: boolean, attachments?: Attachment[]): Promise<string>;
   chatSteerCancel(id: number, noteId: string): Promise<void>;
   chatSetModel(id: number, model: string): Promise<void>;
   chatSetPermissionMode(id: number, mode: string): Promise<void>;
@@ -508,9 +520,14 @@ async function tauriBackend(): Promise<Backend> {
       soft("start_chat", {
         opts: { provider: o.provider, cwd: o.cwd, resume: o.resume ?? null, model: o.model ?? null, permission_mode: o.permission_mode ?? null, ladder: o.ladder ?? null },
       }),
-    chatSend: (id, text) => soft("chat_send", { id, text }),
+    chatSend: (id, text, attachments) => soft("chat_send", { id, text, attachments: attachments?.length ? attachments : null }),
+    attachPaths: (paths) => invoke("attach_paths", { paths }),
+    attachBytes: (name, data) => invoke("attach_bytes", { name, data }),
+    attachImage: (key, provider, session) => invoke("attach_image", { key, provider: provider ?? null, session: session ?? null }),
+    attachPreview: (path, imagesOnly, root) => invoke("attach_preview", { path, imagesOnly: imagesOnly ?? null, root: root ?? null }),
+    attachReveal: (path) => invoke("attach_reveal", { path }),
     chatInterrupt: (id) => soft("chat_interrupt", { id }),
-    chatSteer: (id, text, now) => soft("chat_steer", { id, text, now }),
+    chatSteer: (id, text, now, attachments) => soft("chat_steer", { id, text, now, attachments: attachments?.length ? attachments : null }),
     chatSteerCancel: (id, noteId) => soft("chat_steer_cancel", { id, noteId }),
     chatSetModel: (id, model) => soft("chat_set_model", { id, model }),
     chatSetPermissionMode: (id, mode) => soft("chat_set_permission_mode", { id, mode }),

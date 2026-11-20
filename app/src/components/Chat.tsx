@@ -18,6 +18,8 @@ import { modelLabel } from "../lib/models";
 import type { Activity, RememberOption } from "../lib/types";
 import { ArtifactCard } from "./ArtifactCard";
 import { AwayCard, useChatAway } from "./Away";
+import { StepImages } from "./Attachments";
+import { imagePaths } from "../lib/attachRules";
 import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
@@ -606,7 +608,7 @@ function ItemView({ item, chat, onOpenTerminal, onResume }: { item: ChatItem; ch
   countRender("Chat.ItemView");
   switch (item.kind) {
     case "prompt":
-      return <PromptBubble text={item.text} stamp={item.unsent ? `${clockTime(item.ts)} · not sent` : clockTime(item.ts)} unsent={item.unsent} />;
+      return <PromptBubble text={item.text} stamp={item.unsent ? `${clockTime(item.ts)} · not sent` : clockTime(item.ts)} unsent={item.unsent} attachments={item.attachments} scope={item.key} />;
     case "text":
       return <AssistantText text={item.text} streaming={item.streaming} />;
     case "thinking":
@@ -908,6 +910,8 @@ function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Too
   const [open, setOpen] = useKept(`tool:${t.key}`, false);
   const hasOut = !!t.output && t.endTs !== null;
   const r = stepRow(t, cwd);
+  // Image paths the step names (a screenshot it saved, an image it read): a preview each, read only when clicked.
+  const shots = useMemo(() => (t.endTs === null || t.ok === false ? [] : imagePaths(`${JSON.stringify(t.input ?? "")}\n${t.output}`, 3, cwd)), [t.endTs, t.ok, t.input, t.output, cwd]);
   return (
     <div data-step-family={r.family}>
       <StepLine
@@ -926,6 +930,11 @@ function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Too
         onClick={hasOut ? () => setOpen(!open) : undefined}
         open={open}
       />
+      {shots.length > 0 && (
+        <div className="-mt-0.5 mb-0.5 ml-[18px]">
+          <StepImages paths={shots} root={cwd} />
+        </div>
+      )}
       <AnimatePresence initial={false}>
         {open && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease }} className="overflow-hidden">

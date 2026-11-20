@@ -10,6 +10,7 @@
 //   "ask" / "choose" / "which"        -> a question card (AskUserQuestion), then a reply using the answer
 // Slash commands that only work in the TUI emit `notice` with needs_terminal.
 
+import type { Attachment } from "./attachRules";
 import { whyScript } from "./mockWhy";
 import type { Activity, Agent, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, Session, SlashCommand, Tokens } from "./types";
 
@@ -314,8 +315,9 @@ export class MockChat {
 
   // ---------- commands ----------
 
-  send(text: string) {
+  send(text: string, atts?: Attachment[]) {
     if (!this.running) throw new Error("this chat has exited");
+    if (atts?.length) return void this.turn(text, atts);
     const slash = /^\/(\S+)\s*(.*)$/s.exec(text.trim());
     if (slash) return this.slash(slash[1], slash[2]);
     if (this.busy) {
@@ -648,17 +650,24 @@ export class MockChat {
     };
   }
 
-  async turn(prompt: string) {
+  async turn(prompt: string, atts?: Attachment[]) {
     this.ensureSession();
     this.busy = true;
     const gen = this.gen;
     this.turnStart = this.now();
-    this.emit({ type: "user_message", id: `u_${rid()}`, text: prompt });
+    this.emit({ type: "user_message", id: `u_${rid()}`, text: prompt, ...(atts?.length ? { attachments: atts } : {}) });
     this.setState("working");
     let ok = true;
     try {
       await this.sleep(500, gen);
-      await this.script(prompt, gen);
+      if (atts?.length) {
+        const imgs = atts.filter((a) => a.kind === "image").length;
+        const files = atts.length - imgs;
+        await this.say(
+          `Got ${[imgs ? `${imgs} image${imgs > 1 ? "s" : ""}` : "", files ? `${files} file${files > 1 ? "s" : ""}` : ""].filter(Boolean).join(" and ")}. ${imgs ? "The first screenshot shows the invoice list with March rows labelled 2026-02, which matches the off-by-one in `formatPeriod`. " : ""}${files ? `I read ${atts.filter((a) => a.kind !== "image").map((a) => `\`${a.name}\``).join(", ")} from where they are.` : ""}`,
+          gen,
+        );
+      } else await this.script(prompt, gen);
     } catch (e) {
       if (!(e instanceof Interrupted)) throw e;
       ok = false;

@@ -31,7 +31,11 @@
 // answered from the page). `why` ("What this does and why": the agent's claim at once, the AI read on the insights key,
 // a description that doesn't match its command, Allow / Deny before and after the read). `codex-open-failed` (a Codex
 // resume of a thread id Codex doesn't have: the chat ends as not opened; no model use) and `codex-model-chip` (a new
-// Codex thread, no turn: the Model chip and menu). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
+// Codex thread, no turn: the Model chip and menu). `attach` / `attach-codex` (selftestAttach.ts: images and a file
+// attached, the agent describes and quotes them, the message, lightbox and preview, then the reopened chat shows
+// them again from the transcript; not in `all`), `attach-steer` / `attach-steer-codex` (an image on a note mid-turn),
+// `attach-step-image` (the preview of an image the agent writes, and its refusals) and `attach-gestures` (drag events as
+// Tauri delivers them, a paste event, the PDF pages; no model use). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { glassState } from "./lib/glass";
 import { openOnboarding } from "./lib/onboarding";
@@ -56,6 +60,7 @@ import { changesFromActivity } from "./lib/mission";
 import { voiceScenarios } from "./selftestVoice";
 import { ladderScenarios } from "./selftestLadder";
 import { remoteScenarios } from "./selftestRemote";
+import { attachScenarios } from "./selftestAttach";
 
 interface Config {
   scenario: string;
@@ -6685,6 +6690,7 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
 Object.assign(scenarios, combo);
 // Voice (selftestVoice.ts): fixtures through the real engine, the composer, memory; no microphone, no model calls.
 Object.assign(scenarios, ladderScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a) }));
+Object.assign(scenarios, attachScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a), say }, { claude: CLAUDE_MODEL, codex: CODEX_MODEL }));
 Object.assign(scenarios, remoteScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a), startIn: (cwd, mode) => startIn(cwd, mode), send }));
 Object.assign(scenarios, voiceScenarios({ step, shot, log, sleep, waitFor, fail: (m) => new Fail(m) }, (cmd, args) => invoke(cmd, args)));
 

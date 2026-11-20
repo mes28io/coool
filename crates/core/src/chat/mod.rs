@@ -216,6 +216,9 @@ pub enum ChatEventKind {
         steer: bool,
         /// The note's id when `steer`.
         note_id: Option<String>,
+        /// Images and files sent with it (see [`crate::attach`]); `text` is without their marker lines.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<crate::attach::Attachment>,
     },
     TextDelta {
         message_id: String,
@@ -330,6 +333,9 @@ pub enum ChatEventKind {
         text: String,
         state: SteerState,
         tool_id: Option<String>,
+        /// The note's attachments (sent with it, images included).
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<crate::attach::Attachment>,
     },
 }
 
@@ -422,7 +428,8 @@ pub(crate) trait Backend: Send {
     fn start(&mut self, o: &mut Out);
     /// One line of the CLI's stdout.
     fn on_line(&mut self, line: &str, o: &mut Out);
-    fn send(&mut self, text: &str, o: &mut Out) -> Result<()>;
+    /// A prompt; `atts` are its attachments, already checked and stored ([`crate::attach`]).
+    fn send(&mut self, text: &str, atts: &[crate::attach::Attachment], o: &mut Out) -> Result<()>;
     fn interrupt(&mut self, o: &mut Out) -> Result<()>;
     fn set_model(&mut self, model: &str, o: &mut Out) -> Result<()>;
     fn set_permission_mode(&mut self, mode: &str, o: &mut Out) -> Result<()>;
@@ -432,7 +439,7 @@ pub(crate) trait Backend: Send {
         bail!("no pending permission request {request_id}")
     }
     /// A steering note for the running turn (see [`Chat::steer`]).
-    fn steer(&mut self, _note_id: &str, _text: &str, _now: bool, _o: &mut Out) -> Result<()> {
+    fn steer(&mut self, _note_id: &str, _text: &str, _now: bool, _atts: &[crate::attach::Attachment], _o: &mut Out) -> Result<()> {
         bail!("steering is not supported")
     }
     fn cancel_steer(&mut self, note_id: &str, _o: &mut Out) -> Result<()> {
@@ -883,10 +890,19 @@ impl Chat {
 
     /// A prompt, or a slash command typed as text.
     pub fn send(&mut self, text: &str) -> Result<()> {
-        if text.trim().is_empty() {
+        self.send_with(text, &[])
+    }
+
+    /// A prompt with attachments (images and files; see [`crate::attach`]). Text may be empty when there are some.
+    pub fn send_with(&mut self, text: &str, atts: &[crate::attach::Attachment]) -> Result<()> {
+        if text.trim().is_empty() && atts.is_empty() {
             bail!("empty message");
         }
-        self.with_backend(json!({"call": "send", "text": text}), |b, o| b.send(text, o))
+        if atts.len() > crate::attach::MAX_COUNT {
+            bail!("at most {} attachments per message", crate::attach::MAX_COUNT);
+        }
+        let names: Vec<&str> = atts.iter().map(|a| a.name.as_str()).collect();
+        self.with_backend(json!({"call": "send", "text": text, "attachments": names}), |b, o| b.send(text, atts, o))
     }
 
     /// A note for the running turn; returns its id. `now: false`: delivered at
@@ -896,11 +912,21 @@ impl Chat {
     /// acts like `false`). On an idle chat the note is sent as a prompt. Its
     /// fate arrives as [`ChatEventKind::Steer`] events.
     pub fn steer(&mut self, text: &str, now: bool) -> Result<String> {
-        if text.trim().is_empty() {
+        self.steer_with(text, now, &[])
+    }
+
+    /// A note with attachments: both CLIs take a whole message mid-turn, so the images go in with the note (Claude:
+    /// a user line of content blocks; Codex: `turn/steer` with `localImage` inputs) and files as their marker lines.
+    pub fn steer_with(&mut self, text: &str, now: bool, atts: &[crate::attach::Attachment]) -> Result<String> {
+        if text.trim().is_empty() && atts.is_empty() {
             bail!("empty note");
         }
+        if atts.len() > crate::attach::MAX_COUNT {
+            bail!("at most {} attachments per message", crate::attach::MAX_COUNT);
+        }
         let id = uuid_v4();
-        self.with_backend(json!({"call": "steer", "note_id": id, "text": text, "now": now}), |b, o| b.steer(&id, text, now, o))?;
+        let names: Vec<&str> = atts.iter().map(|a| a.name.as_str()).collect();
+        self.with_backend(json!({"call": "steer", "note_id": id, "text": text, "now": now, "attachments": names}), |b, o| b.steer(&id, text, now, atts, o))?;
         Ok(id)
     }
 
@@ -1132,6 +1158,11 @@ pub(crate) struct Note {
     pub cut: Option<String>,
     /// `cancel_steer` asked the CLI to withdraw it.
     pub cancelling: bool,
+    /// Its attachments ([`crate::attach`]).
+    pub atts: Vec<crate::attach::Attachment>,
+    /// With attachments: the whole message as the CLI takes it (Claude's content blocks, Codex's input list), so it
+    /// goes in as one message, images included, wherever the note is delivered.
+    pub payload: Option<Value>,
 }
 
 /// The notes of one chat, in the order they were made.
@@ -1141,9 +1172,15 @@ pub(crate) struct Notes {
 }
 
 impl Notes {
-    pub fn add(&mut self, id: &str, text: &str, now: bool, o: &mut Out) {
-        self.list.push(Note { id: id.into(), text: text.into(), now, sent: false, own_turn: false, cut: None, cancelling: false });
-        o.ev(ChatEventKind::Steer { note_id: id.into(), text: text.into(), state: SteerState::Queued, tool_id: None });
+    /// A note with attachments and the message the CLI is given for it.
+    pub fn add_with(&mut self, id: &str, text: &str, now: bool, atts: Vec<crate::attach::Attachment>, payload: Option<Value>, o: &mut Out) {
+        o.ev(ChatEventKind::Steer { note_id: id.into(), text: text.into(), state: SteerState::Queued, tool_id: None, attachments: atts.clone() });
+        self.list.push(Note { id: id.into(), text: text.into(), now, sent: false, own_turn: false, cut: None, cancelling: false, atts, payload });
+    }
+
+    /// What the CLI is given for note `id`: its payload, or its text.
+    pub fn message(&self, id: &str) -> Option<Value> {
+        self.list.iter().find(|n| n.id == id).map(|n| n.payload.clone().unwrap_or_else(|| Value::String(n.text.clone())))
     }
 
     pub fn get(&mut self, id: &str) -> Option<&mut Note> {
@@ -1155,10 +1192,10 @@ impl Notes {
     pub fn settle(&mut self, id: &str, state: SteerState, tool_id: Option<String>, user_n: &mut u64, o: &mut Out) -> bool {
         let Some(i) = self.list.iter().position(|n| n.id == id) else { return false };
         let n = self.list.remove(i);
-        o.ev(ChatEventKind::Steer { note_id: n.id.clone(), text: n.text.clone(), state, tool_id });
+        o.ev(ChatEventKind::Steer { note_id: n.id.clone(), text: n.text.clone(), state, tool_id, attachments: n.atts.clone() });
         if matches!(state, SteerState::PickedUp | SteerState::Interrupted) {
             *user_n += 1;
-            o.ev(ChatEventKind::UserMessage { id: format!("u{user_n}"), text: n.text, steer: true, note_id: Some(n.id) });
+            o.ev(ChatEventKind::UserMessage { id: format!("u{user_n}"), text: n.text, steer: true, note_id: Some(n.id), attachments: n.atts });
         }
         true
     }
@@ -1185,6 +1222,24 @@ pub(crate) fn slash_command(text: &str) -> Option<(&str, &str)> {
 pub(crate) mod testutil {
     use super::*;
 
+    /// A store with a 1x1 PNG and a text file for the backends' attachment tests; the store is `COOOL_ATTACH_DIR`,
+    /// shared by every test of this process. Returns (folder to remove, image, file).
+    pub fn attach_fixture(tag: &str) -> (std::path::PathBuf, crate::attach::Attachment, crate::attach::Attachment) {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        let store = std::env::temp_dir().join(format!("coool-attach-store-{}", std::process::id()));
+        // SAFETY: set once, before any test of this process reads it.
+        ONCE.call_once(|| unsafe { std::env::set_var("COOOL_ATTACH_DIR", &store) });
+        let d = std::env::temp_dir().join(format!("coool-attach-fix-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let png = d.join("dot.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89").unwrap();
+        let txt = d.join("notes.txt");
+        std::fs::write(&txt, "a line\n").unwrap();
+        let img = crate::attach::inspect_path(&store, &png).unwrap();
+        let f = crate::attach::inspect_path(&store, &txt).unwrap();
+        (d, img, f)
+    }
+
     /// Replays a trace captured from a real run (`COOOL_CHAT_TRACE`): the CLI's
     /// stdout lines (`out`) and the API calls made on the chat (`api`), in order.
     /// Returns every event, and every line the backend wrote.
@@ -1199,13 +1254,13 @@ pub(crate) mod testutil {
                 Some("api") => {
                     let s = |k: &str| line[k].as_str().unwrap_or("").to_string();
                     let r = match line["call"].as_str().unwrap() {
-                        "send" => b.send(&s("text"), &mut o),
+                        "send" => b.send(&s("text"), &[], &mut o),
                         "interrupt" => b.interrupt(&mut o),
                         "set_model" => b.set_model(&s("model"), &mut o),
                         "set_permission_mode" => b.set_permission_mode(&s("mode"), &mut o),
                         "respond_permission" if line["remember"].is_string() => b.respond_permission_remember(&s("request_id"), &s("remember"), &mut o),
                         "respond_permission" => b.respond_permission(&s("request_id"), line["allow"] == true, line["always"] == true, &mut o),
-                        "steer" => b.steer(&s("note_id"), &s("text"), line["now"] == true, &mut o),
+                        "steer" => b.steer(&s("note_id"), &s("text"), line["now"] == true, &[], &mut o),
                         "cancel_steer" => b.cancel_steer(&s("note_id"), &mut o),
                         "respond_question" => {
                             let answers: Vec<Vec<String>> = serde_json::from_value(line["answers"].clone()).unwrap();
@@ -1244,9 +1299,9 @@ mod tests {
         assert_eq!(v, serde_json::json!({"seq": 3, "ts": 10, "type": "text_delta", "message_id": "m", "text": "hi", "parent_tool_id": null}));
         let e = ChatEvent { seq: 1, ts: 1, kind: ChatEventKind::State { state: ChatState::WaitingPermission } };
         assert_eq!(serde_json::to_value(&e).unwrap()["state"], "waiting_permission");
-        let e = ChatEvent { seq: 2, ts: 2, kind: ChatEventKind::Steer { note_id: "n".into(), text: "t".into(), state: SteerState::PickedUp, tool_id: Some("tool".into()) } };
+        let e = ChatEvent { seq: 2, ts: 2, kind: ChatEventKind::Steer { note_id: "n".into(), text: "t".into(), state: SteerState::PickedUp, tool_id: Some("tool".into()), attachments: Vec::new() } };
         assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({"seq": 2, "ts": 2, "type": "steer", "note_id": "n", "text": "t", "state": "picked_up", "tool_id": "tool"}));
-        let e = ChatEvent { seq: 3, ts: 3, kind: ChatEventKind::UserMessage { id: "u1".into(), text: "t".into(), steer: false, note_id: None } };
+        let e = ChatEvent { seq: 3, ts: 3, kind: ChatEventKind::UserMessage { id: "u1".into(), text: "t".into(), steer: false, note_id: None, attachments: Vec::new() } };
         assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({"seq": 3, "ts": 3, "type": "user_message", "id": "u1", "text": "t", "steer": false, "note_id": null}));
         let e = ChatEvent { seq: 1, ts: 1, kind: ChatEventKind::needs_terminal("x") };
         let v = serde_json::to_value(&e).unwrap();
@@ -1361,7 +1416,7 @@ mod tests {
         impl Backend for Nop {
             fn start(&mut self, _: &mut Out) {}
             fn on_line(&mut self, _: &str, _: &mut Out) {}
-            fn send(&mut self, _: &str, _: &mut Out) -> Result<()> {
+            fn send(&mut self, _: &str, _: &[crate::attach::Attachment], _: &mut Out) -> Result<()> {
                 Ok(())
             }
             fn interrupt(&mut self, _: &mut Out) -> Result<()> {
@@ -1430,7 +1485,7 @@ mod tests {
             fn on_line(&mut self, line: &str, o: &mut Out) {
                 o.ev(ChatEventKind::notice(NoticeLevel::Info, line));
             }
-            fn send(&mut self, text: &str, o: &mut Out) -> Result<()> {
+            fn send(&mut self, text: &str, _: &[crate::attach::Attachment], o: &mut Out) -> Result<()> {
                 o.write(&Value::String(text.into()));
                 Ok(())
             }
@@ -1481,7 +1536,7 @@ mod tests {
                 let state = if line.trim_matches('"') == "idle" { ChatState::Idle } else { ChatState::Working };
                 o.ev(ChatEventKind::State { state });
             }
-            fn send(&mut self, t: &str, o: &mut Out) -> Result<()> {
+            fn send(&mut self, t: &str, _: &[crate::attach::Attachment], o: &mut Out) -> Result<()> {
                 o.write(&Value::String(t.into()));
                 Ok(())
             }
@@ -1552,7 +1607,7 @@ mod tests {
         impl Backend for Nop {
             fn start(&mut self, _: &mut Out) {}
             fn on_line(&mut self, _: &str, _: &mut Out) {}
-            fn send(&mut self, _: &str, _: &mut Out) -> Result<()> {
+            fn send(&mut self, _: &str, _: &[crate::attach::Attachment], _: &mut Out) -> Result<()> {
                 Ok(())
             }
             fn interrupt(&mut self, _: &mut Out) -> Result<()> {

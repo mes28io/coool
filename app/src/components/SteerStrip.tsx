@@ -4,7 +4,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import type { Chat, Note } from "../lib/chat";
 import { canCancel, cancelNote, discardUnused, noteNow, sendUnused } from "../lib/steer";
-import { IBolt, ICheck, IClose, IReturn } from "./icons";
+import { IBolt, ICheck, IClip, IClose, IReturn } from "./icons";
 import { cx, ease } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
@@ -43,6 +43,7 @@ export function SteerStrip({ chat }: { chat: Chat }) {
                       <span className="min-w-0 flex-1 truncate text-fg" title={n.text}>
                         {n.text}
                       </span>
+                      <NoteAtts n={n} />
                       {!local && canCancel(chat, n) && (
                         <button type="button" onClick={() => void noteNow(chat, n.id)} title="Deliver now: interrupt the current step" data-note-now className="flex h-[24px] shrink-0 items-center gap-1 rounded-[7px] px-1.5 text-small font-medium text-dim hover:bg-hover hover:text-fg">
                           <IBolt size={12} /> Now
@@ -80,6 +81,19 @@ export function SteerStrip({ chat }: { chat: Chat }) {
   );
 }
 
+/** A note's attachments: a clip and their count, names in the tooltip; they go in with the note. */
+function NoteAtts({ n }: { n: Note }) {
+  const a = n.attachments ?? [];
+  if (!a.length) return null;
+  const imgs = a.filter((x) => x.kind === "image").length;
+  return (
+    <span className="flex shrink-0 items-center gap-1 text-small text-dim" title={`With the note:\n${a.map((x) => x.name).join("\n")}`} data-note-attachments={a.length}>
+      <IClip size={12} />
+      {imgs && imgs === a.length ? `${imgs} image${imgs > 1 ? "s" : ""}` : `${a.length} attached`}
+    </span>
+  );
+}
+
 /** Delivered notes attached under the step they were picked up in. */
 export function NoteRows({ notes }: { notes: Note[] }) {
   const shown = notes.filter((n) => n.state === "picked_up" || n.state === "interrupted");
@@ -93,6 +107,7 @@ export function NoteRows({ notes }: { notes: Note[] }) {
             <span className="min-w-0 flex-1 truncate" title={n.text}>
               {n.text}
             </span>
+            <NoteAtts n={n} />
             <span className={cx("flex shrink-0 items-center gap-1 text-faint")}>
               {n.state === "interrupted" ? <IReturn size={12} /> : <ICheck size={12} />}
               {n.state === "interrupted" ? "Interrupted" : "Picked up"}

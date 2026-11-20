@@ -1,4 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
+import { AttachSource, DropVeil } from "./Attachments";
+import { htmlDrop } from "../lib/attach";
 import { AnimatePresence, motion } from "motion/react";
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BrowserContext, closeNative, recentPages, tabKey, useBrowserState, type OpenPage } from "../lib/browser";
@@ -12,7 +14,7 @@ import { answerKeysCovered } from "../lib/answerKeys";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { cardRoles, useChatTiers } from "./LadderTally";
-import { api } from "../lib/backend";
+import { api, isTauri } from "../lib/backend";
 import { chatModels, chatTitle, pendingPermission, useChatShell, type Chat } from "../lib/chat";
 import { displayTitle, folderName, titleWas } from "../lib/format";
 import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
@@ -285,6 +287,8 @@ export function SessionView({
   const hasTerm = pty !== null;
   const mode: ViewMode = !hasTerm ? "activity" : (stored ?? (isChat ? "activity" : running ? "terminal" : "activity"));
   const modeTarget: Target = session ? { kind: "session", key: sessionKey(session) } : target;
+  // Where this pane's images come from when coool's store doesn't have them: its session's transcript.
+  const attachSource = useMemo(() => ({ provider: chat?.provider ?? session?.provider ?? null, session: chat?.sessionId ?? session?.id ?? null }), [chat?.provider, chat?.sessionId, session?.provider, session?.id]);
 
   // ⌘↵ allows / ⌘⌫ denies a pending permission in the focused pane.
   useEffect(() => {
@@ -450,7 +454,13 @@ export function SessionView({
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
+        <AttachSource.Provider value={attachSource}>
+        <div
+          className="relative flex min-w-0 flex-1 flex-col"
+          data-chat-drop={chat && mode !== "terminal" ? chat.id : undefined}
+          {...(chat && mode !== "terminal" && !isTauri ? htmlDrop(chat.id) : {})}
+        >
+          {chat && mode !== "terminal" && <DropVeil chat={chat.id} provider={chat.provider} />}
           {/* body */}
           <div className="relative min-h-0 flex-1">
             <AnimatePresence initial={false} mode="popLayout">
@@ -493,6 +503,7 @@ export function SessionView({
             <ExternalNotice session={session!} leaf={leaf} compact={compact} />
           ) : null}
         </div>
+        </AttachSource.Provider>
         {(wide || browserFits || deviceFits || macFits) && panelKey && (
           <RightPanel which={showing} width={panelWidth} dragging={resizing} onWidth={onPanelWidth} onDragging={setResizing} onClose={() => setPanel("closed")}>
             {(k, active) =>

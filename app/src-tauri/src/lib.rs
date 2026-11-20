@@ -9,6 +9,7 @@
 //! handles cloned out of the Hub, so a slow refresh never delays streamed text.
 //! See docs/APP_SPEC.md ("Backend contract") and docs/CHAT_SPEC.md.
 
+mod attach;
 mod apps;
 mod artifact;
 mod browser;
@@ -766,8 +767,9 @@ fn private_alias(cwd: &str) -> String {
 }
 
 #[tauri::command(async)]
-fn chat_send(core: State<'_, Arc<Core>>, id: usize, text: String) -> Res<()> {
-    core.with_chat(id, |c| c.send(&text))
+fn chat_send(core: State<'_, Arc<Core>>, id: usize, text: String, attachments: Option<Vec<coool_core::attach::Attachment>>) -> Res<()> {
+    let atts = attachments.unwrap_or_default();
+    core.with_chat(id, |c| c.send_with(&text, &atts))
 }
 
 #[tauri::command(async)]
@@ -778,8 +780,8 @@ fn chat_interrupt(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
 
 /// A steering note for the running turn; returns its id (see CHAT_SPEC "Steering").
 #[tauri::command(async)]
-fn chat_steer(core: State<'_, Arc<Core>>, id: usize, text: String, now: bool) -> Res<String> {
-    core.with_chat(id, |c| c.steer(&text, now))
+fn chat_steer(core: State<'_, Arc<Core>>, id: usize, text: String, now: bool, attachments: Option<Vec<coool_core::attach::Attachment>>) -> Res<String> {
+    core.with_chat(id, |c| c.steer_with(&text, now, &attachments.unwrap_or_default()))
 }
 
 #[tauri::command(async)]
@@ -1826,6 +1828,11 @@ pub fn run() {
         .manage(Arc::new(voice::Voice::new()))
         .manage(Arc::new(update::Updater::new(core.selftest.is_some())))
         .invoke_handler(tauri::generate_handler![
+            attach::attach_paths,
+            attach::attach_bytes,
+            attach::attach_image,
+            attach::attach_preview,
+            attach::attach_reveal,
             list_sessions,
             spawn_session,
             resume_session,
@@ -1980,6 +1987,7 @@ pub fn run() {
             selftest::selftest_close_preview,
             selftest::selftest_local_ipc,
             selftest::selftest_click,
+            selftest::selftest_drag,
             selftest::selftest_native,
             selftest::selftest_sim_delete,
             selftest::selftest_mac_install_requests,

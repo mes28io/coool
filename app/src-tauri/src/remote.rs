@@ -206,7 +206,12 @@ impl coool_remote::Host for AppHost {
         let mut items: Vec<Value> = events
             .iter()
             .filter_map(|e| match &e.kind {
-                ChatEventKind::UserMessage { text, .. } => Some(json!({"role": "user", "text": text})),
+                // Attachments go to the phone by name only (the protocol has no field for them).
+                ChatEventKind::UserMessage { text, attachments, .. } => {
+                    let names: Vec<&str> = attachments.iter().map(|a| a.name.as_str()).collect();
+                    let text = if names.is_empty() { text.clone() } else { format!("{}{}[Attached: {}]", text, if text.is_empty() { "" } else { "\n" }, names.join(", ")) };
+                    Some(json!({"role": "user", "text": text}))
+                }
                 ChatEventKind::AssistantMessage { text, parent_tool_id: None, .. } if !text.is_empty() => Some(json!({"role": "assistant", "text": text})),
                 ChatEventKind::ToolStart { name, summary, parent_tool_id: None, .. } => Some(json!({"role": "tool", "tool": name, "text": summary})),
                 ChatEventKind::Notice { text, .. } => Some(json!({"role": "notice", "text": text})),

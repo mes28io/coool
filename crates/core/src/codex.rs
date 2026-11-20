@@ -449,6 +449,12 @@ pub(crate) fn date_path(t: SystemTime) -> PathBuf {
     Path::new(&format!("{:04}", tm.tm_year + 1900)).join(format!("{:02}", tm.tm_mon + 1)).join(format!("{:02}", tm.tm_mday))
 }
 
+/// The text Codex wraps around an image input (`<image name=[Image #1]>`, `</image>`), not the person's words.
+fn is_image_wrapper(t: &str) -> bool {
+    let t = t.trim();
+    t.is_empty() || ((t.starts_with("<image") || t.starts_with("</image")) && t.ends_with('>') && !t.contains('\n'))
+}
+
 fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return };
     let ts = v["timestamp"].as_str().map(short_time).unwrap_or_default();
@@ -523,14 +529,28 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
         }
         (Some("response_item"), Some("message")) => {
             let role = p["role"].as_str().unwrap_or("");
-            let text: String = p["content"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n"))
-                .unwrap_or_default();
-            if text.trim().is_empty() || text.trim_start().starts_with('<') {
+            let items = p["content"].as_array().map(|a| a.as_slice()).unwrap_or_default();
+            // A user message's images (`input_image` data URLs) and the wrappers Codex puts around them.
+            let images: Vec<(String, String, u64)> = if role == "user" { items.iter().filter_map(crate::attach::block_image).collect() } else { Vec::new() };
+            let text: String = items
+                .iter()
+                .filter_map(|c| c["text"].as_str())
+                .filter(|t| images.is_empty() || !is_image_wrapper(t))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (clean, atts) = if role == "user" { crate::attach::split_markers(&text) } else { (text.clone(), Vec::new()) };
+            if atts.is_empty() && images.is_empty() && (text.trim().is_empty() || text.trim_start().starts_with('<')) {
                 return;
             }
             match role {
+                "user" if !atts.is_empty() || !images.is_empty() => {
+                    st.titles.prompts += 1;
+                    let clean = if clean.trim_start().starts_with('<') { String::new() } else { clean };
+                    s.last_prompt = Some(one_line(&clean, 400));
+                    let mut a = Activity::message(ts, ActivityKind::Prompt, &clean, 400);
+                    a.attachments = crate::attach::merge_images(atts, images);
+                    push_activity(&mut s.activity, a);
+                }
                 "user" => {
                     st.titles.prompts += 1;
                     s.last_prompt = Some(one_line(&text, 400));
@@ -758,6 +778,28 @@ mod tests {
             parse_line(l, &mut st, &mut s);
         }
         (st, s)
+    }
+
+    /// A prompt coool sent with attachments: Codex records the text (with coool's marker lines) and each
+    /// `localImage` as an `input_image` data URL, between wrapper texts.
+    #[test]
+    fn prompt_attachments_round_trip() {
+        let f = crate::attach::Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 9, kind: crate::attach::AttachKind::File, path: Some("/w/notes.txt".into()), key: None, note: None };
+        let i = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/s/k.png".into()), key: None, note: None };
+        let text = crate::attach::with_markers("describe", &[i, f]);
+        let line = serde_json::json!({"timestamp": "2026-11-20T10:00:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": text},
+            {"type": "input_text", "text": "<image name=[Image #1]>"},
+            {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+            {"type": "input_text", "text": "</image>"}]}});
+        let (_, s) = run(&line.to_string());
+        let p: Vec<_> = s.activity.iter().filter(|a| a.kind == ActivityKind::Prompt).collect();
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].text, "describe");
+        assert_eq!(p[0].attachments.len(), 2);
+        assert_eq!(p[0].attachments[0].key.as_deref(), Some(crate::attach::key_of("AAAA").as_str()));
+        assert_eq!(p[0].attachments[1].name, "notes.txt");
+        assert_eq!(s.last_prompt.as_deref(), Some("describe"));
     }
 
     #[test]

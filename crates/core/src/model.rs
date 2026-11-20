@@ -104,6 +104,9 @@ pub struct Activity {
     /// A step that published a page to claude.ai (see [`crate::artifact`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<Box<crate::artifact::ArtifactInfo>>,
+    /// A prompt's attachments (images and files the person added; see [`crate::attach`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::attach::Attachment>,
 }
 
 /// Characters of `Activity::full` kept per entry.
@@ -115,7 +118,7 @@ pub const FULL_RECENT: usize = 50;
 impl Activity {
     /// A step (tool call, subagent) or a fixed note: one line says it all.
     pub fn line(ts: String, kind: ActivityKind, text: impl Into<String>) -> Self {
-        Self { ts, kind, text: text.into(), full: None, shortened: false, step: false, artifact: None }
+        Self { ts, kind, text: text.into(), full: None, shortened: false, step: false, artifact: None, attachments: Vec::new() }
     }
 
     /// A prompt, reply or error: its one-line form (`max` columns) and, when
@@ -130,7 +133,7 @@ impl Activity {
             Some((end, _)) => (format!("{}…", &s[..end]), true),
             None => (s.to_string(), false),
         };
-        Self { ts, kind, text, full: Some(full), shortened: cut, step: false, artifact: None }
+        Self { ts, kind, text, full: Some(full), shortened: cut, step: false, artifact: None, attachments: Vec::new() }
     }
 }
 

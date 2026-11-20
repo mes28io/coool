@@ -1,3 +1,4 @@
+import type { Attachment } from "./attachRules";
 // Chat state, reduced from CHAT_SPEC events. One entry per chat id, kept for
 // every chat the backend reports (not only open ones) so the sidebar, tabs and
 // Mission control can show "Needs you" without the chat view being mounted.
@@ -26,7 +27,7 @@ export interface OpenFailed {
 }
 
 export type ChatItem =
-  | { kind: "prompt"; key: string; id: string; text: string; ts: number; unsent?: boolean }
+  | { kind: "prompt"; key: string; id: string; text: string; ts: number; unsent?: boolean; attachments?: Attachment[] }
   | { kind: "text"; key: string; id: string; text: string; ts: number; streaming: boolean; parent: string | null; model: string | null }
   | { kind: "thinking"; key: string; id: string; text: string; ts: number; endTs: number | null; parent: string | null }
   | {
@@ -83,6 +84,8 @@ export interface Note {
   echoed?: boolean;
   /** Delivered as an ordinary prompt (idle chat, a missed step boundary, or no step to attach to): its echo is a normal prompt bubble. */
   asPrompt?: boolean;
+  /** Images and files that go with it (both CLIs take them mid-turn: see crates/core/src/chat). */
+  attachments?: Attachment[];
 }
 
 /** The backend's `steer` event (CHAT_SPEC "Steering"). */
@@ -94,6 +97,7 @@ export interface SteerEvent {
   text: string;
   state: NoteState;
   tool_id: string | null;
+  attachments?: Attachment[];
 }
 
 export interface UsagePoint {
@@ -267,7 +271,8 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         asPrompt = !toolId;
       }
       const cur = c.notes.find((n) => n.id === s.note_id);
-      const note: Note = { ...(cur ?? { id: s.note_id, ts: s.ts }), text: s.text || cur?.text || "", state: s.state, toolId: toolId ?? (delivered ? null : (cur?.toolId ?? null)), asPrompt, local: false };
+      const atts = s.attachments?.length ? s.attachments : cur?.attachments;
+      const note: Note = { ...(cur ?? { id: s.note_id, ts: s.ts }), text: s.text || cur?.text || "", state: s.state, toolId: toolId ?? (delivered ? null : (cur?.toolId ?? null)), asPrompt, local: false, ...(atts?.length ? { attachments: atts } : {}) };
       c = { ...c, notes: cur ? c.notes.map((n) => (n.id === s.note_id ? note : n)) : [...c.notes, note] };
       continue;
     }
@@ -295,7 +300,7 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           c = { ...c, notes: c.notes.map((x) => (x === n ? { ...x, echoed: true } : x)) };
           if (!n.asPrompt && e.steer !== false) break;
         }
-        its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts });
+        its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts, ...(e.attachments?.length ? { attachments: e.attachments } : {}) });
         c = { ...c, prompts: c.prompts[c.prompts.length - 1] === e.text ? c.prompts : [...c.prompts, e.text].slice(-200), turnStart: c.turnStart ?? e.ts, turnOut0: c.turnStart === null ? c.tokens.output : c.turnOut0 };
         break;
       }
