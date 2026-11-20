@@ -9,11 +9,16 @@ cd "$(dirname "$0")/.."
 root=$(pwd)
 target="${CARGO_TARGET_DIR:-$root/target}"
 [ "$(uname -m)" = "arm64" ] || { echo "package.sh: build on an Apple silicon Mac" >&2; exit 1; }
-key_item=coool-release-signing-key
-security find-generic-password -s "$key_item" >/dev/null 2>&1 || {
-  echo "package.sh: no release signing key in the Keychain ($key_item). Run sh scripts/release-key.sh once on the release Mac." >&2
+key_item=coool-release-signing-key-locked
+# The key comes from one of two places. Safest: it lives in a password manager, not on this Mac, and is pasted at the
+# hidden prompt below when releasing. Otherwise: the Keychain item, which should be locked so every read asks for the
+# login password (scripts/release-key.sh makes it that way).
+key_from=prompt
+security find-generic-password -s "$key_item" >/dev/null 2>&1 && key_from=keychain
+if [ "$key_from" = prompt ] && [ ! -t 0 ]; then
+  echo "package.sh: no release signing key in the Keychain ($key_item) and no terminal to paste it into." >&2
   exit 1
-}
+fi
 
 # Keep this Mac's home folder (and so the account name) out of the binary: panic messages and C asserts embed
 # source paths otherwise.
@@ -37,7 +42,14 @@ COPYFILE_DISABLE=1 tar -czf "$out" -C "$(dirname "$app")" coool.app
 ( cd dist && shasum -a 256 coool-macos-arm64.tar.gz > coool-macos-arm64.tar.gz.sha256 )
 # The secret key goes from the Keychain to the signer on stdin (never to a file); the signer keeps the signature only
 # if a key pinned in the app verifies it.
-security find-generic-password -s "$key_item" -w | cargo run -q -p coool-app --example sign_release -- sign "$out" app/src-tauri/src/update/keys.rs
+if [ "$key_from" = keychain ]; then
+  security find-generic-password -s "$key_item" -w | cargo run -q -p coool-app --example sign_release -- sign "$out" app/src-tauri/src/update/keys.rs
+else
+  printf 'Paste the release signing key (nothing is shown), then press Return: ' >&2
+  stty -echo; IFS= read -r pasted_key; stty echo; printf '\n' >&2
+  printf '%s\n' "$pasted_key" | cargo run -q -p coool-app --example sign_release -- sign "$out" app/src-tauri/src/update/keys.rs
+  unset pasted_key
+fi
 ver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
 echo "Packed coool $ver: $out ($(du -h "$out" | cut -f1))"
 cat dist/coool-macos-arm64.tar.gz.sha256
