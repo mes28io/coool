@@ -347,6 +347,7 @@ struct WhenToggle: View {
       option(.interrupt, "Interrupt now", "bolt.fill")
       Spacer(minLength: 0)
     }
+    .accessibilityElement(children: .contain)
     .accessibilityIdentifier("chat.when")
   }
 
@@ -408,6 +409,7 @@ struct NotesStrip: View {
               .accessibilityLabel("Remove")
               .accessibilityIdentifier("note.remove|\(n.id)")
           }
+          .accessibilityElement(children: .contain)
           .accessibilityIdentifier("note|\(n.id)|queued")
           .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -422,6 +424,7 @@ struct NotesStrip: View {
               ProgressView().controlSize(.mini)
             }
           }
+          .accessibilityElement(children: .contain)
           .accessibilityIdentifier("note|\(o.id)|\(o.state == .sending ? "sending" : "sent")")
           .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -602,6 +605,7 @@ struct AttachStrip: View {
             .accessibilityLabel("Remove \(a.name)")
             .accessibilityIdentifier("attach.remove|\(i)")
           }
+          .accessibilityElement(children: .contain)
           .accessibilityIdentifier(a.kind == .image ? "attach.pic|\(i)" : "attach.file|\(i)")
           .transition(.scale(scale: 0.8).combined(with: .opacity))
         }

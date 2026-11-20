@@ -21,6 +21,9 @@ struct ChatView: View {
   @State private var jump = 0
   /// The streaming row's height: when it grows by a line, the list follows (if the person is at the bottom).
   @State private var grew: CGFloat = 0
+  /// The content's height (iOS 18): any growth while at the bottom (a reply finishing its reveal, a notice, an image
+  /// arriving) keeps the bottom in view.
+  @State private var grown: CGFloat = 0
 
   private var session: SessionInfo? { store.session(sessionId) }
   /// The id the Mac's live view goes by: the chat's listed id once known (a started chat is `chat:<n>` first).
@@ -46,7 +49,7 @@ struct ChatView: View {
   private var rows: [Row] {
     var r: [Row] = (log?.items ?? []).map { .item($0, id: store.rowId($0)) }
     r += (store.outbox[liveId] ?? []).filter { !$0.isNote }.map { .out($0) }
-    if let t = streaming { r.append(.stream(t, id: store.streamId(liveId))) }
+    if let t = streaming { r.append(.stream(t, id: store.streamIds[liveId] ?? "stream:new")) }
     return r
   }
 
@@ -105,7 +108,7 @@ struct ChatView: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
       }
-      .modifier(StickToBottom(atBottom: $atBottom))
+      .modifier(StickToBottom(atBottom: $atBottom, grown: $grown))
       .scrollDismissesKeyboard(.interactively)
       // A tap on the conversation puts the keyboard away (and brings back the chat's state row under the field).
       .simultaneousGesture(TapGesture().onEnded { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) })
@@ -117,6 +120,9 @@ struct ChatView: View {
         } else if new > old {
           missed += new - old
         }
+      }
+      .onChange(of: grown) { old, new in
+        if atBottom, new > old { withAnimation(.easeOut(duration: 0.22)) { proxy.scrollTo("bottom", anchor: .bottom) } }
       }
       .onChange(of: grew) { _, _ in
         // The stream grew by a line: glide down with it.
@@ -181,6 +187,10 @@ struct ChatView: View {
 
   @ViewBuilder private func rowView(_ row: Row) -> some View {
     switch row {
+    case .out, .item where Self.isUser(row):
+      // One branch for a message on its way and the Mac's copy of it, so the copy keeps the same view: it settles in
+      // place (the status line fades), with no cross-fade or jump.
+      userRow(row)
     case .item(let it, _) where it.role != "assistant":
       LiveItemView(item: it, session: liveId, running: working).equatable()
     case .item, .stream:
@@ -193,15 +203,29 @@ struct ChatView: View {
       }()
       FlowText(text: t, flowing: flowing)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in if flowing { grew = h } }
-    case .out(let o):
-      UserBubble(text: o.text, images: [], pics: o.attachments.compactMap(\.image), files: o.attachments.filter { $0.kind == .file }.map(\.name), steer: false, session: liveId, status: o.state)
-        .contextMenu {
+    }
+  }
+
+  static func isUser(_ row: Row) -> Bool {
+    if case .item(let it, _) = row { return it.role == "user" }
+    if case .out = row { return true }
+    return false
+  }
+
+  private func userRow(_ row: Row) -> some View {
+    let o: Outgoing? = { if case .out(let o) = row { return o } else { return nil } }()
+    let it: LiveItem? = { if case .item(let it, _) = row { return it } else { return nil } }()
+    // A settled message shows the pictures it was sent with until the Mac's copies of them arrive.
+    let pics = o?.attachments.compactMap(\.image) ?? []
+    return UserBubble(text: o?.text ?? it?.text, images: it?.images ?? [], pics: pics, files: o?.attachments.filter { $0.kind == .file }.map(\.name) ?? [], steer: it?.steer == true, session: liveId, status: o?.state)
+      .contextMenu {
+        if let o {
           if case .failed = o.state { Button { store.retry(o) } label: { Label("Retry", systemImage: "arrow.clockwise") } }
           Button(role: .destructive) { store.discard(o) } label: { Label("Remove", systemImage: "trash") }
         }
-        .onTapGesture { if case .failed = o.state { store.retry(o) } }
-        .accessibilityIdentifier("chat.out|\(o.id)")
-    }
+      }
+      .onTapGesture { if let o, case .failed = o.state { store.retry(o) } }
+      .accessibilityIdentifier(o.map { "chat.out|\($0.id)" } ?? "chat.user")
   }
 
   // ---------------------------------------------------------------- the header: state, step, tally, agents, devices
@@ -286,11 +310,13 @@ struct ChatView: View {
 /// view itself keeps the bottom anchored as content grows (no scroll commands per token); iOS 17: a scroll per change.
 struct StickToBottom: ViewModifier {
   @Binding var atBottom: Bool
+  @Binding var grown: CGFloat
 
   func body(content: Content) -> some View {
     if #available(iOS 18.0, *) {
       content
         .defaultScrollAnchor(.bottom)
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in grown = h }
         .onScrollPhaseChange { old, phase, ctx in
           // Only the person's own scrolling decides whether they left the bottom (content growing, the keyboard
           // coming up, or a programmatic scroll never do).

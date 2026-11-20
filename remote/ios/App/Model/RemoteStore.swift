@@ -397,6 +397,8 @@ final class RemoteStore {
       rowIds[a.k] = streamId(s)
     }
     if streamed && !streaming { nextStream(s) }
+    // The stream's row id is made here, never while a view draws.
+    if streaming { _ = streamId(s) }
     var out = outbox[s] ?? []
     let taken = Set(rowIds.keys)
     for (o, k) in Settle.match(out.filter { !$0.isNote }, items: l.items, taken: taken) {

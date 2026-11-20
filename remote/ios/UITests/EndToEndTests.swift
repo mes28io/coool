@@ -152,23 +152,26 @@ final class EndToEndTests: XCTestCase {
     try step("Stop accepted", wait("stop result", timeout: 60) { !stop.exists || (state.value as? String) != "working" })
     XCTAssertFalse(app.descendants(matching: .any)["chat.error"].exists)
     put("remote-phone-stopped.txt", "sent, then stopped \(session) from the app")
-    _ = wait("the stop line in the tail", timeout: 20) { app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Stopped from'")).count > 0 }
+    // (The Mac checks its "Stopped from" line; here it sits above the stopped reply, out of the lazy list's view.)
     shot(shots, "e2e-14-chat-stopped")
     try step("the bubble settled into the Mac's copy (same row, no status left)", wait("settled", timeout: 30) { !self.elements(self.app, "chat.out|").firstMatch.exists })
 
     // 4b (minor 2). A note queued while a real Haiku turn runs: in the strip with its state, then picked up.
     _ = wait("idle after the stop", timeout: 30) { (state.value as? String) == "idle" }
     input.tap()
-    typeInto(input, "Use the Read tool to read notes.txt, then remote-ok.txt, then notes.txt again, then remote-ok.txt again: one Read call at a time, each only after the previous result. Then reply with one word: done")
+    typeInto(input, "Use the Read tool on notes.txt twelve times: one Read call at a time, each only after the previous result. Then reply with one word: done")
     app.buttons["chat.send"].tap()
     try step("working on the reads", stop.waitForExistence(timeout: 60))
     input.tap()
-    typeInto(input, "Also end your reply with the word pelican.")
+    typeInto(input, "Also say pelican.")
     try step("while it works, the message would go in at its next step", app.buttons["chat.when|next"].waitForExistence(timeout: 5))
     put("remote-phone-note-sending.txt", "1")
     app.buttons["chat.send"].tap()
     let strip = app.descendants(matching: .any)["notes.strip"]
-    try step("the note shows in the queued strip at once", strip.waitForExistence(timeout: 2))
+    // In the strip until the agent takes it in (at its next step: sometimes within a second, then it is already a
+    // note in the conversation).
+    let inChat = app.staticTexts["Also say pelican."]
+    try step("the note shows in the queued strip (or was already picked up)", wait("the note", timeout: 3) { strip.exists || inChat.exists })
     shot(shots, "e2e-16-note-queued")
     let picked = wait("the reply with the note's word", timeout: 120) {
       (state.value as? String) == "idle" && self.elements(self.app, "chat.assistant").allElementsBoundByIndex.contains { $0.label.lowercased().contains("pelican") }
@@ -231,9 +234,10 @@ final class EndToEndTests: XCTestCase {
     let modelChip = app.buttons["meta.model"].firstMatch
     try step("the model chip", modelChip.waitForExistence(timeout: 10))
     modelChip.tap()
-    let sonnet = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'meta.model|' AND identifier CONTAINS[c] 'sonnet'")).firstMatch
+    // (A menu's items are found by their words: SwiftUI doesn't carry identifiers into a menu.)
+    let sonnet = app.buttons.matching(NSPredicate(format: "label BEGINSWITH[c] 'Sonnet'")).firstMatch
     try step("the Mac's models for this chat", sonnet.waitForExistence(timeout: 5))
-    let chosen = String(sonnet.identifier.dropFirst("meta.model|".count))
+    let chosen = sonnet.label
     shot(shots, "e2e-22-model-menu")
     sonnet.tap()
     put("remote-phone-model.txt", chosen)
@@ -268,11 +272,10 @@ final class EndToEndTests: XCTestCase {
     try step("the asking modes offered", accept.waitForExistence(timeout: 5))
     accept.tap()
     XCTAssertFalse(app.buttons["new.mode|bypassPermissions"].exists, "Bypass offered")
-    let attach = app.buttons["chat.attach"].firstMatch
-    if !attach.isHittable { app.swipeUp() }
-    attach.tap()
+    // New chat shows its sources under the prompt (pictures, camera, files, paste).
     let test = app.buttons["attach.test"]
-    try step("the attach menu", test.waitForExistence(timeout: 5))
+    try step("the attachment sources", test.waitForExistence(timeout: 5))
+    if !test.isHittable { app.swipeUp() }
     test.tap()
     try step("the picture is ready to send", elements(app, "attach.pic|").firstMatch.waitForExistence(timeout: 5))
     shot(shots, "e2e-11-new-chat")
