@@ -26,6 +26,7 @@ from pathlib import Path
 
 SCALE = 2  # CSS px -> window pixels (retina)
 MARGIN = 24
+FRAME = (2880, 1800)  # the window's pixels
 
 
 def main():
@@ -83,8 +84,11 @@ def main():
                 x, y, w, h = r
                 m = MARGIN * SCALE
                 x0, y0 = max(0, x - m), max(0, y - m)
+                x1, y1 = min(FRAME[0], x + w + m), min(FRAME[1], y + h + m)
+                if x1 - x0 < 16 or y1 - y0 < 16:
+                    continue
                 crop = out / f"{name}-{label}-{k}.png"
-                subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(png), "-vf", f"crop={w + 2 * m}:{h + 2 * m}:{x0}:{y0}:exact=1", str(crop)], check=False)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(png), "-vf", f"crop={x1 - x0}:{y1 - y0}:{x0}:{y0}:exact=1", str(crop)], check=False)
         if t0:
             info["cues"] = [{"cue": n, "t": round(at - t0, 2)} for at, n in cues if 0 <= at - t0 <= frames[-1][0]]
         (out / f"{name}.json").write_text(json.dumps(info, indent=1))

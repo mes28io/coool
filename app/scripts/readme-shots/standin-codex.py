@@ -18,7 +18,7 @@ from pathlib import Path
 
 ARGS = sys.argv[1:]
 if "--version" in ARGS or "-V" in ARGS:
-    print("codex-cli 0.145.0")
+    print("codex-cli 0.171.0")
     sys.exit(0)
 if "app-server" not in ARGS:
     sys.exit(1)
@@ -127,13 +127,13 @@ def main():
             continue  # notifications (initialized)
         p = v.get("params") or {}
         if m == "initialize":
-            r = {"userAgent": "codex_cli_rs/0.145.0 (Mac OS 26.0.0; arm64)"}
+            r = {"userAgent": "codex_cli_rs/0.171.0 (Mac OS 26.0.0; arm64)"}
         elif m == "model/list":
             r = {"data": [{"id": "gpt-5.6", "model": "gpt-5.6", "displayName": "GPT-5.6"}, {"id": "gpt-5.6-luna", "model": "gpt-5.6-luna", "displayName": "GPT-5.6 Luna"}]}
         elif m == "config/read":
             r = {"config": {}}
         elif m in ("thread/start", "thread/resume"):
-            roll({"type": "session_meta", "payload": {"id": TID, "cwd": CWD, "originator": "coool-selftest", "cli_version": "0.145.0", "timestamp": iso(), "model_provider": "openai"}})
+            roll({"type": "session_meta", "payload": {"id": TID, "cwd": CWD, "originator": "coool-selftest", "cli_version": "0.171.0", "timestamp": iso(), "model_provider": "openai"}})
             r = {"thread": {"id": TID}, "model": MODEL, "approvalPolicy": "on-request", "sandbox": {"type": "workspaceWrite"}}
         elif m == "turn/start":
             turn = f"turn_{uuid.uuid4().hex[:8]}"

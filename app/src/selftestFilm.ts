@@ -229,7 +229,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
           await mark("tab-pixelforge", { tab });
           await sleep(2500);
           await cue("commit-pixel");
-          await waitFor("the pixelforge merge on the trail", () => /Merged|wgpu-port/.test(text($("[data-mc-trail]"))) && /Blur pass/.test(text($("[data-mc-trail]"))), 40_000);
+          await waitFor("the pixelforge merge on the trail", () => /Merged ?wgpu-port/.test(text($("[data-mc-trail]"))) && !$("[data-mc-committing]"), 40_000);
           await mark("pixel-merge", { trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
           await sleep(4000);
         });
@@ -349,7 +349,8 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
           const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
           useStore.getState().setRightPanel(key, "device");
           await waitFor("the booted device in the panel", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 60_000);
-          await sleep(4000);
+          // A freshly booted simulator draws its home screen icons a while after it boots.
+          await sleep(20_000);
           await burst("iphone", async () => {
             await sleep(800);
             await typeOut("On the iPhone in the panel, open Settings and read the iOS version in General > About.", sleep);
