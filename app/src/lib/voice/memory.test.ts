@@ -4,12 +4,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  addWord,
   applyMemory,
   emptyMemory,
   exportMemory,
   importMemory,
-  initialPrompt,
+  echoWords,
+  isLibrary,
   MAX_AI_CACHE,
   MAX_UNCONFIRMED,
   offered,
@@ -157,7 +157,7 @@ test("learning: two dismissals suppress (a stub is created for an unknown pair)"
   assert.equal(suppressed(m, "thier", "their"), false);
   assert.equal(apply(m, "there"), "there");
   // The stub is not a library word.
-  assert.equal(initialPrompt(m), "");
+  assert.equal(isLibrary(entry(m, "their")!), false);
 });
 
 test("recordUse: counts uses and the last use", () => {
@@ -169,21 +169,14 @@ test("recordUse: counts uses and the last use", () => {
   assert.equal(entry(m, "Tauri")?.uses, 0); // pure
 });
 
-test("initialPrompt: the person's words first (uses, then recency), seed after, cut between words", () => {
+test("echoWords: written and heard forms, once each, capped", () => {
   let m = emptyMemory();
-  m = addWord(m, "Grafana", [], "you", NOW - 10);
-  m = addWord(m, "Supabase", [], "you", NOW - 5);
-  m = addWord(m, "Vercel", [], "you", NOW - 1);
-  m = recordUse(m, [entry(m, "Grafana")!.id], NOW - 3);
-  const p = initialPrompt(m);
-  assert.ok(p.startsWith("Glossary: Grafana, Vercel, Supabase, "), p);
-  assert.ok(p.endsWith("."));
-  assert.ok(p.includes("Tauri"));
-  const short = initialPrompt(m, 40);
-  assert.equal(short, "Glossary: Grafana, Vercel, Supabase.");
-  assert.ok(short.length <= 40);
-  assert.equal(initialPrompt(bare()), "");
-  assert.ok(initialPrompt(emptyMemory()).length <= 600);
+  m = recordAlways(m, "Xfield", "Field", "you", NOW);
+  const w = echoWords(m);
+  for (const x of ["Field", "Xfield", "Tauri", "tory"]) assert.ok(w.includes(x), x);
+  assert.equal(new Set(w.map((x) => x.toLowerCase())).size, w.length);
+  assert.equal(echoWords(m, 3).length, 3);
+  assert.deepEqual(echoWords(bare()), []);
 });
 
 test("export/import: round trip, merge, malformed input", () => {

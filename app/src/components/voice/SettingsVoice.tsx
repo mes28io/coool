@@ -9,42 +9,18 @@ import { projectOf, homeShort, folderName } from "../../lib/format";
 import { voiceApi, type MicPermission, type ProjectWord } from "../../lib/voice/api";
 import { addWord, exportMemory, importMemory, offeredPairs, recordAlways, recordNever, removeEntry, type Entry } from "../../lib/voice/memory";
 import { clearMemory, DEFAULT_TOGGLE, loadMemory, setVoicePrefs, updateMemory, useMemory, useVoicePrefs, type Chord, type HoldKey } from "../../lib/voice/prefs";
-import { useVoice } from "../../lib/voice/controller";
+import { cancelListening, startListening, stopListening, TEST_TARGET, useVoice } from "../../lib/voice/controller";
+import { isQuiet } from "../../lib/voice/surface";
 import { SHORTCUTS } from "../../lib/shortcuts";
 import { Button, cx, Kbd } from "../primitives";
 import { ErrorLine, Group, Mono, Note, Row, Select, Switch, Tag, useSearching, type Option } from "../settings/ui";
-import { chordKeys, HOLD_LABEL, Meter } from "./parts";
+import { chordKeys, fmtSecs, HOLD_LABEL, Meter } from "./parts";
 import { ModelPicker } from "./ModelPicker";
+import { LANGUAGES } from "./languages";
 
-const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+export { LANGUAGES };
 
-export const LANGUAGES: Option<string>[] = [
-  { value: "auto", label: "Detect automatically" },
-  ...(
-    [
-      ["en", "English"],
-      ["tr", "Turkish"],
-      ["de", "German"],
-      ["es", "Spanish"],
-      ["fr", "French"],
-      ["it", "Italian"],
-      ["pt", "Portuguese"],
-      ["nl", "Dutch"],
-      ["pl", "Polish"],
-      ["ru", "Russian"],
-      ["uk", "Ukrainian"],
-      ["ar", "Arabic"],
-      ["fa", "Persian"],
-      ["hi", "Hindi"],
-      ["zh", "Chinese"],
-      ["ja", "Japanese"],
-      ["ko", "Korean"],
-      ["sv", "Swedish"],
-      ["el", "Greek"],
-      ["he", "Hebrew"],
-    ] as const
-  ).map(([value, label]) => ({ value, label })),
-];
+
 
 const PERM_TEXT: Record<MicPermission, string> = {
   not_determined: "macOS asks the first time you dictate.",
@@ -128,7 +104,7 @@ export function VoiceSettings() {
         <MicRow perm={perm} />
       </Group>
 
-      <Group label="Keys" footer="Voice keys work while a composer or answer field has focus, never while a device panel has the keyboard.">
+      <Group label="Keys" footer="The keys work while coool is the front app, wherever you are in its window: they dictate into the composer you were last in. They don't work while another app is in front (that would need macOS's Input Monitoring permission, which coool doesn't ask for), or while the sandbox Mac or iPhone panel has the keyboard. You can always click the mic in a composer instead.">
         <VoiceKeyRows />
       </Group>
 
@@ -154,57 +130,151 @@ export function VoiceSettings() {
 function MicRow({ perm }: { perm: MicPermission | null }) {
   const p = useVoicePrefs();
   const [devices, setDevices] = useState<{ name: string; default: boolean }[]>([]);
-  const [testing, setTesting] = useState(false);
-  const [levels, setLevels] = useState<number[]>([]);
-  const [err, setErr] = useState<string | null>(null);
-  const busy = useVoice((s) => s.phase !== "idle" && s.phase !== "error");
   useEffect(() => {
     void voiceApi().devices().then(setDevices).catch(() => {});
   }, []);
-  useEffect(() => {
-    if (!testing) return;
-    const v = voiceApi();
-    const off = v.onLevel(({ level }) => setLevels((l) => (l.length >= 40 ? [...l.slice(1), level] : [...l, level])));
-    return () => {
-      off();
-      void v.cancel();
-    };
-  }, [testing]);
-  const test = async () => {
-    setErr(null);
-    if (testing) return setTesting(false);
-    try {
-      const v = voiceApi();
-      // A test is a first use too: macOS asks here if it hasn't yet.
-      if ((await v.permission()) === "not_determined") await v.requestPermission();
-      setLevels([]);
-      setTesting(true);
-      await v.start(p.device, null);
-      setTimeout(() => setTesting(false), 15_000);
-    } catch (e) {
-      setTesting(false);
-      setErr(/^permission:/.test(errText(e)) ? "coool isn't allowed to use the microphone." : errText(e));
-    }
-  };
   const opts: Option<string>[] = [{ value: "", label: "System default" }, ...devices.map((d) => ({ value: d.name, label: d.name, hint: d.default ? "current system default" : undefined }))];
   return (
+    <>
+      <Row
+        attr="voice-device"
+        label="Input"
+        desc={devices.length ? "The microphone voice listens to." : "No microphone found. Connect one, or check System Settings > Sound > Input."}
+        k="input device microphone airpods"
+        control={<Select label="Input device" value={p.device ?? ""} width={260} onChange={(v) => setVoicePrefs({ device: v || null })} options={opts} />}
+      />
+      <MicTest perm={perm} />
+      <KeepRecordingRow />
+    </>
+  );
+}
+
+const TEST_SECS = 5;
+const NO_LEVELS: number[] = [];
+const NOTHING_TEXT: Record<string, string> = {
+  silence: "No speech reached coool. Check the input above, move closer, or speak up.",
+  unclear: "Something was heard, but not clearly enough to write down.",
+  echo: "Only noise was heard.",
+  repetition: "Only noise was heard.",
+  boilerplate: "Only noise was heard.",
+};
+
+/** "Test your microphone": the live level, a few seconds recorded, and what coool heard, without starting a chat. */
+function MicTest({ perm }: { perm: MicPermission | null }) {
+  const p = useVoicePrefs();
+  const mine = useVoice((s) => s.target === TEST_TARGET);
+  const phase = useVoice((s) => (s.target === TEST_TARGET ? s.phase : "idle"));
+  const levels = useVoice((s) => (s.target === TEST_TARGET ? s.levels : NO_LEVELS));
+  const secs = useVoice((s) => (s.target === TEST_TARGET ? s.secs : 0));
+  const error = useVoice((s) => (s.target === TEST_TARGET ? s.error : null));
+  const device = useVoice((s) => (s.target === TEST_TARGET ? s.device : null));
+  const last = useVoice((s) => s.last);
+  const busyElsewhere = useVoice((s) => s.target !== TEST_TARGET && (s.phase === "starting" || s.phase === "listening" || s.phase === "transcribing"));
+  const [ran, setRan] = useState(false);
+  const field = useRef<HTMLTextAreaElement | null>(null);
+  const quiet = phase === "listening" && isQuiet(levels, secs);
+  useEffect(() => {
+    if (phase === "listening" && secs >= TEST_SECS) void stopListening();
+  }, [phase, secs]);
+  useEffect(() => () => void (useVoice.getState().target === TEST_TARGET && cancelListening()), []);
+  const start = () => {
+    field.current ??= document.createElement("textarea");
+    setRan(true);
+    useVoice.setState({ last: null });
+    void startListening({ id: TEST_TARGET, el: field.current, inline: true }, "click");
+  };
+  const listening = phase === "listening" || phase === "starting";
+  const working = phase === "transcribing";
+  const desc = !p.model
+    ? "Choose a speech model above first."
+    : listening
+      ? quiet
+        ? "coool can't hear anything. Check the input above, or the microphone's own mute switch."
+        : `Say a sentence, the way you would dictate. Stops by itself after ${TEST_SECS} seconds.`
+      : working
+        ? "Turning speech into text…"
+        : `Records ${TEST_SECS} seconds and shows what coool heard. Nothing is sent or inserted anywhere.`;
+  return (
     <Row
-      attr="voice-device"
-      label="Input"
-      desc={testing ? "Speak: the bars should move. Stops by itself after 15 seconds." : "The microphone voice listens to."}
-      k="input device microphone level test airpods"
+      attr="voice-test"
+      label="Test your microphone"
+      desc={desc}
+      k="test microphone level check hear record"
       control={
-        <>
-          <Select label="Input device" value={p.device ?? ""} width={260} onChange={(v) => setVoicePrefs({ device: v || null })} options={opts} />
-          <Button variant="outline" className="h-[30px] px-2.5 text-small" disabled={busy || perm === "denied" || perm === "restricted"} onClick={() => void test()} data-voice-test>
-            {testing ? "Stop" : "Test"}
+        listening ? (
+          <>
+            <Button variant="outline" className="h-[30px] px-2.5 text-small" onClick={() => void stopListening()} data-voice-test-done>
+              Done
+            </Button>
+            <Button variant="ghost" className="h-[30px] px-2 text-small" onClick={cancelListening}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <Button variant="outline" className="h-[30px] px-2.5 text-small" disabled={!p.model || working || busyElsewhere || perm === "denied" || perm === "restricted"} onClick={start} data-voice-test>
+            {ran ? "Test again" : "Test"}
           </Button>
-        </>
+        )
       }
     >
-      {testing && <Meter levels={levels} bars={40} className="h-[22px]" tone="var(--accent)" />}
-      <ErrorLine>{err}</ErrorLine>
+      {(listening || working || (ran && mine)) && (
+        <div className="flex flex-col gap-2 rounded-[10px] border border-line px-3 py-2.5" data-voice-test-state={listening ? (quiet ? "quiet" : "listening") : working ? "working" : phase === "error" ? "error" : last ? (last.heard === "words" ? "heard" : "nothing") : "idle"}>
+          <div className="flex items-center gap-2.5">
+            <span className={cx("size-[8px] shrink-0 rounded-full", listening ? "bg-[var(--error)]" : "bg-[color-mix(in_oklab,var(--dim)_40%,transparent)]")} />
+            <Meter levels={levels} bars={44} className="h-[22px]" tone={quiet ? "var(--status-needs)" : "var(--accent)"} />
+            <span className="font-mono text-mono-small text-dim tnum">{fmtSecs(secs)}</span>
+            <span className="min-w-0 flex-1 truncate text-right text-micro text-faint">{device ? `${device.device} · ${device.format}` : ""}</span>
+          </div>
+          {phase === "error" && <ErrorLine>{error}</ErrorLine>}
+          {!listening && !working && last && (
+            <div className="flex flex-col gap-0.5" data-voice-test-result={last.heard}>
+              <span className="font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">coool heard</span>
+              {last.heard === "words" ? <span className="text-base text-fg">“{last.text}”</span> : <span className="text-small text-busy-text">{NOTHING_TEXT[last.heard] ?? "Nothing."}</span>}
+              <span className="text-micro text-faint tnum">
+                {last.speech_secs.toFixed(1)} s of speech{last.gain_db > 0.5 ? ` · quiet, boosted ${Math.round(last.gain_db)} dB` : ""}
+                {last.language ? ` · language: ${last.language}` : ""}
+                {last.ms ? ` · ${(last.ms / 1000).toFixed(1)} s to write down` : ""}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </Row>
+  );
+}
+
+/** "Keep the last recording" (off by default): one WAV in coool's voice folder, replaced each time. */
+function KeepRecordingRow() {
+  const p = useVoicePrefs();
+  const [st, setSt] = useState<{ path: string; there: boolean } | null>(null);
+  const last = useVoice((s) => s.last);
+  useEffect(() => {
+    void voiceApi()
+      .status()
+      .then((s) => setSt({ path: s.recording_path, there: s.recording }))
+      .catch(() => {});
+  }, [last, p.keepRecording]);
+  return (
+    <Row
+      attr="voice-keep"
+      label="Keep the last recording"
+      desc={
+        <>
+          For troubleshooting: what the microphone captured last is saved as <Mono>last-recording.wav</Mono> in <span title={st?.path}>coool&rsquo;s voice folder</span> (Show in Finder, once there is one), replaced each time. It stays on this Mac and is never sent anywhere.
+        </>
+      }
+      k="keep recording save audio wav troubleshoot debug"
+      control={
+        <>
+          {p.keepRecording && st?.there && (
+            <Button variant="ghost" className="h-[30px] px-2 text-small" onClick={() => void voiceApi().reveal("recording")}>
+              Show in Finder
+            </Button>
+          )}
+          <Switch label="Keep the last recording" on={p.keepRecording} onChange={(v) => setVoicePrefs({ keepRecording: v })} />
+        </>
+      }
+    />
   );
 }
 
@@ -222,8 +292,8 @@ export function VoiceKeyRows() {
   const p = useVoicePrefs();
   return (
     <>
-      <Row attr="voice-hold" dense label="Hold to talk" desc="Hold, speak, release to insert." k="push to talk shortcut key option fn hold" control={<Select label="Hold to talk" value={p.hold} width={280} onChange={(v) => setVoicePrefs({ hold: v })} options={HOLD_OPTS} />} />
-      <Row attr="voice-toggle" dense label="Hands-free" desc="Press once to start, again to insert." k="toggle shortcut key hands free" control={<ChordRecorder value={p.toggle} onChange={(c) => setVoicePrefs({ toggle: c })} />} />
+      <Row attr="voice-hold" dense label="Hold to talk" desc="Hold the key, speak, let go: the text goes into the composer." k="push to talk shortcut key option fn hold" control={<Select label="Hold to talk" value={p.hold} width={280} onChange={(v) => setVoicePrefs({ hold: v })} options={HOLD_OPTS} />} />
+      <Row attr="voice-toggle" dense label="Hands-free" desc="Press once to start listening; press it again, or Return, to put the words in the composer. Esc throws the recording away." k="toggle shortcut key hands free" control={<ChordRecorder value={p.toggle} onChange={(c) => setVoicePrefs({ toggle: c })} />} />
     </>
   );
 }

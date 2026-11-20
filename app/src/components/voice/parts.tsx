@@ -2,8 +2,8 @@
 // the hint line that says how to finish.
 
 import { memo } from "react";
-import { useVoicePrefs, type Chord, type HoldKey } from "../../lib/voice/prefs";
-import { cx, Kbd } from "../primitives";
+import type { Chord, HoldKey } from "../../lib/voice/prefs";
+import { cx } from "../primitives";
 
 export function IMic({ size = 16, className, strokeWidth = 1.5 }: { size?: number; className?: string; strokeWidth?: number }) {
   return (
@@ -48,34 +48,4 @@ export function chordKeys(c: Chord | null): string[] {
   if (c.meta) k.push("⌘");
   k.push(CODE_LABEL[c.code] ?? c.code.replace(/^Key|^Digit/, ""));
   return k;
-}
-
-/** "release to insert · esc to cancel", worded for how listening started. */
-export function FinishHint({ mode, compact }: { mode: "hold" | "toggle" | "click"; compact?: boolean }) {
-  const p = useVoicePrefs();
-  const keys = chordKeys(p.toggle);
-  return (
-    <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-small text-faint" data-voice-hint={mode}>
-      {mode === "hold" ? (
-        <>release to insert</>
-      ) : mode === "toggle" ? (
-        <>
-          {keys.map((k) => (
-            <Kbd key={k} className="h-[18px] min-w-[18px] px-1">
-              {k}
-            </Kbd>
-          ))}{" "}
-          to insert
-        </>
-      ) : (
-        <>click the mic to insert</>
-      )}
-      {!compact && <span>·</span>}
-      {!compact && (
-        <>
-          <Kbd className="h-[18px] px-1">esc</Kbd> to cancel
-        </>
-      )}
-    </span>
-  );
 }

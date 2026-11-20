@@ -1,6 +1,6 @@
 // Voice's calls into the backend (app/src-tauri/src/voice): the Tauri commands and events, or a browser mock for
-// `pnpm dev` (knobs: `?voice=demo` starts with a model ready; `&mic=denied|not_determined|authorized|restricted`;
-// `&model=none|downloading`). Kept apart from lib/backend.ts so voice stays in its own files.
+// `pnpm dev` (knobs: `?voice=demo` starts with a model ready; `&mic=denied|not_determined|authorized|restricted|nodevice`;
+// `&model=none|downloading`; `&level=flat`: a microphone that hears nothing; `&voicestate=…`: see demo.ts). Kept apart from lib/backend.ts so voice stays in its own files.
 
 import { isTauri } from "../backend";
 import type { AiFix } from "./aiFix.ts";
@@ -14,6 +14,9 @@ export interface VoiceStatus {
   listening: boolean;
   models_dir: string;
   memory_path: string;
+  /** Where "Keep the last recording" writes, and whether a recording is there now. */
+  recording_path: string;
+  recording: boolean;
 }
 
 export type Progress =
@@ -57,12 +60,35 @@ export interface Transcript {
   secs: number;
   load_ms: number;
   silent: boolean;
+  /** "words", "silence" (whisper wasn't run), or why what whisper decoded was dropped: "unclear", "echo", "repetition", "boilerplate". */
+  heard: string;
+  speech_secs: number;
+  gain_db: number;
+  /** What whisper decoded before coool's checks. */
+  raw: string;
 }
+export interface Started {
+  device: string;
+  /** What the device delivers, e.g. "48000 Hz, 1 ch, F32". */
+  format: string;
+}
+/** The key monitor's settings (Rust: voice::keys::Config). */
+export interface KeysConfig {
+  enabled: boolean;
+  hold: string;
+  toggle: { key: number; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean } | null;
+  active: boolean;
+  enter_finishes: boolean;
+}
+export type KeyEvent = { kind: "hold"; down: boolean } | { kind: "chord" } | { kind: "toggle" } | { kind: "escape" } | { kind: "enter" };
 export interface StopReq {
   model: string;
   task: "translate" | "transcribe";
   language?: string | null;
-  prompt?: string | null;
+  /** The person's words: only to recognise whisper reading them back (never given to whisper). */
+  vocabulary?: string[];
+  /** Keep this recording as a WAV file (Settings > Voice > Keep the last recording). */
+  keep?: boolean;
 }
 export interface SpellHit {
   from: number;
@@ -88,7 +114,7 @@ export interface VoiceApi {
   requestPermission(): Promise<MicPermission>;
   openPrivacy(): Promise<void>;
   devices(): Promise<{ name: string; default: boolean }[]>;
-  start(device: string | null, model: string | null): Promise<string>;
+  start(device: string | null, model: string | null): Promise<Started>;
   stop(req: StopReq): Promise<Transcript>;
   cancel(): Promise<void>;
   preload(model: string): Promise<void>;
@@ -101,15 +127,18 @@ export interface VoiceApi {
   memoryRead(): Promise<string | null>;
   memoryWrite(json: string): Promise<void>;
   memoryClear(): Promise<void>;
-  reveal(what: "memory" | "models"): Promise<void>;
+  reveal(what: "memory" | "models" | "recording"): Promise<void>;
+  /** Tells the key monitor which keys voice uses and whether it is busy. */
+  keys(cfg: KeysConfig): Promise<void>;
   projectWords(cwd: string): Promise<ProjectWord[]>;
   spell(text: string, language: string | null, ignore: string[], grammar: boolean): Promise<SpellHit[]>;
   polish(text: string, words: string[], mode: string): Promise<PolishReply>;
   pickModelFile(): Promise<string | null>;
-  onLevel(cb: (l: { level: number; secs: number }) => void): () => void;
+  onLevel(cb: (l: { level: number; secs: number; peak?: number }) => void): () => void;
   onPartial(cb: (text: string) => void): () => void;
   onModel(cb: (p: { id: string } & Progress) => void): () => void;
-  onFn(cb: (down: boolean) => void): () => void;
+  /** The key monitor (the app only; the browser mock reads keys in the page). */
+  onKey(cb: (k: KeyEvent) => void): () => void;
   onError(cb: (e: string) => void): () => void;
 }
 
@@ -153,6 +182,7 @@ function tauriVoice(): VoiceApi {
     memoryWrite: (json) => call("voice_memory_write", { json }),
     memoryClear: () => call("voice_memory_clear"),
     reveal: (what) => call("voice_reveal", { what }),
+    keys: (cfg) => call("voice_keys", { cfg }),
     projectWords: (cwd) => call("voice_project_words", { cwd }),
     spell: (text, language, ignore, grammar) => call("voice_spell", { text, language, ignore, grammar }),
     polish: (text, words, mode) => call("voice_polish", { req: { text, words, mode } }),
@@ -164,7 +194,7 @@ function tauriVoice(): VoiceApi {
     onLevel: (cb) => sub("voice-level", cb),
     onPartial: (cb) => sub("voice-partial", cb),
     onModel: (cb) => sub("voice-model", cb),
-    onFn: (cb) => sub("voice-fn", cb),
+    onKey: (cb) => sub("voice-key", cb),
     onError: (cb) => sub("voice-error", cb),
   };
 }
@@ -187,7 +217,7 @@ const CATALOG: Omit<ModelRow, "path" | "partial" | "download">[] = [
 
 function mockVoice(): VoiceApi {
   const demo = knob("voice") === "demo";
-  let perm: MicPermission = (knob("mic") as MicPermission | null) ?? (demo ? "authorized" : "not_determined");
+  let perm: MicPermission = knob("mic") === "nodevice" ? "authorized" : ((knob("mic") as MicPermission | null) ?? (demo ? "authorized" : "not_determined"));
   const dir = "~/Library/Application Support/sh.coool.app/voice/models";
   const have = new Map<string, string>();
   if (demo && knob("model") !== "none") have.set("medium-q5_0", `${dir}/ggml-medium-q5_0.bin`);
@@ -207,7 +237,16 @@ function mockVoice(): VoiceApi {
   };
   return {
     kind: "mock",
-    status: async () => ({ available: true, permission: perm, loaded: null, listening: !!listening, models_dir: dir, memory_path: "~/Library/Application Support/sh.coool.app/voice/memory.json" }),
+    status: async () => ({
+      available: true,
+      permission: perm,
+      loaded: null,
+      listening: !!listening,
+      models_dir: dir,
+      memory_path: "~/Library/Application Support/sh.coool.app/voice/memory.json",
+      recording_path: "~/Library/Application Support/sh.coool.app/voice/last-recording.wav",
+      recording: false,
+    }),
     permission: async () => perm,
     requestPermission: async () => {
       if (perm === "not_determined") perm = "authorized";
@@ -220,15 +259,17 @@ function mockVoice(): VoiceApi {
     ],
     start: async () => {
       if (perm !== "authorized") throw new Error(`permission:${perm}`);
+      if (knob("mic") === "nodevice") throw new Error("no-device: No microphone found.");
+      const flat = knob("level") === "flat";
       const t0 = performance.now();
       const timer = setInterval(() => {
         const s = (performance.now() - t0) / 1000;
         // Speech-like: syllable bursts over a slow swell, with short pauses.
         const level = Math.max(0, 0.25 + 0.45 * Math.abs(Math.sin(s * 7.3)) * (0.6 + 0.4 * Math.sin(s * 1.7)) - (Math.sin(s * 2.1) > 0.92 ? 0.4 : 0));
-        levelCbs.forEach((f) => f({ level: Math.min(1, level), secs: s }));
+        levelCbs.forEach((f) => f({ level: flat ? 0.04 : Math.min(1, level), secs: s }));
       }, 40);
       listening = { t0, timer };
-      return "MacBook Pro Microphone";
+      return { device: "MacBook Pro Microphone", format: "48000 Hz, 1 ch, F32" };
     },
     stop: async () => {
       const secs = listening ? (performance.now() - listening.t0) / 1000 : 0;
@@ -237,7 +278,7 @@ function mockVoice(): VoiceApi {
       await new Promise((r) => setTimeout(r, 160));
       partialCbs.forEach((f) => f(text));
       await new Promise((r) => setTimeout(r, 120));
-      return { text, language: "en", ms: 280, secs, load_ms: 0, silent: false };
+      return { text, language: "en", ms: 280, secs, load_ms: 0, silent: !text, heard: text ? "words" : "silence", speech_secs: secs, gain_db: 0, raw: text };
     },
     cancel: async () => stopLevels(),
     preload: async () => {},
@@ -287,6 +328,7 @@ function mockVoice(): VoiceApi {
     memoryWrite: async (j) => void (memory = j),
     memoryClear: async () => void (memory = null),
     reveal: async () => {},
+    keys: async () => {},
     projectWords: async () => [
       { word: "harbor", from: "package.json" },
       { word: "zustand", from: "package.json" },
@@ -309,7 +351,7 @@ function mockVoice(): VoiceApi {
     onLevel: (cb) => on(levelCbs, cb),
     onPartial: (cb) => on(partialCbs, cb),
     onModel: (cb) => on(modelCbs, cb),
-    onFn: () => () => {},
+    onKey: () => () => {},
     onError: () => () => {},
   };
 }

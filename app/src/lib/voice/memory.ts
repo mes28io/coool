@@ -592,21 +592,18 @@ export function removeEntry(m: Memory, id: string): Memory {
   return { ...m, entries: m.entries.filter((e) => e.id !== id) };
 }
 
-export function initialPrompt(m: Memory, maxChars = 600): string {
-  const words = m.entries
-    .filter(isLibrary)
-    .sort((a, b) => Number(a.source === "seed") - Number(b.source === "seed") || b.uses - a.uses || b.lastUsed - a.lastUsed);
+/** Every word memory knows, written and heard forms alike (at most `max`). Not given to whisper: coool used to prime
+ *  whisper with these as a "Glossary: …" prompt, which made it read them back on quiet or noisy audio and turn long
+ *  requests into lists of nouns (APP_SPEC "Voice"). The backend only uses them to recognise such an echo and drop it. */
+export function echoWords(m: Memory, max = 400): string[] {
   const seen = new Set<string>();
-  const list: string[] = [];
-  let len = "Glossary: .".length;
-  for (const e of words) {
-    const k = e.written.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    const add = (list.length ? 2 : 0) + e.written.length;
-    if (len + add > maxChars) break; // cut between words, never inside one
-    list.push(e.written);
-    len += add;
-  }
-  return list.length ? `Glossary: ${list.join(", ")}.` : "";
+  const out: string[] = [];
+  for (const e of m.entries)
+    for (const w of [e.written, ...e.heard]) {
+      const k = w.toLowerCase();
+      if (!w.trim() || seen.has(k) || out.length >= max) continue;
+      seen.add(k);
+      out.push(w);
+    }
+  return out;
 }

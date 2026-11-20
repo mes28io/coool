@@ -2,7 +2,7 @@
 //! command thread that matters. The model loads on first use (or ahead of it: `preload` when the person starts holding
 //! the key), stays loaded between utterances, and is dropped after `IDLE` without use, which gives its memory back.
 
-use coool_whisper::{Model, Options, Task, audio, audio_ctx_for};
+use coool_whisper::{Model, Task, dictate};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -25,6 +25,13 @@ pub struct Transcript {
     pub load_ms: u64,
     /// Nothing but silence was captured (whisper was not run).
     pub silent: bool,
+    /// "words", "silence", or why what whisper decoded was dropped ("unclear", "echo", "repetition", "boilerplate").
+    pub heard: String,
+    /// Seconds of speech energy in the recording, and the gain applied to it (dB).
+    pub speech_secs: f32,
+    pub gain_db: f32,
+    /// What whisper decoded before the guard (for the self-test and troubleshooting).
+    pub raw: String,
 }
 
 pub struct RunReq {
@@ -32,7 +39,8 @@ pub struct RunReq {
     pub samples: Vec<f32>,
     pub task: Task,
     pub language: Option<String>,
-    pub prompt: Option<String>,
+    /// The person's words: only to recognise whisper reading them back (they are not given to whisper).
+    pub vocabulary: Vec<String>,
 }
 
 enum Job {
@@ -110,25 +118,26 @@ fn worker(rx: Receiver<Job>, abort: Arc<AtomicI32>, loaded: Arc<Mutex<Option<Pat
             }
             Job::Run(r, mut partial, reply) => {
                 let out = (|| {
-                    let Some(speech) = audio::trim_silence(&r.samples) else {
-                        return Ok(Transcript { silent: true, secs: r.samples.len() as f32 / 16_000.0, ..Default::default() });
-                    };
-                    let samples = audio::pad_min(speech.to_vec());
+                    // Silence or steady noise: whisper isn't run (and the model isn't even loaded for it).
+                    if dictate::prepare(&r.samples).is_none() {
+                        return Ok(Transcript { silent: true, heard: "silence".into(), secs: r.samples.len() as f32 / 16_000.0, ..Default::default() });
+                    }
                     let load_ms = ensure(&mut model, &r.model)?;
                     let (_, m) = model.as_mut().unwrap();
-                    if r.task == Task::Translate && !m.multilingual() {
-                        return Err("This model only knows English, so it can't translate. Choose a multilingual model in Settings > Voice.".into());
-                    }
-                    let o = Options {
-                        task: r.task,
-                        language: r.language.as_deref(),
-                        prompt: r.prompt.as_deref(),
-                        audio_ctx: audio_ctx_for(samples.len()),
-                        ..Default::default()
-                    };
-                    let t = Instant::now();
-                    let res = m.run(&samples, &o, |s| partial(s), Some(&abort)).map_err(|e| e.0)?;
-                    Ok(Transcript { text: res.text, language: res.language, ms: t.elapsed().as_millis() as u64, secs: samples.len() as f32 / 16_000.0, load_ms, silent: false })
+                    let req = dictate::Request { task: r.task, language: r.language.as_deref(), vocabulary: &r.vocabulary };
+                    let d = dictate::run(m, &r.samples, &req, |s| partial(s), Some(&abort)).map_err(|e| e.0)?;
+                    Ok(Transcript {
+                        text: d.text,
+                        language: d.language,
+                        ms: d.ms,
+                        secs: d.secs,
+                        load_ms,
+                        silent: d.heard == "silence",
+                        heard: d.heard.into(),
+                        speech_secs: d.speech_secs,
+                        gain_db: d.gain_db,
+                        raw: d.raw,
+                    })
                 })();
                 last = Instant::now();
                 let _ = reply.send(out);

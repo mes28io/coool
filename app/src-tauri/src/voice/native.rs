@@ -1,6 +1,6 @@
 //! The macOS pieces of voice: the microphone permission (AVCaptureDevice), the system spell and grammar checker
-//! (NSSpellChecker, on device), and the Fn key (a local NSEvent monitor: only while coool is the active app, so it
-//! needs no Accessibility or Input Monitoring permission).
+//! (NSSpellChecker, on device), and voice's keys (a local NSEvent monitor, see `keys`: only while coool is the active
+//! app, so it needs no Accessibility or Input Monitoring permission).
 
 use serde::Serialize;
 
@@ -36,7 +36,8 @@ mod mac {
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2_foundation::{NSArray, NSRange, NSString};
     use std::ptr::NonNull;
-    use std::sync::Mutex;
+    use super::super::keys;
+    use std::sync::{Arc, Mutex};
 
     #[link(name = "AVFoundation", kind = "framework")]
     unsafe extern "C" {
@@ -163,38 +164,71 @@ mod mac {
         out
     }
 
-    // ---------- Fn key ----------
+    // ---------- voice's keys ----------
 
+    const KEY_DOWN_MASK: u64 = 1 << 10;
     const FLAGS_CHANGED_MASK: u64 = 1 << 12;
-    const FN_FLAG: usize = 1 << 23;
-    const KVK_FUNCTION: u16 = 63;
 
-    /// Calls `on(down)` when the Fn (🌐) key goes down or up while coool is the active app. Installed once, on the
-    /// main thread; the event passes through unchanged.
-    pub fn watch_fn(on: Box<dyn Fn(bool) + Send + Sync>) {
+    /// Installs the local key monitor (once, on the main thread): every key event coool receives, in any of its
+    /// views, goes through `keys::decide` with the page's current `cfg`; `on` gets what to tell the page, and the
+    /// events voice uses (its chord, Esc and Return while busy) stop there.
+    pub fn watch_keys(cfg: Arc<Mutex<keys::Config>>, on: Box<dyn Fn(keys::KeyEvent) + Send + Sync>) {
         let Some(cls) = AnyClass::get(c"NSEvent") else { return };
-        let held = std::sync::atomic::AtomicBool::new(false);
+        let st = Mutex::new(keys::State::default());
         let block = RcBlock::new(move |e: NonNull<AnyObject>| -> *mut AnyObject {
             let ev = unsafe { e.as_ref() };
+            let kind: usize = unsafe { msg_send![ev, type] };
             let code: u16 = unsafe { msg_send![ev, keyCode] };
-            if code == KVK_FUNCTION {
-                let flags: usize = unsafe { msg_send![ev, modifierFlags] };
-                let down = flags & FN_FLAG != 0;
-                if held.swap(down, std::sync::atomic::Ordering::Relaxed) != down {
-                    on(down);
-                }
+            let flags: usize = unsafe { msg_send![ev, modifierFlags] };
+            let raw = if kind == 12 {
+                keys::Raw::Flags { code, flags }
+            } else {
+                let repeat: Bool = unsafe { msg_send![ev, isARepeat] };
+                keys::Raw::Down { code, flags, repeat: repeat.as_bool() }
+            };
+            let c = cfg.lock().unwrap().clone();
+            let (tell, pass) = keys::decide(&c, &mut st.lock().unwrap(), raw);
+            if let Some(k) = tell {
+                on(k);
             }
-            e.as_ptr()
+            if pass { e.as_ptr() } else { std::ptr::null_mut() }
         });
-        let monitor: *mut AnyObject = unsafe { msg_send![cls, addLocalMonitorForEventsMatchingMask: FLAGS_CHANGED_MASK, handler: &*block] };
+        let monitor: *mut AnyObject = unsafe { msg_send![cls, addLocalMonitorForEventsMatchingMask: KEY_DOWN_MASK | FLAGS_CHANGED_MASK, handler: &*block] };
         // Kept for the life of the app.
         std::mem::forget(block);
         let _ = monitor;
     }
+
+    /// Self-test only: one key event as the keyboard would give it, sent through `-[NSApplication sendEvent:]` (so the
+    /// local monitor sees it, then the key window and its focused view): in-process, posted to nothing system-wide,
+    /// so it needs no permission and no other app sees it. `kind`: 10 key down, 11 key up, 12 flags changed. Call on
+    /// the main thread with the live NSWindow.
+    pub fn post_key(ns: *mut std::ffi::c_void, kind: usize, code: u16, flags: usize, chars: &str) -> Result<(), String> {
+        use objc2_foundation::NSPoint;
+        if ns.is_null() {
+            return Err("no window".into());
+        }
+        unsafe {
+            let win = &*(ns as *mut AnyObject);
+            let number: isize = msg_send![win, windowNumber];
+            let cls = AnyClass::get(c"NSEvent").ok_or("no NSEvent")?;
+            let app_cls = AnyClass::get(c"NSApplication").ok_or("no NSApplication")?;
+            let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+            let info: *mut AnyObject = msg_send![AnyClass::get(c"NSProcessInfo").ok_or("no NSProcessInfo")?, processInfo];
+            let now: f64 = msg_send![&*info, systemUptime];
+            let s = NSString::from_str(chars);
+            let e: *mut AnyObject = msg_send![cls, keyEventWithType: kind, location: NSPoint::new(0.0, 0.0), modifierFlags: flags, timestamp: now, windowNumber: number, context: std::ptr::null_mut::<AnyObject>(), characters: &*s, charactersIgnoringModifiers: &*s, isARepeat: false, keyCode: code];
+            if e.is_null() {
+                return Err("no event".into());
+            }
+            let _: () = msg_send![&*app, sendEvent: &*e];
+        }
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{check as spell_check, permission, request as request_permission, watch_fn};
+pub use mac::{check as spell_check, permission, post_key, request as request_permission, watch_keys};
 
 #[cfg(not(target_os = "macos"))]
 pub fn permission() -> MicPermission {
@@ -209,4 +243,8 @@ pub fn spell_check(_: &str, _: Option<&str>, _: &[String], _: bool) -> Vec<Spell
     vec![]
 }
 #[cfg(not(target_os = "macos"))]
-pub fn watch_fn(_: Box<dyn Fn(bool) + Send + Sync>) {}
+pub fn watch_keys(_: std::sync::Arc<std::sync::Mutex<super::keys::Config>>, _: Box<dyn Fn(super::keys::KeyEvent) + Send + Sync>) {}
+#[cfg(not(target_os = "macos"))]
+pub fn post_key(_: *mut std::ffi::c_void, _: usize, _: u16, _: usize, _: &str) -> Result<(), String> {
+    Err("macOS only".into())
+}
