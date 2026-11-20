@@ -78,7 +78,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   }
   async function burst(name: string, f: () => Promise<void>) {
     current = name;
-    await film("start", { name, workers: 4, format: "png" });
+    await film("start", { name, format: "png" });
     try {
       await f();
     } finally {
@@ -154,7 +154,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         await film("visible");
         await sleep(3000);
       });
-      for (const [workers, format] of [[1, "png"], [3, "png"], [6, "png"], [1, "jpg"], [3, "jpg"], [6, "jpg"], [3, "bmp"], [6, "bmp"]] as const) {
+      for (const [workers, format] of [[2, "png"], [3, "png"], [4, "png"], [3, "jpg"], [3, "bmp"]] as const) {
         await step(`film: burst ${workers}x ${format}`, async () => {
           await film("start", { name: `m-${workers}-${format}`, workers, format });
           await sleep(5000);

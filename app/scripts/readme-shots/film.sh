@@ -47,7 +47,7 @@ sleep 1
 env -i HOME="$H" USER="${USER:-demo}" LOGNAME="${LOGNAME:-demo}" TMPDIR="${TMPDIR:-/tmp/}" LANG=en_US.UTF-8 SHELL=/bin/zsh \
   PATH="$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin" \
   COOOL_SELFTEST="$SCENARIO" COOOL_SELFTEST_DIR="$H/code" COOOL_SELFTEST_SHOTS="$ROOT/shots" COOOL_SELFTEST_LOG="$LOG" \
-  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 \
+  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 COOOL_FILM_WORKERS="${FILM_WORKERS:-3}" \
   "$ROOT/app/$NAME" > "$ROOT/logs/app.out" 2>&1 &
 APP=$!
 

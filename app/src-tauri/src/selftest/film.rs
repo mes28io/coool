@@ -6,7 +6,7 @@
 //! a burst into constant-rate video afterwards, each output frame showing the latest still taken by then.
 //!
 //! `selftest_film` with `action`:
-//! - `start` (`name`, optional `workers`, default 3, and `format`, default `png`): the burst goes to
+//! - `start` (`name`, optional `workers`, else `COOOL_FILM_WORKERS`, else 3, and `format`, default `png`): the burst goes to
 //!   `<shots>/film-<name>/`; one burst at a time.
 //! - `stop`: waits for the workers' last stills and returns `{ name, frames, ms }`.
 //! - `visible`: tells WebKit not to treat the off-screen window as hidden (no throttled timers or animations).
@@ -63,7 +63,8 @@ pub fn selftest_film(app: AppHandle, core: State<'_, Arc<Core>>, action: String,
             let stop = Arc::new(AtomicBool::new(false));
             let frames = Arc::new(AtomicUsize::new(0));
             let started = Instant::now();
-            let n = workers.unwrap_or(3).clamp(1, 8);
+            // Unless asked, `COOOL_FILM_WORKERS` (film.sh): the best count depends on the machine and how busy it is.
+            let n = workers.or_else(|| std::env::var("COOOL_FILM_WORKERS").ok().and_then(|v| v.parse().ok())).unwrap_or(3).clamp(1, 8);
             let handles = (0..n)
                 .map(|k| {
                     let (stop, frames, dir, fmt) = (stop.clone(), frames.clone(), dir.clone(), fmt.clone());
