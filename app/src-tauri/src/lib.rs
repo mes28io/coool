@@ -1944,6 +1944,7 @@ pub fn run() {
             selftest::selftest_previews,
             selftest::selftest_preview_eval,
             selftest::selftest_close_preview,
+            selftest::selftest_local_ipc,
             selftest::selftest_click,
             selftest::selftest_native,
             selftest::selftest_sim_delete,

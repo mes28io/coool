@@ -1125,6 +1125,75 @@ pub fn selftest_close_preview(app: AppHandle, core: State<'_, Arc<Core>>, label:
     app.get_webview_window(&label).ok_or("no such window")?.close().map_err(|e| e.to_string())
 }
 
+/// The worst case for the IPC: the self-test artifact's page loaded as the *top* frame of a webview other than
+/// `main`, so its origin is local (`coool-artifact://`, as every custom scheme is) and Tauri's script and invoke key
+/// are in it. `kind`: `window` (a window labelled like a preview, `preview-selftest-local`) or `child` (a child webview
+/// of the main window labelled like a browser tab, `browser-selftest-local`). Runs [`IPC_PROBE`] there and returns
+/// its result (JSON); the webview is destroyed afterwards. Every command must be refused: only `main` is granted any.
+#[tauri::command(async)]
+pub fn selftest_local_ipc(app: AppHandle, core: State<'_, Arc<Core>>, url: String, kind: String) -> Result<String, String> {
+    active(&core)?;
+    let (_, src) = crate::artifact::mint(&core, &url)?;
+    let src = tauri::webview::Url::parse(&src.ok_or("the artifact's local copy is gone")?).map_err(|e| e.to_string())?;
+    let label = match kind.as_str() {
+        "window" => format!("{}selftest-local", crate::artifact::PREVIEW_PREFIX),
+        "child" => format!("{}selftest-local", crate::browser::PREFIX),
+        _ => return Err("kind: window or child".into()),
+    };
+    let webview: tauri::Webview = if kind == "window" {
+        tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(src))
+            .inner_size(400.0, 300.0)
+            .focused(false)
+            .incognito(true)
+            .build()
+            .map_err(|e| e.to_string())?
+            .as_ref()
+            .clone()
+    } else {
+        let main = app.get_window("main").ok_or("no main window")?;
+        main.add_child(tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(src)).incognito(true), tauri::LogicalPosition::new(0.0, 0.0), tauri::LogicalSize::new(2.0, 2.0))
+            .map_err(|e| e.to_string())?
+    };
+    let title = |w: &tauri::Webview| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let l = label.clone();
+        let _ = w.with_webview(move |pw| {
+            #[cfg(target_os = "macos")]
+            let _ = tx.send(crate::browser::native::state(pw.inner(), l).title);
+            #[cfg(not(target_os = "macos"))]
+            let _ = (tx.send(String::new()), pw, l);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap_or_default()
+    };
+    // Wait for the page (its own title), then probe from its top frame.
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while title(&webview) != "Self-test probe" && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let r = (|| {
+        webview.eval(format!("{IPC_PROBE}\nipcProbe(\"local-{kind}\").then((r) => {{ document.title = \"ipc:\" + JSON.stringify(r); }});")).map_err(|e| e.to_string())?;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let t = title(&webview);
+            if let Some(r) = t.strip_prefix("ipc:") {
+                return Ok(r.to_string());
+            }
+            if std::time::Instant::now() > end {
+                return Err(format!("no probe result (title {t:?})"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    })();
+    if kind == "window" {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.destroy();
+        }
+    } else {
+        let _ = webview.close();
+    }
+    r
+}
+
 /// A real (trusted) mouse click at the centre of browser webview `id`: a left mouse down and up sent to the main
 /// window as AppKit events (`-[NSWindow sendEvent:]`: nothing is posted to the system and the pointer doesn't move).
 /// A page script's own `click()` isn't trusted, and WebKit won't follow a `target=_blank` link for it.

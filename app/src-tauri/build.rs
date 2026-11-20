@@ -2,7 +2,43 @@ fn main() {
     sim_helper();
     vm_helpers();
     lid_helper();
-    tauri_build::build()
+    let manifest = tauri_build::AppManifest::new().commands(app_commands());
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest)).expect("failed to run tauri-build");
+}
+
+/// The app's own commands, read from the `generate_handler!` list in src/lib.rs (the one source of truth). Handing
+/// them to Tauri as the app manifest makes it check every one against the capabilities, as it does plugin commands;
+/// capabilities/default.json grants them to the `main` webview only. Without a manifest Tauri checks app commands
+/// only for remote origins, so any webview showing a local-origin page (every custom scheme, `coool-artifact://`
+/// among them) could call them all.
+///
+/// Fails the build when a command isn't granted there (it would be refused in the app), or when the capability
+/// grants one that isn't in the list.
+fn app_commands() -> &'static [&'static str] {
+    println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed=capabilities");
+    let lib = std::fs::read_to_string("src/lib.rs").expect("read src/lib.rs");
+    let open = "generate_handler![";
+    let start = lib.find(open).expect("no generate_handler! in src/lib.rs") + open.len();
+    let end = start + lib[start..].find(']').expect("generate_handler! isn't closed");
+    let commands: Vec<&'static str> = lib[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .flat_map(|l| l.split(','))
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        // `voice::voice_status` is invoked as `voice_status`.
+        .map(|c| &*String::leak(c.rsplit("::").next().unwrap_or(c).to_string()))
+        .collect();
+    let cap = std::fs::read_to_string("capabilities/default.json").expect("read capabilities/default.json");
+    // Plugin permissions are prefixed (`core:…`, `opener:allow-open-url`); the app's own are bare `allow-<command>`.
+    let granted: Vec<&str> = cap.split('"').filter_map(|s| s.strip_prefix("allow-")).collect();
+    let slug = |c: &str| c.replace('_', "-");
+    let missing: Vec<String> = commands.iter().map(|c| slug(c)).filter(|c| !granted.contains(&c.as_str())).collect();
+    assert!(missing.is_empty(), "capabilities/default.json doesn't grant these commands to `main` (add \"allow-<name>\" for each): {missing:?}");
+    let unknown: Vec<&&str> = granted.iter().filter(|g| !commands.iter().any(|c| slug(c) == **g)).collect();
+    assert!(unknown.is_empty(), "capabilities/default.json grants commands that aren't in generate_handler!: {unknown:?}");
+    Vec::leak(commands)
 }
 
 /// Builds `native/coool-sim.m` (the iOS Simulator helper, see src/device/helper.rs) into OUT_DIR on macOS. The app

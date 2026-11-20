@@ -1542,18 +1542,49 @@ pub fn share_into(src: &Path, shared: &Path) -> Res<String> {
     let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty() && n != "..").ok_or("that path has no file name")?;
     std::fs::create_dir_all(shared).map_err(|e| e.to_string())?;
     let dst = shared.join(&name);
-    if dst.exists() {
-        if dst.is_dir() { std::fs::remove_dir_all(&dst) } else { std::fs::remove_file(&dst) }.map_err(|e| e.to_string())?;
-    }
-    // -c: clone where the file system can; -R for folders (app bundles); -P keeps symlinks as links.
-    let ok = Command::new("/bin/cp").args(if meta.is_dir() { vec!["-cRP"] } else { vec!["-cP"] }).arg(src).arg(&dst).status();
-    if !matches!(ok, Ok(s) if s.success()) {
-        let ok = Command::new("/bin/cp").args(if meta.is_dir() { vec!["-RP"] } else { vec!["-P"] }).arg(src).arg(&dst).status();
+    // The guest can write the shared folder, so whatever is at `dst` may be a link it planted (dangling or not): `cp`
+    // onto it would write through it to the host. The copy goes to a fresh folder of the host's own next to the shared
+    // one (same volume, so `cp -c` still clones), then is renamed over `dst`; rename replaces a link, never follows it.
+    let stage = shared.with_file_name(format!(".share-{}-{}", std::process::id(), STAGE.fetch_add(1, Ordering::SeqCst)));
+    remove_entry(&stage)?;
+    std::fs::create_dir(&stage).map_err(|e| e.to_string())?;
+    let staged = stage.join(&name);
+    let r = (|| {
+        // -c: clone where the file system can; -R for folders (app bundles); -P keeps symlinks as links.
+        let ok = Command::new("/bin/cp").args(if meta.is_dir() { vec!["-cRP"] } else { vec!["-cP"] }).arg(src).arg(&staged).status();
         if !matches!(ok, Ok(s) if s.success()) {
-            return Err(format!("couldn't copy {} into the shared folder", src.display()));
+            let _ = remove_entry(&staged);
+            let ok = Command::new("/bin/cp").args(if meta.is_dir() { vec!["-RP"] } else { vec!["-P"] }).arg(src).arg(&staged).status();
+            if !matches!(ok, Ok(s) if s.success()) {
+                return Err(format!("couldn't copy {} into the shared folder", src.display()));
+            }
         }
+        // A rename can't land on a folder that isn't empty (or a folder onto a file): clear `dst` without following
+        // it, and once more if the guest puts something back in between.
+        for _ in 0..3 {
+            remove_entry(&dst)?;
+            if std::fs::rename(&staged, &dst).is_ok() {
+                return Ok(());
+            }
+        }
+        Err(format!("couldn't move {} into the shared folder", src.display()))
+    })();
+    let _ = remove_entry(&stage);
+    r.map(|_| format!("{SHARED_IN_GUEST}/{name}"))
+}
+
+static STAGE: AtomicU64 = AtomicU64::new(0);
+
+/// Removes whatever is at `p` without following it: a link goes (not what it points to), a real folder goes with what
+/// is in it (`remove_dir_all` doesn't follow links inside). Nothing there is fine.
+fn remove_entry(p: &Path) -> Res<()> {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
+        Ok(_) => std::fs::remove_file(p),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
     }
-    Ok(format!("{SHARED_IN_GUEST}/{name}"))
+    .map_err(|e| format!("{}: {e}", p.display()))
 }
 
 #[cfg(test)]
@@ -1576,6 +1607,35 @@ mod tests {
         assert_eq!(std::fs::read_to_string(shared.join("notes.txt")).unwrap(), "again");
         assert!(shared.join("Demo.app/Contents/Info.plist").exists());
         assert!(share_into(Path::new("relative.txt"), &shared).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn share_never_writes_through_a_link_the_guest_planted() {
+        let base = std::env::temp_dir().join(format!("coool-vm-share-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let shared = base.join("Shared");
+        let host = base.join("host");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::create_dir_all(host.join("victim")).unwrap();
+        std::fs::write(base.join("notes.txt"), "hello").unwrap();
+        std::fs::create_dir_all(base.join("Demo.app/Contents")).unwrap();
+        std::fs::write(base.join("Demo.app/Contents/Info.plist"), "x").unwrap();
+        // A dangling link where the file will go, and a link to a host folder where the folder will go.
+        let target = host.join("planted.txt");
+        std::os::unix::fs::symlink(&target, shared.join("notes.txt")).unwrap();
+        std::os::unix::fs::symlink(host.join("victim"), shared.join("Demo.app")).unwrap();
+        share_into(&base.join("notes.txt"), &shared).unwrap();
+        share_into(&base.join("Demo.app"), &shared).unwrap();
+        assert!(std::fs::symlink_metadata(&target).is_err(), "wrote through the dangling link");
+        assert_eq!(std::fs::read_dir(host.join("victim")).unwrap().count(), 0, "copied into the linked folder");
+        let m = std::fs::symlink_metadata(shared.join("notes.txt")).unwrap();
+        assert!(m.file_type().is_file());
+        assert_eq!(std::fs::read_to_string(shared.join("notes.txt")).unwrap(), "hello");
+        assert!(std::fs::symlink_metadata(shared.join("Demo.app")).unwrap().file_type().is_dir());
+        assert!(shared.join("Demo.app/Contents/Info.plist").exists());
+        // No staging folder left behind.
+        assert!(!std::fs::read_dir(&base).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".share-")));
         let _ = std::fs::remove_dir_all(&base);
     }
 

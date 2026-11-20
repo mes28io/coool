@@ -121,7 +121,7 @@ pub fn artifact_status(core: State<'_, Arc<Core>>, urls: Vec<String>) -> HashMap
 
 /// The artifact at `url` and the `coool-artifact://` URL its page is served from (`None` when the local copy is
 /// gone). One token per artifact: a new version replaces what it serves.
-fn mint(core: &Core, url: &str) -> Result<(ArtifactInfo, Option<String>), String> {
+pub(crate) fn mint(core: &Core, url: &str) -> Result<(ArtifactInfo, Option<String>), String> {
     let a = find(core, url).ok_or("no such artifact")?;
     let page = page_name(&a).ok_or("bad page name")?;
     if !safe_file(Path::new(&a.file_path)) {
