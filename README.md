@@ -6,8 +6,8 @@
 
 | | |
 |---|---|
-| ![Chat with an approval card](docs/media/approval-dark.png) | ![Slash command menu](docs/media/slash-menu-dark.png) |
-| ![Split panes](docs/media/split-dark.png) | ![Light theme](docs/media/mission-light.png) |
+| ![A permission request, with what it does and a risk tag](docs/media/approval-dark.png) | ![The Needs-you page](docs/media/needs-dark.png) |
+| ![An agent driving the iPhone simulator](docs/media/device-dark.png) | ![Light theme](docs/media/mission-light.png) |
 
 Two frontends share one Rust core:
 

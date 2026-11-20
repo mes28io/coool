@@ -1335,7 +1335,7 @@ export function mockBackend(): Backend {
   if (location.search.includes("needs=demo")) {
     const cq = newChat("claude", `${HOME}/code/atlas`, {}, 0);
     setTimeout(() => cq.send("Which retry approach should I choose? ask me"), 1600);
-    const cd = newChat("claude", `${HOME}/code/affect-study`, {}, 0);
+    const cd = newChat("claude", `${HOME}/code/fieldnotes-web`, {}, 0);
     setTimeout(() => cd.send("Check the sign-in page's error states in the Browser (device gate)"), 1900);
     const cp = newChat("claude", `${HOME}/code/notes-ios`, {}, 0);
     setTimeout(() => cp.send("Plan the retry change first (plan mode)"), 2200);

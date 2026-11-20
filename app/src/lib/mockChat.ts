@@ -1042,7 +1042,7 @@ export class MockChat {
   /** A device step the gate asks about first, shaped like device/gate.rs's request (tool "Browser", `coool_device` input). */
   private async deviceAsk(gen: number) {
     const D = (t: string) => (this.provider === "codex" ? `coool-device.${t}` : `mcp__coool-device__${t}`);
-    const url = "https://www.affectui.com/login?next=%2Fcomponents";
+    const url = "https://staging.fieldnotes.example/login?next=%2Fdashboard";
     await this.say("I'll open the sign-in page in the Browser panel and check the form's error states.", gen, {
       think: "The form lives behind /login. The Browser panel isn't allowed in this chat yet, so coool will ask before the first step.",
     });
