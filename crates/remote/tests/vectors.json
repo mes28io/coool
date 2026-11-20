@@ -1,0 +1,31 @@
+{
+  "mac": {
+    "boxPriv": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "signPriv": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+    "boxPub": "pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk",
+    "signPub": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q"
+  },
+  "dev": {
+    "boxPriv": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+    "signPriv": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "boxPub": "Xf7dO2vUf2-ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+    "signPub": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw"
+  },
+  "macId": "00112233445566778899aabbccddeeff",
+  "deviceId": "ffeeddccbbaa99887766554433221100",
+  "pairingId": "0123456789abcdef0123456789abcdef",
+  "secret": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+  "relayKey": "oBu83FC1ylA-DwADhILGJg9Iru4OaDGhdZAlgk6PKbY",
+  "nameBox": "BQUFBQUFBQUFBQUFV32isCWP_gt4rGglItU7oz3OcXTUeFxPKTfrvQ",
+  "proofRelay": "nJrPIQko2oH3M3JbPasG7y4k6SPjtc83pU3f8ScUbAE",
+  "proofMac": "WkFSi5ZGBVU6i0VNwTHYAdHdUoeebbciBrpWITN93uE",
+  "code": "851623",
+  "shared": "sBkFQaKruLwWO27vD657oBeQBLREMm9zgJVjFk1HxSE",
+  "m2d": "aN1rKbkjl3nQxfutDsHYVKjeL03T8pzgqXii9nDN8Lo",
+  "d2m": "3IXwkIY60VLW-s91nWnhEqecAweXOp_h4fphT0WiYQA",
+  "envelope": "{\"v\":1,\"id\":\"8c1d6c2e-0b5c-4c43-9d7e-2f1a3b4c5d6e\",\"t\":\"send\",\"at\":1763640000000,\"b\":{\"session\":\"claude:abc\",\"text\":\"hi\"}}",
+  "counter": 1763640000000123,
+  "sealedD2m": "dyRjFF-9wMweROTChqHo1hQnek_CsfLqAowCvu6d2WZpnLykMfKMeUdwoZjM0NvlpNaf5VHg_W_KVukZeJrnmXG2I2Z1wzJngetmRfbLGYm8iM9KTAgCv27LB4nFukf1SzErfRZjBYMkRfMMPyuzKzVYs3k6pgEzt_TuSWM9j9WpCF_IpWRptUja",
+  "requestSig": "YCyJilIZtHMbsU_EuLYCJeqcLZvhbtFzRe0-pGmoKMKnS619w1_etIuHxSrgTVtwBoy9odo5_LJzXCcCDNMdDA",
+  "pairUrl": "coool://pair?v=1&r=https%3A%2F%2Fexample.convex.cloud&m=00112233445566778899aabbccddeeff&p=0123456789abcdef0123456789abcdef&s=CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk&ks=gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q&kx=pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk"
+}

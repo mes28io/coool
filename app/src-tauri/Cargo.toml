@@ -25,6 +25,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 coool-core = { path = "../../crates/core" }
+# coool Remote (src/remote.rs, docs/REMOTE.md).
+coool-remote = { path = "../../crates/remote" }
 # `unstable`: child webviews (`Window::add_child`) for the in-app browser (src/browser.rs). `webview-data-url`: the
 # artifact preview window loads its host page as a `data:` URL (src/artifact.rs).
 tauri = { version = "2", features = ["unstable", "webview-data-url"] }
