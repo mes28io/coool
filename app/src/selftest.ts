@@ -889,6 +889,19 @@ const updateScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       throw new Fail("still running 5 s after Restart");
     });
   },
+  /** An update installed while coool ran goes in when it quits normally (no Restart click). Run from a test bundle. */
+  async "update-quit"() {
+    await step("update-quit: an installed update is applied by a normal quit", async () => {
+      const s = await poll("an installed update", async () => {
+        const s = (await invoke("update_status")) as UpdSt;
+        return s.items[0].state === "staged" ? s : null;
+      }, 120_000);
+      await log(`QUITTING with ${updLine(s)}`);
+      await invoke("selftest_request_quit");
+      await sleep(8000);
+      throw new Fail("still running 8 s after Quit");
+    });
+  },
 };
 
 const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
