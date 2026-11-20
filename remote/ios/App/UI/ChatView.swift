@@ -80,6 +80,7 @@ struct ChatView: View {
         .padding(.top, 8)
         .animation(Theme.spring, value: log?.items.count)
       }
+      .defaultScrollAnchor(.bottom)
       .scrollDismissesKeyboard(.interactively)
       .refreshable { _ = try? await store.send(.watch(session: liveId, reset: true)) }
       .onChange(of: log?.items.count) { _, _ in withAnimation(Theme.calm) { proxy.scrollTo("bottom", anchor: .bottom) } }
@@ -341,8 +342,8 @@ struct LiveItemView: View {
         }
       }
       .frame(maxWidth: .infinity, alignment: .trailing)
-      .accessibilityElement(children: .combine)
-      .accessibilityLabel("You: \(item.text ?? "")\(item.images.map { ", \($0.count) image\($0.count == 1 ? "" : "s")" } ?? "")")
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("You")
     case "assistant":
       MarkdownView(text: item.text ?? "")
         .font(.body)

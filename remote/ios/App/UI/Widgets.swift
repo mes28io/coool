@@ -27,10 +27,10 @@ func lineDiff(_ before: String, _ after: String, context: Int = 2) -> [DiffLine]
   while i < a.count || j < b.count {
     if i < a.count, j < b.count, a[i] == b[j] {
       out.append(.init(op: .same, text: a[i])); i += 1; j += 1
-    } else if j < b.count, i == a.count || t[i][j + 1] >= t[i + 1][j] {
-      out.append(.init(op: .add, text: b[j])); j += 1
-    } else {
+    } else if i < a.count, j == b.count || t[i + 1][j] >= t[i][j + 1] {
       out.append(.init(op: .del, text: a[i])); i += 1
+    } else {
+      out.append(.init(op: .add, text: b[j])); j += 1
     }
   }
   // Fold long unchanged runs.

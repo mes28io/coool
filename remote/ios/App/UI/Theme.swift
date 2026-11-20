@@ -54,8 +54,8 @@ enum Status: Equatable {
     switch self {
     case .working: "Working"
     case .needsYou: "Needs you"
-    case .waiting: "Waiting"
-    case .done: "Done"
+    case .waiting: "Done"
+    case .done: "Ended"
     }
   }
 

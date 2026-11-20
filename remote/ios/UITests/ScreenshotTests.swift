@@ -12,7 +12,7 @@ final class ScreenshotTests: XCTestCase {
     return app
   }
 
-  func any(_ app: XCUIApplication, _ id: String) -> XCUIElement { app.descendants(matching: .any)[id] }
+  func any(_ app: XCUIApplication, _ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
 
   func back(_ app: XCUIApplication) {
     app.navigationBars.buttons.element(boundBy: 0).tap()

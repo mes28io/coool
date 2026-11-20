@@ -70,7 +70,7 @@ struct NeedView: View {
           }
         }
         Spacer(minLength: 0)
-        Chip(text: n.tool)
+        if n.kind == "permission" { Chip(text: n.tool) }
       }
       if let r = n.risk, !r.isEmpty {
         Label(r, systemImage: "exclamationmark.triangle.fill")

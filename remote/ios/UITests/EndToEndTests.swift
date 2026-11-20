@@ -91,7 +91,7 @@ final class EndToEndTests: XCTestCase {
     // The live view: steps appear while the turn runs (no pull, no reload).
     let state = app.descendants(matching: .any)["chat.state"]
     try step("the chat view", state.waitForExistence(timeout: 20))
-    let items = { elements(app, "chat.item|").count }
+    let items = { self.elements(self.app, "chat.item|").count }
     _ = wait("the live view's first items", timeout: 30) { items() > 0 }
     let before = items()
     let bashCard = elements(app, "chat.need|").firstMatch

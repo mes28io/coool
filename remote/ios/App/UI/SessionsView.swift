@@ -319,14 +319,17 @@ struct UsageStrip: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       SectionTitle("Usage")
-      HStack(spacing: 10) {
-        ForEach(usage.keys.sorted(), id: \.self) { k in
+      VStack(spacing: 0) {
+        ForEach(Array(usage.keys.sorted().enumerated()), id: \.element) { i, k in
           if let u = usage[k] {
-            VStack(alignment: .leading, spacing: 10) {
-              HStack(spacing: 6) {
+            if i > 0 { Divider().overlay(Theme.border) }
+            HStack(alignment: .center, spacing: 10) {
+              VStack(alignment: .leading, spacing: 1) {
                 Text(k == "claude" ? "Claude" : "Codex").font(.footnote.weight(.semibold)).foregroundStyle(Theme.text)
                 if let p = u.plan { Text(p).font(.caption).foregroundStyle(Theme.faint).lineLimit(1) }
               }
+              .frame(minWidth: 56, alignment: .leading)
+              Spacer(minLength: 0)
               HStack(spacing: 14) {
                 ForEach(u.windows.prefix(2), id: \.self) { w in
                   let pct = (w.percent ?? 0) / 100
@@ -337,8 +340,8 @@ struct UsageStrip: View {
                     }
                     .frame(width: 34, height: 34)
                     VStack(alignment: .leading, spacing: 1) {
-                      Text(short(w.label)).font(.caption.weight(.medium)).foregroundStyle(Theme.dim).lineLimit(1)
-                      if let r = until(w.resets) { Text("resets \(r)").font(.caption2).foregroundStyle(Theme.faint).lineLimit(1) }
+                      Text(short(w.label)).font(.caption.weight(.medium)).foregroundStyle(Theme.dim).lineLimit(1).fixedSize()
+                      if let r = until(w.resets) { Text(r).font(.caption2).foregroundStyle(Theme.faint).lineLimit(1).fixedSize() }
                     }
                   }
                   .accessibilityElement(children: .ignore)
@@ -346,10 +349,13 @@ struct UsageStrip: View {
                 }
               }
             }
-            .tile(padding: 12)
+            .padding(.vertical, 10)
           }
         }
       }
+      .padding(.horizontal, 14)
+      .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.border, lineWidth: 0.5))
     }
     .accessibilityIdentifier("home.usage")
   }
