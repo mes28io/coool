@@ -62,15 +62,19 @@ async function typeOut(t: string, sleep: (ms: number) => Promise<unknown>) {
 }
 
 /**
- * Plays the page `s` times slower than real time: its CSS and Web animations (spinners, fades, springs run as Web
- * Animations), and the clock JS animations read (`performance.now`, requestAnimationFrame's timestamps). Timers and
+ * Plays the page `s` times slower than real time: its CSS animations and transitions (spinners, fades, the
+ * backdrop), and with `all` also the clock JS animations read (`performance.now`, requestAnimationFrame's timestamps). Timers and
  * `Date.now` keep real time (the ages the app shows are real).
  */
 function dilate(s: number, what = "animations") {
   if (s <= 1) return;
   const rate = 1 / s;
   setInterval(() => {
-    for (const a of document.getAnimations()) if (a.playbackRate > 0 && a.playbackRate !== rate) a.playbackRate = rate;
+    // CSS animations and transitions only (spinners, the backdrop's drift, hovers, fades): the springs and exits the
+    // page runs as plain Web Animations (motion) keep real time, or an exit outlives its element's replacement and
+    // both show at once.
+    for (const a of document.getAnimations())
+      if ((a instanceof CSSAnimation || a instanceof CSSTransition) && a.playbackRate > 0 && a.playbackRate !== rate) a.playbackRate = rate;
   }, 5);
   if (what !== "all") return;
   const realNow = performance.now.bind(performance);
