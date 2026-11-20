@@ -491,7 +491,7 @@ async function tauriBackend(): Promise<Backend> {
     kind: "tauri",
     startChat: (o) =>
       soft("start_chat", {
-        opts: { provider: o.provider, cwd: o.cwd, resume: o.resume ?? null, model: o.model ?? null, permission_mode: o.permission_mode ?? null },
+        opts: { provider: o.provider, cwd: o.cwd, resume: o.resume ?? null, model: o.model ?? null, permission_mode: o.permission_mode ?? null, ladder: o.ladder ?? null },
       }),
     chatSend: (id, text) => soft("chat_send", { id, text }),
     chatInterrupt: (id) => soft("chat_interrupt", { id }),

@@ -14,6 +14,7 @@ import { fmtTokens } from "../lib/format";
 import { modelColor, modelLabel, tokTotal } from "../lib/models";
 import type { CommandKind } from "../lib/types";
 import { IArrowUp, ICaret, ICheck, IStop, ITerminal } from "./icons";
+import { LadderChip } from "./LadderChip";
 import { InfoPanel, type InfoTab } from "./InfoPanel";
 import { useInfoRequest } from "../lib/infoRequest";
 import { flushLocal, steer } from "../lib/steer";
@@ -512,6 +513,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                 </Popover>
               </div>
             )}
+            <LadderChip chat={chat} />
             {/* info panel (context / status / usage) */}
             <div className="relative">
               <Chip active={pop === "info"} onClick={() => openPop(pop === "info" ? null : "info")} title="Context, status and usage (/context, /status, /usage)">

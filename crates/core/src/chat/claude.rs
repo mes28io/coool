@@ -308,6 +308,11 @@ pub(crate) struct Claude {
     compacting: bool,
 }
 
+/// Ladder's briefs skill (from coool's own plugin): loaded by the lead, never offered in the composer.
+fn is_ladder_skill(name: &str) -> bool {
+    name.strip_prefix(&crate::ladder::plugin_name()).is_some_and(|r| r.starts_with(':'))
+}
+
 /// `--mcp-config=<json>` (the `=` form: the flag takes several values and would swallow what follows) and, for servers
 /// whose tools are pre-approved, `--allowedTools=mcp__<name>`.
 pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
@@ -553,8 +558,8 @@ impl Claude {
                         a.iter()
                             .filter_map(|c| {
                                 let name = c["name"].as_str()?;
-                                // `__name` entries are internal plumbing.
-                                (!name.starts_with("__")).then(|| RawCommand {
+                                // `__name` entries are internal plumbing; Ladder's own skill is the lead's, not the person's.
+                                (!name.starts_with("__") && !is_ladder_skill(name)).then(|| RawCommand {
                                     name: name.to_string(),
                                     description: c["description"].as_str().unwrap_or("").to_string(),
                                     argument_hint: c["argumentHint"].as_str().unwrap_or("").to_string(),
@@ -590,7 +595,7 @@ impl Claude {
                 self.context_max = res["rawMaxTokens"].as_u64().or(res["maxTokens"].as_u64());
                 // The skills, known here before any turn (system/init only comes with the first one).
                 if let Some(fm) = res["skills"]["skillFrontmatter"].as_array() {
-                    let skills: Vec<String> = fm.iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect();
+                    let skills: Vec<String> = fm.iter().filter_map(|f| f["name"].as_str().map(str::to_string)).filter(|n| !is_ladder_skill(n)).collect();
                     if !skills.is_empty() {
                         self.skills = skills;
                         if let Ok(mut k) = KNOWN_KINDS.lock() {
@@ -1133,7 +1138,7 @@ impl Backend for Claude {
                         self.terminal_commands = names(&v["terminal_slash_commands"]);
                     }
                     if v["skills"].is_array() {
-                        self.skills = names(&v["skills"]);
+                        self.skills = names(&v["skills"]).into_iter().filter(|n| !is_ladder_skill(n)).collect();
                     }
                     if let Ok(mut k) = KNOWN_KINDS.lock() {
                         *k = Some((self.skills.clone(), self.terminal_commands.clone()));
@@ -1368,7 +1373,7 @@ mod tests {
     use crate::chat::testutil::replay;
 
     fn opts() -> ChatOptions {
-        ChatOptions { provider: Provider::Claude, cwd: "/work".into(), resume: None, model: Some("haiku".into()), permission_mode: None }
+        ChatOptions { provider: Provider::Claude, cwd: "/work".into(), resume: None, model: Some("haiku".into()), permission_mode: None, ladder: None }
     }
 
     fn kinds(evs: &[ChatEventKind]) -> Vec<String> {

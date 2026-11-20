@@ -5,9 +5,11 @@
 
 import { motion } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { LADDER, LADDER_LINE } from "../lib/ladderTiers";
 import { SETTINGS_SECTIONS, useStore, type SettingsSection } from "../store";
 import { IBack, IBell, IBranch, IClose, ICommand, IDisk, IGauge, IGear, IInfo, IPhone, IPlug, ISearch, ISpark, ISun, ITerminal } from "./icons";
 import { cx, ease, Kbd } from "./primitives";
+import { LadderSettings } from "./settings/Ladder";
 import { Appearance, Shortcuts } from "./settings/Appearance";
 import { General, Notifications } from "./settings/General";
 import { About, Insights, UsageSection } from "./settings/Other";
@@ -19,6 +21,7 @@ import { VoiceSettings } from "./voice/SettingsVoice";
 
 const META: Record<SettingsSection, { label: string; icon: ReactNode; desc: string; body: () => ReactNode }> = {
   general: { label: "General", icon: <IGear size={16} />, desc: "New chats, where files open, and what coool does while agents run.", body: () => <General /> },
+  ladder: { label: LADDER, icon: <ISpark size={16} />, desc: LADDER_LINE, body: () => <LadderSettings /> },
   notifications: { label: "Notifications", icon: <IBell size={16} />, desc: "macOS notifications when an agent needs you, finishes or fails.", body: () => <Notifications /> },
   voice: { label: "Voice", icon: <IMic size={16} />, desc: "Speak your prompts: a model on this Mac writes them down, in English or as spoken, and learns your words.", body: () => <VoiceSettings /> },
   appearance: { label: "Appearance", icon: <ISun size={16} />, desc: "How coool looks and moves.", body: () => <Appearance /> },

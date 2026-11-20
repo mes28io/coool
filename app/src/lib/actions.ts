@@ -5,7 +5,8 @@
 import { useStore } from "../store";
 import { api, isNotAvailable } from "./backend";
 import { useChats, type PermissionAnswer } from "./chat";
-import { getChatDefaults } from "./prefs";
+import { getChatDefaults, seenModelsNow } from "./prefs";
+import { chatLadderOf, ladderOptions, noteLaunched, setChatLadder, type ChatLadder } from "./ladder";
 import { estimateSize } from "./termlite";
 import type { Provider, RememberOption, ResetOutcome, Session } from "./types";
 import { sessionKey } from "./types";
@@ -19,13 +20,18 @@ function place(target: { kind: "chat"; id: number } | { kind: "pty"; id: number 
 }
 
 /** New chat (default for anything coool starts). Falls back to a terminal session. */
-export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; leaf?: string; model?: string | null; permissionMode?: string | null }): Promise<boolean> {
+export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; leaf?: string; model?: string | null; permissionMode?: string | null; ladder?: ChatLadder }): Promise<boolean> {
   try {
     // Settings > General: what a new chat starts with, unless the caller chose.
     const d = getChatDefaults()[a.provider];
     const model = a.model === undefined ? d.model : a.model;
     const mode = a.permissionMode === undefined ? d.mode : a.permissionMode;
-    const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: model ?? null, permission_mode: mode ?? null });
+    // Settings > Ladder (or the sheet's own choice): the tier table from the models this CLI reported.
+    const ladder = ladderOptions(a.provider, model ?? null, seenModelsNow()[a.provider], a.ladder);
+    const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: model ?? null, permission_mode: mode ?? null, ladder });
+    noteLaunched(id, ladder);
+    // The sheet's own choice is this chat's from now on (its chip shows it; a resume keeps it once the session is known).
+    if (a.ladder) setChatLadder({ id, provider: a.provider, sessionId: null }, a.ladder);
     useChats.getState().ensure({ id, provider: a.provider, cwd: a.cwd, session_id: null, model: model ?? null, state: "idle", running: true });
     place({ kind: "chat", id }, a.leaf);
     if (a.prompt?.trim()) await api().chatSend(id, a.prompt.trim());
@@ -48,7 +54,11 @@ export async function resumeSession(s: Session, leaf?: string, opts?: { terminal
   try {
     if (!opts?.terminal) {
       try {
-        const id = await api().startChat({ provider: s.provider, cwd: s.cwd, resume: s.id, model: s.model || null });
+        // The session's own Ladder choice (the composer chip) applies from this start on; else the default.
+        const own = chatLadderOf({ id: -1, provider: s.provider, sessionId: s.id });
+        const ladder = ladderOptions(s.provider, s.model || null, seenModelsNow()[s.provider], own);
+        const id = await api().startChat({ provider: s.provider, cwd: s.cwd, resume: s.id, model: s.model || null, ladder });
+        noteLaunched(id, ladder);
         useChats.getState().ensure({ id, provider: s.provider, cwd: s.cwd, session_id: s.id, model: s.model || null, state: "idle", running: true });
         useChats.getState().setEarlier(id, s.activity);
         st.setMode({ kind: "session", key: sessionKey(s) }, "activity");

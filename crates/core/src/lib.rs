@@ -11,6 +11,7 @@ pub mod claude;
 pub mod codex;
 pub mod hub;
 pub mod insights;
+pub mod ladder;
 pub mod lineage;
 mod loader;
 pub mod model;

@@ -1363,6 +1363,7 @@ export function mockBackend(): Backend {
     }, 600);
   }
   if (location.search.includes("agents=chat")) void import("./mockAgents").then((m) => m.runAgentsChat(newChat("claude", `${HOME}/code/blender-addon`, {}, 0))); // see mockAgents.ts
+  if (location.search.includes("ladder=demo")) void import("./mockLadder").then((m) => m.runLadderChat(newChat("claude", `${HOME}/code/blender-addon`, { model: "claude-opus-5-5" }, 0))); // see mockLadder.ts
   // `?tools=demo`: a chat that drives the Browser, iPhone and Mac through coool-device (readable step rows, where the
   // turn went, a subagent near its context limit): one finished turn, then a live one (`?tools=demo&live=0`: no live turn).
   if (location.search.includes("tools=demo")) {

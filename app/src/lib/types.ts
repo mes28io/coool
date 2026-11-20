@@ -378,6 +378,8 @@ export interface ChatOptions {
   resume?: string | null;
   model?: string | null;
   permission_mode?: string | null;
+  /** Ladder (APP_SPEC "Ladder"): the tier table and limits handed to the CLI at launch; null/absent: off. */
+  ladder?: import("./ladderTiers").LadderOptions | null;
 }
 
 export interface InsightsStatus {

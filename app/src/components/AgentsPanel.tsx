@@ -32,8 +32,11 @@ export function AgentsBody({
   onOpenCard,
   onStop,
   onStopShell,
+  roles,
 }: {
   cards: AgentCardData[];
+  /** Card id -> Ladder tier ("small"), for a chat launched with Ladder. */
+  roles?: Record<string, string>;
   /** Background shells of the session (APP_SPEC "Background shells"): listed between running and finished agents. */
   shells?: Shell[];
   onOpenCard: (c: AgentCardData) => void;
@@ -76,7 +79,7 @@ export function AgentsBody({
               className="overflow-hidden"
             >
               <div className="pb-2">
-                <Card card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
+                <Card role={roles?.[c.id]} card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
               </div>
             </motion.div>
           ))}
@@ -95,7 +98,7 @@ export function AgentsBody({
               className="overflow-hidden"
             >
               <div className="pb-2">
-                <Card card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
+                <Card role={roles?.[c.id]} card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
               </div>
             </motion.div>
           ))}
@@ -133,7 +136,7 @@ function CardTotal({ card }: { card: AgentCardData }) {
   );
 }
 
-function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => void; onStop: () => void }) {
+function Card({ card, role, onOpen, onStop }: { card: AgentCardData; role?: string; onOpen: () => void; onStop: () => void }) {
   // Finished (done, failed, stopped): folded to the header and the result line; see lib/cardFold.ts.
   const el = useRef<HTMLDivElement>(null);
   const [open, toggle] = useFold(card.id, card.state === "done" || card.state === "failed", el);
@@ -149,7 +152,7 @@ function Card({ card, onOpen, onStop }: { card: AgentCardData; onOpen: () => voi
             {card.description || (card.model ? modelLabel(card.model) : "Agent")}
           </div>
           <div className="truncate text-small leading-[16px] text-dim" title={full}>
-            {[card.model ? modelLabel(card.model) : null, card.kind].filter(Boolean).join(" · ")}
+            {[card.model ? (role ? `${role} · ${modelLabel(card.model)}` : modelLabel(card.model)) : null, card.kind].filter(Boolean).join(" · ")}
           </div>
         </div>
         <span className="-mt-[2px] flex shrink-0 items-center gap-1">

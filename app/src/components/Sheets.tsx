@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { newChat } from "../lib/actions";
+import { LadderSheetRow, useSheetLadder } from "./LadderSheetRow";
 import { api } from "../lib/backend";
 import { folderName, homeShort, projectOf } from "../lib/format";
 import { modelLabel } from "../lib/models";
@@ -90,6 +91,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [terminal, setTerminal] = useState(false);
+  const ladder = useSheetLadder(provider);
   const missing = env ? !env[provider] : false;
 
   const expand = (p: string) => (p.startsWith("~") && env?.home ? env.home + p.slice(1) : p);
@@ -104,7 +106,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
         const st = useStore.getState();
         st.setMode({ kind: "pty", id }, "terminal");
         st.open({ kind: "pty", id });
-      } else await newChat({ provider, cwd: expand(cwd.trim()), prompt });
+      } else await newChat({ provider, cwd: expand(cwd.trim()), prompt, ladder: ladder.choice });
       close();
     } catch (e) {
       toast(String(e), "error");
@@ -163,6 +165,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
             </div>
           )}
         </Field>
+        {!terminal && <LadderSheetRow l={ladder} />}
         <Field label="Folder">
           <div className="flex gap-2">
             <input autoFocus className={cx(inputCls, "h-[40px] font-mono text-mono-small")} value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="~/code/project" spellCheck={false} />
