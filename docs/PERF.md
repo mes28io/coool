@@ -97,7 +97,7 @@ external sessions (~120 ms; their payload keeps 300 entries), scrolling them (no
 
 Found, not fixed:
 - ~~CSS loops while sessions are busy~~: fixed, see "Loops" below.
-- **Per-batch cost still grows with chat length** (~13 µs per block per batch: 120 blocks 3 ms, 660 blocks 10 ms)
+- ~~**Per-batch cost still grows with chat length**~~ (fixed, see "Streaming into an open chat" below) (~13 µs per block per batch: 120 blocks 3 ms, 660 blocks 10 ms)
   although almost nothing renders: reconciling the long child list, layout of a tall column. Virtualising old turns
   would remove it; large change.
 - `git status` (v1) still runs twice on a trail cache miss; the login-shell PATH lookup (~130 ms) sits before the
@@ -196,3 +196,81 @@ Left as they are:
   six linear spinners ~40 against ~4 for an empty page): Core Animation's own commits.
 - Pausing when the window is unfocused would stop motion the person can still see; loops already pause when the
   window is hidden or occluded (page hidden), off screen or scrolled away (lib/animPause.ts).
+
+## Streaming into an open chat (third pass, 2026-11-20)
+
+Synthetic home, window on screen and never focused (`PERF_OFFSCREEN=0 COOOL_SELFTEST_WINDOW=quiet`), 1-minute load
+3-5, 120 Hz display. "Before" is master (d1d882a) with only the perf probes added; "after" this pass, built from the
+same tree and run back to back (`perf-chat`, then `perf-busy 1`). The made-up chat streams one batch every ~16 ms
+(like the backend's pump) with a `live_output` in each.
+
+**Where the time went (before).** Counts first (`perf-chat`, batches applied one at a time, layout forced and timed):
+
+- Script per batch grew with the chat: 2.2 ms at 126 items, 5.3 at 540, 12.9 at 1500; layout only 0.1-1.1 ms. At
+  1500 items the page could not keep up (652 of ~1000 batches in 20 s; 894 ms/s page CPU).
+- The O(n) parts: React walking ~670 memoised block views per batch; `buildBlocks` and the checkpoints rebuilt over
+  every item; the Checkpoints card (one row per turn, in the DOM even when folded) rendering again per token and
+  every second; a turn starting or ending rendering every block again (`state_change_ms`, 150 ms at 1500).
+- Per frame, not per batch: the reveal of streamed text set state on every display frame (110-140 `requestAnimationFrame`
+  a second, AssistantText 2-3 renders and a Markdown parse of the paragraph being written per batch), and the whole
+  pane (SessionView: header, composer, panels) rendered with every batch.
+- A native sample of the page during streaming (`sample <pid>`, after this pass): ~60 % of its main thread in script
+  run from animation frames (React), ~20 % in WebKit's own rendering update and layer commit.
+- The app process: ~270-370 wakeups a second whatever the page does while anything on it changes at 10 Hz or more
+  (measured: 60, 30 and 10 Hz updates all ~260-340; the turn running with nothing streaming ~160): WebKit's display
+  link on a 120 Hz screen. WebKit already draws the page near 60 fps (its `PreferPageRenderingUpdatesNear60FPSEnabled`
+  is on by default here).
+
+**What changed**
+
+- `components/Windowed.tsx`: both timelines draw only the rows within about a screen of the view; spacers from
+  measured heights; its own scroll anchor (CHAT_SPEC "Long timelines" has the rules). ~14-30 rows in the DOM instead of
+  ~670 (168 DOM nodes instead of 8 000 at 1500 items).
+- `lib/chatBlocks.ts`: blocks rebuilt only from the turn that changed (test: equal to a full build at every step of
+  long made-up chats); checkpoints kept while only prose grew; the Checkpoints card skips re-rendering and has its
+  rows in the DOM only while open; the live turn bar renders again only when its segments change.
+- `lib/frame.ts` + `chatQueue` (`lib/chat.ts`): backend batches, the text reveal and rising token counts share one
+  frame, ~30 a second (frames skipped until the gap has passed). `useChatShell`: the pane around the timeline holds
+  still while only the reply grows. A chat behind Settings, Needs you or a hidden window holds still and catches up
+  when shown.
+- Row entrances: a CSS one-off (`.row-in`) instead of Motion per frame.
+
+| What (one busy chat open) | Before | After |
+|---|---|---|
+| Script per batch, 126 / 540 / 1500 items (ms) | 2.17 / 5.29 / 12.89 | 1.04 / 1.22 / 1.20 |
+| Layout per batch, 126 / 540 / 1500 (ms) | 0.40 / 0.16 / 1.13 | 0.06 / 0.05 / 0.06 |
+| Renders per batch (126 / 1500) | 9.4 / 16.3 | 5.3 / 5.3 |
+| Rows in the DOM (1500 items) | 667 (8 033 nodes) | 14 (168 nodes) |
+| A turn starting / ending (1500 items, ms incl. a frame) | 158 / 108 (yesterday's run) | 55 / 30 |
+| Open the chat (1500 items, ms) | 381 | 128 |
+| Streaming, 126 items: app ms/s · app wakeups/s · page ms/s · page wakeups/s | 66.9 · 372 · 344 · 94 | 48.3 · 322 · 147 · 115 |
+| … 540 items | 60.1 · 363 · 498 · 82 | 55.1 · 312 · 182 · 114 |
+| … 1500 items | 59.6 · 327 · 894 · 42 (page saturated: 652 batches) | 55.7 · 326 · 143 · 107 (1 000 batches) |
+| … GPU process ms/s, 126 / 1500 | 113 / 108 | 60 / 61 |
+| A busy transcript session open (`perf-busy 1`): app ms/s · app wakeups/s · page ms/s | 56.1 · 335 · 133 | 33.3 · 255 · 100 |
+
+Noise: run to run ±20-30 % on the CPU figures and ±30 wakeups (other work on the machine; the earlier runs of this
+pass ranged 128-194 page ms/s at 1500 items after, 805-951 before). The per-batch counts move less than 10 %.
+
+Targets: cost per batch independent of length, met (1.04-1.22 ms at 126-1500 items, within noise). App plus page CPU
+halved: met at every length (126: 411 → 195 ms/s, -52 %; 540: 558 → 237, -58 %; 1500: 954 → 199, -79 %). Wakeups
+halved: **missed**. App wakeups fall 0-20 % and page wakeups rise (the shared frame's frames replace the base's
+saturated page); the app's wakeups are WebKit's display link, which runs at the screen's rate while anything on the
+page changes at 10 Hz or more (`chat-1500-cpu-frame-gap-100ms`, 10 updates a second: still ~340), so no rate a
+streaming reveal could use brings them down from the page. The busy transcript session (44 entries, nothing to
+window) improves less: -29 % CPU, -17 % wakeups.
+
+What else the variants at 1500 items say (after): CSS loops paused -15 % page CPU, Motion instant on top no change;
+the turn running with nothing streaming 17 app ms/s, 173 app wakeups, 34 page ms/s; the shared frame at 60 Hz instead
+of 30: +30 % page CPU, at 10 Hz -20 %.
+
+Re-run: `run.sh <home> perf-chat` (and `perf-chat-long` for the 1500-item part with its variants), `run.sh <home>
+perf-busy 1`, `run.sh <home> chat-window` (pass/fail); a native sample of the page: start `perf-chat-long`, wait for
+its `cpu-start` line (it logs the pids), then `sample <web_pid> 8`.
+
+Left as they are:
+- Wakeups (above). A chat streaming at 30 updates a second instead of one per display frame is the visible trade:
+  the text appears in steps of ~33 ms instead of ~8-17 ms.
+- `buildBlocks` still walks the items once per batch for subagent children (pointer checks, ~10 µs at 1500), and the
+  live row's `now` / `idleSince` / `inputs` loops are O(items): all well under the noise.
+- Text further than a screen from the view is not in the DOM: a selection can't reach it.
