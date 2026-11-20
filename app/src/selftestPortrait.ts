@@ -145,16 +145,22 @@ export function portraitScenarios(k: PortraitKit): Record<string, () => Promise<
         await waitFor("the chat", () => $("[data-chat-timeline]"), 20_000);
         const key = panelKeyOf(audit);
         if (useStore.getState().rightPanel[key] !== "agents") useStore.getState().setRightPanel(key, "agents");
+        const state = () => {
+          const { panel, body } = pane();
+          return `rightPanel[${key}]=${useStore.getState().rightPanel[key]}, frame ${panel?.dataset.rightPanel}/${panel?.dataset.panelAxis} ${Math.round(rect(panel)?.height ?? 0)}px, body ${Math.round(body?.width ?? 0)}x${Math.round(body?.height ?? 0)}, jobs button ${!!$all("button").find((b) => /running|Jobs/.test(b.textContent ?? ""))}`;
+        };
         const p = await waitFor("the Jobs panel above the chat", () => {
           const { body, panel, timeline } = pane();
           if (!body || !panel || panel.dataset.rightPanel !== "agents" || panel.dataset.panelAxis !== "y" || !timeline) return null;
           const pr = panel.getBoundingClientRect();
           const tr = timeline.getBoundingClientRect();
           return pr.height > 150 && pr.bottom <= tr.top + 1 && Math.abs(pr.width - body.width) <= 2 ? { pr, tr } : null;
-        }, 15_000);
+        }, 15_000).catch((e) => {
+          throw new Error(`${e instanceof Error ? e.message : e} (${state()})`);
+        });
         await sleep(800);
         noOverflow("chat with Jobs");
-        await shot("portrait-chat-jobs", 900);
+        await shot("portrait-chat-jobs", 1500);
         return `panel ${Math.round(p.pr.width)}x${Math.round(p.pr.height)} above a ${Math.round(p.tr.height)} px timeline`;
       });
 
@@ -172,7 +178,7 @@ export function portraitScenarios(k: PortraitKit): Record<string, () => Promise<
         }, 15_000);
         await sleep(900);
         noOverflow("chat with the Browser");
-        await shot("portrait-chat-browser", 900);
+        await shot("portrait-chat-browser", 1800);
         return `panel ${Math.round(p.pr.width)}x${Math.round(p.pr.height)}, chat below ${Math.round(p.tr.height)} px`;
       });
 
@@ -191,7 +197,7 @@ export function portraitScenarios(k: PortraitKit): Record<string, () => Promise<
         await shot("portrait-split", 900);
         // Back to one pane, the invoices chat.
         const t3 = useStore.getState().tabs.find((t) => t.id === useStore.getState().activeTab)!;
-        useStore.getState().closePane(leaves(t3.root).find((l) => l.target?.kind === "chat" && l.target.id === audit)!.id);
+        if (leaves(t3.root).length > 1) useStore.getState().closePane(t3.focus);
         return "row split drawn top / bottom; the tree keeps row";
       });
 
@@ -225,6 +231,10 @@ export function portraitScenarios(k: PortraitKit): Record<string, () => Promise<
         useStore.getState().open({ kind: "chat", id: invoices });
         const tl = await waitFor("the timeline", () => $("[data-chat-timeline]"), 20_000);
         await sleep(800);
+        // Its Browser panel showing (above the chat, in portrait).
+        if ($("[data-right-panel]")?.dataset.rightPanel !== "browser") $all("button[title]").find((b) => /^Show the browser/.test(b.title))?.click();
+        await waitFor("the Browser panel above", () => $("[data-right-panel]")?.dataset.rightPanel === "browser" && $("[data-right-panel]")?.dataset.panelAxis === "y", 10_000);
+        await sleep(600);
         (tl as HTMLElement & { __mark?: number }).__mark = 1;
         const tabId = useStore.getState().activeTab;
         // A reader scrolled up, if the chat is long enough to scroll.
@@ -262,36 +272,35 @@ export function portraitScenarios(k: PortraitKit): Record<string, () => Promise<
         return scrolls ? `same timeline, panel beside then above, top line at ${before?.off} px both times` : "same timeline, panel beside then above (the chat is too short to scroll, so the reader's place was not checked)";
       });
 
-      await step("portrait: a long session timeline keeps the reader's place across a rotation", async () => {
-        // The invented session with the most to read, scrolled up part way.
-        const st = useStore.getState();
-        const long = [...st.sessions].filter((s) => !s.nested && s.chat == null).sort((a, b) => (b.activity?.length ?? 0) - (a.activity?.length ?? 0))[0];
-        if (!long) throw new Error("no session");
-        st.open({ kind: "session", key: sessionKey(long) });
-        st.setRightPanel(sessionKey(long), "closed");
-        const tl = await waitFor("its timeline", () => $("[data-activity-timeline]"), 20_000);
+      await step("portrait: a scrolled timeline keeps the reader's place across a rotation", async () => {
+        // The invoices chat (paused on its permission request, so nothing moves under the reader) in a short landscape
+        // window, where it scrolls, read part way up. (The audit chat streams above the view, which moves the line
+        // whatever the layout does.)
+        useStore.getState().open({ kind: "chat", id: invoices });
+        useStore.getState().setRightPanel(panelKeyOf(invoices), "closed");
+        await resize(1280, 560, "wide");
+        const tl = await waitFor("its timeline", () => $("[data-chat-timeline]"), 20_000);
         await sleep(1500);
-        // Short of room in portrait: landscape first, where it scrolls more, then portrait and back.
-        await resize(1440, 900, "wide");
-        if (tl.scrollHeight - tl.clientHeight < 200) return `"${long.title ?? long.id}" is too short to scroll at 1440x900 (${tl.scrollHeight}/${tl.clientHeight}); not checked`;
+        if (tl.scrollHeight - tl.clientHeight < 200) throw new Error(`too short to scroll at 1280x560 (${tl.scrollHeight}/${tl.clientHeight})`);
         tl.scrollTop = Math.round((tl.scrollHeight - tl.clientHeight) * 0.35);
         tl.dispatchEvent(new Event("scroll"));
-        await sleep(600);
+        await sleep(800);
         const top = () => tl.getBoundingClientRect().top;
-        const first = [...tl.querySelectorAll("p, li, pre, [data-step], img")].find((e) => e.getBoundingClientRect().top >= top() - 1);
+        const first = [...tl.querySelectorAll("p, li, pre, button, img")].find((e) => e.getBoundingClientRect().top >= top() - 1 && e.getBoundingClientRect().height > 0);
         if (!first) throw new Error("nothing at the top");
         const off0 = Math.round(first.getBoundingClientRect().top - top());
         const moved: number[] = [];
-        for (const [w, h, m] of [[1080, 1920, "stacked"], [1440, 900, "wide"]] as const) {
+        // A portrait window short enough that the chat still scrolls in it (a view showing everything has no place to keep).
+        for (const [w, h, m] of [[820, 940, "stacked"], [1280, 560, "wide"]] as const) {
           await resize(w, h, m);
-          if (!first.isConnected || $("[data-activity-timeline]") !== tl) throw new Error(`${m}: the timeline was remounted`);
+          if (!first.isConnected || $("[data-chat-timeline]") !== tl) throw new Error(`${m}: the timeline was remounted`);
           moved.push(Math.round(first.getBoundingClientRect().top - top()) - off0);
         }
         await resize(1080, 1920, "stacked");
-        // In portrait the whole session may fit (then it shows from its top, nothing to keep); back in landscape the
-        // line must be where the reader left it.
-        if (Math.abs(moved[1]) > 6) throw new Error(`the top line moved ${moved[1]} px after portrait and back`);
-        return `top line moved ${moved.join(" / ")} px (portrait / landscape again)`;
+        // Portrait rewraps the block at the top to a narrower width, so the line may sit a line or two lower in it (up to
+        // 48 px); back in landscape it must be exactly where it was.
+        if (Math.abs(moved[0]) > 48 || Math.abs(moved[1]) > 6) throw new Error(`the top line moved ${moved.join(" / ")} px (portrait / landscape again)`);
+        return `top line ${off0} px below the view's top; moved ${moved.join(" / ")} px (portrait / landscape again)`;
       });
     },
   };
