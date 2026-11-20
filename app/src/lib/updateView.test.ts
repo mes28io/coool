@@ -51,6 +51,8 @@ test("activity, done and attention", () => {
 test("labels and lines", () => {
   assert.equal(railLabel(status({ coool: { state: "downloading", progress: { phase: "download", done: 1, total: 4 } } })), "Updating coool · 25%");
   assert.equal(railLabel(status({ codex: { state: "waiting" } })), "Codex update waiting");
+  assert.equal(railLabel(status({ coool: { state: "failed", detail: "The update couldn't be verified: the release has no signature." } })), "coool update couldn't be verified");
+  assert.equal(railUpdate(status({ coool: { state: "failed" } })), "attention");
   assert.equal(itemLine(item("codex", { current: "0.145.0", latest: "0.171.0", state: "waiting" })), "0.145.0 → 0.171.0 · waiting");
   assert.equal(itemLine(item("coool", { current: "0.1.0", latest: "0.2.0", state: "staged" })), "0.1.0 → 0.2.0 · installed, restart to apply");
   assert.equal(itemLine(item("claude", { state: "missing" })), "Not installed");

@@ -6,6 +6,7 @@
 //   waiting    a Codex update held while 2 Codex sessions run
 //   cli        Claude Code updating
 //   failed     Codex doesn't start after its update (the repair command)
+//   unverified a coool release whose signature didn't verify (nothing installed)
 //   manual     Claude Code installed with Homebrew: the command to run
 //   current    everything up to date (the icon hides)
 // Add `updatepanel=1` to open the panel at once.
@@ -41,6 +42,9 @@ const KNOBS: Record<string, { patch: Patch; auto_app?: boolean }> = {
     patch: {
       codex: { ...CODEX_OLD, state: "failed", detail: "Codex doesn't start after the update. Run this in Terminal to repair it:", command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh" },
     },
+  },
+  unverified: {
+    patch: { coool: { ...APP_NEW, state: "failed", detail: "The update couldn't be verified: its signature doesn't match coool's release key. Nothing was installed." } },
   },
   manual: { patch: { claude: { current: "2.1.300", latest: "2.1.329", method: "Homebrew", state: "manual", detail: "Installed with Homebrew: update it there.", command: "brew upgrade --cask claude-code" } } },
   current: { patch: {} },

@@ -64,6 +64,6 @@ cat <<EOF
 
 Next:
   git commit -am "coool $ver" && git tag v$ver && git push && git push origin v$ver
-  gh release create v$ver dist/coool-macos-arm64.tar.gz dist/coool-macos-arm64.tar.gz.sha256 --title "coool $ver" --notes "..."
+  gh release create v$ver dist/coool-macos-arm64.tar.gz dist/coool-macos-arm64.tar.gz.sha256 dist/coool-macos-arm64.tar.gz.minisig --title "coool $ver" --notes "..."
 Installed copies find it at their next check (launch, or a few times a day) and install it.
 EOF

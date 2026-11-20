@@ -75,7 +75,7 @@ export function railLabel(s: UpdateStatus | null): string {
     return i.id === "coool" ? `Updating coool${pct !== null ? ` · ${pct}%` : ""}` : `Updating ${i.name}`;
   }
   const failed = by("failed");
-  if (failed) return `${failed.name} update failed`;
+  if (failed) return failed.id === "coool" && /couldn't be verified/.test(failed.detail ?? "") ? "coool update couldn't be verified" : `${failed.name} update failed`;
   const waiting = by("waiting");
   if (waiting) return `${waiting.name} update waiting`;
   const manual = by("manual");

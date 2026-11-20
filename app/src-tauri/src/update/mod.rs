@@ -30,6 +30,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub mod cli;
 pub mod gate;
+pub mod keys;
 
 pub const ASSET: &str = "coool-macos-arm64.tar.gz";
 const BUNDLE_ID: &str = "sh.coool.app";
@@ -40,6 +41,9 @@ const USER_AGENT: &str = "coool-updater";
 const MAX_TARBALL: u64 = 512 * 1024 * 1024;
 const MAX_JSON: u64 = 4 * 1024 * 1024;
 const MAX_SUM: u64 = 4096;
+const MAX_SIG: u64 = 4096;
+/// The signature asset next to the tarball (minisign format).
+pub const SIG_ASSET: &str = "coool-macos-arm64.tar.gz.minisig";
 
 // ---------- versions ----------
 
@@ -161,11 +165,13 @@ pub struct Source {
     pub registry: String,
     /// Plain http is allowed (a loopback test server only).
     loopback: bool,
+    /// The minisign public keys a release must be signed with (keys.rs).
+    pub keys: Vec<String>,
 }
 
 impl Source {
     pub fn github() -> Source {
-        Source { api: API_LATEST.into(), downloads: DOWNLOADS.into(), registry: "https://registry.npmjs.org/".into(), loopback: false }
+        Source { api: API_LATEST.into(), downloads: DOWNLOADS.into(), registry: "https://registry.npmjs.org/".into(), loopback: false, keys: keys::PINNED.iter().map(|k| k.to_string()).collect() }
     }
 
     /// A test server on this Mac: exactly `http://127.0.0.1:<port>`, serving the same paths as GitHub.
@@ -173,7 +179,14 @@ impl Source {
     pub fn loopback(base: &str) -> Option<Source> {
         let port = base.strip_prefix("http://127.0.0.1:")?;
         num(port).filter(|p| (1..=65535).contains(p))?;
-        Some(Source { api: format!("{base}/repos/mes28io/coool/releases/latest"), downloads: format!("{base}/mes28io/coool/releases/download/"), registry: format!("{base}/npm/"), loopback: true })
+        // A test server's releases may be signed with a test key (`COOOL_UPDATE_TEST_PUBKEY`): debug builds and
+        // loopback only, on top of the pinned keys.
+        let mut keys: Vec<String> = keys::PINNED.iter().map(|k| k.to_string()).collect();
+        #[cfg(debug_assertions)]
+        if let Ok(k) = std::env::var("COOOL_UPDATE_TEST_PUBKEY") {
+            keys.push(k);
+        }
+        Some(Source { api: format!("{base}/repos/mes28io/coool/releases/latest"), downloads: format!("{base}/mes28io/coool/releases/download/"), registry: format!("{base}/npm/"), loopback: true, keys })
     }
 
     /// GitHub, or in a debug build a loopback server named by `COOOL_UPDATE_BASE`.
@@ -220,6 +233,9 @@ pub struct Release {
     pub tarball: String,
     #[serde(skip)]
     pub checksum: String,
+    /// The `.minisig` (a release without one is offered, but can't be installed: "couldn't be verified").
+    #[serde(skip)]
+    pub signature: Option<String>,
 }
 
 /// Only these fields of GitHub's release object are read; the title, notes and the rest are ignored.
@@ -258,7 +274,7 @@ pub fn pick(json: &[u8], current: &Version, src: &Source) -> Result<Option<Relea
     let url = |name: &str| r.assets.iter().find(|a| a.name == name).map(|a| a.browser_download_url.clone()).filter(|u| src.allows(u, tag, name));
     let sum_name = format!("{ASSET}.sha256");
     match (url(ASSET), url(&sum_name)) {
-        (Some(tarball), Some(checksum)) => Ok(Some(Release { version: v.to_string(), tag: tag.to_string(), tarball, checksum })),
+        (Some(tarball), Some(checksum)) => Ok(Some(Release { version: v.to_string(), tag: tag.to_string(), tarball, checksum, signature: url(SIG_ASSET) })),
         _ => Ok(None),
     }
 }
@@ -473,6 +489,41 @@ pub fn staged_path(app: &Path) -> Option<PathBuf> {
     update_dir(app).map(|d| d.join("coool.app")).filter(|p| p.join("Contents/Info.plist").is_file())
 }
 
+pub const UNVERIFIED: &str = "The update couldn't be verified: its signature doesn't match coool's release key. Nothing was installed.";
+pub const UNVERIFIED_NO_SIG: &str = "The update couldn't be verified: the release has no signature. Nothing was installed.";
+pub const UNVERIFIED_NO_KEY: &str = "The update couldn't be verified: this build of coool has no release key. Nothing was installed.";
+
+/// Checks `file` against a minisign signature (prehashed, as `minisign -S` makes) with any of `keys`.
+pub fn verify_signature(file: &Path, sig: &str, keys: &[String]) -> Result<(), String> {
+    if keys.is_empty() {
+        return Err(UNVERIFIED_NO_KEY.into());
+    }
+    let sig = minisign_verify::Signature::decode(sig).map_err(|_| UNVERIFIED.to_string())?;
+    for k in keys {
+        let Ok(pk) = minisign_verify::PublicKey::from_base64(k.trim()) else { continue };
+        // A key whose id doesn't match the signature's is skipped before any work.
+        let Ok(mut v) = pk.verify_stream(&sig) else { continue };
+        let mut f = std::fs::File::open(file).map_err(|e| e.to_string())?;
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            v.update(&buf[..n]);
+        }
+        if v.finalize().is_ok() {
+            return Ok(());
+        }
+    }
+    Err(UNVERIFIED.into())
+}
+
+/// Whether a stage error means the release couldn't be verified (shown) rather than a passing failure (retried quietly).
+pub fn is_unverified(e: &str) -> bool {
+    e.starts_with("The update couldn't be verified")
+}
+
 /// Downloads, checks and unpacks `rel`, and keeps the verified bundle beside the installed one
 /// (`.coool-update/coool.app`). The installed bundle, and so the running app, is never touched: the swap happens
 /// at restart, at quit or at the next launch (`apply_staged`). Any error leaves no new staged bundle behind.
@@ -502,6 +553,12 @@ pub fn stage(src: &Source, rel: &Release, app: &Path, progress: &mut dyn FnMut(P
     if got != want {
         return Err("The download didn't match its published checksum.".into());
     }
+    // The checksum only catches a corrupt download (it comes from the same release); the signature, made with a key
+    // only the release Mac holds, is what says the build is coool's.
+    let sig_url = rel.signature.as_deref().filter(|u| src.allows(u, &rel.tag, SIG_ASSET)).ok_or(UNVERIFIED_NO_SIG)?;
+    let mut resp = get(&agent, sig_url, "text/plain")?;
+    let sig = String::from_utf8_lossy(&read_limited(&mut resp, MAX_SIG)?).into_owned();
+    verify_signature(&tarball, &sig, &src.keys)?;
     let x = work.0.join("x");
     std::fs::create_dir(&x).map_err(|e| e.to_string())?;
     let ok = std::process::Command::new("/usr/bin/tar").arg("-xzf").arg(&tarball).arg("-C").arg(&x).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
@@ -879,7 +936,12 @@ fn stage_app(u: &Updater, app: &AppHandle) -> bool {
     let ok = r.is_ok();
     u.set(app, 0, |it| {
         it.progress = None;
-        it.state = if ok { ItemState::Staged } else { ItemState::Available };
+        // A download that can't be verified is shown (and not installed); other failures are retried quietly.
+        it.state = match &r {
+            Ok(_) => ItemState::Staged,
+            Err(e) if is_unverified(e) => ItemState::Failed,
+            Err(_) => ItemState::Available,
+        };
         it.detail = r.err();
     });
     ok
@@ -1379,6 +1441,124 @@ mod tests {
         base
     }
 
+    /// A throwaway minisign key pair (never the pinned one): its public key (base64) and secret key.
+    fn test_key() -> (String, minisign::SecretKey) {
+        let kp = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        (kp.pk.to_base64(), kp.sk)
+    }
+
+    fn sign(sk: &minisign::SecretKey, data: &[u8]) -> String {
+        minisign::sign(None, sk, std::io::Cursor::new(data), Some("coool test release"), None).unwrap().into_string()
+    }
+
+    #[test]
+    fn signatures_are_checked_against_the_pinned_keys() {
+        let d = tmp("sig");
+        let f = d.join("t.tar.gz");
+        std::fs::write(&f, b"the real tarball").unwrap();
+        let (pk, sk) = test_key();
+        let (other_pk, other_sk) = test_key();
+        let sig = sign(&sk, b"the real tarball");
+        assert!(verify_signature(&f, &sig, std::slice::from_ref(&pk)).is_ok());
+        // Rotation: any pinned key may match.
+        assert!(verify_signature(&f, &sig, &[other_pk.clone(), pk.clone()]).is_ok());
+        // Another key's signature, a key that didn't sign, no key at all, garbage: refused.
+        assert_eq!(verify_signature(&f, &sign(&other_sk, b"the real tarball"), std::slice::from_ref(&pk)).unwrap_err(), UNVERIFIED);
+        assert_eq!(verify_signature(&f, &sig, std::slice::from_ref(&other_pk)).unwrap_err(), UNVERIFIED);
+        assert_eq!(verify_signature(&f, &sig, &[]).unwrap_err(), UNVERIFIED_NO_KEY);
+        assert_eq!(verify_signature(&f, "not a signature", std::slice::from_ref(&pk)).unwrap_err(), UNVERIFIED);
+        // The same signature over different bytes: refused.
+        std::fs::write(&f, b"the real tarball, tampered").unwrap();
+        assert_eq!(verify_signature(&f, &sig, std::slice::from_ref(&pk)).unwrap_err(), UNVERIFIED);
+        // The shipped list holds well-formed keys only.
+        for k in keys::PINNED {
+            assert!(minisign_verify::PublicKey::from_base64(k).is_ok(), "{k}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A real, ad-hoc signed `coool.app` of version `v`, packed as a release tarball.
+    fn release_tarball(d: &Path, v: &str) -> Vec<u8> {
+        let app = d.join(format!("pack-{v}/coool.app"));
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join("Contents/MacOS/coool"), "#!/bin/sh\necho new\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(app.join("Contents/MacOS/coool"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plist = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>sh.coool.app</string><key>CFBundleShortVersionString</key><string>{v}</string><key>CFBundleExecutable</key><string>coool</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n"
+        );
+        std::fs::write(app.join("Contents/Info.plist"), plist).unwrap();
+        assert!(std::process::Command::new("/usr/bin/codesign").args(["--force", "--deep", "--sign", "-"]).arg(&app).status().unwrap().success());
+        let out = d.join(format!("pack-{v}.tar.gz"));
+        assert!(std::process::Command::new("/usr/bin/tar").env("COPYFILE_DISABLE", "1").arg("-czf").arg(&out).arg("-C").arg(app.parent().unwrap()).arg("coool.app").status().unwrap().success());
+        std::fs::read(out).unwrap()
+    }
+
+    fn sha_line(b: &[u8]) -> Vec<u8> {
+        format!("{}  {ASSET}\n", hex(&Sha256::digest(b))).into_bytes()
+    }
+
+    /// Serves `tarball`, its checksum and (when given) `sig` as release v9.0.0; stages it over a fake 0.1.0 bundle.
+    fn try_stage(name: &str, tarball: Vec<u8>, sig: Option<String>, keys: Vec<String>) -> (PathBuf, Result<PathBuf, String>) {
+        let d = tmp(name);
+        let app = d.join("coool.app");
+        fake_app(&app, "old");
+        let dl = |n: &str| format!("/mes28io/coool/releases/download/v9.0.0/{n}");
+        let mut files = vec![(dl(&format!("{ASSET}.sha256")), sha_line(&tarball)), (dl(ASSET), tarball)];
+        let signed = sig.is_some();
+        if let Some(s) = sig {
+            files.push((dl(SIG_ASSET), s.into_bytes()));
+        }
+        let base = serve(files);
+        let mut src = Source::loopback(&base).unwrap();
+        src.keys = keys;
+        let rel = Release { version: "9.0.0".into(), tag: "v9.0.0".into(), tarball: format!("{base}{}", dl(ASSET)), checksum: format!("{base}{}", dl(&format!("{ASSET}.sha256"))), signature: signed.then(|| format!("{base}{}", dl(SIG_ASSET))) };
+        let r = stage(&src, &rel, &app, &mut |_| {});
+        // The installed bundle is never touched by staging, whatever happened.
+        assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/coool")).unwrap(), "old");
+        (d, r)
+    }
+
+    #[test]
+    fn only_a_release_signed_with_a_pinned_key_is_installed() {
+        let (pk, sk) = test_key();
+        let (_, other_sk) = test_key();
+        let work = tmp("sigpack");
+        let good = release_tarball(&work, "9.0.0");
+
+        // Signed with the pinned key: staged, then applied.
+        let (d, r) = try_stage("sig-ok", good.clone(), Some(sign(&sk, &good)), vec![pk.clone()]);
+        let staged = r.expect("a signed release is installed");
+        assert_eq!(bundle_version(&staged).as_deref(), Some("9.0.0"));
+        assert_eq!(apply_staged(&d.join("coool.app"), &v("0.1.0")).unwrap().as_deref(), Some("9.0.0"));
+        assert_eq!(bundle_version(&d.join("coool.app")).as_deref(), Some("9.0.0"));
+        let _ = std::fs::remove_dir_all(&d);
+
+        // Tampered: a different tarball with a checksum recomputed to match, and the old signature.
+        let evil = release_tarball(&work, "9.0.1");
+        let (d, r) = try_stage("sig-tampered", evil, Some(sign(&sk, &good)), vec![pk.clone()]);
+        assert_eq!(r.unwrap_err(), UNVERIFIED);
+        assert!(staged_path(&d.join("coool.app")).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+
+        // Signed with another key.
+        let (d, r) = try_stage("sig-otherkey", good.clone(), Some(sign(&other_sk, &good)), vec![pk.clone()]);
+        assert_eq!(r.unwrap_err(), UNVERIFIED);
+        assert!(staged_path(&d.join("coool.app")).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+
+        // No signature in the release.
+        let (d, r) = try_stage("sig-missing", good.clone(), None, vec![pk.clone()]);
+        assert_eq!(r.unwrap_err(), UNVERIFIED_NO_SIG);
+        let _ = std::fs::remove_dir_all(&d);
+
+        // No pinned key in this build.
+        let (d, r) = try_stage("sig-nokey", good.clone(), Some(sign(&sk, &good)), vec![]);
+        assert_eq!(r.unwrap_err(), UNVERIFIED_NO_KEY);
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
     #[test]
     fn a_checksum_mismatch_leaves_the_installed_bundle_alone() {
         let d = tmp("mismatch");
@@ -1389,7 +1569,7 @@ mod tests {
         let dl = |name: &str| format!("/mes28io/coool/releases/download/v9.0.0/{name}");
         let base = serve(vec![(dl(ASSET), tarball), (dl(&format!("{ASSET}.sha256")), sum.into_bytes())]);
         let src = Source::loopback(&base).unwrap();
-        let rel = Release { version: "9.0.0".into(), tag: "v9.0.0".into(), tarball: format!("{base}{}", dl(ASSET)), checksum: format!("{base}{}", dl(&format!("{ASSET}.sha256"))) };
+        let rel = Release { version: "9.0.0".into(), tag: "v9.0.0".into(), signature: None, tarball: format!("{base}{}", dl(ASSET)), checksum: format!("{base}{}", dl(&format!("{ASSET}.sha256"))) };
         let mut phases = vec![];
         let err = stage(&src, &rel, &app, &mut |p| phases.push(p.phase)).unwrap_err();
         assert!(err.contains("checksum"), "{err}");

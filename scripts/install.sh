@@ -7,6 +7,12 @@
 # /Applications isn't writable). Nothing runs as root. A file fetched by curl carries no quarantine flag, so macOS
 # opens the app without the "unidentified developer" block even though the build isn't notarised.
 #
+# What it checks: HTTPS to GitHub and the SHA-256 from the same release (a corruption check), then the bundle's ad-hoc
+# signature. It does NOT check the release's minisign signature (coool-macos-arm64.tar.gz.minisig), which the app
+# itself requires before installing an update: stock macOS has no Ed25519 verifier (its LibreSSL lacks Ed25519, and
+# minisign isn't installed by default), and this script installs nothing. To check by hand first, with minisign
+# installed: minisign -Vm coool-macos-arm64.tar.gz -p scripts/coool-release.pub
+#
 # Overrides (mostly for testing):
 #   COOOL_VERSION   a release tag such as v0.1.0 (default: the latest release)
 #   COOOL_BASE_URL  where coool-macos-arm64.tar.gz and its .sha256 live (default: the GitHub release)
