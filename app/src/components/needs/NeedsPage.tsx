@@ -125,9 +125,9 @@ export function NeedsPage() {
       exit={{ opacity: 0 }}
       transition={{ duration: 0.16, ease }}
     >
-      <div className="flex min-w-0 flex-1 flex-col @[760px]:flex-row">
+      <div className="flex min-w-0 flex-1 flex-col wide:@[760px]:flex-row">
         {/* The list */}
-        <div className="flex max-h-[42%] shrink-0 flex-col border-b border-hairline @[760px]:max-h-none @[760px]:w-[320px] @[760px]:border-b-0 @[760px]:border-r">
+        <div className="flex max-h-[42%] shrink-0 flex-col border-b border-hairline wide:@[760px]:max-h-none wide:@[760px]:w-[320px] wide:@[760px]:border-b-0 wide:@[760px]:border-r">
           <div data-tauri-drag-region className="flex h-[48px] shrink-0 items-center px-2" data-needs-head>
             <button
               type="button"
@@ -152,7 +152,7 @@ export function NeedsPage() {
               ))}
             </AnimatePresence>
           </div>
-          <div className={cx("hidden items-center gap-1.5 px-4 pb-4 pt-2 text-small text-faint @[760px]:flex", !list.length && "invisible")}>
+          <div className={cx("hidden items-center gap-1.5 px-4 pb-4 pt-2 text-small text-faint wide:@[760px]:flex", !list.length && "invisible")}>
             <Kbd className="h-[20px]">↑↓</Kbd> move
             <Kbd className="ml-2 h-[20px]">↵</Kbd> open chat
             <Kbd className="ml-2 h-[20px]">Esc</Kbd> back
@@ -161,11 +161,11 @@ export function NeedsPage() {
 
         {/* The selected item */}
         <div className="scroll min-h-0 min-w-0 flex-1" data-needs-main>
-          <div data-tauri-drag-region className="hidden h-[48px] @[760px]:block" />
+          <div data-tauri-drag-region className="hidden h-[48px] wide:@[760px]:block" />
           {current ? (
             <motion.div
               key={sessionKey(current.s)}
-              className="mx-auto w-full max-w-[760px] px-4 pb-12 pt-4 @[760px]:px-8 @[760px]:pt-0"
+              className="mx-auto w-full max-w-[760px] px-4 pb-12 pt-4 wide:@[760px]:px-8 wide:@[760px]:pt-0"
               initial={reduce ? false : { opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.18, ease }}

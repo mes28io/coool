@@ -223,7 +223,7 @@ function ProjectTabs({ projects, current, onPick }: { projects: Project[]; curre
           );
         })}
       </div>
-      <PathText path={current.path} className="hidden min-w-0 max-w-[30%] shrink text-mono-small text-faint @[720px]:flex" />
+      <PathText path={current.path} className="hidden min-w-0 max-w-[30%] shrink text-mono-small text-faint wide:@[720px]:flex" />
       <button type="button" title={`New session in ${folderName(current.path)}`} onClick={() => setSheet({ kind: "new", cwd: current.path })} className="flex size-[28px] shrink-0 items-center justify-center rounded-[8px] text-dim transition-colors hover:bg-hover hover:text-fg">
         <IPlus size={13} strokeWidth={2} />
       </button>
@@ -291,8 +291,8 @@ function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Att
       data-mc-project={folderName(p.path)}
     >
       {/* One grid: sessions and changes on the left, the trail on the right spanning both, so the columns end together. */}
-      <div className="grid items-stretch gap-3 @[900px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] @[900px]:grid-rows-[auto_1fr]">
-        <Card className="@[900px]:col-start-1 @[900px]:row-start-1" data-mc-sessions={p.sessions.length}>
+      <div className="grid items-stretch gap-3 wide:@[900px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] wide:@[900px]:grid-rows-[auto_1fr]">
+        <Card className="wide:@[900px]:col-start-1 wide:@[900px]:row-start-1" data-mc-sessions={p.sessions.length}>
           <CardHeader icon={IAgent} title="Sessions" meta={meta.length ? meta : undefined} />
           {p.sessions.map((s, k) => (
             <SessionRow key={sessionKey(s)} s={s} att={att.get(s)!} first={k === 0} />
@@ -301,8 +301,8 @@ function ProjectSection({ p, att, stagger }: { p: Project; att: Map<Session, Att
             <StartingRow key={e.k} p={e.p} chat={e.chat} first={k === 0 && p.sessions.length === 0} />
           ))}
         </Card>
-        <ChangeLedger changes={changes} sources={sources} onOpen={openChange} overlaps={found} onOpenSession={openEdit} onOpenBoth={openBoth} className={showTrail ? "@[900px]:col-start-1 @[900px]:row-start-2" : "@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1"} />
-        {showTrail && <CommitTrail trail={trail} loading={!entry} committing={committingRow} className="@[900px]:col-start-2 @[900px]:row-span-2 @[900px]:row-start-1" />}
+        <ChangeLedger changes={changes} sources={sources} onOpen={openChange} overlaps={found} onOpenSession={openEdit} onOpenBoth={openBoth} className={showTrail ? "wide:@[900px]:col-start-1 wide:@[900px]:row-start-2" : "wide:@[900px]:col-start-2 wide:@[900px]:row-span-2 wide:@[900px]:row-start-1"} />
+        {showTrail && <CommitTrail trail={trail} loading={!entry} committing={committingRow} className="wide:@[900px]:col-start-2 wide:@[900px]:row-span-2 wide:@[900px]:row-start-1" />}
       </div>
       <AgentLanes sessions={p.sessions} att={att} />
     </motion.section>
@@ -487,7 +487,7 @@ function ProjectSkeleton() {
       {[0, 1].map((k) => (
         <div key={k} className="mb-9">
           <Skel w={110} h={12} i={k} className="mb-4 ml-1" />
-          <div className="grid gap-3 @[900px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+          <div className="grid gap-3 wide:@[900px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
             <div className="flex flex-col gap-3">
               <div className="rounded-[14px] border border-hairline bg-bg">
                 {[0, 1].map((r) => (

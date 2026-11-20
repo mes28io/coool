@@ -7,6 +7,8 @@ import { sessionKey } from "./lib/types";
 import { api, isTauri } from "./lib/backend";
 import type { Away } from "./lib/away";
 import { markOnce } from "./lib/perfCount";
+import { layoutMode, useLayout } from "./lib/layout";
+import { SIDEBAR_DEFAULT, sidebarKeys, type LayoutMode } from "./lib/layoutRules";
 
 export type Target = { kind: "session"; key: string } | { kind: "pty"; id: number } | { kind: "chat"; id: number };
 export type Leaf = { type: "leaf"; id: string; target: Target | null };
@@ -128,6 +130,15 @@ function readSettingsLast(): SettingsSection {
   } catch {}
   return "general";
 }
+
+function readSidebarOpen(mode: LayoutMode) {
+  try {
+    return localStorage.getItem(sidebarKeys(mode).open) !== "0";
+  } catch {
+    return true;
+  }
+}
+const readSidebarWidth = (mode: LayoutMode) => Math.round(Math.min(420, Math.max(220, readNum(sidebarKeys(mode).width, SIDEBAR_DEFAULT[mode]))));
 
 function readNum(k: string, d: number) {
   try {
@@ -539,7 +550,7 @@ export const useStore = create<State>((set, get) => ({
   palette: false,
   sheet: null,
   toasts: [],
-  sidebarWidth: readNum("coool.sidebar", 300),
+  sidebarWidth: readSidebarWidth(layoutMode()),
   collapsed: readCollapsed(),
   revealed: {},
   kidsOpen: {},
@@ -653,13 +664,7 @@ export const useStore = create<State>((set, get) => ({
     set({ collapsed, revealed });
   },
   setRevealed: (project, n) => set((s) => ({ revealed: { ...s.revealed, [project]: Math.max(0, n) } })),
-  sidebarOpen: (() => {
-    try {
-      return localStorage.getItem("coool.sidebarOpen") !== "0";
-    } catch {
-      return true;
-    }
-  })(),
+  sidebarOpen: readSidebarOpen(layoutMode()),
 
   setSnapshot(snap) {
     const st = get();
@@ -860,18 +865,24 @@ export const useStore = create<State>((set, get) => ({
   toggleSidebar() {
     const v = !get().sidebarOpen;
     try {
-      localStorage.setItem("coool.sidebarOpen", v ? "1" : "0");
+      // Remembered per arrangement (lib/layout.ts): hiding it on the portrait screen leaves landscape's as it was.
+      localStorage.setItem(sidebarKeys(layoutMode()).open, v ? "1" : "0");
     } catch {}
     set({ sidebarOpen: v });
   },
   setSidebarWidth(w) {
     const v = Math.round(Math.min(420, Math.max(220, w)));
     try {
-      localStorage.setItem("coool.sidebar", String(v));
+      localStorage.setItem(sidebarKeys(layoutMode()).width, String(v));
     } catch {}
     set({ sidebarWidth: v });
   },
 }));
+
+// Crossing between landscape and portrait swaps in that arrangement's sidebar (open or not, its width).
+useLayout.subscribe((s, p) => {
+  if (s.mode !== p.mode) useStore.setState({ sidebarOpen: readSidebarOpen(s.mode), sidebarWidth: readSidebarWidth(s.mode) });
+});
 
 // ---------- derived helpers ----------
 

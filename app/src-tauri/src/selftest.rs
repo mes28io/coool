@@ -20,6 +20,8 @@
 //!   `http://127.0.0.1:8741/`, serving the pages that scenario names).
 //! - `COOOL_SELFTEST_SHOTS_ONSCREEN=1`: shoot the window's rectangle on screen instead of the window alone, so the
 //!   frosted glass shows what is behind it (the `glass` scenario).
+//! - `COOOL_SELFTEST_SIZE`: the window's size in points, `<width>x<height>` (default `1440x900`), e.g. `1080x1920` for
+//!   a portrait screen (the `portrait` scenario). A scenario can also resize later (`selftest_resize`).
 //! - `COOOL_SELFTEST_WINDOW`: `quiet` (on top, never focused, no Dock icon) or `back` (never focused, behind the
 //!   person's windows and off screen: checks that need no picture of the window, like `mac-cycles` and `mac-idle`)
 //!   or `behind` (never focused, on screen but behind the person's windows: window-only shots of the glass with a
@@ -141,7 +143,16 @@ impl SelfTest {
         // `get_window`, not `get_webview_window`: once the in-app browser adds a child webview, `main` is a window
         // with several webviews and no longer counts as a webview window.
         if let Some(w) = app.get_window("main") {
-            let _ = w.set_size(tauri::LogicalSize::new(1440.0, 900.0));
+            let (width, height) = window_size(std::env::var("COOOL_SELFTEST_SIZE").ok().as_deref());
+            // A size of its own may be taller than this Mac's screens (a portrait 1080 x 1920 on a 1080-tall display):
+            // macOS would clamp it, so the test's window may be larger than the screen.
+            #[cfg(target_os = "macos")]
+            if std::env::var_os("COOOL_SELFTEST_SIZE").is_some() {
+                if let Ok(ns) = w.ns_window() {
+                    larger_than_screen(ns);
+                }
+            }
+            let _ = w.set_size(tauri::LogicalSize::new(width, height));
             if offscreen() {
                 #[cfg(target_os = "macos")]
                 let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -167,7 +178,7 @@ impl SelfTest {
             // `COOOL_SELFTEST_BACKGROUND=1`: off screen and never focused, so a run doesn't take the person's screen
             // or keyboard (window-alone screenshots still work).
             if background() {
-                let _ = w.set_position(BACKGROUND_POS);
+                place_background(&w);
                 #[cfg(target_os = "macos")]
                 let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 return;
@@ -234,12 +245,50 @@ impl SelfTest {
 const OFFSCREEN: tauri::LogicalPosition<f64> = tauri::LogicalPosition { x: -30000.0, y: 200.0 };
 
 /// `COOOL_SELFTEST_OFFSCREEN=1` (and a build where the self-test can run at all).
+/// The window size a run starts at: `COOOL_SELFTEST_SIZE` as `<width>x<height>` in points, else 1440 x 900. Anything
+/// unreadable or out of range (under 400 or over 8000 a side) falls back to the default.
+fn window_size(v: Option<&str>) -> (f64, f64) {
+    const DEFAULT: (f64, f64) = (1440.0, 900.0);
+    let Some((w, h)) = v.map(str::trim).and_then(|v| v.split_once(['x', 'X'])) else {
+        return DEFAULT;
+    };
+    match (w.trim().parse::<f64>(), h.trim().parse::<f64>()) {
+        (Ok(w), Ok(h)) if (400.0..=8000.0).contains(&w) && (400.0..=8000.0).contains(&h) => (w, h),
+        _ => DEFAULT,
+    }
+}
+
 pub fn offscreen() -> bool {
     cfg!(debug_assertions) && std::env::var("COOOL_SELFTEST_OFFSCREEN").is_ok_and(|v| v == "1")
 }
 
 /// Where the window goes with `COOOL_SELFTEST_BACKGROUND=1`.
 const BACKGROUND_POS: tauri::LogicalPosition<f64> = tauri::LogicalPosition { x: -4000.0, y: -3000.0 };
+
+/// Where `COOOL_SELFTEST_BACKGROUND=1` puts the window. Normally far off screen, where macOS keeps a sliver of it on a
+/// display (window-alone screenshots need that). A window allowed to be larger than its screen (`COOOL_SELFTEST_SIZE`,
+/// `larger_than_screen`) is not pulled back, so it is placed with an 8-point sliver at the right edge of the rightmost
+/// display (nothing lies beyond it), level with that display's top.
+fn place_background(w: &tauri::Window) {
+    if std::env::var_os("COOOL_SELFTEST_SIZE").is_none() {
+        let _ = w.set_position(BACKGROUND_POS);
+        return;
+    }
+    let right = w.available_monitors().unwrap_or_default().into_iter().map(|m| {
+        let s = m.scale_factor();
+        let p = m.position().to_logical::<f64>(s);
+        let z = m.size().to_logical::<f64>(s);
+        (p.x + z.width, p.y)
+    });
+    match right.fold(None, |best: Option<(f64, f64)>, r| if best.is_none_or(|b| r.0 > b.0) { Some(r) } else { best }) {
+        Some((x, y)) => {
+            let _ = w.set_position(tauri::LogicalPosition::new(x - 8.0, y + 40.0));
+        }
+        None => {
+            let _ = w.set_position(BACKGROUND_POS);
+        }
+    }
+}
 
 /// `COOOL_SELFTEST_BACKGROUND=1` (and a build where the self-test can run at all).
 fn background() -> bool {
@@ -314,6 +363,40 @@ fn keep_visible(wk: *mut std::ffi::c_void) {
 
 #[cfg(not(target_os = "macos"))]
 fn keep_visible(_wk: *mut std::ffi::c_void) {}
+
+/// `COOOL_SELFTEST_SIZE`: lets the window be larger than its screen (as Electron's `enableLargerThanScreen`), by making
+/// `-[NSWindow constrainFrameRect:toScreen:]` hand the frame back unchanged for the window's class. Only a self-test
+/// process does this, and only when it asked for a size of its own.
+#[cfg(target_os = "macos")]
+fn larger_than_screen(ns: *mut std::ffi::c_void) {
+    use std::ffi::{c_char, c_void};
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    }
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn object_getClass(obj: *mut c_void) -> *mut c_void;
+        fn class_replaceMethod(cls: *mut c_void, name: *mut c_void, imp: *const c_void, types: *const c_char) -> *const c_void;
+    }
+    extern "C" fn unconstrained(_this: *mut c_void, _sel: *mut c_void, frame: Rect, _screen: *mut c_void) -> Rect {
+        frame
+    }
+    if ns.is_null() {
+        return;
+    }
+    // SAFETY: the live NSWindow on the main thread (setup runs there). The replacement has the method's exact
+    // signature (self, _cmd, NSRect, NSScreen*) -> NSRect, with the matching type encoding.
+    unsafe {
+        let cls = object_getClass(ns);
+        let sel = sel_registerName(c"constrainFrameRect:toScreen:".as_ptr());
+        class_replaceMethod(cls, sel, unconstrained as *const c_void, c"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@".as_ptr());
+    }
+}
 
 /// Fully transparent, no shadow, clicks pass through: the window renders but shows nothing.
 #[cfg(target_os = "macos")]
@@ -683,7 +766,7 @@ pub fn selftest_resize(app: AppHandle, core: State<'_, Arc<Core>>, width: f64, h
     // window pushed wholly off screen counts as hidden to WebKit, and its animations stop finishing (the onboarding's
     // step transitions then never complete).
     if background() && !offscreen() {
-        let _ = w.set_position(BACKGROUND_POS);
+        place_background(&w);
     }
     Ok(())
 }
@@ -1460,7 +1543,7 @@ pub fn selftest_notify_post(core: State<'_, Arc<Core>>, chat: Option<usize>, kin
 
 #[cfg(test)]
 mod tests {
-    use super::{window_mode, WindowMode};
+    use super::{window_mode, window_size, WindowMode};
 
     #[test]
     fn window_switches_combine() {
@@ -1475,5 +1558,18 @@ mod tests {
         assert_eq!(window_mode(Some("quiet"), true, false), WindowMode::Background);
         // The most hidden switch wins.
         assert_eq!(window_mode(Some("behind"), true, true), WindowMode::Offscreen);
+    }
+
+    #[test]
+    fn window_size_from_the_switch() {
+        assert_eq!(window_size(None), (1440.0, 900.0));
+        assert_eq!(window_size(Some("1080x1920")), (1080.0, 1920.0));
+        assert_eq!(window_size(Some(" 1200X1920 ")), (1200.0, 1920.0));
+        assert_eq!(window_size(Some("1440 x 2560")), (1440.0, 2560.0));
+        // Unreadable or out of range: the default.
+        assert_eq!(window_size(Some("portrait")), (1440.0, 900.0));
+        assert_eq!(window_size(Some("1080")), (1440.0, 900.0));
+        assert_eq!(window_size(Some("100x1920")), (1440.0, 900.0));
+        assert_eq!(window_size(Some("1080x99999")), (1440.0, 900.0));
     }
 }

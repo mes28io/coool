@@ -328,7 +328,8 @@ function NativeHost({ tabKey: viewKey, page, active, loading }: { tabKey: string
       const r = el.getBoundingClientRect();
       const clip = panel?.getBoundingClientRect();
       // Fully inside its panel: not while the panel slides open or closed (the page shows once it has settled).
-      const inside = !!clip && r.left >= clip.left - 0.5 && r.right <= clip.right + 0.5 && r.width >= 40 && r.height >= 40;
+      // Stacked above the chat (a portrait window) it slides on the other axis: the top and bottom count too.
+      const inside = !!clip && r.left >= clip.left - 0.5 && r.right <= clip.right + 0.5 && r.top >= clip.top - 0.5 && r.bottom <= clip.bottom + 0.5 && r.width >= 40 && r.height >= 40;
       // The panel already switched kind (this one is fading out).
       const shown = panel?.dataset.rightPanel === "browser";
       const visible = active && shown && !covered && document.visibilityState === "visible" && inside && !overlayCovers(r);
