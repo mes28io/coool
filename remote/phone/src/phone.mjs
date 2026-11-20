@@ -157,11 +157,23 @@ export class Phone {
     return this.send("get_image", { session: sessionId, key });
   }
   /** Minor 1: sends an image in parts; returns its upload id (name it in `attachments` of a send or start). */
-  async upload(bytes) {
+  async upload(bytes, kind = "image", ext = null) {
     const id = P.randomId();
     let last;
-    for (const b of P.uploadParts(id, bytes)) last = await this.send("upload", b);
+    for (const b of P.uploadParts(id, bytes, kind, ext)) last = await this.send("upload", b);
     return { id, last };
+  }
+  /** Minor 2: a queued note of a chat: "cancel" or "now". */
+  note(sessionId, note, what) {
+    return this.send("note", { session: sessionId, note, do: what });
+  }
+  /** Minor 2: switch a chat's model (one the Mac offers for it). */
+  setModel(sessionId, model) {
+    return this.send("set_model", { session: sessionId, model });
+  }
+  /** Minor 2: transcribe a recording sent first with `upload(bytes, "audio")`. */
+  transcribe(uploadId, sessionId) {
+    return this.send("transcribe", { upload: uploadId, ...(sessionId ? { session: sessionId } : {}) });
   }
   getSnapshot() {
     return this.send("get_snapshot");

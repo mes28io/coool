@@ -106,4 +106,58 @@ final class ScreenshotTests: XCTestCase {
     XCTAssertTrue(any(app, "home.pulse").waitForExistence(timeout: 10))
     save("19-empty")
   }
+
+  /// The composer's states (minor 2) at this Simulator's size and appearance.
+  func testComposer() throws {
+    guard let dir = env["COOOL_SHOTS"] else { throw XCTSkip("COOOL_SHOTS not set") }
+    let look = env["COOOL_APPEARANCE"] ?? "any"
+    func open(_ chat: String, _ compose: String? = nil) -> XCUIApplication {
+      let app = XCUIApplication()
+      app.launchArguments = ["--reset", "--demo", "home", "--open", chat] + (compose.map { ["--compose", $0] } ?? [])
+      app.launch()
+      XCTAssertTrue(app.textFields["chat.input"].waitForExistence(timeout: 10) || app.descendants(matching: .any)["voice.recording"].waitForExistence(timeout: 3) || app.descendants(matching: .any)["voice.transcribing"].exists)
+      return app
+    }
+    func save(_ n: String) {
+      Thread.sleep(forTimeInterval: 0.8)
+      shot(dir, "\(look)-c\(n)")
+    }
+    var app = open("chat:4")
+    save("01-idle")
+    app.buttons["chat.attach"].tap()
+    XCTAssertTrue(app.buttons["attach.library"].waitForExistence(timeout: 5))
+    save("02-tray")
+    app.swipeUp()
+    save("03-tray-full")
+    app = open("chat:4")
+    app.buttons["meta.model"].firstMatch.tap()
+    save("04-model-menu")
+    app = open("chat:4")
+    any(app, "meta.commands").tap()
+    save("05-commands")
+    app = open("chat:4")
+    any(app, "meta.mode|default").tap()
+    save("06-mode-read-only")
+    app = open("chat:2")
+    save("07-working-notes")
+    app = open("chat:2", "text")
+    save("08-working-typing")
+    app = open("chat:4", "attachments")
+    save("09-attachments")
+    app = open("chat:4", "slash")
+    app.textFields["chat.input"].tap()
+    save("10-slash")
+    app = open("chat:4", "recording")
+    save("11-recording")
+    app = open("chat:4", "transcribing")
+    save("12-transcribing")
+    app = open("chat:4", "error")
+    save("13-error")
+    app = open("chat:4")
+    any(app, "meta.context").tap()
+    save("14-context")
+    app = open("chat:4")
+    app.textFields["chat.input"].tap()
+    save("15-keyboard")
+  }
 }

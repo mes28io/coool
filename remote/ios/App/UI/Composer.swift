@@ -153,7 +153,8 @@ struct Composer: View {
           .padding(.leading, 14).padding(.vertical, 10)
           .accessibilityLabel("Message")
           .accessibilityIdentifier("chat.input")
-        if !hasText {
+        // Dictation runs on the Mac: offered when the Mac says it can (minor 2).
+        if !hasText && (store.macMinor >= 2 || store.demo) {
           MicButton(voice: voice, start: startVoice, finish: { Task { await finishVoice() } })
             .transition(.scale(scale: 0.6).combined(with: .opacity))
         }

@@ -19,9 +19,11 @@ export const CHUNK = 48 * 1024;
 export const MAX_UPLOAD = 2_000_000;
 
 /** An image as `upload` bodies: `{upload, part, parts, size, data}`, data the part's bytes in base64url. */
-export function uploadParts(id, bytes) {
+export function uploadParts(id, bytes, kind = "image", ext = null) {
   const parts = Math.max(1, Math.ceil(bytes.length / CHUNK));
-  return Array.from({ length: parts }, (_, i) => ({ upload: id, part: i, parts, size: bytes.length, data: b64u(bytes.subarray(i * CHUNK, (i + 1) * CHUNK)) }));
+  // Minor 2: `kind` (file, audio) and a file's suggested ending; an image's parts stay exactly as in minor 1.
+  const extra = kind === "image" ? {} : { kind, ...(kind === "file" && ext ? { ext } : {}) };
+  return Array.from({ length: parts }, (_, i) => ({ upload: id, part: i, parts, size: bytes.length, data: b64u(bytes.subarray(i * CHUNK, (i + 1) * CHUNK)), ...extra }));
 }
 
 /** Puts `image` (or `frame`) chunks back together; null until every part is there. */

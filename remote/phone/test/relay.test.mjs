@@ -155,10 +155,17 @@ describe("messages", () => {
     await phone.getImage("sess-1", "zebra-key");
     await phone.upload(MARK);
     await phone.sendText("sess-1", "note", { when: "next" });
+    // Minor 2: a text file and a recording (both with the marker), a note action, a model switch, a transcription.
+    await phone.upload(Buffer.from("# ZEBRA notes\nThe payroll word is zebra.\n".repeat(200)), "file", "md");
+    await phone.upload(Buffer.concat([Buffer.from("0000001c667479704d344120", "hex"), Buffer.from("ZEBRA-SPEECH ".repeat(300))]), "audio");
+    await phone.note("sess-1", "zebra-note", "now");
+    await phone.setModel("sess-1", "zebra-model");
+    await phone.transcribe("0123456789abcdef0123456789abcdef", "sess-1");
     await phone.start("0123456789abcdef0123456789abcdef", "claude", `${SECRET_TITLE}`, { model: "haiku", mode: "plan" });
     const zebraDiff = { path: "zebra/payroll.rs", before: "fn zebra() {}", after: "fn zebra_payroll() {}" };
     for (const [t, b] of [
-      ["chat", { session: "s1", items: [{ k: "t:1", role: "tool", tool: "Edit", text: "zebra/payroll.rs", diff: zebraDiff }], cursor: 3, live: { text: "Zebra streaming", step: "Edit · zebra/payroll.rs" } }],
+      ["chat", { session: "s1", items: [{ k: "t:1", role: "tool", tool: "Edit", text: "zebra/payroll.rs", diff: zebraDiff }], cursor: 3, live: { text: "Zebra streaming", step: "Edit · zebra/payroll.rs", notes: [{ id: "n", text: "Zebra note", state: "queued" }] }, meta: { model: "zebra-model", mode: "default", commands: [{ name: "zebra-review", kind: "skill" }] } }],
+      ["result", { of: "x", t: "transcribe", ok: true, text: "Zebra payroll dictated", heard: "words" }],
       ["overview", { projects: [{ name: "zebra-app", changes: [{ action: "Edited", object: "zebra/payroll.rs" }], commits: [{ subject: "Zebra payroll" }] }] }],
       ["options", { claude: { models: [{ id: "zebra-model", label: "Zebra" }] } }],
       ["image", { session: "s1", key: "zebra-key", part: 0, parts: 1, size: MARK.length, data: P.b64u(MARK) }],
@@ -171,7 +178,7 @@ describe("messages", () => {
     assert.ok(d.messages.length >= 14);
     const raw = JSON.stringify(d);
     // Not in the rows as stored, nor in the decoded bytes of any ciphertext; the device name neither.
-    const needles = ["Zebra", "zebra", "ZEBRA", "payroll", "deploy", "rm -rf", "Test iPhone", "snapshot", "/Users/", "PNG", "upload", "frame", "watch", "haiku", "overview"];
+    const needles = ["Zebra", "zebra", "ZEBRA", "payroll", "deploy", "rm -rf", "Test iPhone", "snapshot", "/Users/", "PNG", "upload", "frame", "watch", "haiku", "overview", "ftyp", "transcribe", "set_model", "audio"];
     for (const n of needles) assert.ok(!raw.includes(n), `stored rows contain "${n}"`);
     for (const m of d.messages) {
       const bytes = Buffer.from(m.ciphertext, "base64url").toString("latin1");

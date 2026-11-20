@@ -156,6 +156,14 @@ struct ChatView: View {
       }
     }
     .background(Theme.bg)
+    // The chat's state for VoiceOver and tests, always present (the header scrolls away in the lazy list).
+    .overlay(alignment: .topLeading) {
+      Color.clear.frame(width: 1, height: 1)
+        .accessibilityElement()
+        .accessibilityLabel("Chat state")
+        .accessibilityValue(live?.state ?? session?.state ?? "")
+        .accessibilityIdentifier("chat.state")
+    }
     .navigationTitle(session?.title ?? "Chat")
     .navigationBarTitleDisplayMode(.inline)
     .task(id: liveId) { if session?.chat ?? true { await store.watch(liveId) } }
@@ -209,8 +217,7 @@ struct ChatView: View {
           Label(s.project, systemImage: "folder").labelStyle(TightLabel()).font(.footnote).foregroundStyle(Theme.faint).lineLimit(1)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("chat.state")
-        .accessibilityValue(live?.state ?? s.state)
+        .accessibilityIdentifier("chat.header")
         if working, let step = live?.step ?? s.step {
           let (tool, target) = ToolLook.split(step)
           HStack(spacing: 8) {

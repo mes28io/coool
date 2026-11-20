@@ -127,8 +127,8 @@ struct NewChatView: View {
                   .padding(14)
                   .accessibilityLabel("Prompt")
                   .accessibilityIdentifier("new.prompt")
-                MicButton(voice: voice, start: { Task { if let e = await voice.start() { error = e } } }, finish: { Task { await finishVoice() } })
-                  .padding(.top, 4).padding(.trailing, 4)
+                if store.macMinor >= 2 || store.demo { MicButton(voice: voice, start: { Task { if let e = await voice.start() { error = e } } }, finish: { Task { await finishVoice() } })
+                  .padding(.top, 4).padding(.trailing, 4) }
               }
               .tile(padding: 0)
             }
