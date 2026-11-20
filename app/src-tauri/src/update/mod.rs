@@ -181,6 +181,7 @@ impl Source {
         num(port).filter(|p| (1..=65535).contains(p))?;
         // A test server's releases may be signed with a test key (`COOOL_UPDATE_TEST_PUBKEY`): debug builds and
         // loopback only, on top of the pinned keys.
+        #[cfg_attr(not(debug_assertions), allow(unused_mut))]
         let mut keys: Vec<String> = keys::PINNED.iter().map(|k| k.to_string()).collect();
         #[cfg(debug_assertions)]
         if let Ok(k) = std::env::var("COOOL_UPDATE_TEST_PUBKEY") {
