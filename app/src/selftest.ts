@@ -1037,6 +1037,17 @@ const updateScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await shot("update-launch-slow-staged", undefined, 300);
       return `${updLine(s)}; rail ${label}; still running`;
     });
+    await step("update-launch-slow: the panel's Restart shows the same Restarting moment", async () => {
+      useUpdates.getState().setPanel(true);
+      const b = await waitFor("the panel's Restart", () => $("[data-update-restart]"), 5_000);
+      b.click();
+      await waitFor("Restarting", () => $("[data-update-stage=Restarting]"), 5_000);
+      await log(`PASS update-launch-slow: "Restarting" is on screen after Restart (${$("[data-update-title]")?.textContent})`);
+      pass++;
+      await shot("update-launch-slow-restarting", undefined, 120);
+      await sleep(15_000);
+      throw new Fail("still running 15 s after Restart");
+    });
   },
 };
 

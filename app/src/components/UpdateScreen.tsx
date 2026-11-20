@@ -10,6 +10,7 @@ import { registerOverlay } from "../lib/overlays";
 import { coverOf, useUpdates } from "../lib/update";
 import { launchView, type LaunchView } from "../lib/updateView";
 import { Button, cx, ease } from "./primitives";
+import { Wordmark } from "./Wordmark";
 
 /** Page ms, every 250 ms while `on` (when "Start coool now" is offered). */
 function useNow(on: boolean): number {
@@ -70,7 +71,7 @@ function Content({ view: v }: { view: LaunchView }) {
   return (
     <motion.div
       data-tauri-drag-region
-      className="flex w-[340px] flex-col items-center pb-[6vh] text-center"
+      className="flex w-[440px] max-w-[calc(100vw-32px)] flex-col items-center pb-[6vh] text-center text-balance"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, transition: { duration: 0.16 } }}
@@ -79,11 +80,10 @@ function Content({ view: v }: { view: LaunchView }) {
       aria-live="polite"
       data-update-stage={v.failed ? "failed" : v.stage}
     >
-      <div aria-hidden className="flex size-[64px] items-center justify-center rounded-[16px] bg-fg text-bg shadow-card">
-        <span className="text-[16px] font-semibold leading-none tracking-[-0.01em]">coool</span>
-      </div>
+      {/* The name as the home screen and sidebar show it. */}
+      <Wordmark size={40} />
       {/* A failure is one plain line in the title's place; the rest stays as it was laid out, so nothing jumps. */}
-      <div className={cx("mt-6 min-h-[24px] text-fg tnum", v.failed ? "text-[15px]" : "text-[17px] font-semibold")} data-update-title>
+      <div className={cx("mt-5 min-h-[24px] text-fg tnum", v.failed ? "text-[15px]" : "text-[17px] font-semibold")} data-update-title>
         {v.failed ? v.stage : v.title}
       </div>
       <div className="mt-1.5 min-h-[20px] text-base text-dim tnum" data-update-line>
