@@ -662,7 +662,7 @@ function ModelPicker({ chat, current, onPick }: { chat: Chat; current: string | 
           onChange={(e) => setCustom(e.target.value)}
           placeholder="Other model id…"
           spellCheck={false}
-          className="h-[34px] w-full rounded-[9px] border border-line bg-bg px-2 font-mono text-mono-small outline-none placeholder:font-sans placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]"
+          className="h-[34px] w-full rounded-[9px] border border-line bg-bg px-2 font-mono text-mono-small outline-none placeholder:font-sans placeholder:text-faint focus:border-[color-mix(in_oklab,var(--fg)_30%,var(--border))]"
         />
       </form>
     </div>

@@ -1336,7 +1336,7 @@ export function QuestionCard({ item, chat, bare }: { item: Ask; chat: Chat; bare
                           submit();
                         }
                       }}
-                      className="mt-1.5 h-[38px] w-full rounded-[10px] border border-line bg-bg px-2.5 text-base outline-none placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]"
+                      className="mt-1.5 h-[38px] w-full rounded-[10px] border border-line bg-bg px-2.5 text-base outline-none placeholder:text-faint focus:border-[color-mix(in_oklab,var(--fg)_30%,var(--border))]"
                     />
                   )}
                 </div>

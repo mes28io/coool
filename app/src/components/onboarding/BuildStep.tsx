@@ -126,7 +126,7 @@ export function BuildStep() {
               data-onb-kind={k.id}
               className={cx(
                 "flex flex-col items-start gap-0.5 rounded-[12px] border px-3 py-2 text-left transition-colors duration-150",
-                on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft" : "border-line bg-panel hover:bg-hover",
+                on ? "border-[color-mix(in_oklab,var(--fg)_30%,var(--border))] bg-accent-soft" : "border-line bg-panel hover:bg-hover",
               )}
             >
               <span className="flex w-full items-center gap-2">

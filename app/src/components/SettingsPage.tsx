@@ -132,7 +132,7 @@ export function SettingsPage() {
           </button>
         </div>
         <div className="px-2 pb-2 pt-2">
-          <label className="flex h-[32px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 transition-[border-color,box-shadow] duration-150 focus-within:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]">
+          <label className="flex h-[32px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 transition-[border-color,box-shadow] duration-150 focus-within:border-[color-mix(in_oklab,var(--fg)_30%,var(--border))] focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--fg)_6%,transparent)]">
             <ISearch size={14} className="shrink-0 text-faint" />
             <input
               ref={searchRef}

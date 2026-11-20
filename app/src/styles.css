@@ -305,7 +305,8 @@ button {
 }
 @layer base {
   :focus-visible {
-    outline: 1.5px solid color-mix(in oklab, var(--accent) 70%, transparent);
+    /* Neutral, not the state green: green in this app means an agent is done. */
+    outline: 1.5px solid color-mix(in oklab, var(--fg) 45%, transparent);
     outline-offset: 1px;
   }
   input:focus-visible,

@@ -64,7 +64,7 @@ function Field({ label, children, aside }: { label: string; children: ReactNode;
 }
 
 const inputCls =
-  "w-full rounded-[10px] border border-line bg-bg px-3 text-base outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
+  "w-full rounded-[10px] border border-line bg-bg px-3 text-base outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--fg)_30%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--fg)_6%,transparent)]";
 
 /** "Opus · Ask me before each change": what a new chat on `p` starts with (Settings > General), or null for the CLI's own. */
 function startsWith(p: Provider): string | null {
@@ -190,7 +190,7 @@ function NewSession({ initialCwd, initialProvider, close }: { initialCwd?: strin
                     onClick={() => setCwd(homeShort(r))}
                     className={cx(
                       "h-[28px] rounded-[8px] border px-2 text-small transition-colors duration-150",
-                      on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
+                      on ? "border-[color-mix(in_oklab,var(--fg)_30%,var(--border))] bg-accent-soft text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
                     )}
                   >
                     {folderName(r)}

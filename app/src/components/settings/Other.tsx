@@ -11,7 +11,7 @@ import { UsageBlock, useUsageProviders } from "../Usage";
 import { Group, Note, Row, Switch } from "./ui";
 
 const inputCls =
-  "h-[32px] w-full min-w-0 rounded-[8px] border border-line bg-bg px-2.5 font-mono text-mono-small outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_12%,transparent)]";
+  "h-[32px] w-full min-w-0 rounded-[8px] border border-line bg-bg px-2.5 font-mono text-mono-small outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-faint focus:border-[color-mix(in_oklab,var(--fg)_30%,var(--border))] focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--fg)_6%,transparent)]";
 
 // ---------- Assist ----------
 

@@ -375,7 +375,7 @@ function MemorySection() {
         <Row label="Your words and fixes" desc="Names, project words and corrections. Words bias the model; a fix with “heard as” is applied once confirmed." k="words library vocabulary memory corrections dictionary heard">
           {!searching && (
             <div className="flex items-center gap-2">
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${entries.length} entries`} aria-label="Search memory" spellCheck={false} className="h-[30px] min-w-0 flex-1 rounded-[8px] border border-line bg-bg px-2.5 text-small outline-none placeholder:text-faint focus:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]" data-voice-memory-search />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${entries.length} entries`} aria-label="Search memory" spellCheck={false} className="h-[30px] min-w-0 flex-1 rounded-[8px] border border-line bg-bg px-2.5 text-small outline-none placeholder:text-faint focus:border-[color-mix(in_oklab,var(--fg)_30%,var(--border))]" data-voice-memory-search />
               <AddEntry />
             </div>
           )}
@@ -555,7 +555,7 @@ function ProjectWords() {
                   type="button"
                   title={x.from}
                   onClick={() => setWords((ws) => ws!.map((y, j) => (j === i ? { ...y, on: !y.on } : y)))}
-                  className={cx("h-[26px] rounded-[7px] border px-2 text-small", x.on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft text-fg" : "border-line text-faint line-through")}
+                  className={cx("h-[26px] rounded-[7px] border px-2 text-small", x.on ? "border-[color-mix(in_oklab,var(--fg)_30%,var(--border))] bg-accent-soft text-fg" : "border-line text-faint line-through")}
                 >
                   {x.word}
                 </button>

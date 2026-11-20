@@ -149,7 +149,7 @@ export function Shortcuts() {
   return (
     <>
       {!searching && (
-        <label className="mb-5 flex h-[34px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 focus-within:border-[color-mix(in_oklab,var(--accent)_50%,var(--border))]">
+        <label className="mb-5 flex h-[34px] items-center gap-2 rounded-[9px] border border-line bg-raised px-2.5 focus-within:border-[color-mix(in_oklab,var(--fg)_30%,var(--border))]">
           <ISearch size={14} className="shrink-0 text-faint" />
           <input
             value={q}
