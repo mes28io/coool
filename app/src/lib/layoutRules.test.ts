@@ -51,14 +51,14 @@ test("wide: every panel sits beside the chat", () => {
   for (const k of ["agents", "models", "browser", "device", "mac"] as const) assert.equal(panelAxis("wide", k, 2000, 1800, 400), "x");
 });
 
-test("stacked: the Browser, Mac, Jobs and Models go above the chat at full width", () => {
+test("stacked: the Browser, Mac, Jobs and Models go below the chat at full width", () => {
   for (const k of ["agents", "models", "browser", "mac"] as const) {
     assert.equal(panelAxis("stacked", k, 780, 1800, 400), "y");
     assert.equal(panelAxis("stacked", k, 1400, 2400, 400), "y");
   }
 });
 
-test("stacked: the iPhone stays beside a chat that keeps room, else goes above", () => {
+test("stacked: the iPhone stays beside a chat that keeps room, else goes below", () => {
   assert.equal(panelAxis("stacked", "device", 780, 1800, 400), "y");
   assert.equal(panelAxis("stacked", "device", 1020, 1800, 400), "x");
   assert.equal(panelAxis("stacked", "device", 819, 1800, 400), "y");

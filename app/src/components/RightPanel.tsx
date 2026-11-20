@@ -1,6 +1,6 @@
 // The right-hand slot of a session: one panel at a time (Jobs, Models, the browser or the iPhone) in one frame.
 // The frame animates its width open / closed; switching panels cross-fades inside it. On a portrait window the frame
-// can sit above the chat instead (`axis` "y", lib/layoutRules.ts), animating its height.
+// can sit below the chat instead (`axis` "y", lib/layoutRules.ts), animating its height.
 
 import { AnimatePresence, motion } from "motion/react";
 import { useRef, useState, type ReactNode } from "react";
@@ -33,7 +33,7 @@ export function RightPanel({
   /** Each kind's width (the browser is wider than Jobs / Models). */
   width: (kind: RightKind) => number;
   /**
-   * "x": beside the chat, on its right (landscape, always). "y": above the chat at the pane's full width (a portrait
+   * "x": beside the chat, on its right (landscape, always). "y": below the chat at the pane's full width (a portrait
    * window, lib/layoutRules.ts `panelAxis`); the frame then animates its height and the divider is its bottom edge.
    */
   axis?: "x" | "y";
@@ -56,7 +56,7 @@ export function RightPanel({
   const y = axis === "y";
   const w = width(kind);
   const h = height;
-  // Switching between beside and above (the window rotated) snaps: a frame growing on one axis while shrinking on
+  // Switching between beside and below (the window rotated) snaps: a frame growing on one axis while shrinking on
   // the other would sweep across the chat.
   const [shownAxis, setShownAxis] = useState(axis);
   const flipped = shownAxis !== axis;
@@ -71,7 +71,7 @@ export function RightPanel({
       initial={false}
       animate={y ? { width: "100%", height: open ? h : 0 } : { width: open ? w : 0, height: "100%" }}
       transition={dragging || flipped || reducedMotion() ? { duration: 0 } : spring}
-      className={cx("relative shrink-0 overflow-hidden", y && "order-first")}
+      className="relative shrink-0 overflow-hidden"
       aria-hidden={!open}
       inert={!open}
       data-right-panel={open ? kind : "closed"}
@@ -84,7 +84,7 @@ export function RightPanel({
       }}
     >
       <div
-        className={cx(y ? "absolute inset-x-0 top-0 border-b" : "absolute inset-y-0 left-0 border-l", glass ? "border-glass-line bg-side-glass" : "border-hairline bg-panel")}
+        className={cx(y ? "absolute inset-x-0 top-0 border-t" : "absolute inset-y-0 left-0 border-l", glass ? "border-glass-line bg-side-glass" : "border-hairline bg-panel")}
         style={y ? { height: h } : { width: w }}
         data-glass={glass || undefined}
       >
@@ -93,9 +93,9 @@ export function RightPanel({
             {children(kind, open && which === kind)}
           </motion.div>
         </AnimatePresence>
-        {/* Drag the edge that faces the chat to resize: the left one beside it, the bottom one above it. */}
+        {/* Drag the edge that faces the chat to resize: the left one beside it, the top one below it. */}
         <div
-          className={cx("group absolute z-10", y ? "inset-x-0 bottom-0 h-[6px] cursor-row-resize" : "inset-y-0 left-0 w-[6px] cursor-col-resize")}
+          className={cx("group absolute z-10", y ? "inset-x-0 top-0 h-[6px] cursor-row-resize" : "inset-y-0 left-0 w-[6px] cursor-col-resize")}
           title={y ? "Drag to resize · double-click for the default height" : undefined}
           data-panel-divider={axis}
           onPointerDown={(e) => {
@@ -106,7 +106,7 @@ export function RightPanel({
           onPointerMove={(e) => {
             const s = start.current;
             if (!s) return;
-            if (y) onHeight?.(kind, s.size + e.clientY - s.at);
+            if (y) onHeight?.(kind, s.size + s.at - e.clientY);
             else onWidth(kind, s.size + s.at - e.clientX);
           }}
           onPointerUp={() => {
@@ -115,7 +115,7 @@ export function RightPanel({
           }}
           onDoubleClick={() => y && onHeight?.(kind, -1)}
         >
-          <div className={cx("bg-fg opacity-0 transition-opacity duration-150 group-hover:opacity-40", y ? "absolute inset-x-0 bottom-0 h-[2px]" : "h-full w-[2px]")} />
+          <div className={cx("bg-fg opacity-0 transition-opacity duration-150 group-hover:opacity-40", y ? "absolute inset-x-0 top-0 h-[2px]" : "h-full w-[2px]")} />
         </div>
       </div>
     </motion.aside>

@@ -4,10 +4,10 @@
 //   COOOL_SELFTEST=portrait COOOL_SELFTEST_SIZE=1080x1920 (plus run.sh's HOME, PATH and BACKGROUND switches)
 //
 // It checks, at that size: the layout is stacked; Mission control, a chat, the Needs you page and Settings have no
-// horizontal overflow; Mission control is one column; a chat's Browser panel and its Jobs panel sit above the chat at
+// horizontal overflow; Mission control is one column; a chat's Browser panel and its Jobs panel sit below the chat at
 // the pane's full width; a side-by-side split shows top / bottom. Then it resizes the window to landscape and back
 // (`selftest_resize`) and checks the open chat is the same (same tab, its timeline not remounted, the Browser panel
-// still chosen, beside then above again) and the reader's place in a scrolled timeline is kept.
+// still chosen, beside then below again) and the reader's place in a scrolled timeline is kept.
 //
 // Shots (`real-portrait-<name>.png`): mission-dark, mission-light, chat-browser, chat-jobs, split, needs, settings,
 // landscape, back.
@@ -140,7 +140,7 @@ export function portraitScenarios(k: PortraitKit): Record<string, () => Promise<
         return `chats ${invoices}, ${audit}`;
       });
 
-      await step("portrait: a chat's Jobs panel sits above it at full width", async () => {
+      await step("portrait: a chat's Jobs panel sits below it at full width", async () => {
         useStore.getState().open({ kind: "chat", id: audit });
         await waitFor("the chat", () => $("[data-chat-timeline]"), 20_000);
         const key = panelKeyOf(audit);
@@ -149,37 +149,37 @@ export function portraitScenarios(k: PortraitKit): Record<string, () => Promise<
           const { panel, body } = pane();
           return `rightPanel[${key}]=${useStore.getState().rightPanel[key]}, frame ${panel?.dataset.rightPanel}/${panel?.dataset.panelAxis} ${Math.round(rect(panel)?.height ?? 0)}px, body ${Math.round(body?.width ?? 0)}x${Math.round(body?.height ?? 0)}, jobs button ${!!$all("button").find((b) => /running|Jobs/.test(b.textContent ?? ""))}`;
         };
-        const p = await waitFor("the Jobs panel above the chat", () => {
+        const p = await waitFor("the Jobs panel below the chat", () => {
           const { body, panel, timeline } = pane();
           if (!body || !panel || panel.dataset.rightPanel !== "agents" || panel.dataset.panelAxis !== "y" || !timeline) return null;
           const pr = panel.getBoundingClientRect();
           const tr = timeline.getBoundingClientRect();
-          return pr.height > 150 && pr.bottom <= tr.top + 1 && Math.abs(pr.width - body.width) <= 2 ? { pr, tr } : null;
+          return pr.height > 150 && pr.top >= tr.bottom - 1 && Math.abs(pr.width - body.width) <= 2 ? { pr, tr } : null;
         }, 15_000).catch((e) => {
           throw new Error(`${e instanceof Error ? e.message : e} (${state()})`);
         });
         await sleep(800);
         noOverflow("chat with Jobs");
         await shot("portrait-chat-jobs", 1500);
-        return `panel ${Math.round(p.pr.width)}x${Math.round(p.pr.height)} above a ${Math.round(p.tr.height)} px timeline`;
+        return `panel ${Math.round(p.pr.width)}x${Math.round(p.pr.height)} below a ${Math.round(p.tr.height)} px timeline`;
       });
 
-      await step("portrait: a device panel (the Browser) stacks above the chat", async () => {
+      await step("portrait: a device panel (the Browser) stacks below the chat", async () => {
         useStore.getState().open({ kind: "chat", id: invoices });
         await waitFor("the chat", () => $("[data-chat-timeline]"), 20_000);
         const globe = await waitFor("the globe button", () => $all("button[title]").find((b) => /^Show the browser/.test(b.title)), 10_000);
         globe.click();
-        const p = await waitFor("the Browser panel above the chat", () => {
+        const p = await waitFor("the Browser panel below the chat", () => {
           const { body, panel, timeline } = pane();
           if (!body || !panel || panel.dataset.rightPanel !== "browser" || panel.dataset.panelAxis !== "y" || !timeline) return null;
           const pr = panel.getBoundingClientRect();
           const tr = timeline.getBoundingClientRect();
-          return pr.height > 300 && pr.bottom <= tr.top + 1 && Math.abs(pr.width - body.width) <= 2 ? { pr, tr } : null;
+          return pr.height > 300 && pr.top >= tr.bottom - 1 && Math.abs(pr.width - body.width) <= 2 ? { pr, tr } : null;
         }, 15_000);
         await sleep(900);
         noOverflow("chat with the Browser");
         await shot("portrait-chat-browser", 1800);
-        return `panel ${Math.round(p.pr.width)}x${Math.round(p.pr.height)}, chat below ${Math.round(p.tr.height)} px`;
+        return `panel ${Math.round(p.pr.width)}x${Math.round(p.pr.height)}, chat above ${Math.round(p.tr.height)} px`;
       });
 
       await step("portrait: a side-by-side split shows top and bottom", async () => {

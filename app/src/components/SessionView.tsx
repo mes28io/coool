@@ -83,7 +83,7 @@ export function SessionView({
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [paneW, setPaneW] = useState(0);
-  // The body's height (under the header): how tall a panel stacked above the chat can be (a portrait window).
+  // The body's height (under the header): how tall a panel stacked below the chat can be (a portrait window).
   const [body, setBody] = useState<HTMLDivElement | null>(null);
   const [bodyH, setBodyH] = useState(0);
   useLayoutEffect(() => {
@@ -106,7 +106,7 @@ export function SessionView({
   const axisOf = (k: RightKind): Axis => panelAxis(layout, k, paneW, bodyH, Math.max(DEVICE_MIN, Math.min(deviceWidthPref, paneW - BROWSER_CHAT_MIN)));
   const stack = useLayout((s) => s.stack);
   const setStack = useLayout((s) => s.setStack);
-  // Jobs and Models want a wide pane beside the chat; stacked above it, any pane will do.
+  // Jobs and Models want a wide pane beside the chat; stacked below it, any pane will do.
   const wide = paneW >= 900 || axisOf("agents") === "y";
   // Opening Jobs by itself takes room from the chat: stacked, only in a pane tall enough to spare it (not a short split).
   const roomy = paneW >= 900 || (axisOf("agents") === "y" && bodyH >= 1100);
@@ -165,7 +165,7 @@ export function SessionView({
             : panelState === "models"
               ? "models"
               : null;
-  // The kind the panel frame shows (the last one while it closes) decides beside or above.
+  // The kind the panel frame shows (the last one while it closes) decides beside or below.
   const [lastPanel, setLastPanel] = useState<RightKind>("agents");
   if (showing && showing !== lastPanel) setLastPanel(showing);
   const panelAxisNow = axisOf(showing ?? lastPanel);
@@ -247,9 +247,9 @@ export function SessionView({
   // The chat's agent using its browser while another panel (or none) shows: a dot on the globe, as for the iPhone.
   const browserBusy = !!useAgentBrowsing(chatId, 4000);
   const toggleRight = (k: RightKind) => setPanel(showing === k ? "closed" : k);
-  // Stacked, an iPhone beside the chat keeps the chat at `BESIDE_CHAT_MIN` (dragging it wider would send it above).
+  // Stacked, an iPhone beside the chat keeps the chat at `BESIDE_CHAT_MIN` (dragging it wider would send it below).
   const deviceChatMin = layout === "stacked" ? BESIDE_CHAT_MIN : BROWSER_CHAT_MIN;
-  // Stacked above the chat: each kind's remembered share of the body's height (its default until dragged).
+  // Stacked below the chat: each kind's remembered share of the body's height (its default until dragged).
   const panelHeight = (k: RightKind) => stackHeight(stack[k] ?? defaultFrac(k, paneW, bodyH), bodyH);
   const onPanelHeight = (k: RightKind, h: number) => setStack(k, h < 0 ? defaultFrac(k, paneW, bodyH) : fracOf(h, bodyH));
   const panelWidth = (k: RightKind) =>

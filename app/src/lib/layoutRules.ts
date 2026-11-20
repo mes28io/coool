@@ -29,7 +29,7 @@ export function decideMode(w: number, h: number, pref: LayoutPref, prev?: Layout
   return h > w ? "stacked" : "wide";
 }
 
-/** Below a panel stacked above it, the chat keeps at least this much height (its composer and a few lines). */
+/** Above a panel stacked below it, the chat keeps at least this much height (its composer and a few lines). */
 export const CHAT_MIN_H = 300;
 /** A stacked panel's least height. */
 export const PANEL_MIN_H = 220;
@@ -37,9 +37,9 @@ export const PANEL_MIN_H = 220;
 export const BESIDE_CHAT_MIN = 420;
 
 /**
- * Where a session's panel goes: "x" beside the chat (to its right), "y" above it. "wide" is always beside. "stacked"
- * puts the landscape panels (Browser, Mac) and Jobs / Models above the chat at the pane's full width; the iPhone,
- * itself portrait, stays beside a chat that keeps `BESIDE_CHAT_MIN` and goes above a narrower one. A pane too short
+ * Where a session's panel goes: "x" beside the chat (to its right), "y" below it. "wide" is always beside. "stacked"
+ * puts the landscape panels (Browser, Mac) and Jobs / Models below the chat at the pane's full width; the iPhone,
+ * itself portrait, stays beside a chat that keeps `BESIDE_CHAT_MIN` and goes below a narrower one. A pane too short
  * to stack (a short split) keeps its panel beside.
  */
 export function panelAxis(mode: LayoutMode, kind: PanelKind, paneW: number, bodyH: number, deviceW: number): Axis {
@@ -49,7 +49,7 @@ export function panelAxis(mode: LayoutMode, kind: PanelKind, paneW: number, body
   return "y";
 }
 
-/** Each kind's share of the pane's body height when stacked above the chat, until the person drags the divider. */
+/** Each kind's share of the pane's body height when stacked below the chat, until the person drags the divider. */
 export const STACK_DEFAULT: Record<PanelKind, number> = { browser: 0.56, mac: 0.5, device: 0.56, agents: 0.36, models: 0.42 };
 const STACK_MIN = 0.15;
 const STACK_MAX = 0.85;
