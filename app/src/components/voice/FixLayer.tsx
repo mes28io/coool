@@ -115,6 +115,18 @@ export function FixLayer({ target, ta, text }: { target: string; ta: RefObject<H
     return () => clearTimeout(t);
   }, [lastApplied]);
 
+  // What was just dictated: tinted for a moment (the tint fades), so the person sees what voice wrote.
+  const freshAt = ins && text.slice(ins.from, ins.to) === ins.before.slice(ins.from, ins.to) ? ins.at : 0;
+  const fresh: [number, number] | null = ins && freshAt && Date.now() - freshAt < TINT_MS + 200 ? [ins.from, ins.to] : null;
+  const [freshOn, setFreshOn] = useState(false);
+  useEffect(() => {
+    if (!freshAt) return;
+    setFreshOn(true);
+    const a = setTimeout(() => setFreshOn(false), 60);
+    const b = setTimeout(() => setNow(Date.now()), TINT_MS + 300);
+    return () => (clearTimeout(a), clearTimeout(b));
+  }, [freshAt]);
+
   const marks = useMemo<Mark[]>(() => {
     const m: Mark[] = [];
     for (const s of sugs ?? []) if (text.slice(s.from, s.to) === s.original) m.push({ from: s.from, to: s.to, kind: "sug", s });
@@ -180,7 +192,7 @@ export function FixLayer({ target, ta, text }: { target: string; ta: RefObject<H
   return (
     <>
       <div ref={mirror} aria-hidden className="pointer-events-none absolute left-0 top-0 overflow-hidden whitespace-pre-wrap break-words text-transparent" style={style} data-fix-mirror>
-        {render(text, marks, now)}
+        {render(text, marks, now, fresh, freshOn)}
       </div>
       <AnimatePresence>
         {activeMark && cardPos && (
@@ -206,12 +218,26 @@ export function FixLayer({ target, ta, text }: { target: string; ta: RefObject<H
 
 const keyOf = (m: Mark) => (m.kind === "sug" ? m.s.id : `a${m.a.from}-${m.a.at}`);
 
-function render(text: string, marks: Mark[], now: number): ReactNode[] {
+/** Plain text from `a` to `b`, with the part inside `fresh` (just dictated) tinted. */
+function plain(text: string, a: number, b: number, fresh: [number, number] | null, on: boolean): ReactNode[] {
+  if (!fresh || b <= fresh[0] || a >= fresh[1]) return [text.slice(a, b)];
+  const x = Math.max(a, fresh[0]);
+  const y = Math.min(b, fresh[1]);
+  return [
+    text.slice(a, x),
+    <span key={`f${x}`} className={cx("fix-applied", on && "fix-applied-on")} data-voice-fresh>
+      {text.slice(x, y)}
+    </span>,
+    text.slice(y, b),
+  ];
+}
+
+function render(text: string, marks: Mark[], now: number, fresh: [number, number] | null = null, freshOn = false): ReactNode[] {
   const out: ReactNode[] = [];
   let at = 0;
   for (const m of marks) {
     if (m.from < at) continue;
-    out.push(text.slice(at, m.from));
+    out.push(...plain(text, at, m.from, fresh, freshOn));
     const k = keyOf(m);
     if (m.kind === "sug")
       out.push(
@@ -227,7 +253,7 @@ function render(text: string, marks: Mark[], now: number): ReactNode[] {
       );
     at = m.to;
   }
-  out.push(text.slice(at), "​");
+  out.push(...plain(text, at, text.length, fresh, freshOn), "​");
   return out;
 }
 

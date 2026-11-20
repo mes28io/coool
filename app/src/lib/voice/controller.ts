@@ -1,7 +1,10 @@
 // Voice's state and actions, shared by the key handling (components/voice/VoiceHost.tsx), the listening UI in each
 // composer, the mic button and Settings. One utterance at a time:
 //
-//   idle → listening (mic open, level meter) → transcribing (mic already closed) → inserted at the caret → idle
+//   idle → starting (opening the mic) → listening (level meter) → transcribing (mic already closed) → idle, with a
+//   notice: "done" (inserted at the caret, Undo) or "nothing" (nothing heard; nothing inserted). Errors say which kind
+//   (no model, permission, no microphone) so the surface can offer the fix. lib/voice/surface.ts turns this into what
+//   the recording surface shows.
 //
 // The text pipeline after whisper: clean-up (2relay's rules) → memory (confirmed corrections and the words library,
 // applied at once and shown for a moment) → insert → the checker's suggestions (memory pairs offered before, words-library
@@ -10,7 +13,8 @@
 
 import { create } from "zustand";
 import { api } from "../backend";
-import { voiceApi, type MicPermission, type SpellHit } from "./api.ts";
+import { voiceApi, type MicPermission, type SpellHit, type Transcript } from "./api.ts";
+import type { ErrorKind } from "./surface.ts";
 import { aiCacheKey, cacheFixes, cachedFixes, validateAiFixes, type AiFix } from "./aiFix.ts";
 import { cleanTranscript } from "./clean.ts";
 import { learnFromEdit, singleWordFix, type Pair } from "./learn.ts";
@@ -19,7 +23,7 @@ import { getMemory, getVoicePrefs, loadMemory, updateMemory } from "./prefs.ts";
 import { aiNeeded, applySuggestion, check, type Suggestion } from "./suggest.ts";
 import { overlaps, tokenize } from "./text.ts";
 
-export type Phase = "idle" | "listening" | "transcribing" | "error";
+export type Phase = "idle" | "starting" | "listening" | "transcribing" | "error";
 export type Mode = "hold" | "toggle" | "click";
 
 /** A text field voice can write into (a composer, an answer field, the new-session prompt). */
@@ -58,6 +62,13 @@ export interface VoiceState {
   error: string | null;
   /** Shown once per error kind: "permission:denied" etc. */
   permission: MicPermission | null;
+  errorKind: ErrorKind | null;
+  /** After an utterance: what happened, while it is shown (cleared after a few seconds, or by the next one). */
+  notice: { kind: "done" | "nothing"; target: string; why?: string; at: number; undo?: { value: string; inserted: string } } | null;
+  /** The microphone in use and its format, once open ("MacBook Pro Microphone", "48000 Hz, 1 ch, F32"). */
+  device: { device: string; format: string } | null;
+  /** The last utterance's result, for Settings > Voice's test row and the self-test. */
+  last: Transcript | null;
   /** The last insertion per field. */
   inserted: Record<string, Insertion>;
   /** Suggestions per field (offsets into the field's current text). */
@@ -81,6 +92,10 @@ export const useVoice = create<VoiceState>(() => ({
   partial: "",
   error: null,
   permission: null,
+  errorKind: null,
+  notice: null,
+  device: null,
+  last: null,
   inserted: {},
   suggestions: {},
   open: {},
@@ -121,17 +136,26 @@ function errorText(e: unknown) {
   return s;
 }
 
+const errorKindOf = (msg: string): ErrorKind => (/model/i.test(msg) ? "model" : /^no-device:|no microphone/i.test(msg) ? "device" : "other");
+const fail = (msg: string, kind?: ErrorKind) => set({ phase: "error", error: msg.replace(/^no-device:\s*/, ""), errorKind: kind ?? errorKindOf(msg), level: 0 });
+
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+function notify(n: NonNullable<VoiceState["notice"]>, ms: number) {
+  if (noticeTimer) clearTimeout(noticeTimer);
+  set({ notice: n });
+  noticeTimer = setTimeout(() => get().notice === n && set({ notice: null }), ms);
+}
+export const dismissNotice = () => set({ notice: null });
+
 /** Starts listening into `t`. The microphone permission is asked here, the first time only. */
 export async function startListening(t: Target, mode: Mode) {
   const st = get();
-  if (st.phase === "listening" || st.phase === "transcribing") return;
+  if (st.phase === "starting" || st.phase === "listening" || st.phase === "transcribing") return;
   const p = getVoicePrefs();
-  if (!p.model) {
-    set({ phase: "error", target: t.id, error: "Choose a voice model first: Settings > Voice.", mode });
-    return;
-  }
+  set({ target: t.id, mode, notice: null, permission: null });
+  if (!p.model) return fail("No voice model yet.", "model");
   savedSel.set(t.id, [t.el.selectionStart ?? t.el.value.length, t.el.selectionEnd ?? t.el.value.length]);
-  set({ phase: "listening", mode, target: t.id, level: 0, levels: [], secs: 0, since: performance.now(), partial: "", error: null, offer: null });
+  set({ phase: "starting", level: 0, levels: [], secs: 0, since: performance.now(), partial: "", error: null, errorKind: null, offer: null, device: null });
   void loadMemory();
   const v = voiceApi();
   try {
@@ -139,34 +163,36 @@ export async function startListening(t: Target, mode: Mode) {
     unsubLevel = v.onLevel(({ level, secs }) => {
       const s = get();
       if (s.phase !== "listening") return;
-      const levels = s.levels.length >= 48 ? [...s.levels.slice(1), level] : [...s.levels, level];
+      const levels = s.levels.length >= 75 ? [...s.levels.slice(1), level] : [...s.levels, level];
       set({ level, secs, levels });
     });
     // The backend refuses until macOS allows the microphone. Only then, and only the first time (not determined),
     // is the system prompt shown; a self-test's injected fixture never asks.
     const open = async (retry: boolean): Promise<boolean> => {
       try {
-        await v.start(p.device, p.model);
+        const d = await v.start(p.device, p.model);
+        if (get().phase === "starting" && get().target === t.id) set({ phase: "listening", device: d, since: performance.now() });
         return true;
       } catch (e) {
         const m = /^permission:(\w+)/.exec(errorText(e));
         if (!m) throw e;
         if (m[1] === "not_determined" && retry) {
           const r = await v.requestPermission();
-          if (r === "authorized" && get().phase === "listening" && get().target === t.id) return open(false);
+          if (r === "authorized" && get().phase === "starting" && get().target === t.id) return open(false);
         }
         const perm = (m[1] === "not_determined" ? await v.permission() : m[1]) as MicPermission;
         stopEvents();
-        set({ phase: "error", permission: perm, error: perm === "denied" || perm === "restricted" ? "coool isn't allowed to use the microphone." : "Microphone permission is needed." });
+        set({ permission: perm });
+        fail(perm === "denied" || perm === "restricted" ? "coool isn't allowed to use the microphone." : "coool needs the microphone permission.", "permission");
         return false;
       }
     };
     if (!(await open(true))) return;
-    // Released before the microphone opened (a very short hold): stop now.
+    // Released or cancelled before the microphone opened (a very short hold): stop now.
     if (get().phase !== "listening") void v.cancel();
   } catch (e) {
     stopEvents();
-    set({ phase: "error", error: errorText(e) });
+    fail(errorText(e));
   }
 }
 
@@ -183,14 +209,18 @@ export function cancelListening() {
   if (s.phase === "idle") return;
   stopEvents();
   if (s.phase !== "error") void voiceApi().cancel();
-  set({ phase: "idle", partial: "", error: null, level: 0 });
+  set({ phase: "idle", partial: "", error: null, errorKind: null, level: 0 });
 }
 
-export const dismissError = () => set({ phase: "idle", error: null, permission: null });
+export const dismissError = () => set({ phase: "idle", error: null, errorKind: null, permission: null });
 
-/** Release (or the second press, or the mic button): close the mic, transcribe, insert. */
+/** Records and transcribes without inserting anywhere (Settings > Voice > Test your microphone). */
+export const TEST_TARGET = "voice-test";
+
+/** Release (or the second press, Return, Done, or the mic button): close the mic, transcribe, insert. */
 export async function stopListening() {
   const s = get();
+  if (s.phase === "starting") return cancelListening();
   if (s.phase !== "listening" || !s.target) return;
   const t = targets.get(s.target);
   const p = getVoicePrefs();
@@ -203,24 +233,37 @@ export async function stopListening() {
     const r = await voiceApi().stop({ model: p.model!, task: p.task, language: p.language === "auto" ? null : p.language, vocabulary: echoWords(mem), keep: p.keepRecording });
     stopEvents();
     if (get().phase !== "transcribing") return; // cancelled meanwhile
-    set({ phase: "idle", partial: "" });
-    if (r.silent || !r.text.trim()) {
-      set({ phase: "error", error: "Didn't catch anything. Hold the key while you speak." });
-      setTimeout(() => get().error?.startsWith("Didn't catch") && dismissError(), 2500);
-      return;
-    }
+    set({ phase: "idle", partial: "", last: r });
+    if (s.target === TEST_TARGET) return;
+    if (r.heard !== "words" || !r.text.trim()) return notify({ kind: "nothing", target: s.target, why: r.heard, at: Date.now() }, 6000);
     if (!t) return;
+    const prev = t.el.value;
     const ins = insertText(t, r.text, s.mode);
-    if (ins && p.sendOnRelease && t.send) {
+    if (!ins) return notify({ kind: "nothing", target: s.target, why: "unclear", at: Date.now() }, 6000);
+    if (p.sendOnRelease && t.send) {
       // The send reads the composer's state: one frame later.
       requestAnimationFrame(() => t.send?.());
       return;
     }
-    if (ins) void checkInsertion(t, ins);
+    notify({ kind: "done", target: s.target, at: Date.now(), undo: { value: prev, inserted: t.el.value } }, 8000);
+    void checkInsertion(t, ins);
   } catch (e) {
     stopEvents();
-    if (get().phase === "transcribing") set({ phase: "error", error: errorText(e) });
+    if (get().phase === "transcribing") fail(errorText(e));
   }
+}
+
+/** Undo the last dictation (one step): the field goes back to what it was, if nothing changed since. */
+export function undoDictation() {
+  const n = get().notice;
+  const t = n?.undo ? targets.get(n.target) : null;
+  set({ notice: null });
+  if (!n?.undo || !t || t.el.value !== n.undo.inserted) return false;
+  replaceRange(t.el, 0, t.el.value.length, n.undo.value);
+  const [a] = savedSel.get(n.target) ?? [n.undo.value.length];
+  t.el.setSelectionRange(a, a);
+  set((st) => ({ inserted: Object.fromEntries(Object.entries(st.inserted).filter(([k]) => k !== n.target)), suggestions: { ...st.suggestions, [n.target]: [] } }));
+  return true;
 }
 
 // ---------------------------------------------------------------- inserting

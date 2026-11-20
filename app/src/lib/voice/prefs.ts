@@ -103,6 +103,7 @@ const prefs = store<VoicePrefs>(typeof localStorage === "undefined" ? DEFAULTS :
 export const getVoicePrefs = prefs.get;
 export const setVoicePrefs = (patch: Partial<VoicePrefs>) => prefs.set({ ...prefs.get(), ...patch });
 export const useVoicePrefs = () => useSyncExternalStore(prefs.sub, prefs.get);
+export const subscribeVoicePrefs = prefs.sub;
 /** Voice can listen: on, and a model chosen. */
 export const voiceReady = (p: VoicePrefs) => p.enabled && !!p.model;
 
