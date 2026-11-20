@@ -7,7 +7,9 @@
 | | |
 |---|---|
 | ![A permission request, with what it does and a risk tag](docs/media/approval-dark.png) | ![The Needs-you page](docs/media/needs-dark.png) |
-| ![An agent driving the iPhone simulator](docs/media/device-dark.png) | ![Light theme](docs/media/mission-light.png) |
+| ![A chat fanning out to three subagents, with their jobs on the right](docs/media/agents-dark.png) | ![Light theme](docs/media/mission-light.png) |
+
+<sub>Screenshots of the real app on an invented workspace; `sh app/scripts/readme-shots/run.sh` makes them again.</sub>
 
 Two frontends share one Rust core:
 
