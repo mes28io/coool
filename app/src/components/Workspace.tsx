@@ -1,6 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { AnimatePresence, motion, Reorder } from "motion/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { chatTitle, needsAnswer, useChats } from "../lib/chat";
 import { displayTitle, folderName, previousTitles, projectOf } from "../lib/format";
 import { useAttention, useUnseen } from "../lib/live";
@@ -13,6 +13,8 @@ import { MissionControl } from "./MissionControl";
 import { cx, ease, IconButton, Kbd, ProviderMark, spring, StatusDot } from "./primitives";
 import { SessionView } from "./SessionView";
 import { countRender } from "../lib/perfCount";
+import { useLayoutMode } from "../lib/layout";
+import { splitDir } from "../lib/layoutRules";
 
 export function Workspace() {
   countRender("Workspace");
@@ -184,11 +186,23 @@ function SplitView({ tab, node }: { tab: Tab; node: Extract<Node, { type: "split
   const setRatio = useStore((s) => s.setRatio);
   const box = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
-  const row = node.dir === "row";
+  // On a portrait window a narrow side-by-side split shows its panes top / bottom (lib/layoutRules.ts `splitDir`);
+  // the tree keeps its direction, so landscape gets it back as it was.
+  const layout = useLayoutMode();
+  const [boxW, setBoxW] = useState(0);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || layout !== "stacked") return;
+    const ro = new ResizeObserver(() => setBoxW(el.clientWidth));
+    ro.observe(el);
+    setBoxW(el.clientWidth);
+    return () => ro.disconnect();
+  }, [layout]);
+  const row = splitDir(layout, node.dir, boxW) === "row";
   const t = dragging ? { duration: 0 } : spring;
 
   return (
-    <div ref={box} className={cx("flex h-full w-full min-h-0 min-w-0", row ? "flex-row" : "flex-col")}>
+    <div ref={box} className={cx("flex h-full w-full min-h-0 min-w-0", row ? "flex-row" : "flex-col")} data-split={row ? "row" : "col"}>
       <motion.div className="relative min-h-0 min-w-0 overflow-hidden" style={{ flexBasis: 0 }} initial={false} animate={{ flexGrow: node.ratio }} transition={t}>
         <LayoutView tab={tab} node={node.a} />
       </motion.div>

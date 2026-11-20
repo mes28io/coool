@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* The layout mode (lib/layout.ts sets <html data-layout>): `wide:` applies in the landscape arrangement (and before the
+   attribute is set), `stacked:` in the portrait one. Prefixing a breakpoint with `wide:` keeps it out of stacked. */
+@custom-variant wide (&:where(:root:not([data-layout="stacked"]) *));
+@custom-variant stacked (&:where(:root[data-layout="stacked"] *));
+
 @font-face {
   font-family: "Geist";
   src: url("./assets/fonts/Geist-Variable.woff2") format("woff2");

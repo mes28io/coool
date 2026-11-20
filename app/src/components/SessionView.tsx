@@ -35,6 +35,8 @@ import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitiv
 import { modelLabel } from "../lib/models";
 import { useShellFocus } from "../lib/shellFocus";
 import { countRender } from "../lib/perfCount";
+import { useLayout, useLayoutMode } from "../lib/layout";
+import { BESIDE_CHAT_MIN, defaultFrac, fracOf, panelAxis, stackHeight, type Axis } from "../lib/layoutRules";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -81,6 +83,9 @@ export function SessionView({
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [paneW, setPaneW] = useState(0);
+  // The body's height (under the header): how tall a panel stacked above the chat can be (a portrait window).
+  const [body, setBody] = useState<HTMLDivElement | null>(null);
+  const [bodyH, setBodyH] = useState(0);
   useLayoutEffect(() => {
     if (!root) return;
     const ro = new ResizeObserver(() => setPaneW(root.clientWidth));
@@ -88,11 +93,26 @@ export function SessionView({
     setPaneW(root.clientWidth);
     return () => ro.disconnect();
   }, [root]);
-  const wide = paneW >= 900;
-  // The browser panel fits a narrower pane: it only needs room for itself and a readable chat beside it.
-  const browserFits = paneW >= BROWSER_MIN + BROWSER_CHAT_MIN;
-  const deviceFits = paneW >= DEVICE_MIN + BROWSER_CHAT_MIN;
-  const macFits = paneW >= MAC_MIN + BROWSER_CHAT_MIN;
+  useLayoutEffect(() => {
+    if (!body) return;
+    const ro = new ResizeObserver(() => setBodyH(body.clientHeight));
+    ro.observe(body);
+    setBodyH(body.clientHeight);
+    return () => ro.disconnect();
+  }, [body]);
+  // Beside the chat ("x", landscape) or above it ("y", a portrait window), per kind (lib/layoutRules.ts).
+  const layout = useLayoutMode();
+  const deviceWidthPref = useStore((st) => st.deviceWidth);
+  const axisOf = (k: RightKind): Axis => panelAxis(layout, k, paneW, bodyH, Math.max(DEVICE_MIN, Math.min(deviceWidthPref, paneW - BROWSER_CHAT_MIN)));
+  const stack = useLayout((s) => s.stack);
+  const setStack = useLayout((s) => s.setStack);
+  // Jobs and Models want a wide pane beside the chat; stacked above it, any pane will do.
+  const wide = paneW >= 900 || axisOf("agents") === "y";
+  // The browser panel fits a narrower pane: it only needs room for itself and a readable chat beside it (or, stacked,
+  // the pane's width).
+  const browserFits = paneW >= BROWSER_MIN + (axisOf("browser") === "y" ? 0 : BROWSER_CHAT_MIN);
+  const deviceFits = paneW >= DEVICE_MIN + (axisOf("device") === "y" ? 0 : BROWSER_CHAT_MIN);
+  const macFits = axisOf("mac") === "y" ? paneW >= BROWSER_MIN : paneW >= MAC_MIN + BROWSER_CHAT_MIN;
   const cards = useAgentCards(r.session, chat);
   const ladderTiers = useChatTiers(r.chat);
   const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
@@ -143,6 +163,10 @@ export function SessionView({
             : panelState === "models"
               ? "models"
               : null;
+  // The kind the panel frame shows (the last one while it closes) decides beside or above.
+  const [lastPanel, setLastPanel] = useState<RightKind>("agents");
+  if (showing && showing !== lastPanel) setLastPanel(showing);
+  const panelAxisNow = axisOf(showing ?? lastPanel);
   const agentsOpen = showing === "agents";
   const modelsOpen = showing === "models";
   const browserOpen = showing === "browser";
@@ -221,11 +245,16 @@ export function SessionView({
   // The chat's agent using its browser while another panel (or none) shows: a dot on the globe, as for the iPhone.
   const browserBusy = !!useAgentBrowsing(chatId, 4000);
   const toggleRight = (k: RightKind) => setPanel(showing === k ? "closed" : k);
+  // Stacked, an iPhone beside the chat keeps the chat at `BESIDE_CHAT_MIN` (dragging it wider would send it above).
+  const deviceChatMin = layout === "stacked" ? BESIDE_CHAT_MIN : BROWSER_CHAT_MIN;
+  // Stacked above the chat: each kind's remembered share of the body's height (its default until dragged).
+  const panelHeight = (k: RightKind) => stackHeight(stack[k] ?? defaultFrac(k, paneW, bodyH), bodyH);
+  const onPanelHeight = (k: RightKind, h: number) => setStack(k, h < 0 ? defaultFrac(k, paneW, bodyH) : fracOf(h, bodyH));
   const panelWidth = (k: RightKind) =>
     k === "browser"
       ? Math.max(BROWSER_MIN, Math.min(browserWidth, paneW - BROWSER_CHAT_MIN))
       : k === "device"
-        ? Math.max(DEVICE_MIN, Math.min(deviceWidth, paneW - BROWSER_CHAT_MIN))
+        ? Math.max(DEVICE_MIN, Math.min(deviceWidth, paneW - deviceChatMin))
         : k === "mac"
           ? Math.max(MAC_MIN, Math.min(macWidth, paneW - BROWSER_CHAT_MIN))
           : agentsWidth;
@@ -233,7 +262,7 @@ export function SessionView({
     k === "browser"
       ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
       : k === "device"
-        ? setDeviceWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
+        ? setDeviceWidth(Math.min(w, paneW - deviceChatMin))
         : k === "mac"
           ? setMacWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
           : setAgentsWidth(w);
@@ -242,12 +271,12 @@ export function SessionView({
     (p: OpenPage) => {
       if (!panelKey) return;
       if (!browserFits) {
-        useStore.getState().toast("Make this pane wider to open the page beside the chat");
+        useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to open the page with the chat" : "Make this pane wider to open the page beside the chat");
         return;
       }
       openBrowser(panelKey, p);
     },
-    [panelKey, browserFits, openBrowser],
+    [panelKey, browserFits, openBrowser, layout],
   );
   // Closing destroys the tabs' webviews but remembers the tabs (where each was, the active one): the globe restores them.
   const onCloseBrowser = () => {
@@ -264,7 +293,7 @@ export function SessionView({
   const onGlobe = () => {
     if (!panelKey) return;
     if (browserOpen) return setPanel("closed");
-    if (!browserFits) return useStore.getState().toast("Make this pane wider to open the browser beside the chat");
+    if (!browserFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to open the browser with the chat" : "Make this pane wider to open the browser beside the chat");
     if (tabs) return setPanel("browser");
     if (showing === "device" || showing === "mac") setPanel("closed");
     restoreBrowser(panelKey);
@@ -272,13 +301,13 @@ export function SessionView({
   const onPhone = () => {
     if (!panelKey) return;
     if (deviceOpen) return setPanel("closed");
-    if (!deviceFits) return useStore.getState().toast("Make this pane wider to show the iPhone beside the chat");
+    if (!deviceFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the iPhone with the chat" : "Make this pane wider to show the iPhone beside the chat");
     setPanel("device");
   };
   const onMac = () => {
     if (!panelKey) return;
     if (macOpen) return setPanel("closed");
-    if (!macFits) return useStore.getState().toast("Make this pane wider to show the Mac beside the chat");
+    if (!macFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the Mac with the chat" : "Make this pane wider to show the Mac beside the chat");
     setPanel("mac");
   };
 
@@ -447,10 +476,10 @@ export function SessionView({
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div ref={setBody} className={cx("flex min-h-0 flex-1", panelAxisNow === "y" && "flex-col")} data-pane-body>
         <AttachSource.Provider value={attachSource}>
         <div
-          className="relative flex min-w-0 flex-1 flex-col"
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col"
           data-chat-drop={chat && mode !== "terminal" ? chat.id : undefined}
           {...(chat && mode !== "terminal" && !isTauri ? htmlDrop(chat.id) : {})}
         >
@@ -499,7 +528,15 @@ export function SessionView({
         </div>
         </AttachSource.Provider>
         {(wide || browserFits || deviceFits || macFits) && panelKey && (
-          <RightPanel which={showing} width={panelWidth} dragging={resizing} onWidth={onPanelWidth} onDragging={setResizing} onClose={() => setPanel("closed")}>
+          <RightPanel
+            which={showing}
+            width={panelWidth}
+            axis={panelAxisNow}
+            height={panelHeight(showing ?? lastPanel)}
+            dragging={resizing}
+            onWidth={onPanelWidth}
+            onHeight={onPanelHeight}
+            onDragging={setResizing} onClose={() => setPanel("closed")}>
             {(k, active) =>
               k === "agents" ? (
                 <AgentsBody cards={cards} roles={cardRoles(ladderTiers, cards)} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
