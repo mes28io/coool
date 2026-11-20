@@ -264,11 +264,16 @@ pub fn create(hidden: bool, test: bool) {
     // room in the bar, not even for a frame. Then it gets the variable length a real one has (still hidden).
     let item = NSStatusBar::systemStatusBar().statusItemWithLength(if hidden { 0.0 } else { -1.0 /* NSVariableStatusItemLength */ });
     if hidden {
+        // Its own autosave name first: macOS stores an item's visibility in the app's defaults under that name, and
+        // a hidden test item with the default name ("Item-0") once left the real item invisible on the next launch.
+        item.setAutosaveName(Some(&NSString::from_str("coool-hidden-test")));
         item.setVisible(false);
         item.setLength(-1.0);
     } else {
         // Remembers where the person dragged it (⌘-drag) between launches.
         item.setAutosaveName(Some(&NSString::from_str("coool")));
+        // Shown whatever a stored flag says: whether it shows is Settings > General > Menu bar, nothing else.
+        item.setVisible(true);
     }
     if let Some(b) = item.button(mtm) {
         b.setImage(Some(&glyph(test)));
