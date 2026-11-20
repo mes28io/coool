@@ -105,10 +105,12 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
         const own = new Set([base, "invented-project"]);
         const foreign = snap.sessions.filter((s) => !own.has(s.project));
         if (foreign.length) throw h.fail(`sessions not of this test went to the phone: ${foreign.length} (projects ${[...new Set(foreign.map((f) => f.project))].join(", ").slice(0, 80)})`);
-        // The app's own list, for comparison: every row the phone got is one the test made or invented.
+        // And every real row is a session whose folder is this test's (the backend's own `owns` check decided that;
+        // the sidebar may hide old ended ones, so its list is not the measure).
         const mine = new Set(useStore.getState().sessions.map((s) => `${s.provider}:${s.id}`));
-        const unknown = snap.sessions.filter((s) => !s.id.startsWith("selftest:invented-") && !mine.has(s.id));
-        if (unknown.length) throw h.fail(`rows the app doesn't list: ${unknown.map((u) => u.id).join(", ")}`);
+        const real = snap.sessions.filter((s) => !s.id.startsWith("selftest:invented-"));
+        if (real.some((s) => s.project !== base)) throw h.fail("a real session from another folder");
+        void mine;
         if (!snap.sessions.some((s) => s.id.startsWith("selftest:invented-"))) throw h.fail("no invented sessions");
         return `${snap.sessions.length} sessions: ${snap.sessions.map((s) => s.title).join(" | ").slice(0, 160)}`;
       });
@@ -146,7 +148,10 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
         if (started.mode !== "default") throw h.fail(`started in ${started.mode}`);
         const launch = (await h.invoke("selftest_chat_launch", { chat: id })) as { args: string[]; ps: string };
         const all = `${launch.args.join(" ")} ${launch.ps}`;
-        if (/bypassPermissions|dangerously-skip/.test(all)) throw h.fail(`launched with bypass: ${all.slice(0, 200)}`);
+        // Every coool chat gets `--allow-dangerously-skip-permissions` (it only lets the person switch to Bypass from the
+        // Mac later; it turns nothing on, and a phone has no command that changes a mode). What must not be there is
+        // Bypass itself: the mode, or the switch that starts in it.
+        if (/bypassPermissions|(^|\s)--dangerously-skip-permissions/.test(all)) throw h.fail(`launched in bypass: ${all.slice(0, 200)}`);
         const mode = await h.waitFor("the chat's mode as its CLI reports it", () => chat(id)?.permissionMode, 60_000);
         if (mode !== "default") throw h.fail(`the CLI reports mode ${mode}`);
         if (!c.cwd.endsWith(dir.split("/").pop()!)) throw h.fail(`started in ${c.cwd}`);
