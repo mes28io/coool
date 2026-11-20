@@ -7,7 +7,7 @@ import type { ChatEvent, ChatOptions, ContextMap, Environment, GitTrail, Insight
 import type { MotionHints } from "./motion";
 import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
-import type { UpdateStatus } from "./updateView";
+import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
 
 export interface PtyChunk {
@@ -70,6 +70,10 @@ export interface Backend extends SettingsBackend {
   updateCliNow(provider: Provider): Promise<void>;
   /** Restarts into the installed update (stops what coool runs, as Quit does). */
   updateRestart(): Promise<void>;
+  /** "Start coool now" on the launch update screen: the app starts, the download carries on. False once too late. */
+  updateLaunchSkip(): Promise<boolean>;
+  /** "Updated to": what the restart into this version came from, once per launch (null after, or on a normal launch). */
+  updateWelcome(): Promise<UpdateWelcome | null>;
   onUpdateState(cb: (s: UpdateStatus) => void): Unlisten;
   onSessions(cb: (s: Snapshot) => void): Unlisten;
   onPtyOutput(cb: (c: PtyChunk) => void): Unlisten;
@@ -613,6 +617,8 @@ async function tauriBackend(): Promise<Backend> {
     updateInstall: () => soft("update_install"),
     updateCliNow: (provider) => soft("update_cli_now", { provider }),
     updateRestart: () => soft("update_restart"),
+    updateLaunchSkip: () => soft<boolean>("update_launch_skip").catch(() => false),
+    updateWelcome: () => soft<UpdateWelcome | null>("update_welcome").catch(() => null),
     onUpdateState: (cb) => sub<UpdateStatus>("update-state", cb),
     usageRefresh: (provider) => invoke("usage_refresh", { provider }),
     usageResetCodex: (idempotencyKey) => invoke("usage_reset_codex", { idempotencyKey }),

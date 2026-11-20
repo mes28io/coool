@@ -14,6 +14,10 @@
 //!    (`renamex_np(RENAME_SWAP)`). Any failure before the swap leaves the installed app as it was.
 //! 3. Relaunch: a detached `sh` waits for this process to exit, then `open`s the bundle again.
 //!
+//! An install at launch that ends in a restart is shown as it happens (`Launch`, the window's update screen): from
+//! the moment the check finds a newer version, through the download, its checks and the swap, to a "Restarting"
+//! moment before the process exits. The restart leaves a note (marker.rs) so the next launch says "Updated to".
+//!
 //! Tests (debug builds only) can point the check at a loopback server: `COOOL_UPDATE_BASE=http://127.0.0.1:<port>`.
 //! A release build compiles that switch out.
 
@@ -31,6 +35,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub mod cli;
 pub mod gate;
 pub mod keys;
+pub mod marker;
 
 pub const ASSET: &str = "coool-macos-arm64.tar.gz";
 const BUNDLE_ID: &str = "sh.coool.app";
@@ -623,7 +628,12 @@ const GATE_MAX: Duration = Duration::from_secs(15);
 const CLI_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// A chat of a CLI being updated waits at most this long for it.
 const CLI_HOLD_MAX: Duration = Duration::from_secs(5 * 60 + 10);
-const RECHECK: Duration = Duration::from_secs(6 * 3600);
+/// The periodic check (the request is the same as at launch: nothing about the person).
+const RECHECK: Duration = Duration::from_secs(3600);
+/// How long the update screen says "Restarting" before the process exits.
+const RESTART_MOMENT: Duration = Duration::from_millis(1200);
+/// The longest a restart waits for the window to have asked for the updater's state (so the screen is up).
+const UI_WAIT: Duration = Duration::from_secs(4);
 /// After a quiet failure (offline, a broken download), the next try.
 const RETRY: Duration = Duration::from_secs(30 * 60);
 
@@ -671,6 +681,45 @@ impl Item {
     }
 }
 
+/// Where an install at launch (or a Restart) stands, for the window's update screen.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchStage {
+    Download,
+    /// The checksum, the signature, unpacking and the bundle's own checks.
+    Verify,
+    /// The swap into place.
+    Install,
+    /// The process exits in a moment and opens again.
+    Restarting,
+    /// It failed or ran past the gate's limit: the screen says one line and steps aside.
+    Failed,
+    /// "Start coool now": the app starts; the download carries on and ends as "restart to apply".
+    Background,
+}
+
+impl LaunchStage {
+    fn of(p: Phase) -> LaunchStage {
+        match p {
+            Phase::Download => LaunchStage::Download,
+            Phase::Verify => LaunchStage::Verify,
+            Phase::Install => LaunchStage::Install,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Launch {
+    pub from: String,
+    pub to: String,
+    pub stage: LaunchStage,
+    pub progress: Option<Progress>,
+    /// Failed because it ran past the gate's limit (the download may still finish in the background).
+    pub timed_out: bool,
+    /// Why it failed (for the log; the screen says one plain line).
+    pub detail: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 pub struct Status {
     /// coool, Claude Code, Codex.
@@ -687,6 +736,8 @@ pub struct Status {
     checked_at: Option<u64>,
     /// Why this copy of coool can't update itself, if so.
     blocked: Option<String>,
+    /// An install that ends in a restart, while it runs (the update screen).
+    launch: Option<Launch>,
 }
 
 pub struct Updater {
@@ -704,6 +755,12 @@ pub struct Updater {
     cli_writes: bool,
     /// May check coool itself (a self-test only with a loopback server).
     app_checks: bool,
+    /// The update screen's state (an install at launch, or a Restart).
+    launch: Mutex<Option<Launch>>,
+    /// The window has asked for the updater's state (its update screen can show).
+    ui_seen: AtomicBool,
+    /// "Updated to": the note the last restart left, for the window to take once.
+    welcome: Mutex<Option<marker::Updated>>,
 }
 
 impl Updater {
@@ -726,6 +783,9 @@ impl Updater {
             cli_writes: if selftest || tauri::is_dev() { cli_dir.is_some() } else { true },
             app_checks: !selftest || loop_src,
             cli_dir,
+            launch: Mutex::new(None),
+            ui_seen: AtomicBool::new(false),
+            welcome: Mutex::new(None),
         }
     }
 
@@ -743,8 +803,93 @@ impl Updater {
         let s = crate::settings::load(core.selftest.as_ref());
         let mut items = self.items.lock().unwrap().to_vec();
         items[0].current = Some(app.package_info().version.to_string());
-        Status { items, auto_app: s.update_checks, auto_cli: s.update_clis, gate_open: self.gate.is_open(), gate_ms: self.gate.opened_after().map(|d| d.as_millis() as u64), checked_at: *self.checked_at.lock().unwrap(), blocked: blocked() }
+        let launch = self.launch.lock().unwrap().clone();
+        Status { items, auto_app: s.update_checks, auto_cli: s.update_clis, gate_open: self.gate.is_open(), gate_ms: self.gate.opened_after().map(|d| d.as_millis() as u64), checked_at: *self.checked_at.lock().unwrap(), blocked: blocked(), launch }
     }
+
+    /// Changes the update screen's state (when it is up) and reports it.
+    fn set_launch(&self, app: &AppHandle, f: impl FnOnce(&mut Option<Launch>)) {
+        f(&mut self.launch.lock().unwrap());
+        let _ = app.emit("update-state", self.status(app));
+    }
+
+    /// The screen goes up: `to` is being installed and coool will restart into it.
+    fn begin_launch(&self, app: &AppHandle, to: &str, stage: LaunchStage) {
+        let from = app.package_info().version.to_string();
+        self.set_launch(app, |l| *l = Some(Launch { from, to: to.into(), stage, progress: None, timed_out: false, detail: None }));
+    }
+
+    /// Steps aside with the plain line. Only from a stage still on screen ("Start coool now" stays as it is).
+    fn fail_launch(&self, app: &AppHandle, timed_out: bool, detail: Option<String>) {
+        self.set_launch(app, |l| {
+            if let Some(l) = l.as_mut().filter(|l| matches!(l.stage, LaunchStage::Download | LaunchStage::Verify | LaunchStage::Install)) {
+                l.stage = LaunchStage::Failed;
+                l.progress = None;
+                l.timed_out = timed_out;
+                l.detail = detail;
+            }
+        });
+    }
+
+    /// The point of no return: the swap may start unless "Start coool now" was pressed or the gate's time ran out.
+    fn commit_launch(&self, app: &AppHandle) -> bool {
+        let ok = {
+            let mut g = self.launch.lock().unwrap();
+            match g.as_mut() {
+                Some(l) if matches!(l.stage, LaunchStage::Download | LaunchStage::Verify | LaunchStage::Install) && !self.gate.is_open() => {
+                    l.stage = LaunchStage::Install;
+                    l.progress = None;
+                    true
+                }
+                _ => false,
+            }
+        };
+        let _ = app.emit("update-state", self.status(app));
+        ok
+    }
+
+    /// Waits (bounded) until the window has asked for the updater's state, so its screen is up.
+    fn wait_ui(&self) {
+        let until = std::time::Instant::now() + UI_WAIT;
+        while !self.ui_seen.load(AtOrd::SeqCst) && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Where the restart's note for the next launch lives: beside coool's settings (a self-test's own folder in a run).
+fn marker_path(core: &Core) -> Option<PathBuf> {
+    match &core.selftest {
+        Some(t) => Some(t.dir().join(".coool-selftest-updated.json")),
+        None => dirs::config_dir().map(|d| d.join("coool").join("updated.json")),
+    }
+}
+
+/// The new version is in place: leave the note, start the relaunch, say "Restarting" for a moment, then exit.
+/// `false` (nothing exits) when the relaunch can't be started. A self-test exits without relaunching.
+fn restart_into(u: &Updater, app: &AppHandle, core: &Core, bundle: &Path, from: &str, to: &str) -> bool {
+    let selftest = core.selftest.as_ref();
+    if let Some(p) = marker_path(core) {
+        let _ = marker::write(&p, from, to);
+    }
+    if selftest.is_none() && relaunch(bundle).is_err() {
+        return false;
+    }
+    u.set_launch(app, |l| {
+        let l = l.get_or_insert_with(|| Launch { from: from.into(), to: to.into(), stage: LaunchStage::Restarting, progress: None, timed_out: false, detail: None });
+        l.stage = LaunchStage::Restarting;
+        l.progress = None;
+    });
+    let t = std::time::Instant::now();
+    u.wait_ui();
+    std::thread::sleep(RESTART_MOMENT);
+    if let Some(t0) = selftest {
+        t0.log_line(&format!("UPDATE exiting {} ms after \"Restarting\" ({from} -> {to}, installed {})", t.elapsed().as_millis(), bundle_version(bundle).unwrap_or_default()));
+    }
+    core.allow_exit.store(true, AtOrd::SeqCst);
+    core.hub.lock().unwrap().kill_all();
+    app.exit(0);
+    true
 }
 
 fn running_version(app: &AppHandle) -> Version {
@@ -928,6 +1073,11 @@ fn stage_app(u: &Updater, app: &AppHandle) -> bool {
     });
     let r = stage(&Source::current(), &rel, &bundle, &mut |p| {
         let st = if p.phase == Phase::Download { ItemState::Downloading } else { ItemState::Installing };
+        // The update screen follows while it is up (not after "Start coool now").
+        if let Some(l) = u.launch.lock().unwrap().as_mut().filter(|l| matches!(l.stage, LaunchStage::Download | LaunchStage::Verify | LaunchStage::Install)) {
+            l.stage = LaunchStage::of(p.phase);
+            l.progress = Some(p.clone());
+        }
         u.set(app, 0, |it| {
             it.state = st;
             it.progress = Some(p);
@@ -950,8 +1100,9 @@ fn stage_app(u: &Updater, app: &AppHandle) -> bool {
 
 type Answer = (usize, Option<CliCheck>, Option<Result<Option<Release>, String>>);
 
-/// All three at once, each request bounded by `limit`. Returns coool's newer release, if any.
-fn check_all(u: &Arc<Updater>, app: &AppHandle, limit: Duration) -> Option<Release> {
+/// All three at once, each request bounded by `limit`. Returns coool's newer release, if any. `on_app` hears of it as
+/// soon as coool's own answer is in (the launch starts its install then, without waiting for the CLIs' answers).
+fn check_all(u: &Arc<Updater>, app: &AppHandle, limit: Duration, on_app: Option<&dyn Fn(&Release)>) -> Option<Release> {
     for i in 0..3 {
         u.set(app, i, |it| {
             if matches!(it.state, ItemState::Unknown | ItemState::Current) {
@@ -1000,6 +1151,9 @@ fn check_all(u: &Arc<Updater>, app: &AppHandle, limit: Duration) -> Option<Relea
                     Err(_) => ItemState::Unknown,
                 };
             });
+            if let (Some(f), Ok(Some(rel))) = (on_app, &r) {
+                f(rel);
+            }
         }
     }
     // What didn't answer in time is unknown (quietly).
@@ -1031,6 +1185,13 @@ fn spawn_cli_updates(u: &Arc<Updater>, app: &AppHandle) -> Vec<std::thread::Join
 /// The launch step (a thread started in setup): apply a staged coool, check all three, update what may be
 /// updated, then let chats start. Chats wait for it at most `GATE_MAX`, and the gate opens however it ends.
 pub fn spawn_launch(app: AppHandle) {
+    // The note a restart into this version left, taken before the window can ask for it.
+    {
+        let core = app.state::<Arc<Core>>();
+        if let Some(p) = marker_path(&core) {
+            *up(&app).welcome.lock().unwrap() = marker::take(&p, &running_version(&app));
+        }
+    }
     std::thread::spawn(move || {
         let u = up(&app);
         let core = app.state::<Arc<Core>>().inner().clone();
@@ -1053,7 +1214,7 @@ pub fn spawn_launch(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(60));
             let s = crate::settings::load(core.selftest.as_ref());
             if std::time::Instant::now() >= next {
-                let rel = if s.update_checks || s.update_clis { check_all(&u, &app, Duration::from_secs(20)) } else { None };
+                let rel = if s.update_checks || s.update_clis { check_all(&u, &app, Duration::from_secs(20), None) } else { None };
                 let ok = rel.is_none() || !s.update_checks || stage_app(&u, &app);
                 next = std::time::Instant::now() + if ok { RECHECK } else { RETRY };
             }
@@ -1068,6 +1229,9 @@ pub fn spawn_launch(app: AppHandle) {
 fn launch_step(u: &Arc<Updater>, app: &AppHandle, core: &Arc<Core>) -> bool {
     let s = crate::settings::load(core.selftest.as_ref());
     let selftest = core.selftest.is_some();
+    // A self-test restarts (exits, never relaunches) only in the scenarios made for it; the others keep the app.
+    let may_restart = core.selftest.as_ref().is_none_or(|t| t.wants_update_launch());
+    let from = running_version(app);
     let restart = |b: &Path| {
         if selftest || relaunch(b).is_err() {
             return false;
@@ -1076,18 +1240,59 @@ fn launch_step(u: &Arc<Updater>, app: &AppHandle, core: &Arc<Core>) -> bool {
         app.exit(0);
         true
     };
-    // 1. A version staged last time and not applied (a crash, a force quit).
-    if let Some(b) = own_bundle()
-        && let Ok(Some(_)) = apply_staged(&b, &running_version(app))
-        && restart(&b)
-    {
-        return true;
+    // 1. A version staged last time and not applied (a crash, a force quit): the screen says so, then restarts.
+    if let Some(b) = own_bundle() {
+        let staged = staged_path(&b).and_then(|p| bundle_version(&p)).filter(|v| Version::parse(v).is_some_and(|v| v > from));
+        if may_restart && let Some(to) = staged {
+            u.begin_launch(app, &to, LaunchStage::Install);
+            match apply_staged(&b, &from) {
+                Ok(Some(v)) if restart_into(u, app, core, &b, &from.to_string(), &v) => return true,
+                Ok(_) => u.set_launch(app, |l| *l = None),
+                Err(e) => u.fail_launch(app, false, Some(e)),
+            }
+        } else if !may_restart && let Ok(Some(_)) = apply_staged(&b, &from) && restart(&b) {
+            return true;
+        }
     }
-    // 2. The checks.
-    let rel = if s.update_checks || s.update_clis { check_all(u, app, CHECK_BUDGET) } else { None };
+    // 2. The checks. When coool's answer names a newer version that can be installed and restarted into now
+    //    (automatic updates on, a bundle it may replace, nothing running), the update screen goes up at once and the
+    //    download starts while the CLIs' answers come in.
+    let early: Mutex<Option<std::thread::JoinHandle<bool>>> = Mutex::new(None);
+    let start = |rel: &Release| {
+        if s.update_checks && may_restart && core.running() == 0 && own_bundle().is_some() {
+            u.begin_launch(app, &rel.version, LaunchStage::Download);
+            let (u2, app2) = (u.clone(), app.clone());
+            *early.lock().unwrap() = Some(std::thread::spawn(move || stage_app(&u2, &app2)));
+        }
+    };
+    let rel = if s.update_checks || s.update_clis { check_all(u, app, CHECK_BUDGET, Some(&start)) } else { None };
     // 3. coool: download and install now, and restart into it if that's done while chats still wait. A download
-    //    that runs long carries on in the background and ends as "restart to apply".
-    if rel.is_some() && s.update_checks && own_bundle().is_some() {
+    //    that runs long, or one left with "Start coool now", carries on in the background and ends as "restart to
+    //    apply".
+    if let Some(h) = early.into_inner().unwrap() {
+        while !h.is_finished() && !u.gate.is_open() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if !h.is_finished() {
+            // Past the gate's limit (after "Start coool now" the screen is already gone; this leaves it so).
+            u.fail_launch(app, true, None);
+        } else if !h.join().unwrap_or(false) {
+            let detail = u.items.lock().unwrap()[0].detail.clone();
+            u.fail_launch(app, false, detail);
+        } else if u.commit_launch(app)
+            && let Some(b) = own_bundle()
+        {
+            match apply_staged(&b, &from) {
+                Ok(Some(v)) if restart_into(u, app, core, &b, &from.to_string(), &v) => return true,
+                Ok(Some(_)) => u.set_launch(app, |l| *l = None),
+                Ok(None) => u.fail_launch(app, false, Some("The installed update was gone.".into())),
+                Err(e) => u.fail_launch(app, false, Some(e)),
+            }
+        } else {
+            // Finished just past the gate's limit: it waits as "restart to apply".
+            u.fail_launch(app, true, None);
+        }
+    } else if rel.is_some() && s.update_checks && own_bundle().is_some() {
         let (u2, app2) = (u.clone(), app.clone());
         let h = std::thread::spawn(move || stage_app(&u2, &app2));
         while !h.is_finished() && !u.gate.is_open() {
@@ -1098,7 +1303,7 @@ fn launch_step(u: &Arc<Updater>, app: &AppHandle, core: &Arc<Core>) -> bool {
             && h.join().unwrap_or(false)
             && core.running() == 0
             && let Some(b) = own_bundle()
-            && let Ok(Some(_)) = apply_staged(&b, &running_version(app))
+            && let Ok(Some(_)) = apply_staged(&b, &from)
             && restart(&b)
         {
             return true;
@@ -1123,14 +1328,40 @@ pub fn on_exit(app: &AppHandle) {
 
 #[tauri::command(async)]
 pub fn update_status(app: AppHandle) -> Status {
-    up(&app).status(&app)
+    let u = up(&app);
+    u.ui_seen.store(true, AtOrd::SeqCst);
+    u.status(&app)
+}
+
+/// "Start coool now" on the update screen: the app starts, and the download carries on in the background (it ends
+/// as "restart to apply"). `false` once it is too late (the swap has started).
+#[tauri::command(async)]
+pub fn update_launch_skip(app: AppHandle) -> bool {
+    let u = up(&app);
+    let mut ok = false;
+    u.set_launch(&app, |l| {
+        if let Some(l) = l.as_mut().filter(|l| matches!(l.stage, LaunchStage::Download | LaunchStage::Verify)) {
+            l.stage = LaunchStage::Background;
+            ok = true;
+        }
+    });
+    if ok {
+        u.gate.open();
+    }
+    ok
+}
+
+/// "Updated to": the note the restart into this version left, once (later calls get nothing).
+#[tauri::command(async)]
+pub fn update_welcome(app: AppHandle) -> Option<marker::Updated> {
+    up(&app).welcome.lock().unwrap().take()
 }
 
 /// "Check now" (Settings, the panel): checks all three, then installs what the switches allow, in the background.
 #[tauri::command(async)]
 pub fn update_check(app: AppHandle, core: State<'_, Arc<Core>>) -> Status {
     let u = up(&app);
-    let rel = check_all(&u, &app, Duration::from_secs(10));
+    let rel = check_all(&u, &app, Duration::from_secs(10), None);
     let s = crate::settings::load(core.selftest.as_ref());
     if rel.is_some() && s.update_checks {
         let (u, app) = (u.clone(), app.clone());
@@ -1188,13 +1419,12 @@ pub fn update_restart(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<(), 
     if staged_path(&bundle).is_none() {
         return Err("No update is waiting. Check again.".into());
     }
-    apply_staged(&bundle, &running_version(&app))?;
-    if core.selftest.is_none() {
-        relaunch(&bundle).map_err(|e| format!("coool was updated, but couldn't restart itself ({e}). Quit and open it again."))?;
+    let from = running_version(&app);
+    let Some(to) = apply_staged(&bundle, &from)? else { return Err("No update is waiting. Check again.".into()) };
+    // The same "Restarting" moment as at launch, and the same "Updated to" after.
+    if !restart_into(&up(&app), &app, &core, &bundle, &from.to_string(), &to) {
+        return Err("coool was updated, but couldn't restart itself. Quit and open it again.".into());
     }
-    core.allow_exit.store(true, AtOrd::SeqCst);
-    core.hub.lock().unwrap().kill_all();
-    app.exit(0);
     Ok(())
 }
 

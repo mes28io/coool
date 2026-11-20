@@ -61,6 +61,7 @@ import { voiceScenarios } from "./selftestVoice";
 import { ladderScenarios } from "./selftestLadder";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
+import { coverOf, launchTrace, useUpdates } from "./lib/update";
 
 interface Config {
   scenario: string;
@@ -912,6 +913,129 @@ const updateScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await invoke("selftest_request_quit");
       await sleep(8000);
       throw new Fail("still running 8 s after Quit");
+    });
+  },
+  /**
+   * An update found at launch, installed and restarted into, from a test bundle at the old version with
+   * COOOL_UPDATE_BASE serving a newer, test-signed release (a throttled server, so each stage shows). The update
+   * screen is up before the normal UI ever is, says each stage, and says "Restarting" before the process exits (a
+   * self-test exits without relaunching; the test script opens the new bundle: `update-launch-after`).
+   */
+  async "update-launch"() {
+    await step("update-launch: the update screen is up before any normal UI is interactive", async () => {
+      await waitFor("the update screen", () => launchTrace.screen !== undefined, 15_000);
+      const t = { ...launchTrace };
+      const root = document.querySelector("[data-update-screen]");
+      const inert = document.querySelector(".bg-chrome")?.hasAttribute("inert");
+      if (t.uncovered !== undefined) throw new Fail(`the normal UI was uncovered at ${Math.round(t.uncovered)} ms, before the screen at ${Math.round(t.screen!)} ms`);
+      if (!root || !visible(root)) throw new Fail("no update screen on screen");
+      if (!inert) throw new Fail("the app under the screen isn't inert");
+      if (document.activeElement && document.activeElement !== document.body && !root.contains(document.activeElement)) throw new Fail(`focus is on ${document.activeElement.tagName} under the screen`);
+      await shot("update-launch-first", undefined, 0);
+      return `first status ${Math.round(t.status ?? -1)} ms, screen ${Math.round(t.screen!)} ms after page start; normal UI never uncovered; app under it inert; "${$("[data-update-title]")?.textContent}"`;
+    });
+    await step("update-launch: the stages advance (Downloading, Checking the download, Installing, Restarting)", async () => {
+      const shotted = new Set<string>();
+      const seen: string[] = [];
+      let pct = -1;
+      const t0 = performance.now();
+      for (;;) {
+        const el = $("[data-update-stage]");
+        const stage = el?.getAttribute("data-update-stage") ?? "";
+        if (stage && seen[seen.length - 1] !== stage) seen.push(stage);
+        const p = Number(/(\d+)%/.exec($("[data-update-line]")?.textContent ?? "")?.[1] ?? -1);
+        if (p > pct) pct = p;
+        if (stage === "Restarting") {
+          await log(`PASS update-launch: "Restarting" is on screen (${Math.round(performance.now() - t0)} ms into the stages; ${$("[data-update-title]")?.textContent})`);
+          pass++;
+          await shot("update-launch-restarting", undefined, 120);
+          break;
+        }
+        if (stage === "failed") throw new Fail(`the update failed: ${$("[data-update-title]")?.textContent}`);
+        if (stage && !shotted.has(stage) && (stage !== "Downloading" || pct >= 20)) {
+          shotted.add(stage);
+          await shot(`update-launch-${stage.toLowerCase().replace(/\W+/g, "-")}`, undefined, 0);
+        }
+        if (performance.now() - t0 > 60_000) throw new Fail(`no "Restarting" after 60 s; stages ${seen.join(" → ")}`);
+        await sleep(40);
+      }
+      const all = [...new Set([...launchTrace.stages, ...seen])];
+      for (const want of ["Downloading", "Restarting"]) if (!all.includes(want)) throw new Fail(`"${want}" never showed; ${all.join(" → ")}`);
+      return `DOM ${seen.join(" → ")}; reported ${launchTrace.stages.join(" → ")}; download up to ${pct}%`;
+    });
+    // The app exits here; anything after "Restarting" is the test script's (the log's "UPDATE exiting" line).
+    await sleep(15_000);
+    await step("update-launch: the app exited after Restarting", async () => {
+      throw new Fail("still running 15 s after Restarting");
+    });
+  },
+  /** The launch after `update-launch`, from the new bundle: "Updated to" shows once, and goes away by itself. */
+  async "update-launch-after"() {
+    await step("update-launch-after: the new version says what happened, once", async () => {
+      const t = await waitFor("the Updated to confirmation", () => useStore.getState().toasts.find((x) => x.text.startsWith("Updated to")), 10_000);
+      await shot("update-launch-updated", undefined, 500);
+      const again = await invoke("update_welcome");
+      if (again !== null) throw new Fail(`a second ask got ${JSON.stringify(again)}`);
+      await waitFor("the confirmation to go away by itself", () => !useStore.getState().toasts.some((x) => x.id === t.id), 8_000);
+      const s = (await invoke("update_status")) as UpdSt;
+      return `"${t.text}" (${t.tone}); gone by itself; a second ask: nothing; running ${s.items[0].current}`;
+    });
+  },
+  /** A later launch of the same version: no confirmation. */
+  async "update-launch-again"() {
+    await step("update-launch-again: a normal launch says nothing about an update", async () => {
+      await sleep(6000);
+      const t = useStore.getState().toasts.map((x) => x.text);
+      if (t.some((x) => x.startsWith("Updated to"))) throw new Fail(`toasts: ${t.join(" | ")}`);
+      if (launchTrace.screen !== undefined) throw new Fail("the update screen showed");
+      const s = (await invoke("update_status")) as UpdSt;
+      return `no confirmation, no screen; toasts [${t.join(" | ")}]; running ${s.items[0].current}`;
+    });
+  },
+  /** A release whose signature doesn't verify: the screen says one plain line, steps aside, and the app starts. */
+  async "update-launch-fail"() {
+    await step("update-launch-fail: the screen comes up, then says the plain line", async () => {
+      await waitFor("the update screen", () => launchTrace.screen !== undefined, 15_000);
+      const line = await waitFor("the failure line", () => $("[data-update-stage=failed]") && $("[data-update-title]")?.textContent, 30_000);
+      await shot("update-launch-failed", undefined, 300);
+      if (line !== "Couldn't update right now. coool will try again later.") throw new Fail(`the line: ${line}`);
+      return `"${line}"; stages ${launchTrace.stages.join(" → ")}`;
+    });
+    await step("update-launch-fail: the screen steps aside and the app starts normally", async () => {
+      await waitFor("the screen to go", () => !$("[data-update-screen]") && !coverOf(useUpdates.getState()), 8_000);
+      const s = (await invoke("update_status")) as UpdSt;
+      const inert = document.querySelector(".bg-chrome")?.hasAttribute("inert");
+      if (inert) throw new Fail("the app is still inert");
+      if (!s.gate_open) throw new Fail("chats still wait");
+      await shot("update-launch-fail-app", undefined, 600);
+      return `app interactive, gate open; ${updLine(s)}`;
+    });
+  },
+  /** A crawling download: "Start coool now" lets the app start; the update finishes as "restart to apply". */
+  async "update-launch-slow"() {
+    await step("update-launch-slow: Start coool now is offered after a few seconds", async () => {
+      await waitFor("the update screen", () => launchTrace.screen !== undefined, 15_000);
+      const b = await waitFor("Start coool now", () => $("[data-update-skip]"), 12_000);
+      const after = Math.round(performance.now() - launchTrace.screen!);
+      await shot("update-launch-slow-offer", undefined, 400);
+      b.click();
+      await waitFor("the screen to go", () => !$("[data-update-screen]") && !coverOf(useUpdates.getState()), 3_000);
+      const s = (await invoke("update_status")) as UpdSt;
+      if (!s.gate_open) throw new Fail("chats still wait");
+      if (document.querySelector(".bg-chrome")?.hasAttribute("inert")) throw new Fail("the app is still inert");
+      await shot("update-launch-slow-app", undefined, 600);
+      return `offered ${after} ms after the screen came up; clicked: app interactive, gate open; ${updLine(s)}; rail ${$("[data-update-button]")?.getAttribute("data-update-button")}`;
+    });
+    await step("update-launch-slow: the download finishes in the background as restart to apply, with no restart", async () => {
+      const s = await poll("the update to be installed", async () => {
+        const s = (await invoke("update_status")) as UpdSt;
+        return s.items[0].state === "staged" ? s : null;
+      }, 180_000);
+      await sleep(400);
+      const label = $("[data-update-button]")?.getAttribute("data-update-button");
+      if ($("[data-update-screen]")) throw new Fail("the update screen came back");
+      await shot("update-launch-slow-staged", undefined, 300);
+      return `${updLine(s)}; rail ${label}; still running`;
     });
   },
 };
@@ -7555,10 +7679,13 @@ export async function maybeRunSelfTest() {
   tap();
   const names = cfg.scenario === "all" ? ALL : cfg.scenario.split(",").map((s) => s.trim());
   await log(`START ${names.join(",")} in ${cfg.dir}`);
-  await waitFor("the first sessions payload", () => useStore.getState().ready, 30_000).catch(() => {});
-  await sleep(1500);
-  // The perf scenarios take no screenshots (and the window must not be disturbed before they measure).
-  if (!names.every((n) => n.startsWith("perf-"))) await shot("start");
+  // The launch-time update scenarios watch the window from its first moments: no settling first.
+  if (!names.every((n) => n.startsWith("update-launch"))) {
+    await waitFor("the first sessions payload", () => useStore.getState().ready, 30_000).catch(() => {});
+    await sleep(1500);
+    // The perf scenarios take no screenshots (and the window must not be disturbed before they measure).
+    if (!names.every((n) => n.startsWith("perf-"))) await shot("start");
+  }
   const ctx: Ctx = { cfg, main: null, question: null };
   for (const n of names) {
     const f = scenarios[n] ?? (/^inspo-\d+$/.test(n) ? (c: Ctx) => inspo(c, n) : undefined);

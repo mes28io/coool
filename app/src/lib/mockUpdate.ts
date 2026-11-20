@@ -9,10 +9,22 @@
 //   unverified a coool release whose signature didn't verify (nothing installed)
 //   manual     Claude Code installed with Homebrew: the command to run
 //   current    everything up to date (the icon hides)
+// The update screen (an install at launch that ends in a restart, components/UpdateScreen.tsx):
+//   launch            the whole thing: Downloading (bytes), Checking the download, Installing, Restarting, then the
+//                     "new version" opens with its "Updated to" confirmation (?update=updated)
+//   launch-start      Downloading, before the first bytes (indeterminate)
+//   launch-download   Downloading, 44% (21 MB of 48 MB); "Start coool now" after 4 s
+//   launch-verify     Checking the download
+//   launch-install    Installing
+//   launch-restarting Restarting
+//   launch-failed     the download stops: "Couldn't update right now…", then the app
+//   launch-slow       a crawling download: "Start coool now" after 4 s lets the app start; it ends as "restart to apply"
+//   updated           the confirmation after a restart: "Updated to 0.3.2 · from 0.3.1"
+// The panel's Restart (?update=staged) shows "Restarting" too, then opens ?update=updated.
 // Add `updatepanel=1` to open the panel at once.
 
 import type { Provider } from "./types";
-import type { UpdateItem, UpdateStatus } from "./updateView";
+import type { LaunchUpdate, UpdateItem, UpdateStatus, UpdateWelcome } from "./updateView";
 
 type Patch = Partial<Record<UpdateItem["id"], Partial<UpdateItem>>>;
 
@@ -50,17 +62,36 @@ const KNOBS: Record<string, { patch: Patch; auto_app?: boolean }> = {
   current: { patch: {} },
 };
 
+const MB = 1048576;
+const L_FROM = "0.3.1";
+const L_TO = "0.3.2";
+const L = (o: Partial<LaunchUpdate>): LaunchUpdate => ({ from: L_FROM, to: L_TO, stage: "download", progress: null, timed_out: false, detail: null, ...o });
+const dl = (mb: number) => ({ phase: "download" as const, done: Math.round(mb * MB), total: 48 * MB });
+/** The update screen's knobs: their screen state. */
+const LAUNCH: Record<string, LaunchUpdate> = {
+  "launch-start": L({}),
+  "launch-download": L({ progress: dl(21) }),
+  "launch-verify": L({ stage: "verify" }),
+  "launch-install": L({ stage: "install" }),
+  "launch-restarting": L({ stage: "restarting" }),
+};
+
 function apply(s: UpdateStatus, p: Patch): UpdateStatus {
   return { ...s, items: s.items.map((i) => ({ ...i, ...p[i.id] })) };
 }
 
 export function mockUpdate() {
-  const knob = typeof location !== "undefined" ? (/[?&]update=(\w+)/.exec(location.search)?.[1] ?? "") : "";
+  const knob = typeof location !== "undefined" ? (/[?&]update=([\w-]+)/.exec(location.search)?.[1] ?? "") : "";
   let state: UpdateStatus | null = null;
-  if (knob && (KNOBS[knob] || knob === "demo")) {
+  const launchKnob = knob === "launch" || knob.startsWith("launch-");
+  if (knob && (KNOBS[knob] || knob === "demo" || knob === "updated" || launchKnob)) {
     const k = KNOBS[knob];
     state = apply({ ...base(), auto_app: k?.auto_app ?? true }, k?.patch ?? {});
   }
+  if (launchKnob && state) {
+    state = apply({ ...state, gate_open: false, launch: LAUNCH[knob] ?? L({}) }, { coool: { current: L_FROM, latest: L_TO, state: "downloading" } });
+  }
+  let welcome: UpdateWelcome | null = knob === "updated" ? { from: L_FROM, to: L_TO } : null;
   const subs = new Set<(s: UpdateStatus) => void>();
   const set = (p: Patch, o: Partial<UpdateStatus> = {}) => {
     if (!state) return;
@@ -77,6 +108,34 @@ export function mockUpdate() {
     at(2200, () => set({ codex: { ...CODEX_OLD, state: "waiting", detail: "2 Codex sessions are running. It updates once none are.", command: "codex update" } }, { gate_open: true }));
     at(6200, () => set({ coool: { state: "installing", progress: { phase: "verify", done: 0, total: null } } }));
     at(7400, () => set({ coool: { state: "staged", progress: null } }));
+  }
+  // The update screen playing out (times from the start of the page).
+  const at = (ms: number, f: () => void) => setTimeout(f, ms);
+  const launchTo = (l: Partial<LaunchUpdate>, p: Patch = {}, o: Partial<UpdateStatus> = {}) => set(p, { launch: state?.launch ? { ...state.launch, ...l } : null, ...o });
+  if (knob === "launch") {
+    for (let i = 0; i <= 24; i++) at(500 + i * 190, () => launchTo({ progress: dl(i * 2) }, { coool: { progress: dl(i * 2) } }));
+    at(5300, () => launchTo({ stage: "verify", progress: null }, { coool: { state: "installing" } }));
+    at(6900, () => launchTo({ stage: "install" }));
+    at(8000, () => launchTo({ stage: "restarting" }));
+    // The "new version" opens.
+    at(9300, () => (location.href = `${location.pathname}?update=updated`));
+  }
+  if (knob === "launch-failed") {
+    for (let i = 0; i <= 6; i++) at(300 + i * 200, () => launchTo({ progress: dl(i * 2) }));
+    at(1900, () => launchTo({ stage: "failed", progress: null }, { coool: { state: "available", latest: L_TO, progress: null } }, { gate_open: true }));
+  }
+  if (knob === "launch-slow") {
+    let mb = 0;
+    const tick = setInterval(() => {
+      if (!state) return clearInterval(tick);
+      mb = Math.min(48, mb + 0.6);
+      if (state.launch?.stage !== "background") launchTo({ progress: dl(mb) }, { coool: { progress: dl(mb) } });
+      else set({ coool: { state: "downloading", progress: dl(mb) } });
+      if (mb >= 48) {
+        clearInterval(tick);
+        set({ coool: { state: "staged", progress: null } }, { launch: null, gate_open: true });
+      }
+    }, 300);
   }
   if (/[?&]updatepanel=1/.test(typeof location !== "undefined" ? location.search : ""))
     setTimeout(() => void import("./update").then((m) => m.useUpdates.getState().setPanel(true)), 900);
@@ -106,8 +165,21 @@ export function mockUpdate() {
       set({ [provider]: { state: "current", current: state?.items.find((i) => i.id === provider)?.latest, command: null } });
     },
     async updateRestart() {
-      // A browser can't restart: reload into the "new version".
-      location.href = location.pathname;
+      // A browser can't restart: "Restarting" for a moment, then reload into the "new version".
+      const app = state?.items.find((i) => i.id === "coool");
+      set({}, { launch: L({ from: app?.current ?? L_FROM, to: app?.latest ?? L_TO, stage: "restarting" }) });
+      await new Promise((r) => setTimeout(r, 1200));
+      location.href = `${location.pathname}?update=updated`;
+    },
+    async updateLaunchSkip() {
+      if (!state?.launch || !["download", "verify"].includes(state.launch.stage)) return false;
+      set({}, { launch: { ...state.launch, stage: "background" }, gate_open: true });
+      return true;
+    },
+    async updateWelcome() {
+      const w = welcome;
+      welcome = null;
+      return w;
     },
     onUpdateState(cb: (s: UpdateStatus) => void) {
       subs.add(cb);

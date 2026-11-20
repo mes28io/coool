@@ -2009,6 +2009,8 @@ pub fn run() {
             update::update_install,
             update::update_cli_now,
             update::update_restart,
+            update::update_launch_skip,
+            update::update_welcome,
             // coool Remote (remote.rs)
             remote::remote_status,
             remote::remote_set_enabled,
