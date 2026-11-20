@@ -22,7 +22,7 @@ function useWorking(): number {
 
 /** The rail's update icon: a blue spinner while it works, a blue check once coool's update is installed, a blue arrow
  *  when something needs the person. */
-export function UpdateButton({ children }: { children: (p: { label: string; onClick: () => void; active: boolean; icon: ReactNode; dot: "bad" | null }) => ReactNode }) {
+export function UpdateButton({ children }: { children: (p: { label: string; onClick: () => void; active: boolean; icon: ReactNode; dot: "bad" | null; tint: boolean }) => ReactNode }) {
   const status = useUpdates((s) => s.status);
   const panel = useUpdates((s) => s.panel);
   const setPanel = useUpdates((s) => s.setPanel);
@@ -56,7 +56,7 @@ export function UpdateButton({ children }: { children: (p: { label: string; onCl
           transition={{ duration: 0.2, ease }}
           data-update-button={kind}
         >
-          {children({ label: railLabel(status), onClick: () => setPanel(!panel), active: panel, icon, dot: failed ? "bad" : null })}
+          {children({ label: railLabel(status), onClick: () => setPanel(!panel), active: panel, icon, dot: failed ? "bad" : null, tint: kind === "done" || kind === "attention" })}
           <AnimatePresence>{panel && <Panel key="panel" close={() => setPanel(false)} />}</AnimatePresence>
         </motion.div>
       )}
@@ -172,10 +172,15 @@ function Row({ item: i, autoApp, blocked }: { item: UpdateItem; autoApp: boolean
           <div className="flex items-center gap-1.5 text-base">
             <span>{i.name}</span>
             {i.method && i.id !== "coool" && <span className="text-small text-faint">· {i.method}</span>}
+            {i.id === "coool" && i.state === "staged" && (
+              <span className="text-small text-faint tnum">
+                · {i.current} → {i.latest}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 text-small text-dim">
             {DOT[i.state] && <span className="size-[6px] shrink-0 rounded-full" style={{ background: DOT[i.state] }} />}
-            <span className="truncate tnum">{i.id === "coool" && i.state === "staged" ? `Update installed · restart to apply (${i.current} → ${i.latest})` : itemLine(i)}</span>
+            <span className="truncate tnum">{i.id === "coool" && i.state === "staged" ? "Update installed · restart to apply" : itemLine(i)}</span>
           </div>
         </div>
         {action}

@@ -26,9 +26,24 @@ On an Apple silicon Mac with macOS 13 or later:
 curl -fsSL https://raw.githubusercontent.com/mes28io/coool/master/scripts/install.sh | sh
 ```
 
-This downloads the latest release, checks its SHA-256 and puts `coool.app` in `/Applications`. Nothing runs as root. The build is not notarised by Apple: installed this way macOS opens it normally, but a copy downloaded in a browser would be blocked. Run the same command again to update.
+This downloads the latest release, checks its SHA-256 and puts `coool.app` in `/Applications`. Nothing runs as root. The build is not notarised by Apple: installed this way macOS opens it normally, but a copy downloaded in a browser would be blocked. Running the same command again also updates it.
 
-To cut a release: `sh scripts/package.sh`, then attach the two files it writes to `dist/` to a GitHub release.
+### Updates
+
+coool keeps itself, Claude Code and Codex up to date (Settings > General > Updates has a switch for each, both on by default, and "Check now"):
+
+- **At launch**, before any chat starts, it checks all three (a few seconds at most; offline, it carries on). A newer coool is downloaded, checked (SHA-256, `codesign --verify --deep --strict`, bundle id and version) and installed, and coool restarts into it. Chats wait for this at most 15 seconds; a download that runs longer finishes in the background.
+- **While you work**, a newer coool found by the check a few times a day is installed beside the running app (`.coool-update/` next to `coool.app`), never over it, and the blue icon above the usage ring says "Update installed · restart to apply". It goes in when you click Restart (which stops running chats, as Quit does, and says so first), when you quit, or at the next launch.
+- **Claude Code and Codex** are updated the way they were installed: npm (`npm install -g --prefix <its prefix> <package>@<version>`), Claude Code's native installer (`claude update`) or Codex's standalone installer (`codex update`). Never while any of that CLI's processes are running (your terminal sessions included): the update waits, and the icon says why. Homebrew installs, npm folders that need admin rights, and installs coool can't identify get the command to run yourself. After an update coool checks that the CLI still starts and shows the repair command if it doesn't.
+- Only release assets under `https://github.com/mes28io/coool/releases/download/` are accepted, the check sends no identifiers (a generic User-Agent), and a development build (`pnpm tauri dev`) never updates itself.
+
+### Cutting a release
+
+Every release needs a new version: installed copies only update to a version newer than theirs.
+
+1. `sh scripts/release.sh 0.2.0` sets the version in `app/src-tauri/tauri.conf.json`, `app/package.json`, the crates' `Cargo.toml` and `Cargo.lock`, then runs `scripts/package.sh`, which builds, ad-hoc signs and packs `dist/coool-macos-arm64.tar.gz` and its `.sha256` (`--no-package` only sets the version).
+2. Commit, tag `v0.2.0` and push.
+3. Create the GitHub release for the tag with both files from `dist/` attached (`gh release create v0.2.0 dist/coool-macos-arm64.tar.gz dist/coool-macos-arm64.tar.gz.sha256`). Mark it as the latest release; drafts and pre-releases are ignored by the updater.
 
 ## Run from source
 
