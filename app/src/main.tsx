@@ -2,12 +2,14 @@ import { markOnce } from "./lib/perfCount";
 markOnce("coool-js");
 import "./lib/boot";
 import "./lib/animPause";
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 // Pally is fetched at install time (licence forbids committing it); absent => Geist fallback.
 import.meta.glob("./assets/fonts/pally/pally.css", { eager: true });
 import App from "./App";
+// The menu bar item's browser demo (`?menubar=idle|busy|needs|none`), loaded only when asked for.
+const MenuBarDemo = lazy(() => import("./components/MenuBarDemo").then((m) => ({ default: m.MenuBarDemo })));
 import { demoPage, GlyphsDemo, LedgerDemo, PlanDemo } from "./components/Demos";
 import { initBackend } from "./lib/backend";
 import { startBrowserAgent } from "./lib/browserAgent";
@@ -55,7 +57,11 @@ Promise.all([
   markOnce("coool-render");
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
-      {demoPage() === "ledger" ? <LedgerDemo /> : demoPage() === "plan" ? <PlanDemo /> : demoPage() === "glyphs" ? <GlyphsDemo /> : <App />}
+      {/[?&]menubar=/.test(location.search) ? (
+        <Suspense fallback={null}>
+          <MenuBarDemo />
+        </Suspense>
+      ) : demoPage() === "ledger" ? <LedgerDemo /> : demoPage() === "plan" ? <PlanDemo /> : demoPage() === "glyphs" ? <GlyphsDemo /> : <App />}
     </StrictMode>,
   );
 });

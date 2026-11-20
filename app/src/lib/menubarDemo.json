@@ -54,7 +54,7 @@
         "id": "cpu",
         "label": "CPU",
         "value": "7%",
-        "detail": "▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂  last 60 s\n▂▁▂▁▁▁▁▁▂▂▂▁  12 cores now\nLoad average 1.8 · 2.1 · 2.4",
+        "detail": "▁▂▁▁▁▂▂▁▁▂▂▁▁▁▂  last 60 s\n▂▁▂▁▁▁▁▁▂▂▂▁  12 cores now\nLoad average 1.8 · 2.1 · 2.4",
         "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
       },
       {
@@ -151,16 +151,16 @@
         "kind": "stat",
         "id": "use:claude",
         "label": "Claude Code",
-        "value": "5-hour 82% left · Weekly 64% left",
-        "detail": null,
+        "value": "64% left",
+        "detail": "5-hour 82% left · Weekly 64% left",
         "tip": "Plan usage left, as the usage ring in the app shows it."
       },
       {
         "kind": "stat",
         "id": "use:codex",
         "label": "Codex",
-        "value": "5-hour 97% left · Weekly 88% left",
-        "detail": null,
+        "value": "88% left",
+        "detail": "5-hour 97% left · Weekly 88% left",
         "tip": "Plan usage left, as the usage ring in the app shows it."
       },
       {
@@ -241,7 +241,7 @@
         "id": "cpu",
         "label": "CPU",
         "value": "86%",
-        "detail": "▆▇▇▇▆▆▅▅▅▆▇▇▇▆▆▅▅▅▆▇▇▇▆▆▅▅▅▆▇▇  last 60 s\n████▇▇██▆▆▆▅  12 cores now\nLoad average 19.4 · 14.2 · 9.8",
+        "detail": "▆▇▆▅▆▇▇▅▅▆▇▆▅▆▇  last 60 s\n████▇▇██▆▆▆▅  12 cores now\nLoad average 19.4 · 14.2 · 9.8",
         "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
       },
       {
@@ -366,16 +366,16 @@
         "kind": "stat",
         "id": "use:claude",
         "label": "Claude Code",
-        "value": "5-hour 82% left · Weekly 64% left",
-        "detail": null,
+        "value": "64% left",
+        "detail": "5-hour 82% left · Weekly 64% left",
         "tip": "Plan usage left, as the usage ring in the app shows it."
       },
       {
         "kind": "stat",
         "id": "use:codex",
         "label": "Codex",
-        "value": "5-hour 97% left · Weekly 88% left",
-        "detail": null,
+        "value": "88% left",
+        "detail": "5-hour 97% left · Weekly 88% left",
         "tip": "Plan usage left, as the usage ring in the app shows it."
       },
       {
@@ -478,7 +478,7 @@
         "id": "cpu",
         "label": "CPU",
         "value": "34%",
-        "detail": "▃▄▄▄▄▃▂▂▂▃▄▄▄▄▃▂▂▂▃▄▄▄▃▃▂▂▂▃▄▄  last 60 s\n▅▄▄▃▂▃▃▃▄▃▃▂  12 cores now\nLoad average 5.2 · 6.0 · 6.3",
+        "detail": "▄▄▃▂▃▄▄▂▂▄▄▃▂▃▄  last 60 s\n▅▄▄▃▂▃▃▃▄▃▃▂  12 cores now\nLoad average 5.2 · 6.0 · 6.3",
         "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
       },
       {
@@ -581,7 +581,7 @@
         "kind": "need",
         "id": "n:0",
         "title": "Clear the shader cache — pixelforge",
-        "detail": "Waiting for you: permission to run `rm -rf target/shader-ca…",
+        "detail": "Waiting for you: permission to run `rm -rf target…",
         "open": {
           "key": "claude:a",
           "chat": null
@@ -590,7 +590,7 @@
       {
         "kind": "need",
         "id": "n:1",
-        "title": "Why do invoices from March show the wro… — invoices",
+        "title": "Why do invoices from March… — invoices",
         "detail": "Waiting for your answer",
         "open": {
           "key": "claude:b",
@@ -601,16 +601,16 @@
         "kind": "stat",
         "id": "use:claude",
         "label": "Claude Code",
-        "value": "5-hour 82% left · Weekly 64% left",
-        "detail": null,
+        "value": "64% left",
+        "detail": "5-hour 82% left · Weekly 64% left",
         "tip": "Plan usage left, as the usage ring in the app shows it."
       },
       {
         "kind": "stat",
         "id": "use:codex",
         "label": "Codex",
-        "value": "5-hour 97% left · Weekly 88% left",
-        "detail": null,
+        "value": "88% left",
+        "detail": "5-hour 97% left · Weekly 88% left",
         "tip": "Plan usage left, as the usage ring in the app shows it."
       },
       {
@@ -691,7 +691,7 @@
         "id": "cpu",
         "label": "CPU",
         "value": "7%",
-        "detail": "▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂  last 60 s\n▂▁▂▁▁▁▁▁▂▂▂▁  12 cores now\nLoad average 1.8 · 2.1 · 2.4",
+        "detail": "▁▂▁▁▁▂▂▁▁▂▂▁▁▁▂  last 60 s\n▂▁▂▁▁▁▁▁▂▂▂▁  12 cores now\nLoad average 1.8 · 2.1 · 2.4",
         "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
       },
       {

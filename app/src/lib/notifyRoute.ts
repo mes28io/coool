@@ -4,6 +4,7 @@
 // - "needs you" (a permission request, a question, a plan to approve): the Needs you page with that session picked,
 //   while it still waits; once answered (or gone from the list), its chat instead, never an empty page;
 // - "finished" / "failed": that chat;
+// - "new" (the menu bar item's New session): the New session sheet;
 // - anything else (the Settings test, a notification of an older build): nothing more, coool just comes forward.
 // `destination` is pure (unit-tested in notifyRoute.test.ts); `useNotifyClicks` runs it against the store.
 
@@ -20,7 +21,7 @@ export interface NotifyClick {
   action: string;
 }
 
-export type Destination = { to: "needs"; key: string } | { to: "session"; key: string } | { to: "chat"; id: number } | { to: "app" };
+export type Destination = { to: "needs"; key: string } | { to: "session"; key: string } | { to: "chat"; id: number } | { to: "new" } | { to: "app" };
 
 export interface RouteContext {
   /** The sessions the app lists: key and the coool chat driving it. */
@@ -36,6 +37,8 @@ export function destination(c: NotifyClick, ctx: RouteContext): Destination {
   const byChat = c.chat != null ? ctx.sessions.find((s) => s.chat === c.chat) : undefined;
   const key = (byKey ?? byChat)?.key ?? null;
   const chatKnown = c.chat != null && ctx.chats.includes(c.chat);
+  // The menu bar item's New session (menubar/).
+  if (c.kind === "new") return { to: "new" };
   if (c.kind !== "needs" && c.kind !== "finished" && c.kind !== "failed") return { to: "app" };
   if (c.kind === "needs" && key && ctx.needs.includes(key)) return { to: "needs", key };
   if (key) return { to: "session", key };
@@ -87,6 +90,7 @@ export function useNotifyClicks(needs: string[]) {
       if (d.to === "needs") st.openNeeds(d.key);
       else if (d.to === "session") st.open({ kind: "session", key: d.key });
       else if (d.to === "chat") st.open({ kind: "chat", id: d.id });
+      else if (d.to === "new") st.setSheet({ kind: "new" });
       void invoke("selftest_log", { line: `notify-route ${c.kind} -> ${JSON.stringify(d)}` }).catch(() => {});
     };
     void go();

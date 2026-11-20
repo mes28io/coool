@@ -120,6 +120,19 @@ pub fn proc_pct(cpu: f64) -> String {
     if cpu >= 10.0 { format!("{cpu:.0}%") } else { format!("{cpu:.1}%") }
 }
 
+/// At most `n` values: neighbours averaged into `n` buckets (so a minute of readings fits one short line).
+pub fn squeeze(v: &[f64], n: usize) -> Vec<f64> {
+    if v.len() <= n || n == 0 {
+        return v.to_vec();
+    }
+    (0..n)
+        .map(|i| {
+            let (a, b) = (i * v.len() / n, ((i + 1) * v.len() / n).max(i * v.len() / n + 1));
+            v[a..b].iter().sum::<f64>() / (b - a) as f64
+        })
+        .collect()
+}
+
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 /// Shares (0..=1) as block characters, one per value.
@@ -305,7 +318,7 @@ pub fn rows(r: &Reading) -> Vec<Row> {
     // CPU.
     let mut cpu_detail = Vec::new();
     if r.history.len() >= 2 {
-        cpu_detail.push(format!("{}  last {} s", spark(&r.history), r.history_secs));
+        cpu_detail.push(format!("{}  last {} s", spark(&squeeze(&r.history, 15)), r.history_secs));
     }
     if !r.cores.is_empty() {
         cpu_detail.push(format!("{}  {} cores now", spark(&r.cores), r.cores.len()));
@@ -394,25 +407,24 @@ pub fn rows(r: &Reading) -> Vec<Row> {
     let counts = if a.working + a.needs + a.done == 0 { "No sessions running".to_string() } else { format!("{} working · {} need{} you · {} done", a.working, a.needs, if a.needs == 1 { "s" } else { "" }, a.done) };
     out.push(stat("agents", "Sessions", counts, None, "Working: mid-turn. Needs you: a permission, a question or a plan waits. Done: finished its turn, the CLI still open."));
     for (i, n) in a.needing.iter().take(6).enumerate() {
-        let title = if n.project.is_empty() { clip(&n.title, 44) } else { format!("{} — {}", clip(&n.title, 40), clip(&n.project, 20)) };
-        out.push(Row::Need { id: format!("n:{i}"), title, detail: clip(&n.ask, 60), open: Open { key: n.key.clone(), chat: n.chat } });
+        let title = if n.project.is_empty() { clip(&n.title, 40) } else { format!("{} — {}", clip(&n.title, 28), clip(&n.project, 14)) };
+        out.push(Row::Need { id: format!("n:{i}"), title, detail: clip(&n.ask, 50), open: Open { key: n.key.clone(), chat: n.chat } });
     }
     if a.needing.len() > 6 {
         out.push(Row::Note { text: format!("and {} more on the Needs you page", a.needing.len() - 6) });
     }
     for u in &r.usage {
-        let mut v = u.limits.iter().map(|l| format!("{} {}% left", l.label, l.left)).collect::<Vec<_>>().join(" · ");
-        if v.is_empty() {
-            v = "No usage data yet".into();
-        }
+        // The figure: what is left of the tightest limit; every limit on the line under it.
+        let mut v = u.limits.iter().map(|l| l.left).min().map(|l| format!("{l}% left")).unwrap_or_else(|| "No usage data yet".into());
         if u.stale {
             v.push_str(" (old)");
         }
+        let detail = (!u.limits.is_empty()).then(|| u.limits.iter().map(|l| format!("{} {}% left", l.label, l.left)).collect::<Vec<_>>().join(" · "));
         let id = match u.cli {
             Cli::Claude => "use:claude",
             Cli::Codex => "use:codex",
         };
-        out.push(stat(id, u.cli.name(), v, None, "Plan usage left, as the usage ring in the app shows it."));
+        out.push(stat(id, u.cli.name(), v, detail, "Plan usage left, as the usage ring in the app shows it."));
     }
 
     out.push(Row::Sep);
@@ -552,6 +564,9 @@ mod tests {
         assert_eq!(proc_pct(412.3), "412%");
         assert_eq!(proc_pct(4.25), "4.2%");
         assert_eq!(spark(&[0.0, 0.5, 1.0, 2.0]), "▁▅██");
+        assert_eq!(squeeze(&[0.0, 1.0, 0.5, 0.5, 1.0], 2), vec![0.5, 2.0 / 3.0]);
+        assert_eq!(squeeze(&[0.1, 0.2], 15), vec![0.1, 0.2]);
+        assert_eq!(squeeze(&[0.5; 30], 15).len(), 15);
     }
 
     #[test]

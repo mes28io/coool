@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../lib/backend";
 import { setChatDefault, setDefaultCli, updateAppPrefs, useAppPrefs, useChatDefaults, useDefaultCli, useInstalledApps, useSeenModels } from "../../lib/prefs";
-import type { NotifySounds, PowerStatus } from "../../lib/settingsTypes";
+import type { MenuBarMode, NotifySounds, PowerStatus } from "../../lib/settingsTypes";
 import { loginText, notifyText, useLoginItem, useNotifyPermission } from "../../lib/systemPerms";
 import type { Provider } from "../../lib/types";
 import { useStore } from "../../store";
@@ -228,6 +228,37 @@ export function General() {
                 }}
               />
             </>
+          }
+        />
+      </Group>
+
+      <Group label="Menu bar" footer="Its menu shows CPU, memory, disk, network, heat and battery, the busiest processes (agents named by session), the sessions that need you and plan usage. It goes away when coool quits.">
+        <Row
+          attr="menubar-show"
+          label="Show coool in the menu bar"
+          k="menu bar status item cpu memory disk tray extension"
+          desc="An item at the top right of the screen, while coool is open."
+          control={<Switch label="Show coool in the menu bar" on={prefs?.menubar?.show ?? true} disabled={off || !prefs?.menubar} onChange={(v) => save({ menubar: { mode: prefs?.menubar?.mode ?? "cpu", show: v } })} />}
+        />
+        <Row
+          attr="menubar-mode"
+          label="Next to the icon"
+          k="menu bar cpu memory needs you reading"
+          desc="What the item shows beside its icon. A dot appears whenever a session needs you."
+          control={
+            <Select<MenuBarMode>
+              label="Next to the icon"
+              value={prefs?.menubar?.mode ?? "cpu"}
+              width={220}
+              disabled={off || !prefs?.menubar?.show}
+              options={[
+                { value: "nothing", label: "Nothing", hint: "The icon alone" },
+                { value: "cpu", label: "CPU", hint: "All cores together, like Activity Monitor" },
+                { value: "cpu_memory", label: "CPU and memory", hint: "Memory used of the total" },
+                { value: "needs", label: "Sessions needing you", hint: "How many, when any do" },
+              ]}
+              onChange={(v) => save({ menubar: { show: prefs?.menubar?.show ?? true, mode: v } })}
+            />
           }
         />
       </Group>

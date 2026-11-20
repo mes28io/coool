@@ -162,6 +162,25 @@ pub fn title_width(b: &Bar) -> f64 {
 
 const MENU_WIDTH: f64 = 330.0;
 
+/// A second line: dim text, with runs of sparkline blocks (▁..█) in Menlo, which has them at an even width (the
+/// system font falls back to some other font for them).
+fn push_detail(out: &NSMutableAttributedString, text: &str, dim: &Attrs, spark: &Attrs) {
+    let is_bar = |c: char| ('\u{2581}'..='\u{2588}').contains(&c);
+    let mut run = String::new();
+    let mut bars = false;
+    for c in text.chars() {
+        if is_bar(c) != bars && !run.is_empty() {
+            push(out, &run, if bars { spark } else { dim });
+            run.clear();
+        }
+        bars = is_bar(c);
+        run.push(c);
+    }
+    if !run.is_empty() {
+        push(out, &run, if bars { spark } else { dim });
+    }
+}
+
 fn row_title(r: &Row) -> Retained<NSMutableAttributedString> {
     let out = NSMutableAttributedString::new();
     let body = NSFont::menuFontOfSize(0.0).pointSize();
@@ -173,6 +192,8 @@ fn row_title(r: &Row) -> Retained<NSMutableAttributedString> {
     let main = attrs(&NSFont::menuFontOfSize(body), &NSColor::labelColor(), Some(&para), None);
     let figure = attrs(&NSFont::monospacedDigitSystemFontOfSize_weight(body, 0.0), &NSColor::labelColor(), Some(&para), None);
     let dim = attrs(&NSFont::systemFontOfSize(small), &NSColor::secondaryLabelColor(), Some(&para), None);
+    let spark_font = NSFont::fontWithName_size(&NSString::from_str("Menlo"), small).unwrap_or_else(|| NSFont::systemFontOfSize(small));
+    let spark = attrs(&spark_font, &NSColor::secondaryLabelColor(), Some(&para), None);
     let head = attrs(&NSFont::systemFontOfSize_weight(small, 0.3), &NSColor::secondaryLabelColor(), Some(&para), None);
     let mark = attrs(&NSFont::systemFontOfSize(small), &needs_color(), Some(&para), Some(1.0));
     match r {
@@ -182,7 +203,7 @@ fn row_title(r: &Row) -> Retained<NSMutableAttributedString> {
             push(&out, "\t", &main);
             push(&out, value, &figure);
             if let Some(d) = detail {
-                push(&out, &format!("\n{d}"), &dim);
+                push_detail(&out, &format!("\n{d}"), &dim, &spark);
             }
         }
         Row::Proc { name, what, cpu, .. } => {

@@ -38,3 +38,7 @@ test("canDecide waits for the sessions, and for the named one while the first lo
   assert.equal(canDecide(click({ session: "claude:later" }), true, false, ctx()), true);
   assert.equal(canDecide(click({ session: null }), true, true, ctx()), true);
 });
+
+test("the menu bar item's New session opens the New session sheet", () => {
+  assert.deepEqual(destination(click({ kind: "new", chat: null, session: null, request: null }), ctx()), { to: "new" });
+});
