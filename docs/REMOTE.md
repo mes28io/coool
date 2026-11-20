@@ -254,6 +254,10 @@ and a tray for pictures, files, the model, the mode and commands. Messages appea
 copy; replies stream a word at a time. Drafts are kept per chat. On-device speech recognition is not used: dictation
 needs the Mac.
 
+Not in minor 2: the Ladder chip (its per-chat state lives in the Mac's page, not in the backend; the phone shows a
+`ladder` field if the Mac ever sends one), changing a running chat's mode (deliberately), on-device speech
+recognition.
+
 No relay function or limit changed for minor 2.
 
 ## No push notifications

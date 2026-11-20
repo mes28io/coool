@@ -364,9 +364,16 @@ struct FlowText: View {
   private func reveal() async {
     let target = text.count
     let now = Date()
-    if shown < 0 || (!flowing && shown < 0) {
-      // A reply seen whole (or a chat opened mid-stream): no reveal for what was already there.
-      shown = target
+    if shown < 0 {
+      // A reply seen whole: no reveal. A stream that just began: from its first word (its first step can hold many
+      // lines; shown at once it would jump), caught up within about a second.
+      shown = flowing ? 0 : target
+      if flowing {
+        lastLen = 0
+        lastAt = now.addingTimeInterval(-0.8)
+        await reveal()
+        return
+      }
       lastLen = target
       lastAt = now
       return

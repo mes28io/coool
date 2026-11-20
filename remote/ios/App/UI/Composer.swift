@@ -63,7 +63,7 @@ struct Composer: View {
           .transition(.opacity)
       }
       NotesStrip(session: session, notes: notes.filter { !dismissed.contains($0.id) }, pending: pending, working: working, edit: edit, dismiss: { dismissed.insert($0) }, resend: resend)
-      if let q = slashQuery, let list = meta?.commands, !list.isEmpty {
+      if voice.phase == .idle, let q = slashQuery, let list = meta?.commands, !list.isEmpty {
         SlashList(commands: list, query: q) { pick($0) }
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
@@ -75,7 +75,7 @@ struct Composer: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityIdentifier("voice.note")
       }
-      if working && (hasText || !atts.isEmpty) {
+      if working && canSend && !text.hasPrefix("/") {
         WhenToggle(when: $when).transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
       }
       if voice.phase != .idle {

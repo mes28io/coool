@@ -9,7 +9,10 @@ struct CooolRemoteApp: App {
   init() {
     #if DEBUG
       let args = ProcessInfo.processInfo.arguments
-      if args.contains("--reset") { Vault.forget() }
+      if args.contains("--reset") {
+        Vault.forget()
+        for k in UserDefaults.standard.dictionaryRepresentation().keys where k.hasPrefix("draft.") { UserDefaults.standard.removeObject(forKey: k) }
+      }
       if let i = args.firstIndex(of: "--demo"), i + 1 < args.count {
         _store = State(initialValue: Demo.store(args[i + 1]))
         return

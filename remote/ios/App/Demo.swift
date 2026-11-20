@@ -158,7 +158,7 @@
     }
 
     static func meta(cli: String, model: String) -> ChatMeta {
-      ChatMeta(cli: cli, model: model, models: [.init(id: "opus", label: "Opus"), .init(id: "claude-sonnet", label: "Sonnet"), .init(id: "haiku", label: "Haiku")], mode: "default", modeLabel: "Ask before edits", context: 84_000, window: 200_000, ladder: .init(on: true, tiers: ["haiku", "sonnet"]), commands: [
+      ChatMeta(cli: cli, model: model, models: [.init(id: "opus", label: "Opus"), .init(id: "claude-sonnet", label: "Sonnet"), .init(id: "haiku", label: "Haiku")], mode: "default", modeLabel: "Ask before edits", context: 84_000, window: 200_000, commands: [
         .init(name: "review", description: "Review the current changes", kind: "command"), .init(name: "compact", description: "Summarize the conversation to free context", hint: "[instructions]", kind: "command"),
         .init(name: "context", description: "Context used, as a ring", kind: "app"), .init(name: "model", description: "Switch the model", kind: "app"),
         .init(name: "release-notes", description: "Draft release notes from the merged PRs", kind: "skill"), .init(name: "resume", description: "Pick up a past conversation", kind: "terminal"),
