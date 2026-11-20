@@ -327,6 +327,28 @@ pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
     a
 }
 
+/// The flag that lets a chat started in another mode be switched to Bypass later.
+const BYPASS_SWITCH: &str = "--allow-dangerously-skip-permissions";
+
+/// Whether `claude --help` lists [`BYPASS_SWITCH`] as an option of its own.
+fn help_has_bypass_switch(help: &str) -> bool {
+    help.lines().any(|l| l.trim_start().starts_with(BYPASS_SWITCH))
+}
+
+/// Whether the installed Claude Code knows [`BYPASS_SWITCH`]: asked once per run (`claude --help`, a couple of
+/// seconds at most). When it can't be asked, the flag is left out: a chat that starts beats a menu item that works.
+pub fn bypass_switchable() -> bool {
+    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWN.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let out = std::process::Command::new(crate::model::Provider::Claude.binary()).arg("--help").stdin(std::process::Stdio::null()).output();
+            let _ = tx.send(out.ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()));
+        });
+        matches!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(Some(h)) if help_has_bypass_switch(&h))
+    })
+}
+
 impl Claude {
     pub fn new(opts: &ChatOptions) -> Self {
         let (skills, terminal) = KNOWN_KINDS
@@ -379,6 +401,12 @@ impl Claude {
     }
 
     pub fn args(&self) -> Vec<String> {
+        self.args_for(bypass_switchable())
+    }
+
+    /// The launch arguments. `allow_bypass`: whether the installed CLI knows `--allow-dangerously-skip-permissions`
+    /// ([`bypass_switchable`]); a CLI that doesn't would refuse to start if it were passed.
+    pub fn args_for(&self, allow_bypass: bool) -> Vec<String> {
         let mut a: Vec<String> = [
             "-p",
             "--input-format",
@@ -394,11 +422,14 @@ impl Claude {
             // Bypass stays something the person can switch to later (the mode menu, "Allow everything in this chat");
             // without this the CLI refuses `set_permission_mode` to bypassPermissions in a chat started in any other
             // mode ("the session was not launched with --dangerously-skip-permissions"). It turns nothing on by itself.
-            "--allow-dangerously-skip-permissions",
+            // Passed only when the installed CLI knows it (below).
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
+        if allow_bypass {
+            a.push(BYPASS_SWITCH.to_string());
+        }
         match &self.resume {
             Some(id) => a.extend(["--resume".into(), id.clone()]),
             // Chosen up front so the hub can link the transcript before the first turn.
@@ -1250,6 +1281,10 @@ impl Backend for Claude {
     }
 
     fn set_permission_mode(&mut self, mode: &str, o: &mut Out) -> Result<()> {
+        // An older CLI was started without the switch flag and would refuse this with a confusing message.
+        if mode == "bypassPermissions" && !bypass_switchable() {
+            anyhow::bail!("This version of Claude Code can't switch to Bypass in the middle of a chat. Update Claude Code, or start a new chat in Bypass.");
+        }
         self.request(json!({"subtype": "set_permission_mode", "mode": mode}), Pending::SetMode(mode.to_string()), o);
         Ok(())
     }
@@ -1349,7 +1384,11 @@ mod tests {
         assert!(has("--session-id", &c.session_id));
         assert!(has("--model", "haiku"));
         assert!(!a.contains(&"--permission-mode".to_string()));
-        assert!(a.contains(&"--allow-dangerously-skip-permissions".to_string()), "Bypass must stay switchable");
+        assert!(!c.args_for(false).contains(&BYPASS_SWITCH.to_string()), "a CLI that doesn't know the flag never gets it");
+        let a = c.args_for(true);
+        assert!(a.contains(&BYPASS_SWITCH.to_string()), "Bypass must stay switchable");
+        assert!(help_has_bypass_switch("  --allow-dangerously-skip-permissions  Enable bypassing all permission checks\n"));
+        assert!(!help_has_bypass_switch("  --dangerously-skip-permissions        Bypass all permission checks.\n"));
         assert!(!a.contains(&"--dangerously-skip-permissions".to_string()));
         let mut r = opts();
         r.resume = Some("abc".into());
