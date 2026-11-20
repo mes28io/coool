@@ -463,6 +463,25 @@ fn matches_the_shared_vectors() {
     let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
     assert_eq!(mac.sign(&proto::request_bytes("send", &fields, 1763640000000)), s("requestSig"));
     assert_eq!(proto::pair_url("https://example.convex.cloud", &s("macId"), &s("pairingId"), &s("secret"), &mac.sign_pub(), &mac.box_pub()), s("pairUrl"));
+    // Minor 1: an image's upload parts, and the last one sealed.
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend(std::iter::repeat_n(7u8, live::CHUNK));
+    let parts = live::chunks(&bytes, &json!({"upload": "0f0e0d0c0b0a09080706050403020100"}));
+    let want = v["uploadParts"].as_array().unwrap();
+    assert_eq!(parts.len(), want.len());
+    for (p, w) in parts.iter().zip(want) {
+        for k in ["upload", "part", "parts", "size"] {
+            assert_eq!(p[k], w[k], "{k}");
+        }
+        assert_eq!(proto::sha256_hex(p["data"].as_str().unwrap()), w["dataSha256"].as_str().unwrap());
+    }
+    let env: Envelope = serde_json::from_str(&s("uploadEnvelope")).unwrap();
+    assert_eq!(env.b, parts[1]);
+    assert_eq!(proto::seal(sk.d2m.as_ref(), Dir::D2m, &s("macId"), &s("deviceId"), counter + 1, s("uploadEnvelope").as_bytes()).unwrap(), s("sealedUpload"));
+    // The Mac takes those parts as one image.
+    let mut u = live::Uploads::default();
+    assert_eq!(u.take("d", &parts[0], 0), Ok(live::Step::More));
+    assert!(matches!(u.take("d", &parts[1], 0), Ok(live::Step::Done(ref i)) if i.bytes == bytes && i.mime == "image/png"));
 }
 
 #[test]

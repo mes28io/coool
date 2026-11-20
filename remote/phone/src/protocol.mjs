@@ -11,6 +11,27 @@
 import crypto from "node:crypto";
 
 export const VERSION = 1;
+/** The minor version (docs/REMOTE.md "Minor 1"): said in `hello`; the envelope's `v` stays 1. */
+export const MINOR = 1;
+/** Raw bytes per image chunk, both ways (crates/remote/src/live.rs `CHUNK`). */
+export const CHUNK = 48 * 1024;
+/** Largest image a phone may send (live.rs `MAX_UPLOAD`). */
+export const MAX_UPLOAD = 2_000_000;
+
+/** An image as `upload` bodies: `{upload, part, parts, size, data}`, data the part's bytes in base64url. */
+export function uploadParts(id, bytes) {
+  const parts = Math.max(1, Math.ceil(bytes.length / CHUNK));
+  return Array.from({ length: parts }, (_, i) => ({ upload: id, part: i, parts, size: bytes.length, data: b64u(bytes.subarray(i * CHUNK, (i + 1) * CHUNK)) }));
+}
+
+/** Puts `image` (or `frame`) chunks back together; null until every part is there. */
+export function joinParts(chunks) {
+  const parts = chunks[0]?.parts;
+  if (!parts || chunks.length < parts) return null;
+  const sorted = [...chunks].sort((a, b) => a.part - b.part);
+  if (sorted.some((c, i) => c.part !== i)) return null;
+  return Buffer.concat(sorted.map((c) => Buffer.from(c.data, "base64url")));
+}
 export const PROTOCOL = "coool-remote/1";
 const SALT = Buffer.from(PROTOCOL, "utf8");
 

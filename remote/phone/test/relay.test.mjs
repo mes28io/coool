@@ -148,11 +148,30 @@ describe("messages", () => {
     await phone.sendText("sess-1", `${SECRET_TITLE} please run ${SECRET_CMD}`);
     assert.equal((await mac.sendTo(c, "snapshot", { sessions: [{ id: "s1", title: SECRET_TITLE, project: "zebra-app", cwd: "/Users/someone/zebra-app" }] })).ok, true);
     assert.equal((await mac.sendTo(c, "need", { id: "n1", kind: "permission", tool: "Bash", command: SECRET_CMD })).ok, true);
+    // Minor 1: every new type, both ways, image chunks and device frames included (their bytes hold a marker).
+    const MARK = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("ZEBRA-PIXELS ".repeat(400))]);
+    await phone.watch("sess-1");
+    await phone.watchDevice("sess-1", "browser");
+    await phone.getImage("sess-1", "zebra-key");
+    await phone.upload(MARK);
+    await phone.sendText("sess-1", "note", { when: "next" });
+    await phone.start("0123456789abcdef0123456789abcdef", "claude", `${SECRET_TITLE}`, { model: "haiku", mode: "plan" });
+    const zebraDiff = { path: "zebra/payroll.rs", before: "fn zebra() {}", after: "fn zebra_payroll() {}" };
+    for (const [t, b] of [
+      ["chat", { session: "s1", items: [{ k: "t:1", role: "tool", tool: "Edit", text: "zebra/payroll.rs", diff: zebraDiff }], cursor: 3, live: { text: "Zebra streaming", step: "Edit · zebra/payroll.rs" } }],
+      ["overview", { projects: [{ name: "zebra-app", changes: [{ action: "Edited", object: "zebra/payroll.rs" }], commits: [{ subject: "Zebra payroll" }] }] }],
+      ["options", { claude: { models: [{ id: "zebra-model", label: "Zebra" }] } }],
+      ["image", { session: "s1", key: "zebra-key", part: 0, parts: 1, size: MARK.length, data: P.b64u(MARK) }],
+      ["frame", { session: "s1", device: "browser", seq: 1, data: P.b64u(MARK) }],
+      ["need", { id: "n2", kind: "plan", tool: "ExitPlanMode", plan: "# Zebra plan", diff: zebraDiff, read: { what: "Zebra", why: "payroll", check: [] } }],
+    ]) {
+      assert.equal((await mac.sendTo(c, t, b)).ok, true, t);
+    }
     const d = dump(mac.macId);
-    assert.ok(d.messages.length >= 3);
+    assert.ok(d.messages.length >= 14);
     const raw = JSON.stringify(d);
     // Not in the rows as stored, nor in the decoded bytes of any ciphertext; the device name neither.
-    const needles = ["Zebra", "zebra", "payroll", "deploy", "rm -rf", "Test iPhone", "snapshot", "/Users/"];
+    const needles = ["Zebra", "zebra", "ZEBRA", "payroll", "deploy", "rm -rf", "Test iPhone", "snapshot", "/Users/", "PNG", "upload", "frame", "watch", "haiku", "overview"];
     for (const n of needles) assert.ok(!raw.includes(n), `stored rows contain "${n}"`);
     for (const m of d.messages) {
       const bytes = Buffer.from(m.ciphertext, "base64url").toString("latin1");
