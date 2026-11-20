@@ -119,6 +119,16 @@ fn main() {
     for fw in ["Foundation", "Metal", "MetalKit", "Accelerate"] {
         println!("cargo:rustc-link-lib=framework={fw}");
     }
+    // ggml's Metal glue uses `@available`, which calls `__isPlatformVersionAtLeast` from clang's own runtime. clang
+    // adds that library when it links; rustc doesn't, and a release link fails without it.
+    let rt = std::process::Command::new(c.get_compiler().path()).arg("--print-file-name=libclang_rt.osx.a").output();
+    if let Ok(o) = rt {
+        let p = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
+        if let (true, Some(dir)) = (p.is_file(), p.parent()) {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            println!("cargo:rustc-link-lib=static=clang_rt.osx");
+        }
+    }
 }
 
 /// The Metal shader source with its two headers inlined, wrapped in an assembly file that puts it between the

@@ -18,7 +18,19 @@ Two frontends share one Rust core:
 
 coool doesn't handle logins or API keys. It drives the official `claude` and `codex` CLIs, so you use whatever account those CLIs are signed in with (Claude Pro/Max, ChatGPT plan, or API key). Install and sign in to at least one of them first.
 
-## Run
+## Install
+
+On an Apple silicon Mac with macOS 13 or later:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ahmetx13/coool/master/scripts/install.sh | sh
+```
+
+This downloads the latest release, checks its SHA-256 and puts `coool.app` in `/Applications`. Nothing runs as root. The build is not notarised by Apple: installed this way macOS opens it normally, but a copy downloaded in a browser would be blocked. Run the same command again to update.
+
+To cut a release: `sh scripts/package.sh`, then attach the two files it writes to `dist/` to a GitHub release.
+
+## Run from source
 
 Desktop app (needs Rust, Node 20+ and pnpm):
 
