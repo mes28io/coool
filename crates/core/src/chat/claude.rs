@@ -391,6 +391,10 @@ impl Claude {
             "--forward-subagent-text",
             "--permission-prompt-tool",
             "stdio",
+            // Bypass stays something the person can switch to later (the mode menu, "Allow everything in this chat");
+            // without this the CLI refuses `set_permission_mode` to bypassPermissions in a chat started in any other
+            // mode ("the session was not launched with --dangerously-skip-permissions"). It turns nothing on by itself.
+            "--allow-dangerously-skip-permissions",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -1345,6 +1349,8 @@ mod tests {
         assert!(has("--session-id", &c.session_id));
         assert!(has("--model", "haiku"));
         assert!(!a.contains(&"--permission-mode".to_string()));
+        assert!(a.contains(&"--allow-dangerously-skip-permissions".to_string()), "Bypass must stay switchable");
+        assert!(!a.contains(&"--dangerously-skip-permissions".to_string()));
         let mut r = opts();
         r.resume = Some("abc".into());
         r.permission_mode = Some("plan".into());

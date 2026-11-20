@@ -83,8 +83,8 @@ export function NotifyStep() {
                 data-onb-when-option={o.value}
                 className={cx("flex items-center gap-3 px-3.5 py-2.5 text-left transition-colors duration-150 hover:bg-hover disabled:opacity-50", k > 0 && "border-t border-hairline", k === 0 ? "rounded-t-[12px]" : "rounded-b-[12px]")}
               >
-                <span className={cx("flex size-[16px] shrink-0 items-center justify-center rounded-full border transition-colors duration-150", on ? "border-accent bg-accent" : "border-[color-mix(in_oklab,var(--dim)_45%,transparent)]")}>
-                  {on && <span className="size-[6px] rounded-full bg-white" />}
+                <span className={cx("flex size-[16px] shrink-0 items-center justify-center rounded-full border transition-colors duration-150", on ? "border-fg bg-fg" : "border-[color-mix(in_oklab,var(--dim)_45%,transparent)]")}>
+                  {on && <span className="size-[6px] rounded-full bg-[var(--bg)]" />}
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="text-base text-fg">{o.label}</span>

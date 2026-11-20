@@ -18,7 +18,7 @@ export interface Chord {
 export type HoldKey = "AltRight" | "MetaRight" | "Fn" | "off";
 
 export interface VoicePrefs {
-  /** Off until set up (onboarding's "Skip" leaves it off). */
+  /** Off until set up (the onboarding's Skip leaves it as it was). */
   enabled: boolean;
   task: "translate" | "transcribe";
   /** A whisper language code, or "auto". */

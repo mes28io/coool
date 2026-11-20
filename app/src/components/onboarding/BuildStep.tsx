@@ -126,12 +126,12 @@ export function BuildStep() {
               data-onb-kind={k.id}
               className={cx(
                 "flex flex-col items-start gap-0.5 rounded-[12px] border px-3 py-2 text-left transition-colors duration-150",
-                on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft" : "border-line bg-panel hover:bg-hover",
+                on ? "border-[color-mix(in_oklab,var(--text)_38%,var(--border))] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.10)]" : "border-line bg-panel hover:bg-hover",
               )}
             >
               <span className="flex w-full items-center gap-2">
-                <span className={cx("shrink-0", on ? "text-accent-text" : "text-dim")}>{k.icon}</span>
-                <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{k.label}</span>
+                <span className={cx("shrink-0", on ? "text-fg" : "text-dim")}>{k.icon}</span>
+                <span className="min-w-0 flex-1 text-base font-medium leading-tight text-fg">{k.label}</span>
                 <Box on={on} reduce={reduce} />
               </span>
               <span className="pl-[25px] text-small text-dim">{k.line}</span>
@@ -253,7 +253,7 @@ function Box({ on, dim, reduce }: { on: boolean; dim?: boolean; reduce: boolean 
       aria-hidden
       className={cx(
         "flex size-[16px] shrink-0 items-center justify-center rounded-[5px] border transition-colors duration-150",
-        on ? "border-transparent bg-accent text-[var(--bg)]" : "border-[color-mix(in_oklab,var(--text)_28%,transparent)]",
+        on ? "border-fg bg-fg text-[var(--bg)]" : "border-[color-mix(in_oklab,var(--text)_28%,transparent)]",
         dim && (on ? "opacity-55" : "opacity-50"),
       )}
     >

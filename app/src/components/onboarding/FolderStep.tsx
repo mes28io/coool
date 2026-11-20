@@ -49,7 +49,7 @@ export function FolderStep({ ctx }: StepProps) {
                   onClick={() => ctx.setDraft({ cwd: on ? null : p })}
                   className={cx(
                     "h-[28px] max-w-[200px] truncate rounded-[8px] border px-2.5 text-small transition-colors duration-150",
-                    on ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-accent-soft text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
+                    on ? "border-[color-mix(in_oklab,var(--text)_38%,var(--border))] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.10)] text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
                   )}
                 >
                   {folderName(p)}

@@ -11,8 +11,7 @@ import { DoneStep, finish } from "./DoneStep";
 import { FolderStep } from "./FolderStep";
 import { LookStep, skipLook } from "./LookStep";
 import { NotifyStep, skipNotify } from "./NotifyStep";
-import { VoiceStep } from "./VoiceStep";
-import { setVoicePrefs } from "../../lib/voice/prefs";
+import { skipVoice, VoiceStep } from "./VoiceStep";
 import type { StepDef } from "./types";
 
 export const STEPS: StepDef[] = [
@@ -56,8 +55,9 @@ export const STEPS: StepDef[] = [
     title: "Talk to your agents",
     lead: "Speak your prompts. It runs on this Mac, stays private, and turns any language into English.",
     component: VoiceStep,
-    // Skip leaves voice off until it's set up in Settings > Voice (a download already started keeps going).
-    onSkip: () => setVoicePrefs({ enabled: false }),
+    // Skip puts voice back as it was (off on a first run, until it's set up in Settings > Voice); a download already
+    // started keeps going.
+    onSkip: skipVoice,
   },
   {
     id: "done",

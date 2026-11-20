@@ -284,6 +284,11 @@ after, and makes the unattended path one click away.
   chat's title, session and request, a notification click with that target opening the Needs you item and its
   "paused" note, the mode menu's warning and a mode picked there hiding the line, and Dismiss for this chat sticking
   through the next prompt.
+  Its Ask-mode chat runs `touch …` (Claude Code runs read-only commands such as `echo` in Ask mode without asking, so
+  no prompt would come), and heat is tested after the hold came back from the simulated kill (coool retries 30 s after
+  the helper let go), so it ends a real hold. Run on 2026-11-20 against the dry-run helper: all 15 steps pass. It found
+  two app bugs, both fixed: Bypass picked from the mode menu was refused by Claude Code (chats now start with
+  `--allow-dangerously-skip-permissions`), and the stop's ask named the tool twice ("Bash: Bash · touch …").
 - **Browser mock:** `?lid=missing&lidon=1|ready|display|holding|grace|battery|hot|stale|chat` (`chat`: on and ready,
   Settings not opened; any knob names the first chat waiting on a permission in a `waiting` stop).
 
