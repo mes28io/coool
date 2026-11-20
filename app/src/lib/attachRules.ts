@@ -252,3 +252,19 @@ export function imagePaths(s: string, max = 4, root?: string): string[] {
   }
   return out;
 }
+
+/** What the attach button asks the system file picker for: several files, no folders. */
+export const PICK_OPTIONS = { multiple: true, directory: false, title: "Attach files" } as const;
+
+/** The picker's answer as paths: null (cancelled) gives none; one path or a list as they are. */
+export function pickedPaths(r: unknown): string[] {
+  if (Array.isArray(r)) return r.filter((p): p is string => typeof p === "string" && p.length > 0);
+  return typeof r === "string" && r ? [r] : [];
+}
+
+/** The attach button's flow around the picker (`open` is the dialog plugin's): returns how many paths it added. */
+export async function pickWith(open: (o: typeof PICK_OPTIONS) => Promise<unknown>, add: (paths: string[]) => Promise<void>): Promise<number> {
+  const paths = pickedPaths(await open(PICK_OPTIONS));
+  if (paths.length) await add(paths);
+  return paths.length;
+}

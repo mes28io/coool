@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { admit, colorize, fmtSize, gridOf, imagePaths, MAX_COUNT, toneOf, typeLabel } from "./attachRules.ts";
+import { admit, colorize, fmtSize, gridOf, imagePaths, MAX_COUNT, PICK_OPTIONS, pickedPaths, pickWith, toneOf, typeLabel } from "./attachRules.ts";
 
 test("admit: limits, duplicates and plain reasons", () => {
   const have = [{ name: "a.png", size: 10 }];
@@ -70,4 +70,19 @@ test("image paths an agent mentions", () => {
   assert.deepEqual(imagePaths("nothing here"), []);
   // Only inside the chat's folder when one is given.
   assert.deepEqual(imagePaths("wrote /w/proj/out.png and /tmp/x.png and /w/proj/../etc/y.png", 4, "/w/proj"), ["/w/proj/out.png"]);
+});
+
+test("the attach button's picker: options, a cancel, one path and a list", async () => {
+  const seen: unknown[] = [];
+  const added: string[][] = [];
+  const add = async (p: string[]) => void added.push(p);
+  const open = (answer: unknown) => async (o: unknown) => (seen.push(o), answer);
+  assert.equal(await pickWith(open(null), add), 0, "cancelled: nothing added");
+  assert.equal(await pickWith(open("/a/one.png"), add), 1);
+  assert.equal(await pickWith(open(["/a/x.txt", "/a/y.pdf"]), add), 2);
+  assert.equal(await pickWith(open([]), add), 0);
+  assert.deepEqual(added, [["/a/one.png"], ["/a/x.txt", "/a/y.pdf"]]);
+  assert.deepEqual(seen[0], { multiple: true, directory: false, title: "Attach files" });
+  assert.equal(PICK_OPTIONS.directory, false);
+  assert.deepEqual(pickedPaths([null, "", "/ok"]), ["/ok"]);
 });

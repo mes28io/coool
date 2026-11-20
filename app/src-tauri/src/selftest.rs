@@ -1194,6 +1194,25 @@ pub fn selftest_local_ipc(app: AppHandle, core: State<'_, Arc<Core>>, url: Strin
     r
 }
 
+/// A file drag over the main webview as Tauri delivers the system's (`tauri://drag-enter` / `-over` / `-drop` /
+/// `-leave` to the `main` webview, with the same payload: the paths and the physical position). `kind`: enter, over,
+/// drop or leave. Nothing touches the system's drag pasteboard or the pointer.
+#[tauri::command(async)]
+pub fn selftest_drag(app: AppHandle, core: State<'_, Arc<Core>>, kind: String, paths: Vec<String>, x: f64, y: f64) -> Result<(), String> {
+    use tauri::Emitter;
+    active(&core)?;
+    let target = tauri::EventTarget::Webview { label: "main".into() };
+    let position = serde_json::json!({ "x": x, "y": y });
+    let r = match kind.as_str() {
+        "enter" => app.emit_to(target, "tauri://drag-enter", serde_json::json!({ "paths": paths, "position": position })),
+        "over" => app.emit_to(target, "tauri://drag-over", serde_json::json!({ "position": position })),
+        "drop" => app.emit_to(target, "tauri://drag-drop", serde_json::json!({ "paths": paths, "position": position })),
+        "leave" => app.emit_to(target, "tauri://drag-leave", ()),
+        _ => return Err("kind: enter, over, drop or leave".into()),
+    };
+    r.map_err(|e| e.to_string())
+}
+
 /// A real (trusted) mouse click at the centre of browser webview `id`: a left mouse down and up sent to the main
 /// window as AppKit events (`-[NSWindow sendEvent:]`: nothing is posted to the system and the pointer doesn't move).
 /// A page script's own `click()` isn't trusted, and WebKit won't follow a `target=_blank` link for it.

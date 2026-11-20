@@ -5,7 +5,7 @@
 import type React from "react";
 import { create } from "zustand";
 import { api, isTauri } from "./backend";
-import { admit, type Attachment, type Incoming } from "./attachRules";
+import { admit, type Attachment, type Incoming, pickWith } from "./attachRules";
 import type { Provider } from "./types";
 
 export interface Draft {
@@ -119,9 +119,7 @@ export async function addPaths(chat: number, paths: string[]) {
 export async function pickFiles(chat: number) {
   if (isTauri) {
     const { open } = await import("@tauri-apps/plugin-dialog");
-    const r = await open({ multiple: true, directory: false, title: "Attach files" });
-    const paths = Array.isArray(r) ? r : r ? [r] : [];
-    if (paths.length) await addPaths(chat, paths);
+    await pickWith((o) => open({ ...o }), (paths) => addPaths(chat, paths));
     return;
   }
   const input = document.createElement("input");

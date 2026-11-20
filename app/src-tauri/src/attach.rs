@@ -319,3 +319,18 @@ pub fn attach_reveal(path: String) -> Res<()> {
     std::process::Command::new("/usr/bin/open").arg("-R").arg(&p).status().map_err(err)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod picker_tests {
+    /// The attach button's picker in a packaged app: the dialog plugin is registered, and the main window's
+    /// webview's capability grants its `open` (the plugin's `default` set includes `allow-open`).
+    #[test]
+    fn the_file_picker_is_registered_and_allowed() {
+        let lib = include_str!("lib.rs");
+        assert!(lib.contains(".plugin(tauri_plugin_dialog::init())"));
+        let cap: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert!(cap["webviews"].as_array().unwrap().iter().any(|w| w == "main"));
+        let perms: Vec<&str> = cap["permissions"].as_array().unwrap().iter().filter_map(|p| p.as_str()).collect();
+        assert!(perms.iter().any(|p| *p == "dialog:default" || *p == "dialog:allow-open"), "{perms:?}");
+    }
+}
