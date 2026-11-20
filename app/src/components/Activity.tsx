@@ -29,6 +29,7 @@ import { ArtifactCard, artifactVersions } from "./ArtifactCard";
 import { countRender } from "../lib/perfCount";
 import { sessionKey } from "../lib/types";
 import { bringNear, KeepScope, useKept, Windowed, type WindowApi } from "./Windowed";
+import { useKeepReadingPlace } from "../lib/layoutAnchor";
 
 type Block =
   | { type: "prompt" | "text" | "error"; key: string; a: Activity }
@@ -170,6 +171,8 @@ export function Timeline({ session, compact, live }: { session: Session; compact
     if (focusKey) bringNear(scroller.current, focusKey, stick);
   }, [focusKey]);
   const stick = useRef(true);
+  // Rotating to portrait (or back) keeps a reader's place (lib/layoutAnchor.ts).
+  useKeepReadingPlace(scroller, stick);
   const win = useRef<WindowApi | null>(null);
   const seenPrompt = useRef<string | null>(null);
   const lastTop = useRef(0);
