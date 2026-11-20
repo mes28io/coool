@@ -28,13 +28,15 @@ import { RightPanel, type RightKind } from "./RightPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IMac, IPhone, IPlay, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IMac, IPhone, ITerminal } from "./icons";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
-import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
+import { ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
 import { modelLabel } from "../lib/models";
 import { useShellFocus } from "../lib/shellFocus";
 import { countRender } from "../lib/perfCount";
+import { useLayout, useLayoutMode } from "../lib/layout";
+import { BESIDE_CHAT_MIN, defaultFrac, fracOf, panelAxis, stackHeight, type Axis } from "../lib/layoutRules";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -81,6 +83,9 @@ export function SessionView({
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [paneW, setPaneW] = useState(0);
+  // The body's height (under the header): how tall a panel stacked above the chat can be (a portrait window).
+  const [body, setBody] = useState<HTMLDivElement | null>(null);
+  const [bodyH, setBodyH] = useState(0);
   useLayoutEffect(() => {
     if (!root) return;
     const ro = new ResizeObserver(() => setPaneW(root.clientWidth));
@@ -88,11 +93,28 @@ export function SessionView({
     setPaneW(root.clientWidth);
     return () => ro.disconnect();
   }, [root]);
-  const wide = paneW >= 900;
-  // The browser panel fits a narrower pane: it only needs room for itself and a readable chat beside it.
-  const browserFits = paneW >= BROWSER_MIN + BROWSER_CHAT_MIN;
-  const deviceFits = paneW >= DEVICE_MIN + BROWSER_CHAT_MIN;
-  const macFits = paneW >= MAC_MIN + BROWSER_CHAT_MIN;
+  useLayoutEffect(() => {
+    if (!body) return;
+    const ro = new ResizeObserver(() => setBodyH(body.clientHeight));
+    ro.observe(body);
+    setBodyH(body.clientHeight);
+    return () => ro.disconnect();
+  }, [body]);
+  // Beside the chat ("x", landscape) or above it ("y", a portrait window), per kind (lib/layoutRules.ts).
+  const layout = useLayoutMode();
+  const deviceWidthPref = useStore((st) => st.deviceWidth);
+  const axisOf = (k: RightKind): Axis => panelAxis(layout, k, paneW, bodyH, Math.max(DEVICE_MIN, Math.min(deviceWidthPref, paneW - BROWSER_CHAT_MIN)));
+  const stack = useLayout((s) => s.stack);
+  const setStack = useLayout((s) => s.setStack);
+  // Jobs and Models want a wide pane beside the chat; stacked above it, any pane will do.
+  const wide = paneW >= 900 || axisOf("agents") === "y";
+  // Opening Jobs by itself takes room from the chat: stacked, only in a pane tall enough to spare it (not a short split).
+  const roomy = paneW >= 900 || (axisOf("agents") === "y" && bodyH >= 1100);
+  // The browser panel fits a narrower pane: it only needs room for itself and a readable chat beside it (or, stacked,
+  // the pane's width).
+  const browserFits = paneW >= BROWSER_MIN + (axisOf("browser") === "y" ? 0 : BROWSER_CHAT_MIN);
+  const deviceFits = paneW >= DEVICE_MIN + (axisOf("device") === "y" ? 0 : BROWSER_CHAT_MIN);
+  const macFits = axisOf("mac") === "y" ? paneW >= BROWSER_MIN : paneW >= MAC_MIN + BROWSER_CHAT_MIN;
   const cards = useAgentCards(r.session, chat);
   const ladderTiers = useChatTiers(r.chat);
   const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
@@ -107,8 +129,8 @@ export function SessionView({
   const liveCards = cards.filter(isLive).length + shells.filter((s) => s.background).length;
   // First time something runs while the session is on screen: open it. Closing it is remembered.
   useEffect(() => {
-    if (panelKey && wide && liveCards > 0 && panelState === undefined) setRightPanel(panelKey, "agents");
-  }, [panelKey, wide, liveCards, panelState, setRightPanel]);
+    if (panelKey && roomy && liveCards > 0 && panelState === undefined) setRightPanel(panelKey, "agents");
+  }, [panelKey, roomy, liveCards, panelState, setRightPanel]);
   const hasAgents = cards.length > 0 || shells.length > 0;
   const panelOn = wide && hasAgents;
   const tabs = useStore((st) => (panelKey ? st.browser[panelKey] : undefined));
@@ -143,6 +165,10 @@ export function SessionView({
             : panelState === "models"
               ? "models"
               : null;
+  // The kind the panel frame shows (the last one while it closes) decides beside or above.
+  const [lastPanel, setLastPanel] = useState<RightKind>("agents");
+  if (showing && showing !== lastPanel) setLastPanel(showing);
+  const panelAxisNow = axisOf(showing ?? lastPanel);
   const agentsOpen = showing === "agents";
   const modelsOpen = showing === "models";
   const browserOpen = showing === "browser";
@@ -221,11 +247,16 @@ export function SessionView({
   // The chat's agent using its browser while another panel (or none) shows: a dot on the globe, as for the iPhone.
   const browserBusy = !!useAgentBrowsing(chatId, 4000);
   const toggleRight = (k: RightKind) => setPanel(showing === k ? "closed" : k);
+  // Stacked, an iPhone beside the chat keeps the chat at `BESIDE_CHAT_MIN` (dragging it wider would send it above).
+  const deviceChatMin = layout === "stacked" ? BESIDE_CHAT_MIN : BROWSER_CHAT_MIN;
+  // Stacked above the chat: each kind's remembered share of the body's height (its default until dragged).
+  const panelHeight = (k: RightKind) => stackHeight(stack[k] ?? defaultFrac(k, paneW, bodyH), bodyH);
+  const onPanelHeight = (k: RightKind, h: number) => setStack(k, h < 0 ? defaultFrac(k, paneW, bodyH) : fracOf(h, bodyH));
   const panelWidth = (k: RightKind) =>
     k === "browser"
       ? Math.max(BROWSER_MIN, Math.min(browserWidth, paneW - BROWSER_CHAT_MIN))
       : k === "device"
-        ? Math.max(DEVICE_MIN, Math.min(deviceWidth, paneW - BROWSER_CHAT_MIN))
+        ? Math.max(DEVICE_MIN, Math.min(deviceWidth, paneW - deviceChatMin))
         : k === "mac"
           ? Math.max(MAC_MIN, Math.min(macWidth, paneW - BROWSER_CHAT_MIN))
           : agentsWidth;
@@ -233,7 +264,7 @@ export function SessionView({
     k === "browser"
       ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
       : k === "device"
-        ? setDeviceWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
+        ? setDeviceWidth(Math.min(w, paneW - deviceChatMin))
         : k === "mac"
           ? setMacWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
           : setAgentsWidth(w);
@@ -242,12 +273,12 @@ export function SessionView({
     (p: OpenPage) => {
       if (!panelKey) return;
       if (!browserFits) {
-        useStore.getState().toast("Make this pane wider to open the page beside the chat");
+        useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to open the page with the chat" : "Make this pane wider to open the page beside the chat");
         return;
       }
       openBrowser(panelKey, p);
     },
-    [panelKey, browserFits, openBrowser],
+    [panelKey, browserFits, openBrowser, layout],
   );
   // Closing destroys the tabs' webviews but remembers the tabs (where each was, the active one): the globe restores them.
   const onCloseBrowser = () => {
@@ -264,7 +295,7 @@ export function SessionView({
   const onGlobe = () => {
     if (!panelKey) return;
     if (browserOpen) return setPanel("closed");
-    if (!browserFits) return useStore.getState().toast("Make this pane wider to open the browser beside the chat");
+    if (!browserFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to open the browser with the chat" : "Make this pane wider to open the browser beside the chat");
     if (tabs) return setPanel("browser");
     if (showing === "device" || showing === "mac") setPanel("closed");
     restoreBrowser(panelKey);
@@ -272,13 +303,13 @@ export function SessionView({
   const onPhone = () => {
     if (!panelKey) return;
     if (deviceOpen) return setPanel("closed");
-    if (!deviceFits) return useStore.getState().toast("Make this pane wider to show the iPhone beside the chat");
+    if (!deviceFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the iPhone with the chat" : "Make this pane wider to show the iPhone beside the chat");
     setPanel("device");
   };
   const onMac = () => {
     if (!panelKey) return;
     if (macOpen) return setPanel("closed");
-    if (!macFits) return useStore.getState().toast("Make this pane wider to show the Mac beside the chat");
+    if (!macFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the Mac with the chat" : "Make this pane wider to show the Mac beside the chat");
     setPanel("mac");
   };
 
@@ -340,7 +371,6 @@ export function SessionView({
   const cwd = session?.cwd ?? chat?.cwd ?? startingChat?.cwd ?? starting?.cwd ?? "";
   const chatLive = !!chat?.running;
   const title = session ? displayTitle(session) : (chat && chatTitle(chat)) || `New ${provider === "claude" ? "Claude Code" : "Codex"} chat`;
-  const canResume = !!session && !chatLive && !running && session.status === "ended" && !!session.id && !!session.cwd;
   const external = !!session && !hasTerm && !isChat;
   const model = chat?.model ?? session?.model ?? null;
   const context = chat && chat.context ? chat.context : (session?.tokens.context ?? 0);
@@ -379,12 +409,6 @@ export function SessionView({
           </div>
         </div>
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
-        {canResume && (
-          <Button variant="outline" onClick={() => resumeSession(session!, leaf)} title="Resume this session inside coool">
-            <IPlay size={14} />
-            Resume
-          </Button>
-        )}
         {panelKey && (
           <IconButton
             title={browserOpen ? "Hide the browser" : `Show the browser${browserBusy ? " (the agent is using it)" : pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`}
@@ -447,10 +471,10 @@ export function SessionView({
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div ref={setBody} className={cx("flex min-h-0 flex-1", panelAxisNow === "y" && "flex-col")} data-pane-body>
         <AttachSource.Provider value={attachSource}>
         <div
-          className="relative flex min-w-0 flex-1 flex-col"
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col"
           data-chat-drop={chat && mode !== "terminal" ? chat.id : undefined}
           {...(chat && mode !== "terminal" && !isTauri ? htmlDrop(chat.id) : {})}
         >
@@ -499,7 +523,15 @@ export function SessionView({
         </div>
         </AttachSource.Provider>
         {(wide || browserFits || deviceFits || macFits) && panelKey && (
-          <RightPanel which={showing} width={panelWidth} dragging={resizing} onWidth={onPanelWidth} onDragging={setResizing} onClose={() => setPanel("closed")}>
+          <RightPanel
+            which={showing}
+            width={panelWidth}
+            axis={panelAxisNow}
+            height={panelHeight(showing ?? lastPanel)}
+            dragging={resizing}
+            onWidth={onPanelWidth}
+            onHeight={onPanelHeight}
+            onDragging={setResizing} onClose={() => setPanel("closed")}>
             {(k, active) =>
               k === "agents" ? (
                 <AgentsBody cards={cards} roles={cardRoles(ladderTiers, cards)} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
@@ -573,17 +605,52 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
 function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: string; compact: boolean }) {
   const ended = session.status === "ended";
   const model = session.model ? modelLabel(session.model) : null;
-  // The same box as the chat composer, shown unavailable: coool can read this session but not type into it.
+  const canType = ended && !!session.id && !!session.cwd;
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cli = session.provider === "codex" ? "Codex" : "Claude";
+  // An ended session is just a chat you can keep writing in: the first message reopens it and is sent.
+  const send = async () => {
+    const t = text.trim();
+    if (!t || busy || !canType) return;
+    setBusy(true);
+    try {
+      const id = await resumeSession(session, leaf);
+      if (id !== undefined) {
+        await api().chatSend(id, t);
+        setText("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Clicking the empty box (or pressing a key in it) with nothing typed yet is enough to bring the full composer back.
   return (
     <div className={cx("composer-dock shrink-0 pb-3", compact ? "px-3" : "px-6")}>
       <div
-        aria-disabled="true"
-        className="mx-auto max-w-[700px] cursor-not-allowed rounded-[20px] border border-line bg-raised/60 px-3.5 pb-2.5 pt-3.5 shadow-card"
-        title={ended ? "This session has ended" : "This session runs outside coool, so you can't type into it here"}
+        aria-disabled={canType ? undefined : "true"}
+        className={cx("mx-auto max-w-[700px] rounded-[20px] border border-line px-3.5 pb-2.5 pt-3.5 shadow-card", canType ? "bg-raised" : "cursor-not-allowed bg-raised/60")}
+        title={canType ? undefined : "This session runs outside coool, so you can't type into it here"}
+        data-ended-composer={canType ? "" : undefined}
       >
-        <div className="min-h-[26px] select-none px-0.5 text-prose text-faint">
-          {ended ? "This session has ended. Resume it to keep going." : "Running outside coool. When it ends you can resume it here."}
-        </div>
+        {canType ? (
+          <textarea
+            value={text}
+            disabled={busy}
+            rows={1}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            placeholder={busy ? "Reopening the chat…" : `Message ${cli}… (continues this chat)`}
+            className="block max-h-[200px] min-h-[26px] w-full resize-none bg-transparent px-0.5 text-prose text-fg outline-none placeholder:text-faint [field-sizing:content]"
+          />
+        ) : (
+          <div className="min-h-[26px] select-none px-0.5 text-prose text-faint">Running outside coool. When it ends you can continue it here.</div>
+        )}
         <div className="mt-2 flex h-[34px] items-center gap-2">
           {model && (
             <span className="inline-flex h-[28px] items-center gap-1.5 rounded-[8px] px-2 text-small font-medium text-faint">
@@ -592,22 +659,19 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
             </span>
           )}
           <span className="flex-1" />
-          {ended && session.id ? (
-            <>
-              <Button variant="ghost" onClick={() => resumeSession(session, leaf, { terminal: true })} title="Resume in the CLI's own terminal UI">
-                <ITerminal size={15} />
-                In terminal
-              </Button>
-              <Button variant="primary" onClick={() => resumeSession(session, leaf)}>
-                <IPlay size={14} />
-                Resume here
-              </Button>
-            </>
-          ) : (
-            <span className="flex size-[32px] items-center justify-center rounded-[12px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] text-faint" aria-hidden>
-              <IArrowUp size={17} strokeWidth={1.9} />
-            </span>
-          )}
+          <button
+            type="button"
+            disabled={!canType || busy || !text.trim()}
+            onClick={() => void send()}
+            title={canType ? "Send (Enter). The chat reopens and carries on." : undefined}
+            aria-label="Send"
+            className={cx(
+              "flex size-[32px] items-center justify-center rounded-[12px] transition-colors",
+              canType && text.trim() && !busy ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--text)_8%,transparent)] text-faint",
+            )}
+          >
+            <IArrowUp size={17} strokeWidth={1.9} />
+          </button>
         </div>
       </div>
     </div>

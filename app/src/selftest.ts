@@ -54,6 +54,7 @@ import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
 import { windowScenarios } from "./selftestWindow";
 import { readmeScenarios } from "./selftestReadme";
+import { portraitScenarios } from "./selftestPortrait";
 import { filmScenarios } from "./selftestFilm";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
@@ -164,6 +165,16 @@ function type(text: string) {
 function key(k: string, el: Element = composer(), mods: KeyboardEventInit = {}) {
   el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...mods }));
 }
+/** An ended session's message box (SessionView's ExternalNotice): type `text` and press Enter; the chat reopens. */
+async function sayInEnded(text: string) {
+  const box = (await waitFor("the ended chat's message box", () => $("[data-ended-composer] textarea") as HTMLTextAreaElement | null, 10_000))!;
+  box.focus();
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+  await sleep(120);
+  box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+}
+
 async function say(text: string) {
   type(text);
   await sleep(60);
@@ -2079,15 +2090,14 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await api().chatStop(id);
       const s = await waitFor("the session to end", () => useStore.getState().sessions.find((x) => x.id === sid && x.status === "ended"), 30_000);
       useStore.getState().open({ kind: "session", key: sessionKey(s) });
-      await waitFor("the session view", () => $('button[title="Resume this session inside coool"]'), 10_000);
       const before = new Set(Object.keys(useChats.getState().chats).map(Number));
-      $('button[title="Resume this session inside coool"]')!.click();
+      await sayInEnded("Which colour did I pick in my first answer? Reply with one word.");
       resumed = (await waitFor("the resumed chat", () => newId(before), 15_000)).id;
       await waitFor("ready", () => chat(resumed)?.ready, 60_000);
       const earlier = await waitFor("earlier history on screen", () => $("[data-earlier]"), 10_000);
       if (chat(resumed)!.sessionId !== sid) throw new Fail(`resumed into ${chat(resumed)!.sessionId}, not ${sid}`);
       if ($("[data-main] .xterm")) throw new Fail("a terminal is showing");
-      await say("Which colour did I pick in my first answer? Reply with one word.");
+      
       await nextTurn(resumed, 0);
       const t = lastText(resumed);
       await shot("resumed");
@@ -7540,13 +7550,12 @@ const codexScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const s = await waitFor("the session to end", () => useStore.getState().sessions.find((x) => x.id === sid && x.status === "ended"), 15_000);
       const endedIn = Date.now() - t0;
       useStore.getState().open({ kind: "session", key: sessionKey(s) });
-      await waitFor("the session view", () => $('button[title="Resume this session inside coool"]'), 10_000);
       const before = new Set(Object.keys(useChats.getState().chats).map(Number));
-      $('button[title="Resume this session inside coool"]')!.click();
+      await sayInEnded("Which bird word other than owls came up earlier in this chat? Reply with one word, without running anything.");
       const r = (await waitFor("the resumed chat", () => newId(before), 15_000)).id;
       await waitFor("ready", () => chat(r)?.ready, 90_000);
       const earlier = await waitFor("earlier history", () => $("[data-earlier]"), 10_000).catch(() => null);
-      await say("Which bird word other than owls came up earlier in this chat? Reply with one word, without running anything.");
+      
       await nextTurn(r, 0, 120_000);
       const t = lastText(r)?.text ?? "";
       await shot("codex-resumed");
@@ -7668,6 +7677,10 @@ Object.assign(scenarios, codexScenarios);
 // `readme-shots` (selftestReadme.ts): the README's screenshots on the invented workspace of app/scripts/readme-shots;
 // no model calls (the chats talk to a stand-in CLI). Not in `all`.
 scenarios["readme-shots"] = (c: Ctx) => readmeScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) })["readme-shots"]();
+
+// `portrait` (selftestPortrait.ts): coool on a portrait screen (COOOL_SELFTEST_SIZE=1080x1920) on the same invented
+// workspace, then resized to landscape and back. No model calls. Not in `all`.
+scenarios.portrait = (c: Ctx) => portraitScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) }).portrait();
 
 // `film` / `film-measure` (selftestFilm.ts): motion footage for the launch film on the same invented workspace
 // (app/scripts/readme-shots/film.sh). No model calls. Not in `all`.

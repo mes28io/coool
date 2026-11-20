@@ -52,6 +52,7 @@ import { countRender } from "../lib/perfCount";
 import { voiceRef } from "./voice/VoiceHost";
 import { nextFrame } from "../lib/frame";
 import { bringNear, KeepScope, useKept, Windowed, type WindowApi } from "./Windowed";
+import { useKeepReadingPlace } from "../lib/layoutAnchor";
 
 type Perm = Extract<ChatItem, { kind: "permission" }>;
 type Ask = Extract<ChatItem, { kind: "question" }>;
@@ -167,6 +168,8 @@ export function ChatTimeline({
   const content = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  // Rotating to portrait (or back) keeps a reader's place (lib/layoutAnchor.ts).
+  useKeepReadingPlace(scroller, stick);
   // Scrolled away from the bottom: new output never moves the view; the button says so.
   const [away, setAway] = useState(false);
   const [fresh, setFresh] = useState(false);

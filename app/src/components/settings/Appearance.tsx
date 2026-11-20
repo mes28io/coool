@@ -6,6 +6,8 @@ import { motionHints, setMotionPref, systemReduceMotion, useMotion, type MotionP
 import { setTextSize, useTextSize, type TextSize } from "../../lib/prefs";
 import { searchShortcuts, type ShortcutGroup } from "../../lib/shortcuts";
 import { useStore, type ThemePref } from "../../store";
+import { useLayout } from "../../lib/layout";
+import type { LayoutPref } from "../../lib/layoutRules";
 import { ICheck, ISearch } from "../icons";
 import { cx, Kbd, Segmented } from "../primitives";
 import { Group, Row, Switch, useSearching } from "./ui";
@@ -37,6 +39,7 @@ export function Appearance() {
   const m = useMotion();
   const text = useTextSize();
   const glass = useGlass();
+  const layout = useLayout();
   const searching = useSearching();
   const effect =
     m.pref === "on" ? "Reduced motion, because you chose On." : m.pref === "off" ? "Full motion, because you chose Off. Auto’s checks are ignored." : m.reduce ? `Reduced motion. Auto found: ${m.reason ?? "a device reason"}.` : "Full motion. Auto found no reason to reduce.";
@@ -102,6 +105,30 @@ export function Appearance() {
                 { value: "default", label: "Default" },
                 { value: "large", label: "Large" },
                 { value: "larger", label: "Larger" },
+              ]}
+            />
+          }
+        />
+        <Row
+          attr="layout"
+          label="Layout"
+          desc={
+            layout.pref === "auto"
+              ? `Automatic stacks things when the window is taller than wide, as on a portrait screen. Now: ${layout.mode === "stacked" ? "stacked" : "side by side"}.`
+              : layout.pref === "stacked"
+                ? "Panels above the chat, split panes top and bottom, one column on Home, whatever the window’s shape."
+                : "Panels beside the chat and split panes side by side, whatever the window’s shape."
+          }
+          k="portrait vertical rotate monitor screen orientation stacked side by side columns"
+          control={
+            <Segmented<LayoutPref>
+              size="sm"
+              value={layout.pref}
+              onChange={layout.setPref}
+              options={[
+                { value: "auto", label: "Automatic" },
+                { value: "wide", label: "Side by side" },
+                { value: "stacked", label: "Stacked" },
               ]}
             />
           }
