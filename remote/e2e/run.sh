@@ -19,7 +19,7 @@ mkdir -p "$OUT/remote-e2e-proj" "$OUT/bin" "$OUT/shots"
 OUT=$(cd "$OUT" && pwd -P)
 PROJ="$OUT/remote-e2e-proj"
 cp "$BIN" "$OUT/bin/coool-remote-e2e"
-COOOL_SELFTEST=remote COOOL_SELFTEST_DIR="$PROJ" COOOL_SELFTEST_LOG="$OUT/selftest.log" COOOL_SELFTEST_SHOTS="$OUT/shots" \
+COOOL_REMOTE_RELAY="${COOOL_REMOTE_RELAY:-https://abundant-ostrich-973.eu-west-1.convex.cloud}" COOOL_SELFTEST=remote COOOL_SELFTEST_DIR="$PROJ" COOOL_SELFTEST_LOG="$OUT/selftest.log" COOOL_SELFTEST_SHOTS="$OUT/shots" \
   COOOL_SELFTEST_BACKGROUND=1 "$OUT/bin/coool-remote-e2e" > "$OUT/app.out" 2>&1 &
 APP=$!
 node "$HERE/../phone/e2e.mjs" "$PROJ" > "$OUT/phone.log" 2>&1 &

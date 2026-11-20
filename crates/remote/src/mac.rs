@@ -158,6 +158,8 @@ pub struct Engine {
     pub actions: Vec<Action>,
     pub connected: bool,
     pub error: Option<String>,
+    /// The relay's access key, when the relay is a private one.
+    pub access: Option<String>,
 }
 
 fn now_ms() -> u64 {
@@ -171,7 +173,7 @@ impl Engine {
         if saved.mac_id.is_none() {
             saved.mac_id = Some(proto::random_id());
         }
-        Engine { saved, dir, identity, pairing: None, keys: HashMap::new(), limiter: Limiter::default(), last_sessions: HashMap::new(), last_needs: HashMap::new(), seen: HashMap::new(), actions: Vec::new(), connected: false, error: None }
+        Engine { saved, dir, identity, pairing: None, keys: HashMap::new(), limiter: Limiter::default(), last_sessions: HashMap::new(), last_needs: HashMap::new(), seen: HashMap::new(), actions: Vec::new(), connected: false, error: None, access: None }
     }
 
     pub fn load_saved(dir: &std::path::Path) -> Saved {
@@ -229,7 +231,12 @@ impl Engine {
 
     pub fn register(&self, relay: &dyn RelayApi, now: u64) -> Result<()> {
         let (m, s, b) = (self.mac_id().to_string(), self.identity.sign_pub(), self.identity.box_pub());
-        self.call(relay, "registerMac", &[&m, &s, &b], json!({"macId": m, "signPub": s, "boxPub": b}), now).map(|_| ())
+        let mut args = json!({"macId": m, "signPub": s, "boxPub": b});
+        // A private relay asks a Mac it hasn't seen for its access key (relay.json beside the saved state).
+        if let Some(a) = &self.access {
+            args["access"] = json!(a);
+        }
+        self.call(relay, "registerMac", &[&m, &s, &b], args, now).map(|_| ())
     }
 
     /// Opens a read session; returns the token for `macInbox`.

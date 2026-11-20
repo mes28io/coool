@@ -20,9 +20,24 @@ Not in the first version: push notifications (decided against), accounts and sig
 
 1. **Pair by QR, no account.** The Mac shows a QR code; the phone scans it once. That pairing is the identity. Accounts can be layered on later (several Macs, a web client) without changing the message format.
 2. **It works away from home through a relay.** The QR code is only the introduction. Afterwards both sides connect outwards to the relay; the Mac opens no ports and needs no router setup.
-3. **The relay is Convex** (the owner's team `mes`, a project named `coool-remote`).
+3. **The relay is a Convex project you deploy yourself** (see "Your own relay"). The app has no built-in relay.
 4. **End-to-end encrypted.** The relay stores and forwards ciphertext. It never sees session titles, prompts, commands, paths, answers or the phone's name. It knows: which Mac id talks to which device id, when, and message sizes.
 5. **Off by default.** Nothing connects to the relay until the user turns Remote on in Settings and pairs a phone.
+
+## Your own relay
+
+coool ships with no relay. Remote is a self-hosted feature: it appears in Settings only on a Mac that names a relay,
+and each person who wants it runs their own (a free Convex project is enough for one person).
+
+1. In `remote/relay`: `npm ci`, then `npx convex deploy` into a Convex project of yours.
+2. Make it private: `npx convex env set RELAY_ACCESS "$(openssl rand -hex 32)" --prod`. With that variable set, the
+   relay refuses any Mac it hasn't seen unless the Mac presents the same value.
+3. On the Mac, write `~/Library/Application Support/coool/remote/relay.json` (mode 600):
+   `{"relay": "https://<your-deployment>.convex.cloud", "access": "<the same value>"}`.
+4. Restart coool. Settings > Remote appears. The iPhone app (`remote/ios`) learns the relay from the pairing code.
+
+The access key only gates who may use the relay. It is not part of the encryption: the relay can't read messages
+with or without it.
 
 ## Threat model
 

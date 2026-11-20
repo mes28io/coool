@@ -22,7 +22,7 @@ OUT=$(cd "$OUT" && pwd -P)
 PROJ="$OUT/remote-e2e-proj"
 cp "$BIN" "$OUT/bin/coool-remote-ios-e2e"
 xcrun simctl boot "$SIM" 2>/dev/null || true
-COOOL_SELFTEST=remote COOOL_SELFTEST_DIR="$PROJ" COOOL_SELFTEST_LOG="$OUT/selftest.log" COOOL_SELFTEST_SHOTS="$OUT/shots" \
+COOOL_REMOTE_RELAY="${COOOL_REMOTE_RELAY:-https://abundant-ostrich-973.eu-west-1.convex.cloud}" COOOL_SELFTEST=remote COOOL_SELFTEST_DIR="$PROJ" COOOL_SELFTEST_LOG="$OUT/selftest.log" COOOL_SELFTEST_SHOTS="$OUT/shots" \
   COOOL_SELFTEST_BACKGROUND=1 "$OUT/bin/coool-remote-ios-e2e" > "$OUT/app.out" 2>&1 &
 APP=$!
 TEST_RUNNER_COOOL_E2E_DIR="$PROJ" TEST_RUNNER_COOOL_E2E_SHOTS="$OUT/phone-shots" \

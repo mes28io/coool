@@ -7,6 +7,7 @@ import { motion } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { LADDER, LADDER_LINE } from "../lib/ladderTiers";
 import { SETTINGS_SECTIONS, useStore, type SettingsSection } from "../store";
+import { remoteApi } from "../lib/remote";
 import { IBack, IBell, IBranch, IClose, ICommand, IDisk, IGauge, IGear, IInfo, IPhone, IPlug, ISearch, ISpark, ISun, ITerminal } from "./icons";
 import { cx, ease, Kbd } from "./primitives";
 import { LadderSettings } from "./settings/Ladder";
@@ -39,6 +40,15 @@ const META: Record<SettingsSection, { label: string; icon: ReactNode; desc: stri
 };
 
 export function SettingsPage() {
+  // Remote shows only on a Mac that names a relay of its own (docs/REMOTE.md): the app ships without one.
+  const [hasRelay, setHasRelay] = useState(false);
+  useEffect(() => {
+    remoteApi()
+      .then((r) => r.status())
+      .then((st) => setHasRelay(!!st.relay))
+      .catch(() => {});
+  }, []);
+  const sections = SETTINGS_SECTIONS.filter((x) => x !== "remote" || hasRelay);
   const section = useStore((s) => s.settings) ?? "general";
   const open = useStore((s) => s.openSettings);
   const close = useStore((s) => s.closeSettings);
@@ -87,10 +97,10 @@ export function SettingsPage() {
   }, [close]);
 
   const onNavKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const i = SETTINGS_SECTIONS.indexOf(section);
-    const n = SETTINGS_SECTIONS.length;
+    const i = sections.indexOf(section);
+    const n = sections.length;
     const to =
-      e.key === "ArrowDown" ? SETTINGS_SECTIONS[(i + 1) % n] : e.key === "ArrowUp" ? SETTINGS_SECTIONS[(i - 1 + n) % n] : e.key === "Home" ? SETTINGS_SECTIONS[0] : e.key === "End" ? SETTINGS_SECTIONS[n - 1] : null;
+      e.key === "ArrowDown" ? sections[(i + 1) % n] : e.key === "ArrowUp" ? sections[(i - 1 + n) % n] : e.key === "Home" ? sections[0] : e.key === "End" ? sections[n - 1] : null;
     if (!to) return;
     e.preventDefault();
     go(to);
@@ -159,7 +169,7 @@ export function SettingsPage() {
           </label>
         </div>
         <div role="tablist" aria-orientation="vertical" aria-label="Settings" className="scroll flex min-h-0 flex-1 flex-col gap-0.5 px-2 pb-2" onKeyDown={onNavKey}>
-          {SETTINGS_SECTIONS.map((s) => {
+          {sections.map((s) => {
             const on = s === section && !searching;
             return (
               <button
@@ -211,7 +221,7 @@ export function SettingsPage() {
               <p className="mt-1 text-base text-dim" data-settings-hits={hits ?? ""}>
                 {hits === 0 ? `Nothing matches “${query.trim()}”.` : `Settings matching “${query.trim()}”.`}
               </p>
-              {SETTINGS_SECTIONS.map((s) => {
+              {sections.map((s) => {
                 const all = textMatches(words, `${META[s].label} ${META[s].desc}`);
                 return (
                   <section key={s} className="mt-9 [&:not(:has([data-setting]))]:hidden" data-search-section={s}>
