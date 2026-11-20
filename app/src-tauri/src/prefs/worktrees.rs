@@ -92,6 +92,8 @@ pub fn is_agent_path(path: &str) -> bool {
 /// Runs git with stdin closed and optional locks off. Ok(stdout) on exit 0, else Err(first stderr line).
 fn git(dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
     let mut c = Command::new("git");
+    // A folder from someone else can name a program in `core.fsmonitor`, which git would run.
+    c.args(["-c", "core.fsmonitor=false"]);
     if let Some(d) = dir {
         c.arg("-C").arg(d);
     }

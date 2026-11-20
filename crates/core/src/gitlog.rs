@@ -110,6 +110,8 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .arg("--no-optional-locks")
         .args(["-c", "core.quotepath=off", "-c", "log.showSignature=false", "-c", "color.ui=never"])
+        // A folder from someone else can name a program in `core.fsmonitor`, which `git status` would run.
+        .args(["-c", "core.fsmonitor=false"])
         .args(args)
         .current_dir(dir)
         .env("GIT_OPTIONAL_LOCKS", "0")

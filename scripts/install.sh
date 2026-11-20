@@ -13,6 +13,8 @@
 #   COOOL_DIR       the folder to install into
 set -eu
 
+# Everything runs inside main(), called on the last line: a download that is cut off part-way runs nothing.
+main() {
 REPO="mes28io/coool"
 ASSET="coool-macos-arm64.tar.gz"
 
@@ -77,3 +79,6 @@ if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; th
   say "coool drives the Claude Code and Codex CLIs, and neither is on your PATH yet."
   say "Install and sign in to at least one of them first."
 fi
+}
+
+main "$@"
