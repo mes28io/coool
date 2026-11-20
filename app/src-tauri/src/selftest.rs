@@ -360,6 +360,30 @@ pub fn selftest_log(core: State<'_, Arc<Core>>, line: String) -> Result<(), Stri
     Ok(())
 }
 
+/// A chat's launch, for the `ladder` scenario: the arguments coool started its CLI with, and the running process's
+/// own command line (`ps`), so the check is against what really runs.
+#[derive(Serialize)]
+pub struct ChatLaunch {
+    args: Vec<String>,
+    ps: String,
+    pid: Option<u32>,
+}
+
+#[tauri::command(async)]
+pub fn selftest_chat_launch(core: State<'_, Arc<Core>>, chat: usize) -> Result<ChatLaunch, String> {
+    active(&core)?;
+    let (args, pid) = {
+        let hub = core.hub.lock().unwrap();
+        let c = hub.chat(chat).ok_or("no such chat")?;
+        (c.launch_args().to_vec(), c.pid)
+    };
+    let ps = pid
+        .and_then(|p| std::process::Command::new("ps").args(["-ww", "-o", "args=", "-p", &p.to_string()]).output().ok())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    Ok(ChatLaunch { args, ps, pid })
+}
+
 /// Counters and resource use for the `perf-*` scenarios (see `crate::perf`).
 #[derive(Serialize)]
 pub struct PerfStats {

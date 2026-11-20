@@ -38,6 +38,9 @@ pub struct ChatOptions {
     pub model: Option<String>,
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// Ladder (APP_SPEC "Ladder"): the delegation policy and tier table handed to the CLI at launch; None: off.
+    #[serde(default)]
+    pub ladder: Option<crate::ladder::Ladder>,
 }
 
 /// An MCP server (stdio) handed to a chat's CLI at launch: Claude Code gets it through `--mcp-config`, Codex through
@@ -615,27 +618,41 @@ pub struct Chat {
     shared: Arc<Mutex<Shared>>,
     writer: Sender<WriterMsg>,
     kill_requested: Option<Instant>,
+    /// The arguments the CLI was launched with (the self-test checks Ladder's flags against them).
+    args: Vec<String>,
 }
 
 impl Chat {
     /// `client_name`: how coool introduces itself to `codex app-server` (see [`crate::origin`]).
-    pub(crate) fn start(id: usize, opts: ChatOptions, client_name: &str, mcp: &[McpServer]) -> Result<Self> {
-        let (backend, program, args): (Box<dyn Backend>, &str, Vec<String>) = match opts.provider {
+    /// `ladder_root`: where coool keeps its Claude Code plugin for Ladder (see [`crate::ladder`]).
+    pub(crate) fn start(id: usize, opts: ChatOptions, client_name: &str, mcp: &[McpServer], ladder_root: Option<&std::path::Path>) -> Result<Self> {
+        let (backend, program, args) = Self::launch(&opts, client_name, mcp, ladder_root);
+        Self::spawn(id, opts.provider, &opts.cwd, program, &args, backend)
+    }
+
+    /// The backend, program and arguments a chat starts with (unit-tested: nothing runs).
+    pub(crate) fn launch(opts: &ChatOptions, client_name: &str, mcp: &[McpServer], ladder_root: Option<&std::path::Path>) -> (Box<dyn Backend>, &'static str, Vec<String>) {
+        match opts.provider {
             Provider::Claude => {
-                let b = claude::Claude::new(&opts);
+                let b = claude::Claude::new(opts);
                 let mut args = b.args();
                 args.extend(claude::mcp_args(mcp));
+                if let Some(l) = &opts.ladder {
+                    args.extend(crate::ladder::claude_args(l, std::path::Path::new(&opts.cwd), ladder_root));
+                }
                 (Box::new(b), "claude", args)
             }
             Provider::Codex => {
-                let mut b = codex::Codex::new(&opts);
+                let mut b = codex::Codex::new(opts);
                 b.client_name = client_name.to_string();
                 let mut args = codex::args();
                 args.extend(codex::mcp_args(mcp));
+                if let Some(l) = &opts.ladder {
+                    args.extend(crate::ladder::codex_args(l));
+                }
                 (Box::new(b), "codex", args)
             }
-        };
-        Self::spawn(id, opts.provider, &opts.cwd, program, &args, backend)
+        }
     }
 
     fn spawn(id: usize, provider: Provider, cwd: &str, program: &str, args: &[String], backend: Box<dyn Backend>) -> Result<Self> {
@@ -768,7 +785,7 @@ impl Chat {
             sh.backend.start(&mut o);
             apply(&mut sh, &writer, o);
         }
-        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, writer, kill_requested: None })
+        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, writer, kill_requested: None, args: args.to_vec() })
     }
 
     fn with_backend(&mut self, call: Value, f: impl FnOnce(&mut dyn Backend, &mut Out) -> Result<()>) -> Result<()> {
@@ -910,6 +927,11 @@ impl Chat {
 
     pub fn state(&self) -> ChatState {
         lock(&self.shared).state
+    }
+
+    /// The arguments this chat's CLI was started with.
+    pub fn launch_args(&self) -> &[String] {
+        &self.args
     }
 
     pub fn session_id(&self) -> Option<String> {
@@ -1173,10 +1195,83 @@ mod tests {
         assert_eq!(strip_ansi("\x1b[2mtime\x1b[0m \x1b[31mERROR\x1b[0m x"), "time ERROR x");
     }
 
+    fn ladder_opts(provider: Provider, cwd: &str, on: bool) -> ChatOptions {
+        use crate::ladder::{Ladder, Role, Tier};
+        let tiers = match provider {
+            Provider::Claude => vec![Tier { role: Role::Mid, model: "sonnet".into(), label: "Sonnet 4.6".into() }, Tier { role: Role::Small, model: "haiku".into(), label: "Haiku 4.5".into() }],
+            Provider::Codex => vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }],
+        };
+        ChatOptions { provider, cwd: cwd.into(), resume: None, model: None, permission_mode: None, ladder: on.then(|| Ladder { tiers, max_parallel: 3, verify_tests: true }) }
+    }
+
+    /// Ladder at launch (APP_SPEC "Ladder"): on adds the CLI's own per-launch flags, off adds nothing, and nothing is
+    /// written anywhere but coool's plugin root (never the person's CLI folders or the project).
+    #[test]
+    fn ladder_reaches_the_launch_only_when_on() {
+        let tmp = std::env::temp_dir().join(format!("coool-ladder-launch-{}", std::process::id()));
+        let root = tmp.join("data");
+        let proj = tmp.join("proj");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&proj).unwrap();
+        let p = proj.to_str().unwrap();
+        let has = |a: &[String], pre: &str| a.iter().any(|x| x.starts_with(pre));
+
+        let (_, prog, off) = Chat::launch(&ladder_opts(Provider::Claude, p, false), "coool", &[], Some(&root));
+        assert_eq!(prog, "claude");
+        assert!(!has(&off, "--append-system-prompt") && !has(&off, "--plugin-dir"));
+        assert!(!root.exists(), "off writes nothing");
+
+        let (_, _, on) = Chat::launch(&ladder_opts(Provider::Claude, p, true), "coool", &[], Some(&root));
+        let policy = on.iter().find(|x| x.starts_with("--append-system-prompt=")).unwrap();
+        assert!(policy.contains("  mid Sonnet 4.6 (`sonnet`)") && policy.contains("at most 3 at once"));
+        let dir = on.iter().find_map(|x| x.strip_prefix("--plugin-dir=")).unwrap();
+        assert!(std::path::Path::new(dir).starts_with(&root));
+        // The permission flags are the same with it on: nothing loosened, no bypass turned on.
+        let perm = |a: &[String]| a.iter().filter(|x| !x.starts_with("--append-system-prompt=")).filter(|x| x.contains("permission") || x.contains("dangerously") || x.contains("allowedTools")).cloned().collect::<Vec<_>>();
+        assert_eq!(perm(&on), perm(&off));
+        assert!(!on.iter().any(|x| x == "--dangerously-skip-permissions"));
+
+        let (_, prog, coff) = Chat::launch(&ladder_opts(Provider::Codex, p, false), "coool", &[], Some(&root));
+        assert_eq!(prog, "codex");
+        assert_eq!(coff, vec!["app-server"]);
+        let (_, _, con) = Chat::launch(&ladder_opts(Provider::Codex, p, true), "coool", &[], Some(&root));
+        assert_eq!(con, vec!["app-server", "-c", "agents.max_threads=3", "-c", "agents.default_subagent_model=\"gpt-5.6-luna\""]);
+        assert!(!con.iter().any(|x| x.contains("approval") || x.contains("sandbox")));
+
+        // Only the plugin under the given root was written; the project is empty.
+        assert_eq!(std::fs::read_dir(&proj).unwrap().count(), 0);
+        let files: Vec<_> = walk(&tmp).into_iter().filter(|f| !f.starts_with(&proj)).collect();
+        assert!(files.iter().all(|f| f.starts_with(root.join("coool-ladder"))), "{files:?}");
+        if let Some(home) = dirs::home_dir() {
+            for d in [".claude", ".codex"] {
+                for f in walk(&home.join(d).join("plugins")) {
+                    assert!(!f.to_string_lossy().contains("coool-ladder"), "{f:?}");
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn walk(d: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(d) else { return out };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && !p.is_symlink() {
+                if out.len() < 20_000 {
+                    out.extend(walk(&p));
+                }
+            } else {
+                out.push(p);
+            }
+        }
+        out
+    }
+
     #[test]
     fn missing_folder_is_an_error_not_a_spawn() {
-        let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None };
-        assert!(Chat::start(0, opts, "coool", &[]).is_err());
+        let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None, ladder: None };
+        assert!(Chat::start(0, opts, "coool", &[], None).is_err());
     }
 
     /// A stand-in CLI (`/bin/sh` echoing stdin back) exercises the process

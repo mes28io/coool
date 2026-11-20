@@ -11,6 +11,7 @@ import { keysCaptured } from "../lib/macKeys";
 import { answerKeysCovered } from "../lib/answerKeys";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
+import { cardRoles, useChatTiers } from "./LadderTally";
 import { api } from "../lib/backend";
 import { chatModels, chatTitle, pendingPermission, useChatShell, type Chat } from "../lib/chat";
 import { displayTitle, folderName, titleWas } from "../lib/format";
@@ -91,6 +92,7 @@ export function SessionView({
   const deviceFits = paneW >= DEVICE_MIN + BROWSER_CHAT_MIN;
   const macFits = paneW >= MAC_MIN + BROWSER_CHAT_MIN;
   const cards = useAgentCards(r.session, chat);
+  const ladderTiers = useChatTiers(r.chat);
   const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
   const panelState = useStore((st) => (panelKey ? st.rightPanel[panelKey] : undefined));
   const setRightPanel = useStore((st) => st.setRightPanel);
@@ -495,7 +497,7 @@ export function SessionView({
           <RightPanel which={showing} width={panelWidth} dragging={resizing} onWidth={onPanelWidth} onDragging={setResizing} onClose={() => setPanel("closed")}>
             {(k, active) =>
               k === "agents" ? (
-                <AgentsBody cards={cards} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
+                <AgentsBody cards={cards} roles={cardRoles(ladderTiers, cards)} shells={shells} onOpenCard={onOpenCard} onStop={onStopCard} onStopShell={(pid) => api().stopShell(pid)} />
               ) : k === "browser" ? (
                 tabs ? <BrowserPanel panelKey={panelKey} chat={r.chat} state={tabs} active={active} onClose={onCloseBrowser} recent={recent} /> : null
               ) : k === "device" ? (

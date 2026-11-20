@@ -39,13 +39,14 @@ interface Cell {
   card?: AgentCardData;
 }
 
-export function FanOut({ cards, shells, onOpen }: { cards: AgentCardData[]; shells: Shell[]; onOpen: (c: AgentCardData) => void }) {
+/** `roles`: card id -> Ladder tier ("small"), for chats launched with Ladder; shown before the model. */
+export function FanOut({ cards, shells, onOpen, roles }: { cards: AgentCardData[]; shells: Shell[]; onOpen: (c: AgentCardData) => void; roles?: Record<string, string> }) {
   const cells: Cell[] = [
     ...cards.map((c) => ({
       id: c.id,
       state: cellState(c),
       title: c.description || c.kind,
-      sub: [c.source === "job" ? "Job" : c.kind, c.model ? modelLabel(c.model) : null].filter(Boolean).join(" · "),
+      sub: [c.model && roles?.[c.id] ? `${roles[c.id]} · ${modelLabel(c.model)}` : c.model ? modelLabel(c.model) : null, c.source === "job" ? "Job" : c.kind].filter(Boolean).join(" · "),
       step: c.state === "running" || c.state === "needs" ? (c.error ?? c.label) : (c.error ?? c.result ?? ""),
       tokens: c.tokens,
       since: c.startedAt,
@@ -93,6 +94,7 @@ export function FanOut({ cards, shells, onOpen }: { cards: AgentCardData[]; shel
             >
               <Square state={c.state} size={10} />
               <span className="truncate">{c.title}</span>
+              {roles?.[c.id] && <span className="shrink-0 text-faint">{roles[c.id]}</span>}
             </button>
           ))}
         </div>

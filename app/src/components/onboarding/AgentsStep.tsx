@@ -11,6 +11,7 @@ import { START_MODES } from "../../lib/startModes";
 import { loginBlocked as loginBlockedOf, loginOn as loginOnOf, loginText, useLoginItem } from "../../lib/systemPerms";
 import type { Provider } from "../../lib/types";
 import { PERMISSION_MODES } from "../ChatComposer";
+import { LadderOnboardingRow } from "../LadderOnboarding";
 import { Button, cx, ProviderMark, Segmented } from "../primitives";
 import { DEFAULT, modelChoices } from "../settings/General";
 import { Select, Switch, type Option } from "../settings/ui";
@@ -107,6 +108,7 @@ export function AgentsStep({ ctx }: StepProps) {
           <Switch label="Keep this Mac awake while agents work" on={!!prefs?.prevent_sleep} disabled={!prefs} onChange={(v) => void updateAppPrefs({ prevent_sleep: v }).catch(() => {})} />
         </div>
       </div>
+      <LadderOnboardingRow />
       {err && <div className="px-1 text-small text-err-text">{err}</div>}
     </div>
   );

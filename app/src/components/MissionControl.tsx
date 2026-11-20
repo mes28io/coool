@@ -24,6 +24,7 @@ import { AwayStrip } from "./Away";
 import { ChangeLedger } from "./ChangeLedger";
 import { CommitTrail, type Committing } from "./CommitTrail";
 import { FanOut } from "./FanOut";
+import { cardRoles, useChatTiers } from "./LadderTally";
 import { IAgent, IPlay, IPlus } from "./icons";
 import { Age, Card, CardHeader, Node } from "./MissionCard";
 import { AutoTag, Button, cx, ease, Kbd, PathText, ProviderMark, softSpring, StatusDot } from "./primitives";
@@ -383,6 +384,7 @@ const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
   const headline = s.insight?.headline && !headlineIsTitle(s) ? s.insight.headline : null;
   const pendingLoad = s.loaded === false;
   const showFan = batch.length > 0 || shells.length >= 2;
+  const tiers = useChatTiers(s.chat);
   const live = busy && !pendingLoad && !since.approx;
 
   return (
@@ -429,6 +431,7 @@ const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
           <FanOut
             cards={batch}
             shells={shells}
+            roles={cardRoles(tiers, batch)}
             onOpen={(c) => {
               open({ kind: "session", key: c.source === "job" ? c.ref : key });
               if (c.source !== "job") focusAgent(c.ref);

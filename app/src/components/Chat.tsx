@@ -12,6 +12,7 @@ import { permissionWhat, rowText, toolChips, toolRow, type ToolRow } from "../li
 import { patchFiles, patchLead } from "../lib/patch";
 import { agentFill, fillModel, handoffLine, taskPrompt } from "../lib/agentFill";
 import { FillBar, Handoff } from "./AgentFill";
+import { LadderTally, TierTag, tierWord, useChatTiers } from "./LadderTally";
 import { LiveTurnBar, TurnBar, useTurnBreakdown, Waterfall } from "./TurnBreakdown";
 import { modelLabel } from "../lib/models";
 import type { Activity, RememberOption } from "../lib/types";
@@ -953,6 +954,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
   const fromText = [...new Set(texts.map((t) => t.model).filter(Boolean) as string[])];
   const modelIds = models.length ? models : fromText;
   const agentOut = chat.agents[tool.id]?.total || Object.values(chat.agents[tool.id]?.models ?? {}).reduce((n, u) => n + u.output, 0);
+  const tiers = useChatTiers(chat.id);
   const agentSeen = useRef(new Set(shownSteps.map((s) => s.key)));
   const card = useRef<HTMLDivElement>(null);
   const focus = useStore((st) => st.agentFocus);
@@ -994,6 +996,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
           <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-center gap-2 px-3 pb-1.5 pt-2">
             <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{kind}</span>
             <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
+            <TierTag role={tierWord(tiers, modelIds[0], chat.provider)} />
             {modelIds.map((m) => (
               <ModelTag key={m} model={m} />
             ))}
@@ -1012,6 +1015,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
           {!running && (
             <div className="flex items-center gap-2 px-3 pb-1">
               <span className="rounded-[6px] bg-[color-mix(in_oklab,var(--accent-2)_14%,transparent)] px-1.5 text-small font-medium text-dim">{kind}</span>
+              <TierTag role={tierWord(tiers, modelIds[0], chat.provider)} />
               {modelIds.map((m) => (
                 <ModelTag key={m} model={m} />
               ))}
@@ -1505,8 +1509,9 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
   );
   if (!b)
     return (
-      <div className="-mt-1 flex items-center gap-1.5 px-1 text-small text-faint" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
-        {row}
+      <div className="-mt-1 px-1" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
+        <div className="flex items-center gap-1.5 text-small text-faint">{row}</div>
+        <LadderTally chat={chat} item={item} />
       </div>
     );
   return (
@@ -1524,6 +1529,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
           <IChevron size={11} />
         </motion.span>
       </button>
+      <LadderTally chat={chat} item={item} />
       <TurnBar b={b} className="mt-1.5" />
       <AnimatePresence initial={false}>
         {open && (

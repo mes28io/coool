@@ -58,6 +58,8 @@ const NONE: ChatDefaults = { claude: { model: null, mode: null }, codex: { model
 export const getChatDefaults = () => (ignored ? NONE : chatDefaults.get());
 /** The self-test's chats start as its steps say, whatever the person chose (`false`: a scenario that tests the defaults). */
 export const ignoreChatDefaults = (on = true) => (ignored = on);
+/** A self-test run is on: its chats start as its steps say (Ladder stays off unless a step turns it on). */
+export const chatDefaultsIgnored = () => ignored;
 export const useChatDefaults = chatDefaults.use;
 export const chatDefaultsNow = chatDefaults.get;
 export function setChatDefault(p: Provider, patch: Partial<ChatDefaults[Provider]>) {
@@ -100,6 +102,7 @@ const seenModels = store<Record<Provider, { id: string; label: string }[]>>(
   (v) => writeJson(SEEN_KEY, v),
 );
 export const useSeenModels = seenModels.use;
+export const seenModelsNow = seenModels.get;
 export function rememberModels(p: Provider, list: { id: string; label?: string | null }[]) {
   if (!list.length) return;
   const cur = seenModels.get();

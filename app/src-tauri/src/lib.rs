@@ -1703,6 +1703,8 @@ pub fn run() {
         // folder (so the test still sees them), and Codex threads carry a test name.
         hub.set_own_sessions_file(Some(t.own_sessions_path()));
         hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
+        // Ladder's plugin folder (APP_SPEC "Ladder") goes in the run's own folder too.
+        hub.set_ladder_root(Some(t.dir().join(".coool-ladder")));
     }
     let mut usage = UsageMonitor::new();
     // Self-test runs stay off the person's accounts: free file reads only.
@@ -1890,6 +1892,7 @@ pub fn run() {
             sim_erase,
             selftest::selftest_config,
             selftest::selftest_log,
+            selftest::selftest_chat_launch,
             selftest::selftest_shot,
             selftest::selftest_window,
             selftest::selftest_perf_stats,

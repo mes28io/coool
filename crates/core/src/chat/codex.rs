@@ -102,6 +102,8 @@ pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
 enum Req {
     Init,
     ModelList,
+    /// `config/read` before the thread, for the person's own `developer_instructions` (Ladder appends to them).
+    ConfigRead,
     Thread,
     /// `turn/start`; with the note it carries, if any.
     Turn(Option<String>),
@@ -164,6 +166,8 @@ pub(crate) struct Codex {
     /// `clientInfo.name` in `initialize`; Codex records it as the rollout's
     /// `originator`, which is how a later launch recognises coool's own threads.
     pub(crate) client_name: String,
+    /// Ladder's policy (APP_SPEC "Ladder"), sent as `developerInstructions` after the person's own; None: off.
+    ladder: Option<String>,
 }
 
 impl Codex {
@@ -200,6 +204,7 @@ impl Codex {
             stopping: false,
             plans: 0,
             client_name: crate::origin::CLIENT_NAME.to_string(),
+            ladder: opts.ladder.as_ref().map(|l| crate::ladder::policy(crate::ladder::Cli::Codex, l, std::path::Path::new(&opts.cwd), true)),
         };
         if let Some(m) = &opts.permission_mode {
             let m = approval_policy(m);
@@ -251,7 +256,16 @@ impl Codex {
     }
 
     fn start_thread(&mut self, o: &mut Out) {
+        self.start_thread_with(None, o);
+    }
+
+    /// `theirs`: the `developer_instructions` the person's config has (Ladder's policy goes after them, since
+    /// `developerInstructions` replaces the configured value for this thread).
+    fn start_thread_with(&mut self, theirs: Option<&str>, o: &mut Out) {
         let mut p = json!({"cwd": self.cwd});
+        if let Some(l) = &self.ladder {
+            p["developerInstructions"] = json!(crate::ladder::merge_instructions(theirs, l));
+        }
         if !self.model.is_empty() {
             p["model"] = json!(self.model);
         }
@@ -393,6 +407,11 @@ impl Codex {
             let what = match kind {
                 Req::Init => "start Codex",
                 Req::ModelList => return,
+                Req::ConfigRead => {
+                    // Could not read it: start the thread with the policy alone rather than not at all.
+                    self.start_thread(o);
+                    return;
+                }
                 Req::Thread => "open the thread",
                 Req::Turn(note) => {
                     self.in_turn = false;
@@ -417,7 +436,15 @@ impl Codex {
             Req::Init => {
                 o.write(&json!({"jsonrpc": "2.0", "method": "initialized"}));
                 self.request("model/list", json!({}), Req::ModelList, o);
-                self.start_thread(o);
+                if self.ladder.is_some() {
+                    self.request("config/read", json!({}), Req::ConfigRead, o);
+                } else {
+                    self.start_thread(o);
+                }
+            }
+            Req::ConfigRead => {
+                let theirs = r["config"]["developer_instructions"].as_str().map(str::to_string);
+                self.start_thread_with(theirs.as_deref(), o);
             }
             Req::ModelList => {
                 self.models = r["data"]
@@ -1297,7 +1324,7 @@ mod tests {
     use crate::chat::testutil::{replay, replay_full};
 
     fn opts() -> ChatOptions {
-        ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()) }
+        ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()), ladder: None }
     }
 
     #[test]
@@ -1350,6 +1377,45 @@ mod tests {
         // File changes: the fixed set includes a session option.
         let o = approval_options("item/fileChange/requestApproval", &json!({}));
         assert_eq!((o.len(), o[0].0.scope, o[0].1.clone()), (1, RememberScope::Chat, json!("acceptForSession")));
+    }
+
+    /// Ladder on: the person's own `developer_instructions` are read first and the policy goes after them, on
+    /// `thread/start` and on `thread/resume` alike. Off: no `config/read`, no instructions.
+    #[test]
+    fn ladder_policy_rides_on_the_thread_after_the_persons_own() {
+        use crate::ladder::{Ladder, Role, Tier};
+        let lad = Ladder { tiers: vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }], max_parallel: 2, verify_tests: false };
+        let sent = |o: &Out, method: &str| o.writes.iter().map(|w| serde_json::from_str::<Value>(w).unwrap()).find(|v| v["method"] == method);
+        for resume in [None, Some("t-1".to_string())] {
+            let mut c = Codex::new(&ChatOptions { ladder: Some(lad.clone()), resume: resume.clone(), ..opts() });
+            let mut o = Out::default();
+            c.start(&mut o);
+            c.on_line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#, &mut o);
+            assert!(sent(&o, "thread/start").is_none() && sent(&o, "thread/resume").is_none(), "waits for config/read");
+            let read = sent(&o, "config/read").unwrap();
+            let id = read["id"].as_u64().unwrap();
+            c.on_line(&format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"config":{{"developer_instructions":"Mine first."}}}}}}"#), &mut o);
+            let t = sent(&o, if resume.is_some() { "thread/resume" } else { "thread/start" }).unwrap();
+            let di = t["params"]["developerInstructions"].as_str().unwrap();
+            assert!(di.starts_with("Mine first.\n\n# Ladder"), "{di}");
+            assert!(di.contains("`spawn_agent`'s `model`") && di.contains("GPT-5.6-Luna"));
+            assert_eq!(t["params"]["approvalPolicy"], "untrusted", "permissions unchanged");
+        }
+        // A failed config/read still starts the thread, with the policy alone.
+        let mut c = Codex::new(&ChatOptions { ladder: Some(lad), ..opts() });
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.on_line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#, &mut o);
+        let id = sent(&o, "config/read").unwrap()["id"].as_u64().unwrap();
+        c.on_line(&format!(r#"{{"jsonrpc":"2.0","id":{id},"error":{{"message":"no"}}}}"#), &mut o);
+        assert!(sent(&o, "thread/start").unwrap()["params"]["developerInstructions"].as_str().unwrap().starts_with("# Ladder"));
+        // Off.
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.on_line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#, &mut o);
+        assert!(sent(&o, "config/read").is_none());
+        assert!(sent(&o, "thread/start").unwrap()["params"].get("developerInstructions").is_none());
     }
 
     #[test]
