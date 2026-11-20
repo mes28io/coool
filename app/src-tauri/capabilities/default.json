@@ -56,7 +56,7 @@
     "allow-device-grants", "allow-device-grants-revoke", "allow-browser-agent-sync", "allow-browser-presence-end",
     "allow-presence-motion",
     "allow-selftest-config", "allow-selftest-log", "allow-selftest-chat-launch", "allow-selftest-shot", "allow-selftest-film",
-    "allow-selftest-window", "allow-selftest-perf-stats", "allow-selftest-request-quit", "allow-selftest-artifact",
+    "allow-selftest-window", "allow-selftest-perf-stats", "allow-selftest-menubar", "allow-selftest-request-quit", "allow-selftest-artifact",
     "allow-selftest-probe-server", "allow-selftest-probe-result", "allow-selftest-resize", "allow-selftest-webview",
     "allow-selftest-popups", "allow-selftest-browser-eval", "allow-selftest-page-cursors",
     "allow-selftest-browser-tool", "allow-selftest-page-marks", "allow-selftest-previews",

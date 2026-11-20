@@ -33,6 +33,17 @@ export interface AppPrefs {
   building?: Building[];
   /** "Keep working with the lid closed" and its limits. Left out of a `prefs_set`, it stays as it is. */
   lid?: LidPrefs | null;
+  /** The menu bar item (Settings > General > Menu bar). Older backends: absent. */
+  menubar?: MenuBarPrefs | null;
+}
+
+/** What the menu bar item shows beside its glyph (menubar/model.rs `Mode`). */
+export type MenuBarMode = "nothing" | "cpu" | "cpu_memory" | "needs";
+
+export interface MenuBarPrefs {
+  /** "Show coool in the menu bar" (on by default). */
+  show: boolean;
+  mode: MenuBarMode;
 }
 
 /** The onboarding's answer: each kind suggests a device panel (components/onboarding/BuildStep.tsx). */

@@ -274,3 +274,18 @@ Left as they are:
 - `buildBlocks` still walks the items once per batch for subagent children (pointer checks, ~10 µs at 1500), and the
   live row's `now` / `idleSince` / `inputs` loops are O(items): all well under the noise.
 - Text further than a screen from the view is not in the DOM: a selection can't reach it.
+
+## The menu bar item (2026-11-20)
+
+`app/src-tauri/src/menubar/`: a status item and a native NSMenu; one sampler thread. A sample (CPU ticks per core,
+VM pages, swap, load average, the idle and display state) costs microseconds in C; every 10 s it also scans the
+person's processes (~2 ms for ~1000 pids) so the menu has figures the moment it opens; disk every 30 s, heat and
+battery every 15 s (`motion::read`). It samples every 2 s while the bar shows CPU or memory or the menu is open, every
+10 s after a minute without input, 30 s after five, and not at all while the display sleeps, the screen is locked, or
+the bar shows no figure (the needs-you mark comes from the refresh coool already runs).
+
+Measured by the `menubar` self-test (debug build, the item hidden, invented workspace): the app process at
+0.99 % of one core with the item on (CPU shown) and 0.72 % with it off, over a minute each, load average 15 / 12 / 11;
+the sampler's own time 47 ms in that minute (30 samples, 0.08 %). A second run (no live sessions, load spiking to 69):
+0.78 % on, 0.54 % off, sampler 58 ms (22 samples: the person was away, so it slowed to 10 s). A release build costs
+less. Re-run: `COOOL_BIN=<debug build> sh app/scripts/readme-shots/menubar.sh`.
