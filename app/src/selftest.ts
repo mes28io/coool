@@ -6,7 +6,9 @@
 //
 // Scenarios (COOOL_SELFTEST=all, or a comma list): stream, approval, interrupt,
 // model, slash, question, steer, markdown, resume, codex, insights, quit, and `perf` (CPU phases; not in `all`),
-// `artifact` (the preview window and its sandbox; no model calls), `browser` (artifact, then the in-app browser's
+// `artifact` (the preview window and its sandbox, and the app's commands refused to a local page in any webview but
+// main; no model calls), `acl` (Settings and read-only commands answer main, a Codex chat starts without a turn;
+// no model calls), `browser` (artifact, then the in-app browser's
 // tabs and native webviews: layout tracking, hiding, IPC isolation, pop-ups vs tabs, eviction, restoring; needs the
 // network for example.com; no model calls), `glass` (the frosted window chrome and device panels in both themes, the
 // setting off, inactive, full screen, then frame pacing with it on and off; example.com; no model calls, nothing booted).
@@ -1313,6 +1315,20 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (bad.length) throw new Fail(`${bad.join("; ")} (${JSON.stringify(r)})`);
       return JSON.stringify(r);
     });
+    await step("a local-origin page (the artifact as a top frame) in a webview other than main is refused every command", async () => {
+      // The worst case: coool-artifact:// is a local origin and Tauri's script and invoke key are in the top frame.
+      // Only `main` is granted the app's commands (capabilities/default.json, enforced through the app manifest).
+      const out: string[] = [];
+      for (const kind of ["window", "child"]) {
+        const r = JSON.parse((await invoke("selftest_local_ipc", { url: info.url, kind })) as string) as Record<string, unknown>;
+        const bad = ipcLeaks(r);
+        if (r.internals !== "object") bad.push(`__TAURI_INTERNALS__ ${r.internals} (not the local-origin case)`);
+        if (!String(r.origin).startsWith("coool-artifact:")) bad.push(`origin ${r.origin}`);
+        if (bad.length) throw new Fail(`${kind}: ${bad.join("; ")} (${JSON.stringify(r)})`);
+        out.push(`${kind}: ${JSON.stringify(r)}`);
+      }
+      return out.join(" | ");
+    });
     await step("Preview again focuses the same window; closing it forgets it", async () => {
       if (!label) throw new Fail("no preview window");
       await api().artifactWindow(info.url);
@@ -1323,6 +1339,50 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       await sleep(800);
       const left = await previews();
       if (left.length) throw new Fail(`still open: ${JSON.stringify(left.map((p) => p.label))}`);
+    });
+  },
+  /**
+   * The app's commands still answer `main` now that they go through the ACL (an app manifest made from
+   * generate_handler!, granted to `main` in capabilities/default.json): every Settings section opens, and a set of
+   * read-only commands is called directly; none may be refused by the ACL. Then a Codex chat starts without a turn
+   * (no model call): its `coool-device` server is up with the chat's token, which reaches it through Codex's
+   * environment, not its command line (the harness checks `ps` from outside while it runs).
+   */
+  async acl(ctx) {
+    await step("acl: every Settings section opens from main", async () => {
+      const st = useStore.getState();
+      for (const sec of ["general", "ladder", "notifications", "voice", "appearance", "shortcuts", "providers", "devices", "git", "connections", "storage", "usage", "insights", "about"] as const) {
+        st.openSettings(sec);
+        await waitFor(`the ${sec} settings`, () => $("[data-settings-page]"), 5_000);
+        await sleep(1000);
+      }
+      await shot("acl-settings-about");
+      useStore.getState().closeSettings();
+      await sleep(500);
+    });
+    await step("acl: read-only app commands answer main (none refused by the ACL)", async () => {
+      const cmds = ["list_sessions", "environment", "prefs_get", "power_status", "lid_status", "login_status", "apps_installed", "cli_status", "connections", "worktrees_list", "storage_status", "insights_status", "pilot_log_status", "running_count", "notify_sounds", "voice_status", "voice_models", "mac_status", "device_grants", "motion_hints", "trace_sessions", "onboarding_seen", "selftest_config"];
+      const bad: string[] = [];
+      for (const c of cmds) {
+        try {
+          await invoke(c, {});
+        } catch (e) {
+          const m = String((e as { message?: string })?.message ?? e);
+          // Another error (missing arguments, nothing to show) still means the call got past the ACL.
+          if (/not allowed/i.test(m)) bad.push(`${c}: ${m.slice(0, 120)}`);
+        }
+      }
+      if (bad.length) throw new Fail(bad.join(" | "));
+      return `${cmds.length} commands, none refused`;
+    });
+    await step("acl: a Codex chat starts (no turn) with its device server up", async () => {
+      const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+      await newChat({ provider: "codex", cwd: ctx.cfg.dir, model: CODEX_MODEL });
+      const id = (await waitFor("the Codex chat", () => newId(before), 10_000)).id;
+      await waitFor("ready", () => chat(id)?.ready, 90_000);
+      await log(`INFO acl: codex chat ${id} ready; holding 12 s for the ps check`);
+      await sleep(12_000);
+      return `chat ${id}`;
     });
   },
   async stream(ctx) {

@@ -73,8 +73,10 @@ pub(crate) fn args() -> Vec<String> {
     vec!["app-server".into()]
 }
 
-/// `-c mcp_servers.<name>.command=…` / `.args=[…]` / `.env={…}` overrides (values are TOML; a JSON string is a valid
-/// TOML basic string). Codex reads them on top of the person's config without writing it.
+/// `-c mcp_servers.<name>.command=…` / `.args=[…]` / `.env_vars=[…]` overrides (values are TOML; a JSON string is a
+/// valid TOML basic string). Codex reads them on top of the person's config without writing it. The env values (the
+/// chat's device token) are not on the command line, where any process of this user could read them (`ps`): they
+/// go in the environment of `codex` itself ([`mcp_env`]), and `env_vars` names the ones Codex passes on to the server.
 pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
     let q = |s: &str| serde_json::to_string(s).unwrap_or_default();
     let mut a = Vec::new();
@@ -84,8 +86,8 @@ pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
         let args: Vec<String> = s.args.iter().map(|x| q(x)).collect();
         a.extend(["-c".into(), format!("{key}.args=[{}]", args.join(","))]);
         if !s.env.is_empty() {
-            let env: Vec<String> = s.env.iter().map(|(k, v)| format!("{}={}", q(k), q(v))).collect();
-            a.extend(["-c".into(), format!("{key}.env={{{}}}", env.join(","))]);
+            let names: Vec<String> = s.env.iter().map(|(k, _)| q(k)).collect();
+            a.extend(["-c".into(), format!("{key}.env_vars=[{}]", names.join(","))]);
         }
         // Without it Codex asks before every call of the server's tools, as an MCP elicitation coool can't answer
         // (declined at once, so every call failed with "user rejected MCP tool call").
@@ -97,6 +99,11 @@ pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
         }
     }
     a
+}
+
+/// The servers' env, set on the `codex` process (see [`mcp_args`]; one value per name across servers).
+pub(crate) fn mcp_env(servers: &[super::McpServer]) -> Vec<(String, String)> {
+    servers.iter().flat_map(|s| s.env.iter().cloned()).collect()
 }
 
 enum Req {
@@ -1329,14 +1336,18 @@ mod tests {
 
     #[test]
     fn mcp_servers_become_config_overrides() {
-        let a = mcp_args(&[super::super::McpServer {
+        let servers = [super::super::McpServer {
             name: "coool-device".into(),
             command: "/Applications/coool.app/Contents/MacOS/coool".into(),
             args: vec!["--coool-device-mcp".into()],
-            env: vec![("COOOL_DEVICE_TOKEN".into(), "t\"1".into())],
+            env: vec![("COOOL_DEVICE_TOKEN".into(), "secret-t\"1".into())],
             allow_all: true,
             tool_timeout_sec: Some(900),
-        }]);
+        }];
+        let a = mcp_args(&servers);
+        // The token goes in codex's own environment, never on its command line.
+        assert!(!a.iter().any(|x| x.contains("secret")), "the token is on the command line: {a:?}");
+        assert_eq!(mcp_env(&servers), vec![("COOOL_DEVICE_TOKEN".to_string(), "secret-t\"1".to_string())]);
         assert_eq!(
             a,
             vec![
@@ -1345,7 +1356,7 @@ mod tests {
                 "-c",
                 r#"mcp_servers.coool-device.args=["--coool-device-mcp"]"#,
                 "-c",
-                r#"mcp_servers.coool-device.env={"COOOL_DEVICE_TOKEN"="t\"1"}"#,
+                r#"mcp_servers.coool-device.env_vars=["COOOL_DEVICE_TOKEN"]"#,
                 "-c",
                 r#"mcp_servers.coool-device.default_tools_approval_mode="approve""#,
                 "-c",

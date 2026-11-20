@@ -43,7 +43,7 @@ pub struct ChatOptions {
     pub ladder: Option<crate::ladder::Ladder>,
 }
 
-/// An MCP server (stdio) handed to a chat's CLI at launch: Claude Code gets it through `--mcp-config`, Codex through
+/// An MCP server (stdio) handed to a chat's CLI at launch: Claude Code gets it through `--mcp-config=<private file>`, Codex through
 /// `-c mcp_servers.<name>.…` overrides. Nothing is written to the person's CLI config.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpServer {
@@ -626,17 +626,38 @@ impl Chat {
     /// `client_name`: how coool introduces itself to `codex app-server` (see [`crate::origin`]).
     /// `ladder_root`: where coool keeps its Claude Code plugin for Ladder (see [`crate::ladder`]).
     pub(crate) fn start(id: usize, opts: ChatOptions, client_name: &str, mcp: &[McpServer], ladder_root: Option<&std::path::Path>) -> Result<Self> {
-        let (backend, program, args) = Self::launch(&opts, client_name, mcp, ladder_root);
-        Self::spawn(id, opts.provider, &opts.cwd, program, &args, backend)
+        // MCP servers never ride on the command line (their env holds the chat's device token, and `ps` shows any
+        // process's arguments to this user): Claude Code reads them from a private file, removed as soon as the CLI
+        // has started (its first output) or exited; Codex gets the env values in its own environment.
+        let mcp_file = match opts.provider {
+            Provider::Claude if !mcp.is_empty() => {
+                let p = claude::mcp_config_path(id)?;
+                claude::write_mcp_config(&p, mcp)?;
+                Some(p)
+            }
+            _ => None,
+        };
+        let env = if opts.provider == Provider::Codex { codex::mcp_env(mcp) } else { Vec::new() };
+        let (backend, program, args) = Self::launch(&opts, client_name, mcp, ladder_root, mcp_file.as_deref());
+        let r = Self::spawn(id, opts.provider, &opts.cwd, program, &args, &env, mcp_file.clone(), backend);
+        if r.is_err()
+            && let Some(p) = &mcp_file
+        {
+            let _ = std::fs::remove_file(p);
+        }
+        r
     }
 
-    /// The backend, program and arguments a chat starts with (unit-tested: nothing runs).
-    pub(crate) fn launch(opts: &ChatOptions, client_name: &str, mcp: &[McpServer], ladder_root: Option<&std::path::Path>) -> (Box<dyn Backend>, &'static str, Vec<String>) {
+    /// The backend, program and arguments a chat starts with (unit-tested: nothing runs). `mcp_file`: where Claude
+    /// Code's MCP config is written (see [`Self::start`]).
+    pub(crate) fn launch(opts: &ChatOptions, client_name: &str, mcp: &[McpServer], ladder_root: Option<&std::path::Path>, mcp_file: Option<&std::path::Path>) -> (Box<dyn Backend>, &'static str, Vec<String>) {
         match opts.provider {
             Provider::Claude => {
                 let b = claude::Claude::new(opts);
                 let mut args = b.args();
-                args.extend(claude::mcp_args(mcp));
+                if let Some(f) = mcp_file {
+                    args.extend(claude::mcp_args(mcp, f));
+                }
                 if let Some(l) = &opts.ladder {
                     args.extend(crate::ladder::claude_args(l, std::path::Path::new(&opts.cwd), ladder_root));
                 }
@@ -655,12 +676,13 @@ impl Chat {
         }
     }
 
-    fn spawn(id: usize, provider: Provider, cwd: &str, program: &str, args: &[String], backend: Box<dyn Backend>) -> Result<Self> {
+    #[allow(clippy::too_many_arguments)]
+    fn spawn(id: usize, provider: Provider, cwd: &str, program: &str, args: &[String], env: &[(String, String)], mcp_file: Option<std::path::PathBuf>, backend: Box<dyn Backend>) -> Result<Self> {
         if !std::path::Path::new(cwd).is_dir() {
             bail!("folder does not exist: {cwd}");
         }
         let mut cmd = Command::new(program);
-        cmd.args(args).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(args).envs(env.iter().map(|(k, v)| (k, v))).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         // Own process group, so stop() reaches the tools it spawned too.
         cmd.process_group(0);
         let mut child = cmd.spawn().with_context(|| format!("spawn `{program}` (is it installed and on PATH?)"))?;
@@ -705,6 +727,9 @@ impl Chat {
         {
             let shared = shared.clone();
             let writer = writer.clone();
+            // The CLI has read its MCP config by the time it says anything: the file goes then (and at exit, below,
+            // if it never does), so it doesn't outlive the chat when coool itself quits.
+            let mut config = mcp_file.clone();
             thread::spawn(move || {
                 let mut r = BufReader::new(stdout);
                 let mut buf = Vec::new();
@@ -713,6 +738,9 @@ impl Chat {
                     match r.read_until(b'\n', &mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(_) => {
+                            if let Some(p) = config.take() {
+                                let _ = std::fs::remove_file(p);
+                            }
                             let line = String::from_utf8_lossy(&buf);
                             let line = line.trim();
                             if line.is_empty() {
@@ -761,6 +789,9 @@ impl Chat {
             let writer = writer.clone();
             thread::spawn(move || {
                 let code = child.wait().ok().and_then(|s| s.code());
+                if let Some(p) = mcp_file {
+                    let _ = std::fs::remove_file(p);
+                }
                 // Something the CLI spawned may still hold stdout open; don't wait forever.
                 let _ = eof_rx.recv_timeout(Duration::from_secs(2));
                 let mut sh = lock(&shared);
@@ -1216,12 +1247,12 @@ mod tests {
         let p = proj.to_str().unwrap();
         let has = |a: &[String], pre: &str| a.iter().any(|x| x.starts_with(pre));
 
-        let (_, prog, off) = Chat::launch(&ladder_opts(Provider::Claude, p, false), "coool", &[], Some(&root));
+        let (_, prog, off) = Chat::launch(&ladder_opts(Provider::Claude, p, false), "coool", &[], Some(&root), None);
         assert_eq!(prog, "claude");
         assert!(!has(&off, "--append-system-prompt") && !has(&off, "--plugin-dir"));
         assert!(!root.exists(), "off writes nothing");
 
-        let (_, _, on) = Chat::launch(&ladder_opts(Provider::Claude, p, true), "coool", &[], Some(&root));
+        let (_, _, on) = Chat::launch(&ladder_opts(Provider::Claude, p, true), "coool", &[], Some(&root), None);
         let policy = on.iter().find(|x| x.starts_with("--append-system-prompt=")).unwrap();
         assert!(policy.contains("  mid Sonnet 4.6 (`sonnet`)") && policy.contains("at most 3 at once"));
         let dir = on.iter().find_map(|x| x.strip_prefix("--plugin-dir=")).unwrap();
@@ -1231,10 +1262,10 @@ mod tests {
         assert_eq!(perm(&on), perm(&off));
         assert!(!on.iter().any(|x| x == "--dangerously-skip-permissions"));
 
-        let (_, prog, coff) = Chat::launch(&ladder_opts(Provider::Codex, p, false), "coool", &[], Some(&root));
+        let (_, prog, coff) = Chat::launch(&ladder_opts(Provider::Codex, p, false), "coool", &[], Some(&root), None);
         assert_eq!(prog, "codex");
         assert_eq!(coff, vec!["app-server"]);
-        let (_, _, con) = Chat::launch(&ladder_opts(Provider::Codex, p, true), "coool", &[], Some(&root));
+        let (_, _, con) = Chat::launch(&ladder_opts(Provider::Codex, p, true), "coool", &[], Some(&root), None);
         assert_eq!(con, vec!["app-server", "-c", "agents.max_threads=3", "-c", "agents.default_subagent_model=\"gpt-5.6-luna\""]);
         assert!(!con.iter().any(|x| x.contains("approval") || x.contains("sandbox")));
 
@@ -1250,6 +1281,68 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The device server's token never reaches either CLI's command line (`ps` shows it to any process of this user).
+    #[test]
+    fn device_token_stays_off_the_command_line() {
+        let mcp = [McpServer {
+            name: "coool-device".into(),
+            command: "/Applications/coool.app/Contents/MacOS/coool".into(),
+            args: vec!["--coool-device-mcp".into()],
+            env: vec![("COOOL_DEVICE_SOCKET".into(), "/tmp/s.sock".into()), ("COOOL_DEVICE_TOKEN".into(), "0123456789abcdef-token".into())],
+            allow_all: true,
+            tool_timeout_sec: Some(900),
+        }];
+        let file = std::path::Path::new("/private/coool-mcp/1-2.json");
+        let (_, _, a) = Chat::launch(&ladder_opts(Provider::Claude, "/", false), "coool", &mcp, None, Some(file));
+        assert!(a.iter().any(|x| x == "--mcp-config=/private/coool-mcp/1-2.json"), "{a:?}");
+        let (_, _, b) = Chat::launch(&ladder_opts(Provider::Codex, "/", false), "coool", &mcp, None, None);
+        assert!(b.iter().any(|x| x.contains("mcp_servers.coool-device.env_vars=")), "{b:?}");
+        for x in a.iter().chain(&b) {
+            assert!(!x.contains("0123456789abcdef-token"), "token in argv: {x}");
+        }
+    }
+
+    /// The env given to a chat reaches its process, and Claude Code's MCP config file goes when the process ends.
+    #[test]
+    fn chat_env_is_set_and_the_mcp_file_goes_with_the_process() {
+        struct Nop;
+        impl Backend for Nop {
+            fn start(&mut self, _: &mut Out) {}
+            fn on_line(&mut self, _: &str, _: &mut Out) {}
+            fn send(&mut self, _: &str, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn interrupt(&mut self, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn set_model(&mut self, _: &str, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn set_permission_mode(&mut self, _: &str, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn respond_permission(&mut self, _: &str, _: bool, _: bool, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn on_exit(&mut self, _: &mut Out) {}
+        }
+        let dir = std::env::temp_dir().join(format!("coool-mcp-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cfg.json");
+        std::fs::write(&file, "{}").unwrap();
+        let out = dir.join("env.txt");
+        let script = format!("printf %s \"$COOOL_DEVICE_TOKEN\" > '{}'", out.display());
+        let env = [("COOOL_DEVICE_TOKEN".to_string(), "tok-1".to_string())];
+        let c = Chat::spawn(9, Provider::Codex, "/", "/bin/sh", &["-c".into(), script], &env, Some(file.clone()), Box::new(Nop)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (c.is_running() || file.exists()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!file.exists(), "the MCP config outlived the process");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "tok-1");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn walk(d: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -1306,7 +1399,7 @@ mod tests {
             fn on_exit(&mut self, _: &mut Out) {}
         }
         // `head -n 2` exits after two lines, like a CLI ending on its own.
-        let mut c = Chat::spawn(7, Provider::Claude, "/", "/bin/sh", &["-c".into(), "head -n 2".into()], Box::new(Echo)).unwrap();
+        let mut c = Chat::spawn(7, Provider::Claude, "/", "/bin/sh", &["-c".into(), "head -n 2".into()], &[], None, Box::new(Echo)).unwrap();
         c.send("second").unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while c.is_running() && Instant::now() < deadline {
@@ -1357,7 +1450,7 @@ mod tests {
             fn on_exit(&mut self, _: &mut Out) {}
         }
         // `cat` echoes each written line back: "working" / "idle" drive the backend's state.
-        let mut c = Chat::spawn(3, Provider::Claude, "/", "/bin/cat", &[], Box::new(Nop)).unwrap();
+        let mut c = Chat::spawn(3, Provider::Claude, "/", "/bin/cat", &[], &[], None, Box::new(Nop)).unwrap();
         let wait_state = |c: &Chat, s: ChatState| {
             let deadline = Instant::now() + Duration::from_secs(5);
             while c.state() != s && Instant::now() < deadline {
@@ -1427,7 +1520,7 @@ mod tests {
             fn on_exit(&mut self, _: &mut Out) {}
         }
         // Ignores stdin EOF; only a signal ends it.
-        let mut c = Chat::spawn(0, Provider::Codex, "/", "/bin/sh", &["-c".into(), "sleep 30 & wait".into()], Box::new(Nop)).unwrap();
+        let mut c = Chat::spawn(0, Provider::Codex, "/", "/bin/sh", &["-c".into(), "sleep 30 & wait".into()], &[], None, Box::new(Nop)).unwrap();
         thread::sleep(Duration::from_millis(100));
         c.stop();
         let deadline = Instant::now() + Duration::from_secs(5);

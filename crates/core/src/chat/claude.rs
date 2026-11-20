@@ -313,23 +313,71 @@ fn is_ladder_skill(name: &str) -> bool {
     name.strip_prefix(&crate::ladder::plugin_name()).is_some_and(|r| r.starts_with(':'))
 }
 
-/// `--mcp-config=<json>` (the `=` form: the flag takes several values and would swallow what follows) and, for servers
-/// whose tools are pre-approved, `--allowedTools=mcp__<name>`.
-pub(crate) fn mcp_args(servers: &[super::McpServer]) -> Vec<String> {
+/// `--mcp-config=<file>` (the `=` form: the flag takes several values and would swallow what follows) and, for servers
+/// whose tools are pre-approved, `--allowedTools=mcp__<name>`. The servers themselves are in `config`
+/// ([`write_mcp_config`]), never on the command line: their env carries the chat's device token, and any process of
+/// this user can read another's arguments (`ps`).
+pub(crate) fn mcp_args(servers: &[super::McpServer], config: &std::path::Path) -> Vec<String> {
     if servers.is_empty() {
         return Vec::new();
     }
-    let mut map = serde_json::Map::new();
-    for s in servers {
-        let env: serde_json::Map<String, Value> = s.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
-        map.insert(s.name.clone(), json!({ "type": "stdio", "command": s.command, "args": s.args, "env": env }));
-    }
-    let mut a = vec![format!("--mcp-config={}", json!({ "mcpServers": map }))];
+    let mut a = vec![format!("--mcp-config={}", config.display())];
     let allowed: Vec<String> = servers.iter().filter(|s| s.allow_all).map(|s| format!("mcp__{}", s.name)).collect();
     if !allowed.is_empty() {
         a.push(format!("--allowedTools={}", allowed.join(",")));
     }
     a
+}
+
+fn mcp_config(servers: &[super::McpServer]) -> Value {
+    let mut map = serde_json::Map::new();
+    for s in servers {
+        let env: serde_json::Map<String, Value> = s.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+        map.insert(s.name.clone(), json!({ "type": "stdio", "command": s.command, "args": s.args, "env": env }));
+    }
+    json!({ "mcpServers": map })
+}
+
+/// Where chat `chat`'s MCP config goes: `<per-user temp folder>/coool-mcp/<coool's pid>-<chat>.json`. The folder is
+/// made 0700 (and refused if it is anyone else's or open to others), so only this user can read the file. Files of
+/// coool processes that are gone are cleared on the way.
+pub(crate) fn mcp_config_path(chat: usize) -> anyhow::Result<std::path::PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let dir = std::env::temp_dir().join("coool-mcp");
+    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e).context("make the MCP config folder"),
+    }
+    let m = std::fs::symlink_metadata(&dir)?;
+    // SAFETY: getuid has no preconditions.
+    if !m.file_type().is_dir() || m.uid() != unsafe { libc::getuid() } || m.permissions().mode() & 0o077 != 0 {
+        anyhow::bail!("{} isn't a private folder of this user", dir.display());
+    }
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let pid = n.split('-').next().and_then(|p| p.parse::<i32>().ok());
+            // SAFETY: signal 0 only checks whether the process exists.
+            if let Some(pid) = pid
+                && pid != std::process::id() as i32
+                && unsafe { libc::kill(pid, 0) } != 0
+            {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    Ok(dir.join(format!("{}-{chat}.json", std::process::id())))
+}
+
+/// Writes the servers to `path`, readable by this user only (0600, created fresh: never through a link left there).
+pub(crate) fn write_mcp_config(path: &std::path::Path, servers: &[super::McpServer]) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::remove_file(path);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).with_context(|| format!("write {}", path.display()))?;
+    f.write_all(mcp_config(servers).to_string().as_bytes())?;
+    Ok(())
 }
 
 /// The flag that lets a chat started in another mode be switched to Bypass later.
@@ -1405,23 +1453,32 @@ mod tests {
     }
 
     #[test]
-    fn mcp_servers_ride_on_flags_with_equals() {
-        assert!(mcp_args(&[]).is_empty());
-        let a = mcp_args(&[super::super::McpServer {
+    fn mcp_servers_ride_in_a_private_file_not_on_the_command_line() {
+        use std::os::unix::fs::PermissionsExt;
+        let servers = [super::super::McpServer {
             name: "coool-device".into(),
             command: "/Applications/coool.app/Contents/MacOS/coool".into(),
             args: vec!["--coool-device-mcp".into()],
-            env: vec![("COOOL_DEVICE_TOKEN".into(), "t\"1".into())],
+            env: vec![("COOOL_DEVICE_TOKEN".into(), "secret-t\"1".into())],
             allow_all: true,
             tool_timeout_sec: Some(900),
-        }.clone()]);
-        assert_eq!(a.len(), 2);
-        let cfg: Value = serde_json::from_str(a[0].strip_prefix("--mcp-config=").unwrap()).unwrap();
+        }];
+        let path = mcp_config_path(usize::MAX).unwrap();
+        assert!(mcp_args(&[], &path).is_empty());
+        let a = mcp_args(&servers, &path);
+        assert_eq!(a, vec![format!("--mcp-config={}", path.display()), "--allowedTools=mcp__coool-device".to_string()]);
+        assert!(!a.iter().any(|x| x.contains("secret")), "the token is on the command line: {a:?}");
+        // The file: this user's only, in a folder of this user's only, with the token in the server's env.
+        std::fs::write(&path, "stale").unwrap();
+        write_mcp_config(&path, &servers).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let s = &cfg["mcpServers"]["coool-device"];
         assert_eq!(s["command"], "/Applications/coool.app/Contents/MacOS/coool");
         assert_eq!(s["args"][0], "--coool-device-mcp");
-        assert_eq!(s["env"]["COOOL_DEVICE_TOKEN"], "t\"1");
-        assert_eq!(a[1], "--allowedTools=mcp__coool-device");
+        assert_eq!(s["env"]["COOOL_DEVICE_TOKEN"], "secret-t\"1");
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// Real run: initialize, a Write that needs permission (allowed), then a
