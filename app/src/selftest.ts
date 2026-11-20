@@ -33,7 +33,9 @@
 // resume of a thread id Codex doesn't have: the chat ends as not opened; no model use) and `codex-model-chip` (a new
 // Codex thread, no turn: the Model chip and menu). `attach` / `attach-codex` (selftestAttach.ts: images and a file
 // attached, the agent describes and quotes them, the message, lightbox and preview, then the reopened chat shows
-// them again from the transcript; not in `all`). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
+// them again from the transcript; not in `all`), `attach-steer` / `attach-steer-codex` (an image on a note mid-turn),
+// `attach-step-image` (the preview of an image the agent writes, and its refusals) and `attach-gestures` (drag events as
+// Tauri delivers them, a paste event, the PDF pages; no model use). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { glassState } from "./lib/glass";
 import { openOnboarding } from "./lib/onboarding";
