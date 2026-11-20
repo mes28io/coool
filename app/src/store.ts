@@ -46,7 +46,7 @@ export interface BrowserTabs {
 export type RightPanelKind = "agents" | "models" | "browser" | "device" | "mac";
 
 /** The full-screen Settings page's categories, in order (components/SettingsPage.tsx). */
-export const SETTINGS_SECTIONS = ["general", "ladder", "notifications", "voice", "appearance", "shortcuts", "providers", "devices", "git", "connections", "storage", "usage", "insights", "about"] as const;
+export const SETTINGS_SECTIONS = ["general", "ladder", "notifications", "voice", "appearance", "shortcuts", "providers", "devices", "remote", "git", "connections", "storage", "usage", "insights", "about"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /**

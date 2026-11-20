@@ -602,6 +602,11 @@ impl ChatHandle {
         Some((id, rx))
     }
 
+    /// An info line from coool itself in the chat's timeline, e.g. "Allowed from Ada's iPhone" (coool Remote).
+    pub fn note(&self, text: &str) {
+        lock(&self.shared).push(ChatEventKind::notice(NoticeLevel::Info, text));
+    }
+
     /// Takes back a request from [`Self::ask`] nobody answered (it timed out), with a note in the chat.
     pub fn withdraw(&self, request_id: &str, note: &str) {
         let mut sh = lock(&self.shared);

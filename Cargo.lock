@@ -776,6 +776,7 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "coool-core",
+ "coool-remote",
  "coool-whisper",
  "cpal",
  "dirs",

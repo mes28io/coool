@@ -236,6 +236,12 @@ fn worker(me: std::sync::Weak<Remote>, stop: Arc<AtomicBool>, nudges: mpsc::Rece
         let mut beat = Instant::now();
         let mut last_tick = Instant::now();
         let host = r.host.clone();
+        let devices = |r: &Remote| {
+            if let Ok(v) = t.query("macDevices", serde_json::json!({ "token": token })) {
+                let _ = r.with(|e| e.note_devices(&v));
+            }
+        };
+        devices(&r);
         drop(r);
         loop {
             if stop.load(Ordering::Relaxed) {
@@ -270,6 +276,7 @@ fn worker(me: std::sync::Weak<Remote>, stop: Arc<AtomicBool>, nudges: mpsc::Rece
             if beat.elapsed() >= Duration::from_secs(60) {
                 beat = Instant::now();
                 let _ = r.with(|e| e.heartbeat(&t, Engine::now()));
+                devices(&r);
             }
             if opened.elapsed() >= Duration::from_secs(6 * 3600) {
                 break;

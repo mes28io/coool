@@ -120,9 +120,13 @@ export class Phone {
   }
 
   /** Seals and sends one message; returns its envelope (its `id` is what the Mac's `result` names). */
-  async send(t, b = {}) {
+  send(t, b = {}) {
+    return this.sendEnvelope(P.envelope(t, b));
+  }
+
+  /** Sends a ready envelope (the tests use it for one with an old `at`). */
+  async sendEnvelope(env) {
     const s = this.s;
-    const env = P.envelope(t, b);
     s.sendCounter = P.nextCounter(s.sendCounter ?? 0);
     const ct = P.seal(this.keys.d2m, "d2m", s.mac.macId, s.deviceId, s.sendCounter, env);
     const r = await this.relay.send(s.id.signPriv, s.mac.macId, s.deviceId, "d2m", s.sendCounter, ct);

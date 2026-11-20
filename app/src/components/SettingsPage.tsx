@@ -13,6 +13,7 @@ import { LadderSettings } from "./settings/Ladder";
 import { Appearance, Shortcuts } from "./settings/Appearance";
 import { General, Notifications } from "./settings/General";
 import { About, Insights, UsageSection } from "./settings/Other";
+import { RemoteSettings } from "./settings/Remote";
 import { Devices, Providers, Storage } from "./settings/System";
 import { SearchScope, textMatches } from "./settings/ui";
 import { Connections, Git } from "./settings/Workspace";
@@ -28,6 +29,7 @@ const META: Record<SettingsSection, { label: string; icon: ReactNode; desc: stri
   shortcuts: { label: "Keyboard shortcuts", icon: <ICommand size={16} />, desc: "Every shortcut coool has.", body: () => <Shortcuts /> },
   providers: { label: "Providers", icon: <ITerminal size={16} />, desc: "The Claude Code and Codex CLIs coool runs.", body: () => <Providers /> },
   devices: { label: "Devices", icon: <IPhone size={16} />, desc: "The Browser and iPhone panels agents drive, and the device pilot.", body: () => <Devices /> },
+  remote: { label: "Remote", icon: <IPhone size={16} />, desc: "Watch and steer coool from a paired iPhone, end-to-end encrypted.", body: () => <RemoteSettings /> },
   git: { label: "Git & worktrees", icon: <IBranch size={16} />, desc: "A project’s repository and the worktrees agents made in it.", body: () => <Git /> },
   connections: { label: "Connections", icon: <IPlug size={16} />, desc: "MCP servers, hooks and plugins your CLIs are set up with.", body: () => <Connections /> },
   storage: { label: "Storage", icon: <IDisk size={16} />, desc: "What coool keeps on this Mac, and what you can clear.", body: () => <Storage /> },

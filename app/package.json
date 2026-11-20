@@ -23,6 +23,7 @@
     "border-beam": "1.4.1",
     "geist": "^1.9.2",
     "motion": "^14.14.0",
+    "qrcode-generator": "2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "9.0.1",

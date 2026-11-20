@@ -369,7 +369,10 @@ async function session(ctx: QueryCtx, token: string, role: "mac" | "device") {
   return s;
 }
 
-/** The Mac's live view: messages from its devices (oldest first), claims waiting for the click, its devices. */
+/**
+ * The Mac's live view: messages from its devices (oldest first) and claims waiting for the click. It reads no
+ * `devices` row, so the Mac's own sends (which bump a device's counter) don't re-run it; see `macDevices`.
+ */
 export const macInbox = query({
   args: { token: v.string() },
   handler: async (ctx, a) => {
@@ -380,15 +383,24 @@ export const macInbox = query({
       .withIndex("by_mac_dir", (q) => q.eq("macId", s.macId).eq("dir", "d2m"))
       .take(100);
     const pairings = await ctx.db.query("pairings").withIndex("by_mac", (q) => q.eq("macId", s.macId)).collect();
-    const devices = await ctx.db.query("devices").withIndex("by_mac", (q) => q.eq("macId", s.macId)).collect();
     return {
       ok: true as const,
       messages: messages.map((m) => ({ deviceId: m.deviceId, counter: m.counter, ciphertext: m.ciphertext, createdAt: m.createdAt })),
       claims: pairings
         .filter((p) => p.state === "claimed" && p.claim)
         .map((p) => ({ pairingId: p.pairingId, createdAt: p.createdAt, ...p.claim! })),
-      devices: devices.map((d) => ({ deviceId: d.deviceId, revoked: d.revoked, lastSeen: d.lastSeen })),
     };
+  },
+});
+
+/** The Mac's devices as the relay sees them (when each was last seen), read now and then rather than live. */
+export const macDevices = query({
+  args: { token: v.string() },
+  handler: async (ctx, a) => {
+    const s = await session(ctx, a.token, "mac");
+    if (!s) return refuse("session");
+    const devices = await ctx.db.query("devices").withIndex("by_mac", (q) => q.eq("macId", s.macId)).collect();
+    return { ok: true as const, devices: devices.map((d) => ({ deviceId: d.deviceId, revoked: d.revoked, lastSeen: d.lastSeen })) };
   },
 });
 

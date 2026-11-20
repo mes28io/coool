@@ -405,13 +405,7 @@ impl Engine {
                 host.changed();
             }
         }
-        if let Some(ds) = inbox.get("devices").and_then(Value::as_array) {
-            for d in ds {
-                if let (Some(id), Some(t)) = (d.get("deviceId").and_then(Value::as_str), d.get("lastSeen").and_then(Value::as_f64)) {
-                    self.seen.insert(id.to_string(), t as u64);
-                }
-            }
-        }
+        self.note_devices(inbox);
         let mut msgs: Vec<&Value> = inbox.get("messages").and_then(Value::as_array).map(|a| a.iter().collect()).unwrap_or_default();
         msgs.sort_by_key(|m| m.get("counter").and_then(Value::as_f64).unwrap_or(0.0) as u64);
         let mut acks: HashMap<String, u64> = HashMap::new();
@@ -429,6 +423,17 @@ impl Engine {
             let _ = self.call(relay, "ack", &[&m, &device_id, "d2m", &u], json!({"macId": m, "deviceId": device_id, "dir": "d2m", "upTo": up_to}), now);
         }
         self.save();
+    }
+
+    /// The relay's `macDevices` answer (or any with a `devices` list): when it last saw each device.
+    pub fn note_devices(&mut self, v: &Value) {
+        if let Some(ds) = v.get("devices").and_then(Value::as_array) {
+            for d in ds {
+                if let (Some(id), Some(t)) = (d.get("deviceId").and_then(Value::as_str), d.get("lastSeen").and_then(Value::as_f64)) {
+                    self.seen.insert(id.to_string(), t as u64);
+                }
+            }
+        }
     }
 
     fn refuse(&mut self, host: &dyn Host, device_id: &str, detail: &str, now: u64) {

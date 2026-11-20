@@ -22,6 +22,7 @@ mod notify;
 mod perf;
 mod power;
 mod prefs;
+mod remote;
 mod selftest;
 mod trace;
 mod voice;
@@ -434,6 +435,9 @@ impl Core {
                 })
                 .collect()
         };
+        // coool Remote: the sessions as a paired phone sees them.
+        let waiting_chats: Vec<usize> = chats.iter().filter(|c| c.state == ChatState::WaitingPermission).map(|c| c.id).collect();
+        remote::on_sessions(self, &sessions, &waiting_chats);
         self.usage.tick();
         let usage = UsageOut { claude: self.usage.get(Provider::Claude), codex: self.usage.get(Provider::Codex) };
         let show_automation = self.show_automation.load(Ordering::Relaxed);
@@ -725,6 +729,11 @@ fn shells_focus(core: State<'_, Arc<Core>>, ids: Vec<String>) {
 
 #[tauri::command(async)]
 fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> Res<usize> {
+    start_chat_with(&app, &core, opts)
+}
+
+/// Starts a chat (the page's New session, or coool Remote's `start`).
+fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize> {
     let mut opts = opts;
     opts.cwd = private_alias(&expand_tilde(&opts.cwd));
     check_launch(opts.provider, &opts.cwd)?;
@@ -739,7 +748,7 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
         id
     };
     // The chat row (and a pending tab) shows up right away.
-    core.publish(&app);
+    core.publish(app);
     Ok(id)
 }
 
@@ -1556,6 +1565,7 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
             // Chats: one batch per chat per tick, everything new since the last one.
             let mut batches = Vec::new();
             let mut chat_changed = false;
+            let mut remote_changed = false;
             {
                 let mut chats = core.chats.lock().unwrap();
                 for (&id, c) in chats.iter_mut() {
@@ -1571,6 +1581,7 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                     for e in &events {
                         core.notifier.on_event(id, &c.title, c.key.as_deref(), &e.kind);
                         c.ask = notify::ask_of(&e.kind).or(c.ask.take());
+                        remote_changed |= remote::on_chat_event(id, &e.kind);
                         match e.kind {
                             ChatEventKind::Exited { .. } => {
                                 c.exit_sent = true;
@@ -1588,6 +1599,9 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
             perf::bump(&perf::PTY_CHUNKS, out.len() as u64);
             for b in batches {
                 let _ = app.emit("chat-event", b);
+            }
+            if remote_changed {
+                remote::nudge(&app);
             }
             for o in out {
                 let _ = app.emit("pty-output", o);
@@ -1961,6 +1975,16 @@ pub fn run() {
             selftest::selftest_notify,
             selftest::selftest_notify_click,
             selftest::selftest_notify_post,
+            // coool Remote (remote.rs)
+            remote::remote_status,
+            remote::remote_set_enabled,
+            remote::remote_pair_start,
+            remote::remote_pair_confirm,
+            remote::remote_pair_cancel,
+            remote::remote_remove_device,
+            remote::remote_set_defaults,
+            remote::remote_selftest_read,
+            remote::remote_selftest_write,
         ])
         .setup(move |app| {
             perf::boot_mark("setup");
@@ -1993,6 +2017,8 @@ pub fn run() {
             c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, cwd, provider| d.mcp.server_for(id, cwd, provider).into_iter().collect())));
             // Voice (APP_SPEC "Voice"): its folder (the self-test's own during a run) and the Fn key watcher.
             voice::init(&handle, c.selftest.as_ref().map(|t| t.dir()));
+            // coool Remote (docs/REMOTE.md): off unless the person turned it on.
+            remote::init(&handle, &c);
             spawn_refresher(handle.clone(), c.clone());
             motion::spawn_watch(handle.clone());
             spawn_pump(handle, c);
