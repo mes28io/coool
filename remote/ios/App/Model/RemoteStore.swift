@@ -238,6 +238,7 @@ final class RemoteStore {
 
   /// The app came to the foreground (true) or left it (false). The link is open only while the app is in use.
   func setActive(_ on: Bool) {
+    guard !demo else { return }  // invented data: there is no link to open or close
     active = on
     if on {
       Task { await connect() }
