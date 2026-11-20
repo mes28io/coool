@@ -12,7 +12,7 @@ import { answerKeysCovered } from "../lib/answerKeys";
 import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { api } from "../lib/backend";
-import { chatModels, chatTitle, pendingPermission, useChats, type Chat } from "../lib/chat";
+import { chatModels, chatTitle, pendingPermission, useChatShell, type Chat } from "../lib/chat";
 import { displayTitle, folderName, titleWas } from "../lib/format";
 import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
 import type { Provider, Session } from "../lib/types";
@@ -71,7 +71,8 @@ export function SessionView({
   const stored = useStore((st) => st.modes[modeKey]);
   const since = useStore((st) => (r.session ? st.since[sessionKey(r.session)] : undefined));
   const setMode = useStore((st) => st.setMode);
-  const chat = useChats((st) => (r.chat !== null ? st.chats[r.chat] : undefined));
+  // Not per streamed token: the timeline reads the live chat itself.
+  const chat = useChatShell(r.chat);
   const scanning = useStore((st) => !st.ready || st.loading);
 
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.

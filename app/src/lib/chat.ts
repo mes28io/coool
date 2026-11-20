@@ -2,11 +2,13 @@
 // every chat the backend reports (not only open ones) so the sidebar, tabs and
 // Mission control can show "Needs you" without the chat view being mounted.
 
+import { useRef } from "react";
 import { create } from "zustand";
 import type { Activity, ArtifactInfo, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
 import { shortTitle } from "./format";
 import { isStopReason } from "./stopped";
 import { permissionWhat } from "./toolNames";
+import { nextFrame } from "./frame";
 
 /** "always": allowed and one of the request's remember options applied (`remembered`). */
 export type PermissionAnswer = "allow" | "always" | "deny" | "answered";
@@ -617,6 +619,72 @@ export const useChats = create<ChatStore>((set) => ({
       return { chats: { ...s.chats, [id]: { ...c, items: [...c.items, item] } } };
     }),
 }));
+
+/**
+ * Live batches from the backend (one per chat every ~16 ms while it streams), applied in the shared frame
+ * (lib/frame.ts): one store update for everything that arrived since the last, with the text reveal in the same
+ * render.
+ */
+export const chatQueue = (() => {
+  const q = new Map<number, ChatEvent[]>();
+  let due = false;
+  const flush = () => {
+    due = false;
+    const all = [...q];
+    q.clear();
+    for (const [id, events] of all) useChats.getState().apply(id, events);
+  };
+  return {
+    push(id: number, events: ChatEvent[]) {
+      const l = q.get(id);
+      if (l) l.push(...events);
+      else q.set(id, [...events]);
+      if (!due) {
+        due = true;
+        nextFrame(flush);
+      }
+    },
+    /** Apply what is waiting now. */
+    flush,
+  };
+})();
+
+/** What a streamed delta changes besides the last item. */
+const STREAM_FIELDS = new Set(["items", "liveOut", "outShown", "lastTs", "seq"]);
+
+/**
+ * Whether `b` is `a` with only the reply (or reasoning) being written grown: the last item is the same top-level
+ * text or thinking item, every other item the same object, and no other field changed but the live counts.
+ */
+export function streamedOnly(a: Chat, b: Chat): boolean {
+  if (a === b) return true;
+  const n = a.items.length;
+  if (n === 0 || n !== b.items.length) return false;
+  const x = a.items[n - 1];
+  const y = b.items[n - 1];
+  if (x !== y && !(x.kind === y.kind && x.key === y.key && (x.kind === "text" || x.kind === "thinking") && !x.parent)) return false;
+  for (let i = 0; i < n - 1; i++) if (a.items[i] !== b.items[i]) return false;
+  const ra = a as unknown as Record<string, unknown>;
+  const rb = b as unknown as Record<string, unknown>;
+  for (const k in rb) if (!STREAM_FIELDS.has(k) && ra[k] !== rb[k]) return false;
+  for (const k in ra) if (!(k in rb)) return false;
+  return true;
+}
+
+/**
+ * The chat for views around the timeline (the pane's header, composer, panels): the same object while only the reply
+ * being written grows, so they don't render again per streamed token (the timeline reads the live chat itself).
+ */
+export function useChatShell(id: number | null): Chat | undefined {
+  const held = useRef<Chat | undefined>(undefined);
+  return useChats((st) => {
+    const c = id === null ? undefined : st.chats[id];
+    const h = held.current;
+    if (h && c && h.id === c.id && streamedOnly(h, c)) return h;
+    held.current = c;
+    return c;
+  });
+}
 
 /** Raw events kept per chat (bounded) so a late replay can be merged, see `replace`. */
 const tails: Record<number, ChatEvent[]> = {};

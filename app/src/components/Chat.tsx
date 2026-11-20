@@ -4,9 +4,9 @@
 // requests become an inline approval card.
 
 import { AnimatePresence, motion } from "motion/react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { answerPermission, answerQuestion } from "../lib/actions";
-import { type Chat, type ChatItem, useChats } from "../lib/chat";
+import { type Chat, type ChatItem, chatTitle, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { permissionWhat, rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
 import { patchFiles, patchLead } from "../lib/patch";
@@ -14,8 +14,8 @@ import { agentFill, fillModel, handoffLine, taskPrompt } from "../lib/agentFill"
 import { FillBar, Handoff } from "./AgentFill";
 import { LiveTurnBar, TurnBar, useTurnBreakdown, Waterfall } from "./TurnBreakdown";
 import { modelLabel } from "../lib/models";
-import type { Activity, ArtifactInfo, RememberOption } from "../lib/types";
-import { ArtifactCard, artifactVersions } from "./ArtifactCard";
+import type { Activity, RememberOption } from "../lib/types";
+import { ArtifactCard } from "./ArtifactCard";
 import { AwayCard, useChatAway } from "./Away";
 import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
 import { useFold } from "../lib/cardFold";
@@ -28,9 +28,10 @@ import { CheckpointsCard } from "./Checkpoints";
 import { toolMood } from "../lib/activityMood";
 import { LiveIndicator } from "./Activity";
 import { RailItem, RailList, reducedMotion, Reveal } from "./StepRail";
-import { deriveCheckpoints } from "../lib/checkpoints";
+import { deriveCheckpoints, type Checkpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
-import { isPlanTool, isSyntheticPlan, isTaskNoise, parsePlan, planForTurn } from "../lib/plan";
+import { parsePlan, planForTurn } from "../lib/plan";
+import { buildBlocks, NO_KIDS, sameList, type Block, type Built, type Tool } from "../lib/chatBlocks";
 import { PlanCard } from "./PlanCard";
 import { PermExplain, RedactedPre } from "./Explain";
 import { RiskTag } from "./RiskTag";
@@ -46,117 +47,20 @@ import { isPilotTool, liveRun, parseOutcome, usePilot } from "../lib/pilot";
 import type { PilotOutcome } from "../lib/backend";
 import { countRender } from "../lib/perfCount";
 import { voiceRef } from "./voice/VoiceHost";
+import { nextFrame } from "../lib/frame";
+import { bringNear, KeepScope, useKept, Windowed, type WindowApi } from "./Windowed";
 
-type Tool = Extract<ChatItem, { kind: "tool" }>;
 type Perm = Extract<ChatItem, { kind: "permission" }>;
 type Ask = Extract<ChatItem, { kind: "question" }>;
-
-/** The tool behind a question or plan-approval card; the card stands for it, so it isn't listed as a step. */
-const QUESTION_TOOLS = /^(AskUserQuestion|request_user_input|ExitPlanMode)$/;
-type Block =
-  /** `span`: for a turn's end, the items of its turn (what "where the time went" reads). */
-  | { type: "item"; key: string; item: ChatItem; span?: ChatItem[] }
-  | { type: "steps"; key: string; tools: Tool[] }
-  /** An artifact's newest publish; earlier publishes of the same page fold into it. */
-  | { type: "artifact"; key: string; info: ArtifactInfo; versions: number }
-  /** One task-list card per turn (TodoWrite / update_plan calls), updated in place. */
-  | { type: "plan"; key: string; calls: Tool[]; prompt: string; end: { ts: number; ok: boolean } | null };
 
 const enter = { opacity: 0, y: 10 };
 const shown = { opacity: 1, y: 0 };
 const reduced = reducedMotion;
 
-function buildBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string, ChatItem[]> } {
-  const children = new Map<string, ChatItem[]>();
-  const blocks: Block[] = [];
-  let prompt = "";
-  let plan: Extract<Block, { type: "plan" }> | null = null;
-  // Turns whose task list comes from the driver's synthetic TodoWrite: their raw Task* steps are hidden.
-  const synthetic = new Set<number>();
-  for (let i = 0, turn = 0; i < items.length; i++) {
-    const it = items[i];
-    if (it.kind === "prompt") turn++;
-    else if (it.kind === "tool" && !it.parent && isSyntheticPlan(it)) synthetic.add(turn);
-  }
-  const pages = artifactVersions(items, (it) => (it.kind === "tool" && !it.parent ? it.artifact : undefined));
-  let turnNo = 0;
-  let turnFrom = 0;
-  // Artifact cards wait for the end of their turn (its "worked for" row, or the next prompt), so they read as the
-  // turn's result, after the reply that talks about them.
-  let held: Block[] = [];
-  const flush = () => {
-    blocks.push(...held);
-    held = [];
-  };
-  for (const [idx, it] of items.entries()) {
-    const parent = "parent" in it ? it.parent : null;
-    if (parent) {
-      const l = children.get(parent) ?? [];
-      l.push(it);
-      children.set(parent, l);
-      continue;
-    }
-    if (it.kind === "tool" && QUESTION_TOOLS.test(it.name)) continue;
-    if (it.kind === "tool" && isTaskNoise(it.name) && synthetic.has(turnNo)) continue;
-    if (it.kind === "prompt" || it.kind === "turn") flush();
-    if (it.kind === "prompt") {
-      turnNo++;
-      prompt = it.text;
-      plan = null;
-    }
-    if (it.kind === "turn" && plan) plan.end = { ts: it.ts, ok: it.ok };
-    if (it.kind === "tool" && isPlanTool(it.name)) {
-      // The task list shows as its own card, not as step rows.
-      if (!plan) blocks.push((plan = { type: "plan", key: it.key, calls: [], prompt, end: null }));
-      plan.calls.push(it);
-      continue;
-    }
-    if (it.kind === "tool" && it.artifact) {
-      const p = pages.get(it.artifact.url)!;
-      if (p.last === idx) held.push({ type: "artifact", key: `artifact:${it.artifact.url}`, info: p.info, versions: p.versions });
-    } else if (it.kind === "tool") {
-      const last = blocks[blocks.length - 1];
-      if (last?.type === "steps") last.tools.push(it);
-      else blocks.push({ type: "steps", key: it.key, tools: [it] });
-    } else if (it.kind === "thinking" && !it.text.trim() && it.endTs !== null) {
-      // Empty, finished reasoning (provider hides it): nothing to show.
-    } else if (it.kind === "turn") {
-      blocks.push({ type: "item", key: it.key, item: it, span: items.slice(turnFrom, idx + 1) });
-    } else blocks.push({ type: "item", key: it.key, item: it });
-    if (it.kind === "turn") turnFrom = idx + 1;
-  }
-  flush();
-  return { blocks, children };
-}
-
-const sameList = <T,>(a: readonly T[], b: readonly T[]) => a === b || (a.length === b.length && a.every((x, i) => x === b[i]));
-
-function sameBlock(a: Block, b: Block): boolean {
-  if (a.key !== b.key) return false;
-  switch (a.type) {
-    case "item":
-      return b.type === "item" && a.item === b.item && sameList(a.span ?? NO_KIDS, b.span ?? NO_KIDS);
-    case "steps":
-      return b.type === "steps" && sameList(a.tools, b.tools);
-    case "artifact":
-      return b.type === "artifact" && a.info === b.info && a.versions === b.versions;
-    case "plan":
-      return b.type === "plan" && a.prompt === b.prompt && sameList(a.calls, b.calls) && a.end?.ts === b.end?.ts && a.end?.ok === b.end?.ok;
-  }
-}
-
-/** `buildBlocks`, with each block that is the same as last time kept as the same object (so ChatBlock can skip it). */
+/** `buildBlocks` from the last build: each block that is the same as last time kept as the same object. */
 function useStableBlocks(items: ChatItem[]): { blocks: Block[]; children: Map<string, ChatItem[]> } {
-  const prev = useRef(new Map<string, Block>());
-  return useMemo(() => {
-    const built = buildBlocks(items);
-    const blocks = built.blocks.map((b) => {
-      const old = prev.current.get(b.key);
-      return old && sameBlock(old, b) ? old : b;
-    });
-    prev.current = new Map(blocks.map((b) => [b.key, b]));
-    return { blocks, children: built.children };
-  }, [items]);
+  const prev = useRef<Built | null>(null);
+  return useMemo(() => (prev.current = buildBlocks(items, prev.current)), [items]);
 }
 
 /** The chat's own fields the block views read (besides their items): when one changes, every block renders again. */
@@ -164,7 +68,6 @@ function chatSig(c: Chat): string {
   return [c.id, c.provider, c.cwd, c.model, c.running, c.state, c.permissionMode, c.pendingPermission, c.pendingQuestion, c.turnStart].join("\u0001");
 }
 
-const NO_KIDS: ChatItem[] = [];
 
 interface BlockProps {
   b: Block;
@@ -207,7 +110,8 @@ function sameBlockView(p: BlockProps, n: BlockProps): boolean {
 
 const ChatBlock = memo(function ChatBlock({ b, chat, nested, fresh, cv, latest, onOpenTerminal, onResume }: BlockProps) {
   return (
-    <motion.div data-block={b.key} className={cx(cv && "cv-auto")} initial={fresh ? enter : false} animate={shown} transition={{ duration: 0.32, ease }}>
+    // A row arriving fades and rises in (`.row-in`, a CSS one-off on the compositor, not a script animation per frame).
+    <div data-block={b.key} className={cx(cv && "cv-auto", fresh && "row-in")}>
       {b.type === "plan" ? (
         <PlanBlock b={b} chat={chat} />
       ) : b.type === "steps" ? (
@@ -217,12 +121,12 @@ const ChatBlock = memo(function ChatBlock({ b, chat, nested, fresh, cv, latest, 
       ) : (
         <ItemView item={b.item} chat={chat} onOpenTerminal={onOpenTerminal} onResume={onResume} />
       )}
-    </motion.div>
+    </div>
   );
 }, sameBlockView);
 
 export function ChatTimeline({
-  chat,
+  chat: given,
   compact,
   onOpenTerminal,
   onSuggest,
@@ -235,6 +139,16 @@ export function ChatTimeline({
   onResume?: () => void;
 }) {
   countRender("ChatTimeline");
+  // The live chat: the pane above passes one that holds still while a reply streams (lib/chat.ts useChatShell).
+  // While the pane can't be seen (Settings or Needs you over it, the window hidden) it holds still too, and catches
+  // up when shown.
+  const covered = useCovered();
+  const held = useRef<Chat | undefined>(undefined);
+  const chat =
+    useChats((s) => {
+      if (covered && held.current?.id === given.id) return held.current;
+      return (held.current = s.chats[given.id]);
+    }) ?? given;
   const { blocks, children } = useStableBlocks(chat.items);
   // Stable callbacks for the memoised blocks (the latest ones are called).
   const cbs = useRef({ onOpenTerminal, onResume });
@@ -245,9 +159,8 @@ export function ChatTimeline({
   const gone = useChatAway(chat);
   const awayAt = gone ? blocks.findIndex((b) => blockAfter(b, gone.away.left)) : -1;
   const earlier = useChats((s) => s.earlier[chat.id]);
-  const initial = useRef<Set<string> | null>(null);
-  if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
   const scroller = useRef<HTMLDivElement>(null);
+  const win = useRef<WindowApi | null>(null);
   const content = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -267,20 +180,72 @@ export function ChatTimeline({
     setAway(false);
     setFresh(false);
     setNeeds(false);
-    el.scrollTo({ top: el.scrollHeight, behavior: smooth && !reducedMotion() ? "smooth" : "auto" });
+    // Smooth only through rows that are drawn (the last one is): from further up it is a jump.
+    const glide = smooth && !reducedMotion() && (!blocks.length || !!win.current?.drawn(blocks[blocks.length - 1].key));
+    if (glide) win.current?.hold(900);
+    el.scrollTo({ top: el.scrollHeight, behavior: glide ? "smooth" : "auto" });
   };
+  // The rows of the timeline: the blocks, with the away card before the first block after the person left.
+  const rows = useMemo(() => {
+    const ks = blocks.map((b) => b.key);
+    if (awayAt >= 0) ks.splice(awayAt, 0, AWAY_ROW);
+    return ks;
+  }, [blocks, awayAt]);
+  // Rows drawn wherever they are: the request waiting for an answer, a subagent card asked for, an unread away card.
+  const focus = useStore((st) => st.agentFocus);
+  const focusId = focus && Date.now() - focus.at < 6000 ? focus.id : null;
+  const focusKey = useMemo(() => (focusId ? (blocks.find((b) => b.type === "steps" && b.tools.some((t) => t.agent && t.id === focusId))?.key ?? null) : null), [blocks, focusId]);
+  const must = useMemo(() => {
+    const out: string[] = [];
+    const pp = chat.pendingPermission;
+    const pq = chat.pendingQuestion;
+    if (pp || pq)
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const b = blocks[i];
+        if (b.type === "item" && ((b.item.kind === "permission" && b.item.requestId === pp) || (b.item.kind === "question" && b.item.requestId === pq))) out.push(b.key);
+      }
+    if (focusKey) out.push(focusKey);
+    if (gone && !gone.away.folded && awayAt >= 0) out.push(AWAY_ROW);
+    return out;
+  }, [blocks, chat.pendingPermission, chat.pendingQuestion, focusKey, gone, awayAt]);
+  // A subagent card asked for far from the view: brought near first, so its own smooth centring is a short one.
+  useEffect(() => {
+    if (focusKey) bringNear(scroller.current, focusKey, stick);
+  }, [focusKey]);
   const working = chat.state !== "idle" && chat.running;
   // Checkpoints card (one per turn), shown from two checkpoints on.
-  const cps = useMemo(() => deriveCheckpoints(chat), [chat.items, chat.running, chat.state]);
+  // The same object while nothing in it changed (a streamed token changes none of it): the card skips re-rendering.
+  const cpsHeld = useRef<{ items: ChatItem[]; live: boolean; cps: Checkpoints } | null>(null);
+  const cps = useMemo(() => {
+    const h = cpsHeld.current;
+    const live = chat.running && chat.state !== "idle";
+    // Only replies or reasoning grew (what streaming does): no checkpoint reads their text.
+    if (h && h.live === live && h.items.length === chat.items.length && h.items.every((x, i) => x === chat.items[i] || ((x.kind === "text" || x.kind === "thinking") && x.kind === chat.items[i].kind && x.ts === chat.items[i].ts))) {
+      h.items = chat.items;
+      return h.cps;
+    }
+    const next = sameCheckpoints(h?.cps ?? null, deriveCheckpoints(chat));
+    cpsHeld.current = { items: chat.items, live, cps: next };
+    return next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.items, chat.running, chat.state]);
   const showCps = cps.list.length >= 2;
   // Scroll the timeline to a turn's prompt (below the pinned card) and flash it.
-  const jump = (key: string) => {
+  const jumpRef = useRef<(key: string) => void>(() => {});
+  const [jumpTo, openFiles] = useMemo(() => [(k: string) => jumpRef.current(k), (k: string) => openChanges(chat.id, k)], [chat.id]);
+  const jump = async (key: string) => {
     const el = scroller.current;
-    const block = el?.querySelector<HTMLElement>(`[data-block="${CSS.escape(key)}"]`);
-    if (!el || !block) return;
+    if (!el) return;
+    // A turn outside the drawn window is drawn first, then jumped to (a smooth scroll only within the drawn rows).
+    const near = !!win.current?.drawn(key);
+    const row = await win.current?.ensure(key);
+    const block = row?.querySelector<HTMLElement>(`[data-block="${CSS.escape(key)}"]`);
+    if (!block) return;
     stick.current = false;
     const delta = block.getBoundingClientRect().top - el.getBoundingClientRect().top - ((bar.current?.offsetHeight ?? 0) + 16);
-    el.scrollTo({ top: el.scrollTop + delta, behavior: reducedMotion() ? "auto" : "smooth" });
+    const smooth = near && !reducedMotion();
+    if (smooth) win.current?.hold(900);
+    el.scrollTo({ top: el.scrollTop + delta, behavior: smooth ? "smooth" : "auto" });
     const target = (block.firstElementChild as HTMLElement | null) ?? block;
     const ring = "color-mix(in oklab, var(--text) 40%, transparent)";
     if (reducedMotion()) {
@@ -289,6 +254,8 @@ export function ChatTimeline({
     } else target.animate([{ boxShadow: `0 0 0 2px ${ring}` }, { boxShadow: "0 0 0 2px transparent" }], { duration: 1400, easing: "ease-out" });
   };
 
+  jumpRef.current = jump;
+
   // Pin to the bottom while the reader is there. A ResizeObserver catches every
   // growth (streamed lines, steps expanding) so the view follows without jumps.
   useLayoutEffect(() => {
@@ -296,15 +263,20 @@ export function ChatTimeline({
     const inner = content.current;
     if (!el || !inner) return;
     el.scrollTop = el.scrollHeight;
-    let last = inner.offsetHeight;
     const ro = new ResizeObserver(() => {
       if (stick.current) el.scrollTop = el.scrollHeight;
-      else if (inner.offsetHeight > last) setFresh(true);
-      last = inner.offsetHeight;
     });
     ro.observe(inner);
     return () => ro.disconnect();
   }, []);
+  // New output while the reader is scrolled up: the jump button says so. (From the items, not the column's height:
+  // rows drawn as they scroll into view change that height too.)
+  const lastItems = useRef(chat.items);
+  useLayoutEffect(() => {
+    if (lastItems.current === chat.items) return;
+    lastItems.current = chat.items;
+    if (!stick.current) setFresh(true);
+  }, [chat.items]);
 
   // The away card starts the reading: when it first shows above the view, scroll it to the top (the jump
   // button then says there is more below). Once per absence.
@@ -458,7 +430,7 @@ export function ChatTimeline({
           // Opaque from the header's bottom edge to the bar's bottom edge, then a short fade; in flow, so an expanded bar pushes the timeline down.
           <div ref={bar} className="sticky -top-1 z-20 bg-bg pt-1" data-checkpoints-sticky>
             <div className={cx("mx-auto max-w-[700px] pb-2 pt-2", compact ? "px-4" : "px-8")}>
-              <CheckpointsCard chat={chat} cps={cps} onJump={jump} onFiles={(k) => openChanges(chat.id, k)} />
+              <CheckpointsSlot chat={chat} cps={cps} onJump={jumpTo} onFiles={openFiles} />
             </div>
             <div aria-hidden className="pointer-events-none absolute inset-x-0 top-full h-5" style={{ background: "linear-gradient(to bottom, var(--bg), transparent)" }} />
           </div>
@@ -471,33 +443,46 @@ export function ChatTimeline({
           </div>
         )}
         {chat.ready && blocks.length === 0 && !earlier?.length && <Welcome chat={chat} onSuggest={onSuggest} />}
-        {blocks.flatMap((b, i) => {
-          const fresh = !initial.current!.has(b.key);
-          const isLast = i === blocks.length - 1;
-          const card = i === awayAt && gone && (
-            <AwayCard key="away" chatKey={gone.key} sum={gone.sum} folded={!!gone.away.folded} canRetry={chat.running && chat.state === "idle"} onRetry={onSuggest} onJump={jump} />
-          );
-          // One flat list of keyed children: nested arrays would be matched by position, so dropping the oldest
-          // block (a chat past its item cap) would shift every pair and remount the whole timeline.
-          const view = (
-            <ChatBlock
-              key={b.key}
-              b={b}
-              chat={chat}
-              sig={sig}
-              notes={chat.notes}
-              agents={chat.agents}
-              nested={children}
-              fresh={fresh}
-              cv={!isLast && i < blocks.length - 8}
-              latest={isLast || i >= blocks.length - 2}
-              isLast={isLast}
-              onOpenTerminal={openTerminal}
-              onResume={isLast && onResume ? resume : undefined}
-            />
-          );
-          return card ? [card, view] : [view];
-        })}
+        {rows.length > 0 && (
+          <KeepScope.Provider value={`chat:${chat.id}`}>
+          <Windowed
+            scroller={scroller}
+            stick={stick}
+            keys={rows}
+            gap={compact ? 12 : 16}
+            must={must}
+            api={win}
+            className={cx("flex flex-col", compact ? "gap-3" : "gap-4")}
+            estimate={(r) => {
+              const i = awayAt >= 0 && r >= awayAt ? r - 1 : r;
+              return r === awayAt ? 120 : blockHeight(blocks[i], i >= blocks.length - 2);
+            }}
+            renderRow={(r, fresh) => {
+              if (r === awayAt && gone)
+                return <AwayCard chatKey={gone.key} sum={gone.sum} folded={!!gone.away.folded} canRetry={chat.running && chat.state === "idle"} onRetry={onSuggest} onJump={jump} />;
+              const i = awayAt >= 0 && r > awayAt ? r - 1 : r;
+              const b = blocks[i];
+              const isLast = i === blocks.length - 1;
+              return (
+                <ChatBlock
+                  b={b}
+                  chat={chat}
+                  sig={sig}
+                  notes={chat.notes}
+                  agents={chat.agents}
+                  nested={children}
+                  fresh={fresh}
+                  cv={!isLast && i < blocks.length - 8}
+                  latest={isLast || i >= blocks.length - 2}
+                  isLast={isLast}
+                  onOpenTerminal={openTerminal}
+                  onResume={isLast && onResume ? resume : undefined}
+                />
+              );
+            }}
+          />
+          </KeepScope.Provider>
+        )}
         <AnimatePresence>
           {showRow && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
@@ -516,6 +501,61 @@ export function ChatTimeline({
     <LaterBar chat={chat} compact={compact} />
     </div>
   );
+}
+
+/** Whether the panes can't be seen: Settings or the Needs you page over them, or the window hidden. */
+function useCovered(): boolean {
+  const over = useStore((s) => s.settings !== null || s.needsPage);
+  const hidden = useSyncExternalStore(
+    (cb) => {
+      document.addEventListener("visibilitychange", cb);
+      return () => document.removeEventListener("visibilitychange", cb);
+    },
+    () => document.hidden,
+  );
+  return over || hidden;
+}
+
+const AWAY_ROW = "\u0001away";
+
+/** `next`, or `prev` when every checkpoint in it is the same. */
+function sameCheckpoints(prev: Checkpoints | null, next: Checkpoints): Checkpoints {
+  if (!prev || prev.attempts !== next.attempts || prev.list.length !== next.list.length) return next;
+  for (let i = 0; i < next.list.length; i++) {
+    const a = prev.list[i] as unknown as Record<string, unknown>;
+    const b = next.list[i] as unknown as Record<string, unknown>;
+    for (const k in b) if (a[k] !== b[k]) return next;
+  }
+  return prev;
+}
+
+/** The checkpoints card, drawn again only when its checkpoints or the chat's title change (not per streamed token). */
+const CheckpointsSlot = memo(
+  function CheckpointsSlot(p: { chat: Chat; cps: Checkpoints; onJump: (key: string) => void; onFiles: (key: string) => void }) {
+    return <CheckpointsCard {...p} />;
+  },
+  (a, b) => a.cps === b.cps && a.onJump === b.onJump && a.onFiles === b.onFiles && a.chat.id === b.chat.id && chatTitle(a.chat) === chatTitle(b.chat),
+);
+
+/** A block's height before it has been drawn (Windowed's estimate; measured once drawn). */
+function blockHeight(b: Block, latest: boolean): number {
+  if (b.type === "steps") return 30 + (latest || b.tools.length <= 2 ? b.tools.length * 30 : 0);
+  if (b.type === "plan") return 180;
+  if (b.type === "artifact") return 120;
+  switch (b.item.kind) {
+    case "text":
+      return 30 + Math.ceil(b.item.text.length / 80) * 26;
+    case "prompt":
+      return 70 + Math.ceil(b.item.text.length / 70) * 24;
+    case "turn":
+    case "thinking":
+      return 30;
+    case "permission":
+    case "question":
+      return 220;
+    default:
+      return 44;
+  }
 }
 
 /** Whether a block holds anything from after `t` (where the away card goes). */
@@ -603,7 +643,8 @@ function useReveal(text: string, streaming: boolean): number {
       cur.current = Math.min(cur.current, text.length);
       return;
     }
-    let raf = 0;
+    // In the shared frame (lib/frame.ts): with the chat's batches, at most ~60 steps a second.
+    let cancel = () => {};
     let lastT = performance.now();
     const step = (t: number) => {
       const dt = Math.min(64, t - lastT);
@@ -614,15 +655,16 @@ function useReveal(text: string, streaming: boolean): number {
       const rate = Math.max(60, behind / (streaming ? 0.18 : 0.08));
       cur.current = Math.min(target.current, cur.current + Math.max(1, Math.round((rate * dt) / 1000)));
       setN(cur.current);
-      if (cur.current < target.current) raf = requestAnimationFrame(step);
+      if (cur.current < target.current) cancel = nextFrame(step);
     };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
+    cancel = nextFrame(step);
+    return () => cancel();
   }, [text, streaming]);
   return Math.min(n, text.length);
 }
 
 const AssistantText = memo(function AssistantText({ text, streaming, small }: { text: string; streaming: boolean; small?: boolean }) {
+  countRender("Chat.AssistantText");
   const n = useReveal(text, streaming);
   const typing = streaming || n < text.length;
   return <Markdown text={text.slice(0, n)} streaming={typing} className={small ? "text-small text-dim" : "text-prose text-fg/90"} />;
@@ -631,7 +673,7 @@ const AssistantText = memo(function AssistantText({ text, streaming, small }: { 
 // ---------- thinking ----------
 
 export function ThinkingBlock({ item }: { item: Extract<ChatItem, { kind: "thinking" }> }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useKept(`think:${item.key}`, false);
   const live = item.endTs === null;
   const lastLine = item.text.trim().split(/\n/).pop() ?? "";
   // A stretch that ends while on screen: the icon pops into a check for a moment and the label sweeps in.
@@ -716,7 +758,7 @@ function toolSummary(t: Tool, cwd: string): string {
 
 const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { tools: Tool[]; chat: Chat; nested: Map<string, ChatItem[]>; latest: boolean }) {
   countRender("Chat.Steps");
-  const [open, setOpen] = useState<boolean | null>(null);
+  const [open, setOpen] = useKept<boolean | null>(`steps:${tools[0].key}`, null);
   const active = tools.some((t) => t.endTs === null);
   const focus = useStore((st) => st.agentFocus);
   const holdsFocus = !!focus && Date.now() - focus.at < 6000 && tools.some((t) => t.agent && t.id === focus.id);
@@ -860,7 +902,7 @@ function PilotRun({ t, chat, fresh }: { t: Tool; chat: number; fresh?: boolean }
 }
 
 function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean; fresh?: boolean; stoppedIn?: boolean }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useKept(`tool:${t.key}`, false);
   const hasOut = !!t.output && t.endTs !== null;
   const r = stepRow(t, cwd);
   return (
@@ -1413,7 +1455,7 @@ function Notice({ item, onOpenTerminal }: { item: Extract<ChatItem, { kind: "not
 }
 
 function NoticeBlock({ item, lines }: { item: Extract<ChatItem, { kind: "notice" }>; lines: string[] }) {
-  const [open, setOpen] = useState(lines.length <= 14);
+  const [open, setOpen] = useKept(`notice:${item.key}`, lines.length <= 14);
   return (
     <div className="rounded-[10px] border border-hairline">
       <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-small text-dim hover:text-fg">
@@ -1451,7 +1493,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
   const verb = item.failed ? "Failed after" : item.ok ? "Worked for" : "Stopped after";
   const parts = [item.tools > 0 && `${item.tools} tool ${item.tools === 1 ? "use" : "uses"}`, model && modelLabel(model)].filter(Boolean) as string[];
   const b = useTurnBreakdown(chat, item);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useKept(`turn:${item.key}`, false);
   const row = (
     <>
       {item.failed ? <IAlert size={13} className="text-err-text" /> : item.ok ? <ICheck size={13} className="text-faint" /> : <IReturn size={13} />}

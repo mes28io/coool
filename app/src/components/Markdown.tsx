@@ -2,13 +2,14 @@
 // Tolerates incomplete markdown while streaming (see `streamSafe`), memoized per message; while it streams, its
 // finished blocks are parsed once each and only the block being written is parsed again (lib/mdSplit.ts).
 
-import { Children, isValidElement, memo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { Children, isValidElement, memo, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import parseMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useOpenPage, webUrl } from "../lib/browser";
 import { ICheck, IFile } from "./icons";
 import { cx } from "./primitives";
 import { splitSettled } from "../lib/mdSplit";
+import { addTime, countRender } from "../lib/perfCount";
 
 const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
@@ -184,10 +185,15 @@ export const Markdown = memo(function Markdown({ text, streaming, className }: {
   );
 });
 
+const PLUGINS = [remarkGfm];
+
 const Piece = memo(function Piece({ text }: { text: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-      {text}
-    </ReactMarkdown>
-  );
+  countRender("Markdown.Piece");
+  // react-markdown's component is a plain function (no hooks): called here, so its parse can be timed (perf scenarios).
+  return useMemo(() => {
+    const t = performance.now();
+    const out = parseMarkdown({ remarkPlugins: PLUGINS, components, children: text });
+    addTime("markdown", performance.now() - t);
+    return out;
+  }, [text]);
 });

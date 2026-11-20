@@ -43,6 +43,7 @@ import { leaves, resolveTarget, useStore } from "./store";
 import { activeTabKey, nativeId, tabKey, useBrowserState } from "./lib/browser";
 import { chatPanelKey } from "./lib/browserAgent";
 import { perfScenarios } from "./selftestPerf";
+import { windowScenarios } from "./selftestWindow";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
 import { voiceScenarios } from "./selftestVoice";
@@ -1768,7 +1769,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       });
       const { strong, block, cells } = got;
       const txt = block.textContent ?? "";
-      if (txt.includes("**") || txt.includes("|---|")) throw new Fail(`literal markdown left: "${txt.slice(0, 80)}"`);
+      if (txt.includes("**") || txt.includes("|---|")) throw new Fail(`literal markdown left: "${txt.slice(0, 80)}"; reply ${JSON.stringify(lastText(id)?.text)}; html ${JSON.stringify(block.innerHTML.slice(0, 400))}`);
       await shot("markdown");
       return `strong "${strong.textContent}", table ${cells} cells, pre present, no ** or |---|`;
     });
@@ -4803,6 +4804,13 @@ Object.assign(
   Object.fromEntries(Object.entries(perfScenarios({ invoke: (c, a) => invoke(c, a), log, sleep, waitFor, shot: (n, s) => shot(n, undefined, s) })).map(([n, f]) => [n, () => f()])),
 );
 
+// `chat-window` (selftestWindow.ts): the long-timeline window on a made-up chat and a long transcript session; no
+// model calls, so it runs on the synthetic perf home too.
+Object.assign(
+  scenarios,
+  Object.fromEntries(Object.entries(windowScenarios({ step, sleep, waitFor, invoke: (c, a) => invoke(c, a), shot: (n) => shot(n), fail: (m) => new Fail(m) })).map(([n, f]) => [n, () => f()])),
+);
+
 // ---------- the five inspiration ideas (docs/research/affectui-inspiration.md "Later"), against the real CLI ----------
 //
 // `ideas-risk` (Haiku): a real Bash permission request for `rm -rf` carries the Risky tag (and its reason); a harmless
@@ -6247,7 +6255,8 @@ const codexScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const strong = await waitFor("bold owls in the reply", () => $all("[data-chat-timeline] strong").find((e) => /owls/i.test(e.textContent ?? "")), 10_000).catch(() => null);
       const shell = toolsOf(id).find((t) => t.name === "shell");
       const end = turnEnds(id)[0];
-      const footer = $all("[data-turn-end]").pop();
+      // The turn's end row fades in (a CSS one-off): wait until it is visible.
+      const footer = await waitFor("the turn's end row", () => $all("[data-turn-end]").pop(), 3_000).catch(() => null);
       const chips = $all("[data-step-chip]").map(textOf);
       await shot("codex-chat-first");
       const out = [`${deltaBatches} delta batches`, `live words ${[...live].join("/") || "none"}`, `shell ${shell ? `ok=${shell.ok} "${shell.input && (shell.input as { command?: string }).command}"` : "none"}`, `turn ${end.durationMs} ms ok=${end.ok}`, `footer "${textOf(footer ?? null)}"`, `chips [${chips.join(", ")}]`];

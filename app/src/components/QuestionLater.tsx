@@ -35,7 +35,12 @@ export function reopenQuestion(chat: number, requestId: string, reduce: boolean)
       if (performance.now() < until) requestAnimationFrame(find);
       return;
     }
-    card.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+    // From far away (the timeline draws only what is near the view, Windowed.tsx) a jump, not a glide over rows
+    // that aren't drawn.
+    const sc = card.closest<HTMLElement>(".scroll");
+    const off = sc ? card.getBoundingClientRect().top - sc.getBoundingClientRect().top : 0;
+    const far = !!sc && (off < -sc.clientHeight || off > sc.clientHeight * 2);
+    card.scrollIntoView({ block: "nearest", behavior: reduce || far ? "auto" : "smooth" });
     card.focus({ preventScroll: true });
   };
   requestAnimationFrame(find);

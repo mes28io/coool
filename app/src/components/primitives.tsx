@@ -3,6 +3,7 @@ import { memo, useEffect, useId, useRef, useState, type ReactNode } from "react"
 import type { Provider, Status } from "../lib/types";
 import { homeShort, fmtApprox, fmtClock, fmtElapsed, fmtTokens } from "../lib/format";
 import { useClock } from "../lib/clock";
+import { nextFrame } from "../lib/frame";
 import { reducedMotion } from "../lib/motion";
 import { registerOverlay } from "../lib/overlays";
 import { contextWindow } from "../lib/models";
@@ -162,12 +163,19 @@ function useCountUp(n: number): number {
     }
     const t0 = performance.now();
     const ms = Math.min(1200, 300 + (n - start) * 4);
-    const id = window.setInterval(() => {
+    // Each step in the shared frame (lib/frame.ts): while a chat streams, painted with its text, not on a frame of its own.
+    let id = 0;
+    let cancel = () => {};
+    const step = () => {
       const k = Math.min(1, (performance.now() - t0) / ms);
       setShown(Math.round(start + (n - start) * (1 - (1 - k) * (1 - k))));
-      if (k >= 1) window.clearInterval(id);
-    }, 83);
-    return () => window.clearInterval(id);
+      if (k < 1) id = window.setTimeout(() => (cancel = nextFrame(step)), 83);
+    };
+    id = window.setTimeout(() => (cancel = nextFrame(step)), 83);
+    return () => {
+      window.clearTimeout(id);
+      cancel();
+    };
   }, [n]);
   return shown;
 }

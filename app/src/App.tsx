@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import { api } from "./lib/backend";
 import { useNativeRects } from "./lib/browser";
 import { openAgentsDemo } from "./lib/agentsDemo";
-import { rememberLive, useChats } from "./lib/chat";
+import { chatQueue, rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
 import { keysCaptured } from "./lib/macKeys";
 import { useMotion } from "./lib/motion";
@@ -192,7 +192,7 @@ function useBackendEvents() {
       }),
       b.onChatEvent(({ id, events }) => {
         rememberLive(id, events);
-        useChats.getState().apply(id, events);
+        chatQueue.push(id, events);
       }),
       b.onPtyExit((id) => useStore.getState().markExited(id)),
       b.onConfirmQuit(() => {

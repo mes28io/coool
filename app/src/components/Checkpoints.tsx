@@ -68,8 +68,11 @@ function edgesOf(list: Checkpoint[]): Edge[] {
 export function CheckpointsCard({ chat, cps, onJump, onFiles }: { chat: Chat; cps: Derived; onJump: (key: string) => void; onFiles: (key: string) => void }) {
   const { list, attempts } = cps;
   const [open, setOpen] = useState(() => remembered.get(chat.id) ?? false);
+  // The rows are in the DOM while the card is open or folding (a long chat has hundreds).
+  const [body, setBody] = useState(open);
   const toggle = () => {
     remembered.set(chat.id, !open);
+    if (!open) setBody(true);
     setOpen(!open);
   };
   const live = list.some((c) => c.live);
@@ -134,7 +137,16 @@ export function CheckpointsCard({ chat, cps, onJump, onFiles }: { chat: Chat; cp
         </span>
         <IChevron size={13} className={cx("shrink-0 text-faint transition-transform duration-200 group-hover:text-dim", open && "rotate-90")} />
       </button>
-      <motion.div initial={false} animate={{ height }} transition={{ duration: reducedMotion() ? 0 : 0.32, ease }} className={cx(capped && open ? "scroll overflow-y-auto" : "overflow-hidden")} ref={scroller} inert={!open}>
+      <motion.div
+        initial={false}
+        animate={{ height }}
+        transition={{ duration: reducedMotion() ? 0 : 0.32, ease }}
+        onAnimationComplete={() => !open && setBody(false)}
+        className={cx(capped && open ? "scroll overflow-y-auto" : "overflow-hidden")}
+        ref={scroller}
+        inert={!open}
+      >
+        {body && (
         <div className="relative" style={{ height: natural, paddingTop: PT }}>
           <svg aria-hidden className="pointer-events-none absolute left-0 top-0" width={width} height={natural} fill="none">
             {edges.map((e) => (
@@ -151,9 +163,11 @@ export function CheckpointsCard({ chat, cps, onJump, onFiles }: { chat: Chat; cp
             ))}
           </svg>
           {list.map((c, i) => (
-            <Row key={c.key} c={c} last={i === list.length - 1} left={left} fresh={fresh.has(c.key)} now={now} onJump={onJump} onFiles={onFiles} />
+            // Only a running turn's row reads the clock: the others skip its ticks.
+            <Row key={c.key} c={c} last={i === list.length - 1} left={left} fresh={fresh.has(c.key)} now={c.endTs === null ? now : 0} onJump={onJump} onFiles={onFiles} />
           ))}
         </div>
+        )}
       </motion.div>
     </motion.div>
   );
