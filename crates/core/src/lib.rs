@@ -2,6 +2,7 @@
 //! UI-agnostic: the TUI and the desktop app are both thin layers over [`hub::Hub`].
 
 pub mod artifact;
+pub mod attach;
 pub mod cache;
 pub mod chat;
 pub mod context;

@@ -1290,23 +1290,39 @@ impl Backend for Claude {
         }
     }
 
-    fn send(&mut self, text: &str, o: &mut Out) -> Result<()> {
+    fn send(&mut self, text: &str, atts: &[crate::attach::Attachment], o: &mut Out) -> Result<()> {
         if self.open_failed {
             bail!(OPEN_FAILED_SEND);
         }
-        if let Some((name, _)) = slash_command(text)
+        if atts.is_empty()
+            && let Some((name, _)) = slash_command(text)
             && self.terminal_commands.iter().any(|c| c == name)
         {
             o.ev(ChatEventKind::needs_terminal(format!("/{name} only works in the terminal")));
             return Ok(());
         }
+        // With attachments the content is a list of blocks: the images, then the text with a marker line per
+        // attachment (crate::attach). Built before anything is counted, so a missing image refuses the whole send.
+        let content = if atts.is_empty() {
+            None
+        } else {
+            let dir = crate::attach::store_dir().context("no folder for attachments")?;
+            Some(crate::attach::claude_content(&dir, text, atts)?)
+        };
         self.user_n += 1;
-        self.write_user(&uuid_v4(), text, o);
+        match content {
+            None => self.write_user(&uuid_v4(), text, o),
+            Some(c) => {
+                let uuid = uuid_v4();
+                o.write(&json!({"type": "user", "message": {"role": "user", "content": c}, "parent_tool_use_id": null, "session_id": "", "uuid": uuid}));
+                self.cmds.push(uuid);
+            }
+        }
         let id = format!("u{}", self.user_n);
         if !self.init_done {
-            self.early.push((id.clone(), text.to_string()));
+            self.early.push((id.clone(), crate::attach::with_markers(text, atts)));
         }
-        o.ev(ChatEventKind::UserMessage { id, text: text.to_string(), steer: false, note_id: None });
+        o.ev(ChatEventKind::UserMessage { id, text: text.to_string(), steer: false, note_id: None, attachments: atts.to_vec() });
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
         Ok(())
     }
@@ -1657,7 +1673,7 @@ mod tests {
         assert!(c.terminal_commands.iter().any(|t| t == "send-to-project"), "{:?}", c.terminal_commands);
         // Commands the CLI says need the TUI are answered locally, never sent.
         let mut o = Out::default();
-        c.send("/doctor", &mut o).unwrap();
+        c.send("/doctor", &[], &mut o).unwrap();
         assert!(o.writes.is_empty());
         assert!(matches!(o.events[0], ChatEventKind::Notice { needs_terminal: true, .. }));
     }
@@ -1750,7 +1766,7 @@ mod tests {
         let mut c = Claude::new(&ChatOptions { resume: Some("3f0c2d1e-0000-4000-8000-000000000001".into()), ..opts() });
         let mut o = Out::default();
         c.start(&mut o);
-        c.send("hey", &mut o).unwrap();
+        c.send("hey", &[], &mut o).unwrap();
         let mut o = Out::default();
         c.on_line(r#"{"type":"result","subtype":"error_during_execution","duration_ms":0,"is_error":true,"num_turns":0,"session_id":"3f0c2d1e-0000-4000-8000-000000000001","errors":["No conversation found with session ID: 3f0c2d1e-0000-4000-8000-000000000001"]}"#, &mut o);
         let ChatEventKind::OpenFailed { error, reason, resumed, unsent, .. } = &o.events[0] else { panic!("{:?}", o.events) };
@@ -1760,11 +1776,11 @@ mod tests {
         assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::TurnEnd { .. } | ChatEventKind::Notice { .. })), "{:?}", o.events);
         assert!(matches!(o.events.last(), Some(ChatEventKind::State { state: ChatState::Idle })));
         assert!(o.close);
-        assert!(c.send("again", &mut o).unwrap_err().to_string().contains("couldn't be opened"));
+        assert!(c.send("again", &[], &mut o).unwrap_err().to_string().contains("couldn't be opened"));
         // Not a resume: an error result is an ordinary failed turn, as before.
         let mut c = Claude::new(&opts());
         let mut o = Out::default();
-        c.send("hi", &mut o).unwrap();
+        c.send("hi", &[], &mut o).unwrap();
         c.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"errors":["boom"]}"#, &mut o);
         assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::OpenFailed { .. })));
         assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::TurnEnd { ok: false, .. })));
@@ -1774,7 +1790,7 @@ mod tests {
     fn login_error_is_reported_once_and_points_to_the_terminal() {
         let mut c = Claude::new(&opts());
         let mut o = Out::default();
-        c.send("hi", &mut o).unwrap();
+        c.send("hi", &[], &mut o).unwrap();
         c.on_line(r#"{"type":"assistant","message":{"id":"x","model":"<synthetic>","content":[{"type":"text","text":"Not logged in · Please run /login"}]},"error":"authentication_failed"}"#, &mut o);
         c.on_line(r#"{"type":"result","subtype":"success","is_error":true,"duration_ms":5,"result":"Not logged in · Please run /login"}"#, &mut o);
         let notices: Vec<_> = o.events.iter().filter(|e| matches!(e, ChatEventKind::Notice { level: NoticeLevel::Error, needs_terminal: true, .. })).collect();
@@ -1788,7 +1804,7 @@ mod tests {
     fn ask_user_question_becomes_a_question_and_is_answered() {
         let mut c = Claude::new(&opts());
         let mut o = Out::default();
-        c.send("ask me", &mut o).unwrap();
+        c.send("ask me", &[], &mut o).unwrap();
         let req = r#"{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","display_name":"AskUserQuestion","input":{"questions":[{"question":"Which fruits?","header":"Fruits","options":[{"label":"Apple","description":"Apple"},{"label":"Pear","description":"Pear"},{"label":"Plum","description":"Plum"}],"multiSelect":true},{"question":"Which size?","header":"Size","options":[{"label":"Small","description":""},{"label":"Large","description":""}],"multiSelect":false}]},"tool_use_id":"toolu_1","requires_user_interaction":true}}"#;
         let mut o = Out::default();
         c.on_line(req, &mut o);
@@ -1936,13 +1952,34 @@ mod tests {
         assert_eq!(compacting(&o), [true, false]);
     }
 
+    /// A prompt with attachments goes out as content blocks: the images first, then the text with a marker line per
+    /// attachment; the echo carries the attachments and the text as typed.
+    #[test]
+    fn send_with_attachments_writes_image_blocks() {
+        let (store, img, txt) = crate::chat::testutil::attach_fixture("claude");
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("describe", &[img.clone(), txt.clone()], &mut o).unwrap();
+        let w: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        let content = &w["message"]["content"];
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(crate::attach::key_of(content[0]["source"]["data"].as_str().unwrap()), img.key.clone().unwrap());
+        assert_eq!(content[1]["type"], "text");
+        assert!(content[1]["text"].as_str().unwrap().contains(r#"name="notes.txt""#));
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::UserMessage { text, attachments, .. } if text == "describe" && attachments.len() == 2)));
+        // A slash command with attachments is a prompt, and an image missing from the store refuses the send.
+        let gone = crate::attach::Attachment { key: Some("ffffffffffffffff".into()), ..img };
+        assert!(c.send("x", &[gone], &mut Out::default()).is_err());
+        let _ = std::fs::remove_dir_all(store);
+    }
+
     /// Turn ends with no further step: the held note is not sent and ends
     /// unused; while a permission is pending notes wait, then go out.
     #[test]
     fn notes_wait_for_a_step_and_for_answers() {
         let mut c = Claude::new(&opts());
         let mut o = Out::default();
-        c.send("go", &mut o).unwrap();
+        c.send("go", &[], &mut o).unwrap();
         let first = c.cmds[0].clone();
         c.on_line(&started(&first), &mut o);
         // Streaming text, no step in flight: held by coool.
@@ -1956,7 +1993,7 @@ mod tests {
 
         // A step asks for permission: the note (even `now`) waits for the answer.
         let mut o = Out::default();
-        c.send("again", &mut o).unwrap();
+        c.send("again", &[], &mut o).unwrap();
         c.on_line(&started(&c.cmds[0].clone()), &mut o);
         c.on_line(&line(json!({"type": "assistant", "message": {"id": "m", "model": "x", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "touch a"}}]}})), &mut o);
         c.on_line(&line(json!({"type": "control_request", "request_id": "p1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "touch a"}}})), &mut o);
@@ -1981,7 +2018,7 @@ mod tests {
     fn stop_leaves_notes_unused_and_idle_note_is_a_prompt() {
         let mut c = Claude::new(&opts());
         let mut o = Out::default();
-        c.send("go", &mut o).unwrap();
+        c.send("go", &[], &mut o).unwrap();
         let first = c.cmds[0].clone();
         c.on_line(&started(&first), &mut o);
         c.on_line(&line(json!({"type": "assistant", "message": {"id": "m", "model": "x", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "sleep 9"}}]}})), &mut o);

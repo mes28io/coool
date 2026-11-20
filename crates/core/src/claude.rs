@@ -580,10 +580,16 @@ fn parse_line(
         Some("user") => {
             let content = &v["message"]["content"];
             if let Some(s) = content.as_str() {
-                if v["isMeta"].as_bool() != Some(true) && !s.starts_with('<') {
-                    user_text(s, ts, st, current, activity);
+                if v["isMeta"].as_bool() != Some(true) {
+                    user_prompt(s, Vec::new(), ts, st, current, activity);
                 }
             } else if let Some(arr) = content.as_array() {
+                // Images the person sent (coool's attachments, a terminal paste): they go with the prompt's text.
+                let mut images: Vec<(String, String, u64)> = arr.iter().filter_map(crate::attach::block_image).collect();
+                let has_text = arr.iter().any(|i| i["type"] == "text");
+                if !images.is_empty() && !has_text && v["isMeta"].as_bool() != Some(true) {
+                    user_prompt("", std::mem::take(&mut images), ts.clone(), st, current, activity);
+                }
                 for item in arr {
                     match item["type"].as_str() {
                         Some("tool_result") => {
@@ -605,8 +611,8 @@ fn parse_line(
                         }
                         Some("text") => {
                             let s = item["text"].as_str().unwrap_or("");
-                            if !s.starts_with('<') && v["isMeta"].as_bool() != Some(true) {
-                                user_text(s, ts.clone(), st, current, activity);
+                            if v["isMeta"].as_bool() != Some(true) {
+                                user_prompt(s, std::mem::take(&mut images), ts.clone(), st, current, activity);
                             }
                         }
                         _ => {}
@@ -765,6 +771,26 @@ fn artifact_result(st: &mut ParseState, id: &str, content: &Value, structured: &
     }
 }
 
+/// A user text with the images of its message: coool's attachment lines become the prompt's attachments
+/// ([`crate::attach`]); other text starting with `<` is the CLI's own (commands, reminders) and is skipped.
+fn user_prompt(s: &str, images: Vec<(String, String, u64)>, ts: String, st: &mut ParseState, current: &mut Option<String>, activity: &mut Vec<Activity>) {
+    let (clean, atts) = crate::attach::split_markers(s);
+    if atts.is_empty() && images.is_empty() && clean.starts_with('<') {
+        return;
+    }
+    if atts.is_empty() && images.is_empty() {
+        return user_text(s, ts, st, current, activity);
+    }
+    let text = if clean.starts_with('<') { String::new() } else { clean };
+    push_activity(activity, Activity::message(ts, ActivityKind::Prompt, &text, 400));
+    if let Some(a) = activity.last_mut() {
+        a.attachments = crate::attach::merge_images(atts, images);
+    }
+    st.titles.prompts += 1;
+    st.turn_out = 0;
+    *current = Some("thinking…".into());
+}
+
 /// A user text block: either a real prompt or Claude Code's interrupt marker.
 fn user_text(s: &str, ts: String, st: &mut ParseState, current: &mut Option<String>, activity: &mut Vec<Activity>) {
     if s.starts_with("[Request interrupted by user") {
@@ -858,6 +884,38 @@ mod tests {
             assert_eq!(a.icon.as_deref(), if i == 0 { Some("wrench") } else { None });
         }
         // Survives the parse cache's round trip.
+        let back: Vec<Activity> = serde_json::from_str(&serde_json::to_string(&o.activity).unwrap()).unwrap();
+        assert_eq!(back, o.activity);
+    }
+
+    /// Attachments sent from coool (marker lines plus image blocks) and a terminal paste (an image block and the
+    /// CLI's `[Image #1]` text) come back as the prompt's attachments, with the text the person typed.
+    #[test]
+    fn prompt_attachments_round_trip() {
+        let mut o = Out::default();
+        let a = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/w/dot.png".into()), key: None, note: None };
+        let f = crate::attach::Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 9, kind: crate::attach::AttachKind::File, path: Some("/w/notes.txt".into()), key: None, note: None };
+        let text = crate::attach::with_markers("what is in these?", &[a, f]);
+        let line = serde_json::json!({"type": "user", "timestamp": "2026-11-20T10:00:00Z", "message": {"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}},
+            {"type": "text", "text": text}]}});
+        feed(&mut o, &line.to_string());
+        let paste = serde_json::json!({"type": "user", "timestamp": "2026-11-20T10:01:00Z", "message": {"role": "user", "content": [
+            {"type": "text", "text": "[Image #1] and this?"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "BBBB"}}]}});
+        feed(&mut o, &paste.to_string());
+        let only = serde_json::json!({"type": "user", "timestamp": "2026-11-20T10:02:00Z", "message": {"role": "user", "content": [
+            {"type": "text", "text": crate::attach::with_markers("", &[crate::attach::Attachment { name: "a.pdf".into(), mime: "application/pdf".into(), size: 1, kind: crate::attach::AttachKind::File, path: Some("/w/a.pdf".into()), key: None, note: None }])}]}});
+        feed(&mut o, &only.to_string());
+        let p: Vec<&Activity> = o.activity.iter().filter(|a| a.kind == ActivityKind::Prompt).collect();
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].text, "what is in these?");
+        assert_eq!(p[0].attachments.len(), 2);
+        assert_eq!(p[0].attachments[0].key.as_deref(), Some(crate::attach::key_of("AAAA").as_str()));
+        assert_eq!(p[0].attachments[1].path.as_deref(), Some("/w/notes.txt"));
+        assert_eq!(p[1].text, "[Image #1] and this?");
+        assert_eq!((p[1].attachments[0].name.as_str(), p[1].attachments[0].mime.as_str()), ("Image 1", "image/jpeg"));
+        assert_eq!((p[2].text.as_str(), p[2].attachments[0].name.as_str()), ("", "a.pdf"));
         let back: Vec<Activity> = serde_json::from_str(&serde_json::to_string(&o.activity).unwrap()).unwrap();
         assert_eq!(back, o.activity);
     }

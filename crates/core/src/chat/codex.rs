@@ -145,8 +145,8 @@ pub(crate) struct Codex {
     last_ready: Option<ChatEventKind>,
     next_id: u64,
     pending: HashMap<u64, Req>,
-    /// Prompts sent before the thread exists: (`user_message` id, text).
-    queue: Vec<(String, String)>,
+    /// Prompts sent before the thread exists: (`user_message` id, text, the turn's input).
+    queue: Vec<(String, String, Value)>,
     /// The thread could not be opened: the chat is over and takes no more messages.
     open_failed: bool,
     /// The app-server's version (from `initialize`'s `userAgent`).
@@ -275,7 +275,7 @@ impl Codex {
             return;
         }
         self.open_failed = true;
-        let unsent = std::mem::take(&mut self.queue).into_iter().map(|(id, text)| UnsentPrompt { id, text }).collect();
+        let unsent = std::mem::take(&mut self.queue).into_iter().map(|(id, text, _)| UnsentPrompt { id, text }).collect();
         self.notes.unused(|_| true, o);
         o.ev(ChatEventKind::OpenFailed { error: error.to_string(), reason: open_failure(error), cli_version: self.cli_version.clone(), resumed: self.resume.is_some(), unsent });
         self.in_turn = false;
@@ -315,8 +315,12 @@ impl Codex {
     /// A turn for `text` (or, mid-turn, a steer). `note`: the steering note it
     /// carries, sent as `clientUserMessageId` so its delivery can be seen.
     fn start_turn(&mut self, text: &str, note: Option<&str>, o: &mut Out) {
+        self.start_turn_input(json!([{"type": "text", "text": text, "text_elements": []}]), note, o);
+    }
+
+    /// [`Self::start_turn`] with the turn's whole input (text plus images: [`crate::attach::codex_input`]).
+    fn start_turn_input(&mut self, input: Value, note: Option<&str>, o: &mut Out) {
         let Some(tid) = self.thread_id.clone() else { return };
-        let input = json!([{"type": "text", "text": text, "text_elements": []}]);
         if self.in_turn
             && let Some(turn) = self.turn_id.clone()
         {
@@ -504,8 +508,8 @@ impl Codex {
                     self.sandbox = s;
                 }
                 self.ready(o);
-                for (_, text) in std::mem::take(&mut self.queue) {
-                    self.start_turn(&text, None, o);
+                for (_, _, input) in std::mem::take(&mut self.queue) {
+                    self.start_turn_input(input, None, o);
                 }
                 self.flush_notes(o);
                 o.ev(ChatEventKind::State { state: self.state() });
@@ -1191,11 +1195,11 @@ impl Backend for Codex {
         }
     }
 
-    fn send(&mut self, text: &str, o: &mut Out) -> Result<()> {
+    fn send(&mut self, text: &str, atts: &[crate::attach::Attachment], o: &mut Out) -> Result<()> {
         if self.open_failed {
             bail!(OPEN_FAILED_SEND);
         }
-        if let Some((name, args)) = slash_command(text) {
+        if let Some((name, args)) = slash_command(text).filter(|_| atts.is_empty()) {
             match name {
                 "compact" | "review" => {
                     let Some(tid) = self.thread_id.clone() else { bail!("the chat is still starting") };
@@ -1206,7 +1210,7 @@ impl Backend for Codex {
                         self.request("review/start", json!({"threadId": tid, "target": target}), Req::Other("start the review"), o);
                     }
                     self.user_n += 1;
-                    o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string(), steer: false, note_id: None });
+                    o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string(), steer: false, note_id: None, attachments: Vec::new() });
                     return Ok(());
                 }
                 "model" if !args.is_empty() => {
@@ -1226,13 +1230,20 @@ impl Backend for Codex {
                 _ => {}
             }
         }
+        // Images go as `localImage` inputs (coool's stored copy), every attachment as a marker line in the text.
+        let input = if atts.is_empty() {
+            json!([{"type": "text", "text": text, "text_elements": []}])
+        } else {
+            let dir = crate::attach::store_dir().context("no folder for attachments")?;
+            crate::attach::codex_input(&dir, text, atts)?
+        };
         self.user_n += 1;
         let id = format!("u{}", self.user_n);
-        o.ev(ChatEventKind::UserMessage { id: id.clone(), text: text.to_string(), steer: false, note_id: None });
+        o.ev(ChatEventKind::UserMessage { id: id.clone(), text: text.to_string(), steer: false, note_id: None, attachments: atts.to_vec() });
         if self.thread_id.is_none() {
-            self.queue.push((id, text.to_string()));
+            self.queue.push((id, crate::attach::with_markers(text, atts), input));
         } else {
-            self.start_turn(text, None, o);
+            self.start_turn_input(input, None, o);
         }
         o.ev(ChatEventKind::State { state: self.state() });
         Ok(())
@@ -1368,7 +1379,7 @@ impl Backend for Codex {
     fn on_exit(&mut self, o: &mut Out) {
         // Gone before the thread opened, with prompts waiting for it: they never reached the agent, and say so.
         if self.thread_id.is_none() && !self.open_failed && !self.queue.is_empty() {
-            let unsent = std::mem::take(&mut self.queue).into_iter().map(|(id, text)| UnsentPrompt { id, text }).collect();
+            let unsent = std::mem::take(&mut self.queue).into_iter().map(|(id, text, _)| UnsentPrompt { id, text }).collect();
             self.open_failed = true;
             o.ev(ChatEventKind::OpenFailed { error: String::new(), reason: OpenFailure::Exited, cli_version: self.cli_version.clone(), resumed: self.resume.is_some(), unsent });
         }
@@ -1547,7 +1558,7 @@ mod tests {
         let mut c = Codex::new(&opts());
         let mut o = Out::default();
         c.start(&mut o);
-        c.send("hi", &mut o).unwrap();
+        c.send("hi", &[], &mut o).unwrap();
         assert_eq!(o.writes.len(), 1, "only initialize so far");
         c.on_line(r#"{"id":1,"result":{}}"#, &mut o);
         c.on_line(r#"{"id":3,"result":{"thread":{"id":"t1"},"model":"m","approvalPolicy":"on-request","sandbox":{"type":"workspaceWrite"}}}"#, &mut o);
@@ -1557,9 +1568,28 @@ mod tests {
         assert_eq!(c.sandbox, "workspace-write");
         // A second prompt mid-turn steers the running turn.
         c.on_line(r#"{"method":"turn/started","params":{"threadId":"t1","turn":{"id":"turn1"}}}"#, &mut o);
-        c.send("also this", &mut o).unwrap();
+        c.send("also this", &[], &mut o).unwrap();
         let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
         assert_eq!((last["method"].as_str(), last["params"]["expectedTurnId"].as_str()), (Some("turn/steer"), Some("turn1")));
+    }
+
+    /// Images go as `localImage` inputs (coool's stored copy), held with the prompt until the thread exists.
+    #[test]
+    fn send_with_attachments_adds_local_images() {
+        let (store, img, txt) = crate::chat::testutil::attach_fixture("codex");
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.send("describe", &[img.clone(), txt], &mut o).unwrap();
+        c.on_line(r#"{"id":1,"result":{}}"#, &mut o);
+        c.on_line(r#"{"id":3,"result":{"thread":{"id":"t1"},"model":"m","approvalPolicy":"on-request","sandbox":{"type":"workspaceWrite"}}}"#, &mut o);
+        let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!(last["method"], "turn/start");
+        let input = &last["params"]["input"];
+        assert!(input[0]["text"].as_str().unwrap().starts_with("describe\n\n<attachment kind=\"image\""));
+        assert_eq!(input[1]["type"], "localImage");
+        assert!(input[1]["path"].as_str().unwrap().ends_with(&format!("{}.png", img.key.unwrap())));
+        let _ = std::fs::remove_dir_all(store);
     }
 
     /// The owner's case: a resumed thread an older Codex can't read. The chat ends for good: no working state, the
@@ -1573,7 +1603,7 @@ mod tests {
         c.on_line(r#"{"id":1,"result":{"userAgent":"coool/0.145.0 (Mac OS 27.0.1; arm64) Apple_Terminal/488 (coool; 0)"}}"#, &mut o);
         let resume = sent(&o, "thread/resume").unwrap();
         assert_eq!(resume["params"]["threadId"], "t-old");
-        c.send("hey", &mut o).unwrap();
+        c.send("hey", &[], &mut o).unwrap();
         assert_eq!(c.state(), ChatState::Working, "held for the thread");
         // model/list answered before the thread: nothing to announce yet.
         let list = sent(&o, "model/list").unwrap()["id"].as_u64().unwrap();
@@ -1594,7 +1624,7 @@ mod tests {
         assert_eq!(c.state(), ChatState::Idle);
         // Later sends and notes are refused, saying why.
         let mut o = Out::default();
-        let e = c.send("still there?", &mut o).unwrap_err().to_string();
+        let e = c.send("still there?", &[], &mut o).unwrap_err().to_string();
         assert!(e.contains("couldn't be opened") && e.contains("new chat"), "{e}");
         assert!(c.steer("n1", "and this", false, &mut o).is_err());
         assert!(o.events.is_empty() && o.writes.is_empty());
@@ -1622,7 +1652,7 @@ mod tests {
         let mut c = Codex::new(&opts());
         let mut o = Out::default();
         c.start(&mut o);
-        c.send("hi", &mut o).unwrap();
+        c.send("hi", &[], &mut o).unwrap();
         let mut o = Out::default();
         c.on_exit(&mut o);
         let ChatEventKind::OpenFailed { reason, unsent, error, .. } = &o.events[0] else { panic!("{:?}", o.events) };
@@ -1645,7 +1675,7 @@ mod tests {
         let mut o = Out::default();
         c.set_model("gpt-5.6-luna", &mut o).unwrap();
         assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::Ready { model, .. } if model == "gpt-5.6-luna")));
-        c.send("hi", &mut o).unwrap();
+        c.send("hi", &[], &mut o).unwrap();
         let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
         assert_eq!((last["method"].as_str(), last["params"]["model"].as_str()), (Some("turn/start"), Some("gpt-5.6-luna")));
     }
@@ -1655,10 +1685,10 @@ mod tests {
         let mut c = Codex::new(&opts());
         c.thread_id = Some("t1".into());
         let mut o = Out::default();
-        c.send("/compact", &mut o).unwrap();
-        c.send("/review focus on errors", &mut o).unwrap();
-        c.send("/diff", &mut o).unwrap();
-        c.send("/model gpt-x", &mut o).unwrap();
+        c.send("/compact", &[], &mut o).unwrap();
+        c.send("/review focus on errors", &[], &mut o).unwrap();
+        c.send("/diff", &[], &mut o).unwrap();
+        c.send("/model gpt-x", &[], &mut o).unwrap();
         let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
         assert_eq!(w[0]["method"], "thread/compact/start");
         assert_eq!(w[1]["params"]["target"]["instructions"], "focus on errors");

@@ -21,6 +21,7 @@
         }
       ]
     },
+    "allow-attach-paths", "allow-attach-bytes", "allow-attach-image", "allow-attach-preview", "allow-attach-reveal",
     "allow-list-sessions", "allow-spawn-session", "allow-resume-session", "allow-pty-write", "allow-pty-resize",
     "allow-pty-replay", "allow-send-prompt", "allow-stop-session", "allow-stop-shell", "allow-shells-focus",
     "allow-start-chat", "allow-chat-send", "allow-chat-interrupt", "allow-chat-steer", "allow-chat-steer-cancel",
