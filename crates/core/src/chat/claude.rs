@@ -755,6 +755,13 @@ impl Claude {
         self.cmds.push(uuid.to_string());
     }
 
+    /// A note's user line: its content blocks when it has attachments, else its text.
+    fn write_note(&mut self, id: &str, text: &str, o: &mut Out) {
+        let content = self.notes.message(id).unwrap_or_else(|| Value::String(text.to_string()));
+        o.write(&json!({"type": "user", "message": {"role": "user", "content": content}, "parent_tool_use_id": null, "session_id": "", "uuid": id}));
+        self.cmds.push(id.to_string());
+    }
+
     /// Hands held `next` notes to the CLI once a main-thread step is in
     /// flight: the CLI takes them in after that step's result. Held while a
     /// permission request or question is open, while `now` notes wait, and
@@ -765,7 +772,7 @@ impl Claude {
         }
         let ids: Vec<(String, String)> = self.notes.list.iter().filter(|n| !n.sent && !n.now).map(|n| (n.id.clone(), n.text.clone())).collect();
         for (id, text) in ids {
-            self.write_user(&id, &text, o);
+            self.write_note(&id, &text, o);
             if let Some(n) = self.notes.get(&id) {
                 n.sent = true;
             }
@@ -798,7 +805,7 @@ impl Claude {
         let mut held: Vec<(String, String, bool)> = self.notes.list.iter().filter(|n| !n.sent).map(|n| (n.id.clone(), n.text.clone(), n.now)).collect();
         held.sort_by_key(|h| !h.2);
         for (id, text, _) in held {
-            self.write_user(&id, &text, o);
+            self.write_note(&id, &text, o);
             if let Some(n) = self.notes.get(&id) {
                 n.sent = true;
                 n.own_turn = true;
@@ -1327,16 +1334,23 @@ impl Backend for Claude {
         Ok(())
     }
 
-    fn steer(&mut self, note_id: &str, text: &str, now: bool, o: &mut Out) -> Result<()> {
+    fn steer(&mut self, note_id: &str, text: &str, now: bool, atts: &[crate::attach::Attachment], o: &mut Out) -> Result<()> {
         if self.open_failed {
             bail!(OPEN_FAILED_SEND);
         }
+        // Stream-json takes a whole user message at any time: a note with attachments is one, images as content blocks.
+        let payload = if atts.is_empty() {
+            None
+        } else {
+            let dir = crate::attach::store_dir().context("no folder for attachments")?;
+            Some(crate::attach::claude_content(&dir, text, atts)?)
+        };
         // While the person is asked, nothing is cut: the note waits for the answer.
         let now = now && self.perms.is_empty();
-        self.notes.add(note_id, text, now, o);
+        self.notes.add_with(note_id, text, now, atts.to_vec(), payload, o);
         if self.cmds.is_empty() {
             // Idle: the note is the next prompt.
-            self.write_user(note_id, text, o);
+            self.write_note(note_id, text, o);
             if let Some(n) = self.notes.get(note_id) {
                 n.sent = true;
                 n.own_turn = true;
@@ -1973,6 +1987,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(store);
     }
 
+    /// A note with attachments while a step runs: one user line of content blocks (the images, then the text with a
+    /// marker line per attachment), taken in at the next step like any note; its echo carries the attachments.
+    #[test]
+    fn note_with_attachments_goes_in_whole_at_the_next_step() {
+        let (store, img, txt) = crate::chat::testutil::attach_fixture("claude-note");
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("go", &[], &mut o).unwrap();
+        let first = c.cmds[0].clone();
+        c.on_line(&started(&first), &mut o);
+        c.on_line(&line(json!({"type": "assistant", "message": {"id": "m", "model": "x", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}})), &mut o);
+        let mut o = Out::default();
+        c.steer("n1", "also this picture", false, &[img.clone(), txt], &mut o).unwrap();
+        let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0]["type"].as_str(), w[0]["uuid"].as_str()), (Some("user"), Some("n1")));
+        let content = &w[0]["message"]["content"];
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(crate::attach::key_of(content[0]["source"]["data"].as_str().unwrap()), img.key.clone().unwrap());
+        assert!(content[1]["text"].as_str().unwrap().starts_with("also this picture\n\n<attachment kind=\"image\""));
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::Steer { state: SteerState::Queued, attachments, .. } if attachments.len() == 2)));
+        // A text-only note is still plain text.
+        let mut o = Out::default();
+        c.steer("n2", "and text", false, &[], &mut o).unwrap();
+        let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
+        assert_eq!(w["message"]["content"], "and text");
+        // An image missing from the store refuses the note (nothing is half sent).
+        let gone = crate::attach::Attachment { key: Some("ffffffffffffffff".into()), ..img };
+        let mut o = Out::default();
+        assert!(c.steer("n3", "x", false, &[gone], &mut o).is_err());
+        assert!(o.writes.is_empty() && o.events.is_empty());
+        let _ = std::fs::remove_dir_all(store);
+    }
+
     /// Turn ends with no further step: the held note is not sent and ends
     /// unused; while a permission is pending notes wait, then go out.
     #[test]
@@ -1983,7 +2031,7 @@ mod tests {
         let first = c.cmds[0].clone();
         c.on_line(&started(&first), &mut o);
         // Streaming text, no step in flight: held by coool.
-        c.steer("n1", "late note", false, &mut o).unwrap();
+        c.steer("n1", "late note", false, &[], &mut o).unwrap();
         assert_eq!(o.writes.iter().filter(|w| w.contains("late note")).count(), 0);
         let mut o = Out::default();
         c.on_line(&line(json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 1, "user_message_uuids": [first]})), &mut o);
@@ -1998,7 +2046,7 @@ mod tests {
         c.on_line(&line(json!({"type": "assistant", "message": {"id": "m", "model": "x", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "touch a"}}]}})), &mut o);
         c.on_line(&line(json!({"type": "control_request", "request_id": "p1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "touch a"}}})), &mut o);
         let mut o = Out::default();
-        c.steer("n2", "wait for it", true, &mut o).unwrap();
+        c.steer("n2", "wait for it", true, &[], &mut o).unwrap();
         assert!(o.writes.is_empty(), "nothing sent, nothing interrupted");
         c.respond_permission("p1", true, false, &mut o).unwrap();
         let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
@@ -2022,7 +2070,7 @@ mod tests {
         let first = c.cmds[0].clone();
         c.on_line(&started(&first), &mut o);
         c.on_line(&line(json!({"type": "assistant", "message": {"id": "m", "model": "x", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "sleep 9"}}]}})), &mut o);
-        c.steer("sent", "at the cli", false, &mut o).unwrap();
+        c.steer("sent", "at the cli", false, &[], &mut o).unwrap();
         let mut o = Out::default();
         c.interrupt(&mut o).unwrap();
         let w: Vec<Value> = o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect();
@@ -2036,7 +2084,7 @@ mod tests {
         assert_eq!(c.working_or_idle(), ChatState::Idle);
 
         let mut o = Out::default();
-        c.steer("idle", "hello", false, &mut o).unwrap();
+        c.steer("idle", "hello", false, &[], &mut o).unwrap();
         let w: Value = serde_json::from_str(&o.writes[0]).unwrap();
         assert_eq!((w["uuid"].as_str(), w["message"]["content"].as_str()), (Some("idle"), Some("hello")));
         c.on_line(&started("idle"), &mut o);

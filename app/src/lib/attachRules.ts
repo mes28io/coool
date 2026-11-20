@@ -29,7 +29,7 @@ export interface AttachAdded {
 export type AttachPreview =
   | { kind: "text"; text: string; truncated: boolean; size: number; mime: string }
   | { kind: "image"; data_url: string; size: number; mime: string }
-  | { kind: "pdf"; data_url: string; size: number }
+  | { kind: "pdf"; pages: string[]; count: number; size: number }
   | { kind: "other"; size: number; mime: string; reason: string };
 
 export const MAX_COUNT = 10;
@@ -236,12 +236,17 @@ export function colorize(text: string, name: string): Tok[][] {
   return out;
 }
 
-/** Image paths in an agent's tool input or output (absolute, or `~/`), for a click-to-preview. At most `max`. */
-export function imagePaths(s: string, max = 4): string[] {
+/**
+ * Image paths in an agent's tool input or output (absolute, or `~/`), for a click-to-preview. At most `max`. With
+ * `root`, only paths inside it (the chat's folder; the app checks again after resolving symlinks).
+ */
+export function imagePaths(s: string, max = 4, root?: string): string[] {
+  const base = root ? root.replace(/\/+$/, "") + "/" : null;
   const out: string[] = [];
   const re = /(?:^|[\s"'`(=:])((?:\/|~\/)[^\s"'`()<>|;]*?\.(?:png|jpe?g|gif|webp))(?=$|[\s"'`),.;:])/gi;
   for (const m of s.matchAll(re)) {
     const p = m[1];
+    if (base && (!p.startsWith(base) || p.includes("/../"))) continue;
     if (!out.includes(p)) out.push(p);
     if (out.length >= max) break;
   }

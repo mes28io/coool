@@ -130,8 +130,22 @@ const NOTES = `# March export
 - Customers saw it on the PDF header too
 `;
 
+/** A page as the app draws it (white, text), for the demo. */
+function pdfPage(n: number): string {
+  return draw(1224, 1584, (g) => {
+    g.fillStyle = "#fff";
+    g.fillRect(0, 0, 1224, 1584);
+    g.fillStyle = "#111";
+    g.font = "600 44px Helvetica, sans-serif";
+    g.fillText(n === 1 ? "Invoice export spec" : "Appendix: month numbers", 110, 180);
+    g.font = "30px Helvetica, sans-serif";
+    const lines = n === 1 ? ["Periods are written YYYY-MM.", "Months start at 01 (January) and end at 12.", "A March invoice is 2026-03, never 2026-02."] : ["01 January   02 February   03 March", "04 April     05 May        06 June"];
+    lines.forEach((l, i) => g.fillText(l, 110, 280 + i * 56));
+  });
+}
+
 /** A one-page PDF drawn by hand (text only). */
-function pdf(): string {
+export function pdf(): string {
   const text = "Invoice export spec  -  periods are YYYY-MM, months start at 01";
   const content = `BT /F1 18 Tf 60 740 Td (${text}) Tj ET`;
   const objs = [
@@ -155,7 +169,7 @@ function pdf(): string {
 const FILES: Record<string, AttachPreview> = {
   "/Users/you/code/invoices/src/format.ts": { kind: "text", text: CODE, truncated: false, size: CODE.length, mime: "text/plain" },
   "/Users/you/Desktop/march-notes.md": { kind: "text", text: NOTES, truncated: false, size: NOTES.length, mime: "text/markdown" },
-  "/Users/you/Downloads/export-spec.pdf": { kind: "pdf", data_url: "", size: 1180 },
+  "/Users/you/Downloads/export-spec.pdf": { kind: "pdf", pages: [], count: 2, size: 1180 },
   "/Users/you/Downloads/march-export.zip": { kind: "other", size: 4_812_000, mime: "application/zip", reason: "no preview for this type" },
 };
 
@@ -187,11 +201,12 @@ export async function mockAttachImage(key: string): Promise<string> {
   return s;
 }
 
-export async function mockAttachPreview(path: string): Promise<AttachPreview> {
+export async function mockAttachPreview(path: string, imagesOnly?: boolean, root?: string | null): Promise<AttachPreview> {
   await new Promise((r) => setTimeout(r, 250));
+  if (imagesOnly && (!root || !path.startsWith(root + "/"))) throw new Error("outside this chat's folder, so coool doesn't open it");
   const f = FILES[path];
   if (!f) throw new Error("the file is gone (moved or deleted?)");
-  return f.kind === "pdf" ? { ...f, data_url: pdf() } : f;
+  return f.kind === "pdf" ? { ...f, pages: [pdfPage(1), pdfPage(2)] } : f;
 }
 
 export async function runAttachDemo(c: MockChat) {

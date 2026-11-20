@@ -568,7 +568,16 @@ fn parse_line(
         Some("attachment") if v["attachment"]["type"] == "queued_command" && v["attachment"]["commandMode"].as_str().is_none_or(|m| m == "prompt") => {
             let p = &v["attachment"]["prompt"];
             let s = p.as_str().map(str::to_string).or_else(|| result_text(p)).unwrap_or_default();
-            if !s.trim().is_empty() && !s.starts_with('<') {
+            // A note sent with attachments: its images are content blocks of the prompt.
+            let images: Vec<(String, String, u64)> = p.as_array().map(|a| a.iter().filter_map(crate::attach::block_image).collect()).unwrap_or_default();
+            let (clean, atts) = crate::attach::split_markers(&s);
+            if !atts.is_empty() || !images.is_empty() {
+                st.titles.prompts += 1;
+                let text = if clean.starts_with('<') { String::new() } else { clean };
+                let mut a = Activity::message(ts, ActivityKind::Prompt, &text, 400);
+                a.attachments = crate::attach::merge_images(atts, images);
+                push_activity(activity, a);
+            } else if !s.trim().is_empty() && !s.starts_with('<') {
                 st.titles.prompts += 1;
                 push_activity(activity, Activity::message(ts, ActivityKind::Prompt, &s, 400));
             }
@@ -918,6 +927,22 @@ mod tests {
         assert_eq!((p[2].text.as_str(), p[2].attachments[0].name.as_str()), ("", "a.pdf"));
         let back: Vec<Activity> = serde_json::from_str(&serde_json::to_string(&o.activity).unwrap()).unwrap();
         assert_eq!(back, o.activity);
+    }
+
+    /// A note sent mid-turn with an image: Claude Code records it as a `queued_command` whose prompt is the content
+    /// blocks; it comes back as a prompt with its attachments.
+    #[test]
+    fn queued_note_with_an_image_keeps_its_attachments() {
+        let mut o = Out::default();
+        let a = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/w/dot.png".into()), key: None, note: None };
+        let line = serde_json::json!({"type": "attachment", "timestamp": "2026-11-20T10:00:00Z", "attachment": {"type": "queued_command", "prompt": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "CCCC"}},
+            {"type": "text", "text": crate::attach::with_markers("this too", &[a])}]}});
+        feed(&mut o, &line.to_string());
+        let p: Vec<&Activity> = o.activity.iter().filter(|a| a.kind == ActivityKind::Prompt).collect();
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].text, "this too");
+        assert_eq!(p[0].attachments[0].key.as_deref(), Some(crate::attach::key_of("CCCC").as_str()));
     }
 
     #[test]

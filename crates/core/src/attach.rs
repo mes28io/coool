@@ -63,6 +63,11 @@ pub struct Attachment {
 /// Image formats both CLIs take as image input.
 pub const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
+/// One of [`IMAGE_TYPES`] by its bytes (a name ending in `.png` is not enough).
+pub fn is_image(head: &[u8]) -> bool {
+    IMAGE_TYPES.contains(&detect("", head).as_str())
+}
+
 /// The media type from a name and the file's first bytes (the bytes win for images and PDFs).
 pub fn detect(name: &str, head: &[u8]) -> String {
     let magic = if head.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -180,7 +185,10 @@ fn store_image(dir: &Path, bytes: &[u8], mime: &str) -> Result<(String, PathBuf)
     let p = dir.join(format!("{key}.{}", ext_for(mime)));
     if !p.is_file() {
         std::fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(".{key}.tmp{}", std::process::id()));
+        // A temporary name of its own per write, so two adds of the same image at once don't trip over each other.
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = dir.join(format!(".{key}.tmp{}-{n}", std::process::id()));
         std::fs::write(&tmp, bytes)?;
         std::fs::rename(&tmp, &p)?;
     }
@@ -245,7 +253,7 @@ pub fn inspect_path(dir: &Path, path: &Path) -> Result<Attachment> {
     let head = head_of(path);
     let mime = detect(&name, &head);
     let mut a = Attachment { name, mime: mime.clone(), size, kind: AttachKind::File, path: Some(path.to_string_lossy().into_owned()), key: None, note: None };
-    if IMAGE_TYPES.contains(&mime.as_str()) {
+    if is_image(&head) {
         if size > MAX_IMAGE_SOURCE_BYTES {
             bail!("too large: images can be up to {} MB", MAX_IMAGE_SOURCE_BYTES / 1024 / 1024);
         }
@@ -269,7 +277,7 @@ pub fn store_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Result<Attachment> {
     let mime = detect(name, &bytes[..bytes.len().min(4096)]);
     let clean: String = name.chars().filter(|c| !c.is_control() && *c != '/').collect::<String>();
     let name = if clean.trim().is_empty() || clean == "." || clean == ".." { "pasted".to_string() } else { clean };
-    if IMAGE_TYPES.contains(&mime.as_str()) {
+    if is_image(&bytes[..bytes.len().min(4096)]) {
         if size > MAX_IMAGE_BYTES {
             // Scaled through a file of its own.
             let tmp = std::env::temp_dir().join(format!("coool-paste-{}-{}.{}", std::process::id(), key_of(name.as_str()), ext_for(&mime)));
@@ -495,7 +503,9 @@ pub fn image_from_transcript(dir: &Path, transcript: &Path, key: &str) -> Option
 pub enum Preview {
     Text { text: String, truncated: bool, size: u64, mime: String },
     Image { data_url: String, size: u64, mime: String },
-    Pdf { data_url: String, size: u64 },
+    /// Its first pages as PNG `data:` URLs, drawn by the app (Quartz on macOS: nothing in the PDF runs); `count` is
+    /// the number of pages. The core leaves `pages` empty.
+    Pdf { pages: Vec<String>, count: usize, size: u64 },
     /// Nothing sensible to show inline (binary, too large, gone): the app offers Reveal in Finder.
     Other { size: u64, mime: String, reason: String },
 }
@@ -512,7 +522,7 @@ pub fn preview(path: &Path, images_only: bool) -> Result<Preview> {
     let head = head_of(path);
     let mime = detect(&name, &head);
     let enc = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-    let is_img = IMAGE_TYPES.contains(&mime.as_str());
+    let is_img = is_image(&head);
     if images_only && !is_img {
         bail!("not an image coool can show");
     }
@@ -527,8 +537,7 @@ pub fn preview(path: &Path, images_only: bool) -> Result<Preview> {
         if size > MAX_PREVIEW_BYTES {
             return Ok(Preview::Other { size, mime, reason: "too large to preview".into() });
         }
-        let b = std::fs::read(path)?;
-        return Ok(Preview::Pdf { data_url: format!("data:application/pdf;base64,{}", enc(&b)), size });
+        return Ok(Preview::Pdf { pages: Vec::new(), count: 0, size });
     }
     let texty = mime.starts_with("text/") || matches!(mime.as_str(), "application/json" | "image/svg+xml");
     if texty || looks_text(&head) {
@@ -541,6 +550,17 @@ pub fn preview(path: &Path, images_only: bool) -> Result<Preview> {
         return Ok(Preview::Text { text, truncated: size > MAX_PREVIEW_TEXT, size, mime });
     }
     Ok(Preview::Other { size, mime, reason: "no preview for this type".into() })
+}
+
+/// An image an agent named, previewed after a click: only inside `root` (the chat's folder), after resolving
+/// symlinks, and only a real PNG / JPEG / GIF / WebP (by its bytes, whatever its name says).
+pub fn preview_image_within(path: &Path, root: &Path) -> Result<Preview> {
+    let root = std::fs::canonicalize(root).context("the chat's folder is gone")?;
+    let real = std::fs::canonicalize(path).context("the file is gone (moved or deleted?)")?;
+    if !real.starts_with(&root) {
+        bail!("outside this chat's folder, so coool doesn't open it");
+    }
+    preview(&real, true)
 }
 
 #[cfg(test)]
@@ -667,6 +687,27 @@ mod tests {
         assert!(Path::new(f.path.as_deref().unwrap()).starts_with(&d));
         assert!(!valid_key("../../etc/passwd"));
         assert!(stored(&d, "../x").is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn agent_image_paths_stay_inside_the_chat_folder() {
+        let d = tmp("within");
+        let root = d.join("proj");
+        let outside = d.join("elsewhere");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("shot.png"), PNG).unwrap();
+        std::fs::write(outside.join("secret.png"), PNG).unwrap();
+        std::fs::write(root.join("fake.png"), b"#!/bin/sh\necho not an image\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.png"), root.join("link.png")).unwrap();
+        assert!(matches!(preview_image_within(&root.join("shot.png"), &root).unwrap(), Preview::Image { .. }));
+        let e = |p: &Path| preview_image_within(p, &root).unwrap_err().to_string();
+        assert!(e(&outside.join("secret.png")).contains("outside"));
+        assert!(e(&root.join("link.png")).contains("outside"), "a symlink is followed before the check");
+        assert!(e(&root.join("../elsewhere/secret.png")).contains("outside"));
+        assert!(e(&root.join("fake.png")).contains("not an image"));
+        assert!(e(&root.join("nope.png")).contains("gone"));
         let _ = std::fs::remove_dir_all(&d);
     }
 

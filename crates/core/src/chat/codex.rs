@@ -369,7 +369,7 @@ impl Codex {
                 n.sent = true;
                 n.own_turn = true;
             }
-            self.start_turn(&text, Some(&id), o);
+            self.start_note(&id, &text, o);
             return;
         }
         let Some(turn) = self.turn_id.clone() else { return };
@@ -391,7 +391,15 @@ impl Codex {
             if let Some(n) = self.notes.get(&id) {
                 n.sent = true;
             }
-            self.start_turn(&text, Some(&id), o);
+            self.start_note(&id, &text, o);
+        }
+    }
+
+    /// A note's turn (or `turn/steer`): its input with images when it has attachments, else its text.
+    fn start_note(&mut self, id: &str, text: &str, o: &mut Out) {
+        match self.notes.list.iter().find(|n| n.id == id).and_then(|n| n.payload.clone()) {
+            Some(input) => self.start_turn_input(input, Some(id), o),
+            None => self.start_turn(text, Some(id), o),
         }
     }
 
@@ -1249,13 +1257,20 @@ impl Backend for Codex {
         Ok(())
     }
 
-    fn steer(&mut self, note_id: &str, text: &str, now: bool, o: &mut Out) -> Result<()> {
+    fn steer(&mut self, note_id: &str, text: &str, now: bool, atts: &[crate::attach::Attachment], o: &mut Out) -> Result<()> {
         if self.open_failed {
             bail!(OPEN_FAILED_SEND);
         }
+        // `turn/steer` takes the same input list as `turn/start`: images go in as `localImage` with the note.
+        let payload = if atts.is_empty() {
+            None
+        } else {
+            let dir = crate::attach::store_dir().context("no folder for attachments")?;
+            Some(crate::attach::codex_input(&dir, text, atts)?)
+        };
         // While the person is asked, nothing is cut: the note waits for the answer.
         let now = now && self.perms.is_empty() && self.in_turn;
-        self.notes.add(note_id, text, now, o);
+        self.notes.add_with(note_id, text, now, atts.to_vec(), payload, o);
         self.flush_notes(o);
         o.ev(ChatEventKind::State { state: self.state() });
         Ok(())
@@ -1592,6 +1607,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(store);
     }
 
+    /// A note with attachments mid-turn: `turn/steer` with the same input list as a prompt (images as `localImage`).
+    #[test]
+    fn note_with_attachments_steers_with_local_images() {
+        let (store, img, txt) = crate::chat::testutil::attach_fixture("codex-note");
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.send("go", &[], &mut o).unwrap();
+        c.on_line(r#"{"id":1,"result":{}}"#, &mut o);
+        c.on_line(r#"{"id":3,"result":{"thread":{"id":"t1"},"model":"m","approvalPolicy":"on-request","sandbox":{"type":"workspaceWrite"}}}"#, &mut o);
+        c.on_line(r#"{"method":"turn/started","params":{"threadId":"t1","turn":{"id":"turn1"}}}"#, &mut o);
+        let mut o = Out::default();
+        c.steer("n1", "also this", false, &[img.clone(), txt], &mut o).unwrap();
+        let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!((last["method"].as_str(), last["params"]["clientUserMessageId"].as_str()), (Some("turn/steer"), Some("n1")));
+        let input = &last["params"]["input"];
+        assert!(input[0]["text"].as_str().unwrap().contains(r#"name="notes.txt""#));
+        assert_eq!(input[1]["type"], "localImage");
+        assert!(input[1]["path"].as_str().unwrap().ends_with(&format!("{}.png", img.key.unwrap())));
+        let _ = std::fs::remove_dir_all(store);
+    }
+
     /// The owner's case: a resumed thread an older Codex can't read. The chat ends for good: no working state, the
     /// prompt typed meanwhile comes back as not sent, the app-server is told to exit, later sends are refused.
     #[test]
@@ -1626,7 +1663,7 @@ mod tests {
         let mut o = Out::default();
         let e = c.send("still there?", &[], &mut o).unwrap_err().to_string();
         assert!(e.contains("couldn't be opened") && e.contains("new chat"), "{e}");
-        assert!(c.steer("n1", "and this", false, &mut o).is_err());
+        assert!(c.steer("n1", "and this", false, &[], &mut o).is_err());
         assert!(o.events.is_empty() && o.writes.is_empty());
         // The exit that follows reports nothing twice.
         c.on_exit(&mut o);
@@ -1861,10 +1898,10 @@ mod tests {
         c.on_line(r#"{"method":"turn/started","params":{"threadId":"t1","turn":{"id":"turn1"}}}"#, &mut o);
         c.on_line(r#"{"jsonrpc":"2.0","id":0,"method":"item/commandExecution/requestApproval","params":{"threadId":"t1","itemId":"e1","command":"touch a","availableDecisions":["accept","decline"]}}"#, &mut o);
         let mut o = Out::default();
-        c.steer("n1", "after the answer", true, &mut o).unwrap();
+        c.steer("n1", "after the answer", true, &[], &mut o).unwrap();
         assert!(o.writes.is_empty());
         // Held by coool: still withdrawable.
-        c.steer("n2", "never mind", false, &mut o).unwrap();
+        c.steer("n2", "never mind", false, &[], &mut o).unwrap();
         c.cancel_steer("n2", &mut o).unwrap();
         assert_eq!(steers(&o.events), [(SteerState::Cancelled, None)]);
         let mut o = Out::default();

@@ -911,7 +911,7 @@ function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Too
   const hasOut = !!t.output && t.endTs !== null;
   const r = stepRow(t, cwd);
   // Image paths the step names (a screenshot it saved, an image it read): a preview each, read only when clicked.
-  const shots = useMemo(() => (t.endTs === null || t.ok === false ? [] : imagePaths(`${JSON.stringify(t.input ?? "")}\n${t.output}`, 3)), [t.endTs, t.ok, t.input, t.output]);
+  const shots = useMemo(() => (t.endTs === null || t.ok === false ? [] : imagePaths(`${JSON.stringify(t.input ?? "")}\n${t.output}`, 3, cwd)), [t.endTs, t.ok, t.input, t.output, cwd]);
   return (
     <div data-step-family={r.family}>
       <StepLine
@@ -932,7 +932,7 @@ function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Too
       />
       {shots.length > 0 && (
         <div className="-mt-0.5 mb-0.5 ml-[18px]">
-          <StepImages paths={shots} />
+          <StepImages paths={shots} root={cwd} />
         </div>
       )}
       <AnimatePresence initial={false}>

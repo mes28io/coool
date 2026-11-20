@@ -780,8 +780,8 @@ fn chat_interrupt(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
 
 /// A steering note for the running turn; returns its id (see CHAT_SPEC "Steering").
 #[tauri::command(async)]
-fn chat_steer(core: State<'_, Arc<Core>>, id: usize, text: String, now: bool) -> Res<String> {
-    core.with_chat(id, |c| c.steer(&text, now))
+fn chat_steer(core: State<'_, Arc<Core>>, id: usize, text: String, now: bool, attachments: Option<Vec<coool_core::attach::Attachment>>) -> Res<String> {
+    core.with_chat(id, |c| c.steer_with(&text, now, &attachments.unwrap_or_default()))
 }
 
 #[tauri::command(async)]

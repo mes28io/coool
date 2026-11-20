@@ -1838,7 +1838,7 @@ export function mockBackend(): Backend {
     attachPaths: (paths) => import("./mockAttach").then((m) => m.mockAttachPaths(paths)),
     attachBytes: (name, data) => import("./mockAttach").then((m) => m.mockAttachBytes(name, data)),
     attachImage: (key) => import("./mockAttach").then((m) => m.mockAttachImage(key)),
-    attachPreview: (path) => import("./mockAttach").then((m) => m.mockAttachPreview(path)),
+    attachPreview: (path, imagesOnly, root) => import("./mockAttach").then((m) => m.mockAttachPreview(path, imagesOnly, root)),
     attachReveal: async () => {},
     async chatInterrupt(id) {
       chats[id]?.interrupt();

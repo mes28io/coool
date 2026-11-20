@@ -84,6 +84,8 @@ export interface Note {
   echoed?: boolean;
   /** Delivered as an ordinary prompt (idle chat, a missed step boundary, or no step to attach to): its echo is a normal prompt bubble. */
   asPrompt?: boolean;
+  /** Images and files that go with it (both CLIs take them mid-turn: see crates/core/src/chat). */
+  attachments?: Attachment[];
 }
 
 /** The backend's `steer` event (CHAT_SPEC "Steering"). */
@@ -95,6 +97,7 @@ export interface SteerEvent {
   text: string;
   state: NoteState;
   tool_id: string | null;
+  attachments?: Attachment[];
 }
 
 export interface UsagePoint {
@@ -268,7 +271,8 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         asPrompt = !toolId;
       }
       const cur = c.notes.find((n) => n.id === s.note_id);
-      const note: Note = { ...(cur ?? { id: s.note_id, ts: s.ts }), text: s.text || cur?.text || "", state: s.state, toolId: toolId ?? (delivered ? null : (cur?.toolId ?? null)), asPrompt, local: false };
+      const atts = s.attachments?.length ? s.attachments : cur?.attachments;
+      const note: Note = { ...(cur ?? { id: s.note_id, ts: s.ts }), text: s.text || cur?.text || "", state: s.state, toolId: toolId ?? (delivered ? null : (cur?.toolId ?? null)), asPrompt, local: false, ...(atts?.length ? { attachments: atts } : {}) };
       c = { ...c, notes: cur ? c.notes.map((n) => (n.id === s.note_id ? note : n)) : [...c.notes, note] };
       continue;
     }

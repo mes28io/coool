@@ -16,7 +16,7 @@ import { Chip, cx, ease } from "./primitives";
 // ---------- where a conversation's images come from ----------
 
 /** The session whose transcript holds a conversation's images (for ones not in coool's store). */
-export const AttachSource = createContext<{ provider: Provider | null; session: string | null }>({ provider: null, session: null });
+export const AttachSource = createContext<{ provider: Provider | null; session: string | null; cwd?: string | null }>({ provider: null, session: null });
 
 /** One image the viewer can show: by key (loaded through the core), or a local URL (a composer draft). */
 export interface ViewImage {
@@ -26,6 +26,8 @@ export interface ViewImage {
   key?: string;
   src?: string;
   path?: string;
+  /** A path an agent wrote: only previewed inside this folder (the chat's). */
+  root?: string | null;
   provider?: Provider | null;
   session?: string | null;
 }
@@ -42,7 +44,7 @@ function useImage(img: ViewImage | null): { src: string | null; failed: boolean 
       if (img.path)
         // A path an agent wrote: read only now, after a click, and only as an image.
         void api()
-          .attachPreview(img.path, true)
+          .attachPreview(img.path, true, img.root)
           .then((p) => setState({ src: p.kind === "image" ? p.data_url : null, failed: p.kind !== "image", for: img.id }))
           .catch(() => setState({ src: null, failed: true, for: img.id }));
       else setState({ src: null, failed: true, for: img.id });
@@ -364,9 +366,9 @@ function SingleImage({ img, onOpen }: { img: ViewImage; onOpen: () => void }) {
 }
 
 /** "Preview" buttons for image paths an agent wrote in a step (read only when clicked). */
-export function StepImages({ paths }: { paths: string[] }) {
+export function StepImages({ paths, root }: { paths: string[]; root: string }) {
   if (!paths.length) return null;
-  const items: ViewImage[] = paths.map((p) => ({ id: `path:${p}`, name: p.split("/").pop() || p, size: 0, path: p }));
+  const items: ViewImage[] = paths.map((p) => ({ id: `path:${p}`, name: p.split("/").pop() || p, size: 0, path: p, root }));
   return (
     <span className="ml-1 inline-flex gap-1" data-step-images={paths.length}>
       {items.map((it, i) => (
@@ -626,16 +628,6 @@ function QuickLook({ att, onClose }: { att: Attachment; onClose: () => void }) {
     window.addEventListener("keydown", on, true);
     return () => window.removeEventListener("keydown", on, true);
   }, [onClose]);
-  // A PDF shows from a blob of its own bytes (nothing else is loaded).
-  const pdf = useMemo(() => {
-    if (p?.kind !== "pdf") return null;
-    const b64 = p.data_url.slice(p.data_url.indexOf(",") + 1);
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-    return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-  }, [p]);
-  useEffect(() => () => void (pdf && URL.revokeObjectURL(pdf)), [pdf]);
   const lines = useMemo(() => (p?.kind === "text" ? colorize(p.text.replace(/\n$/, ""), att.name) : null), [p, att.name]);
   return (
     <motion.div className="fixed inset-0 z-[90] flex items-center justify-center p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }} data-quicklook={att.name} role="dialog" aria-label={att.name}>
@@ -710,8 +702,18 @@ function QuickLook({ att, onClose }: { att: Attachment; onClose: () => void }) {
               </table>
               {p.truncated && <div className="px-4 py-3 text-small text-faint">Showing the first {fmtSize(512 * 1024)} of {fmtSize(p.size)}.</div>}
             </div>
-          ) : p.kind === "pdf" && pdf ? (
-            <iframe src={pdf} title={att.name} className="size-full border-0 bg-bg" data-quicklook-pdf />
+          ) : p.kind === "pdf" ? (
+            // Pages drawn by the app (Quartz) as images: the PDF itself is never loaded in the page.
+            <div className="scroll h-full" data-quicklook-pdf={p.pages.length}>
+              <div className="flex flex-col items-center gap-4 px-6 py-5">
+                {p.pages.map((src, k) => (
+                  <img key={k} src={src} alt={`Page ${k + 1}`} draggable={false} className="w-full max-w-[760px] rounded-[4px] border border-hairline bg-white shadow-card" data-quicklook-pdf-page={k + 1} />
+                ))}
+                <div className="pb-1 text-small text-faint">
+                  {p.count > p.pages.length ? `Showing the first ${p.pages.length} of ${p.count} pages. Reveal it in Finder for the rest.` : `${p.count} page${p.count === 1 ? "" : "s"}`}
+                </div>
+              </div>
+            </div>
           ) : p.kind === "image" ? (
             <div className="flex size-full items-center justify-center p-4">
               <img src={p.data_url} alt={att.name} className="max-h-full max-w-full rounded-[6px] object-contain" />

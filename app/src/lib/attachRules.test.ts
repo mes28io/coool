@@ -68,4 +68,6 @@ test("image paths an agent mentions", () => {
   assert.deepEqual(imagePaths('Saved screenshot to /tmp/shot-1.png. Also "~/Desktop/a b.jpg" and ./rel.png'), ["/tmp/shot-1.png"]);
   assert.deepEqual(imagePaths("file_path=/Users/x/img.webp, /Users/x/doc.pdf"), ["/Users/x/img.webp"]);
   assert.deepEqual(imagePaths("nothing here"), []);
+  // Only inside the chat's folder when one is given.
+  assert.deepEqual(imagePaths("wrote /w/proj/out.png and /tmp/x.png and /w/proj/../etc/y.png", 4, "/w/proj"), ["/w/proj/out.png"]);
 });

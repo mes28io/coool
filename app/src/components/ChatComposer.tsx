@@ -236,14 +236,15 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     const native = m && !atts.length ? nativeByKey.get(m[1].toLowerCase()) : undefined;
     if (native) return runNative(native);
     if (atts.length) {
-      // Attachments start a message of their own: a running turn only takes text (a steering note).
-      if (working) return useChats.getState().local(chat.id, { level: "info", text: "Attachments go with a new message: send it once the agent finishes, or stop it first." });
+      // While a turn runs, they go with a steering note (both CLIs take images mid-turn); else a message of their own.
+      if (working && (chat.pendingPermission || chat.pendingQuestion)) return;
       hist.current = { i: null, draft: "" };
       noteSent(voiceId, t);
       setText("");
       const kept = useAttach.getState().drafts[chat.id] ?? [];
       useAttach.getState().clear(chat.id);
-      void chatCall(chat.id, () => api().chatSend(chat.id, t, atts)).then((ok) => {
+      const sent = working ? steer(chat, t, now, atts) : chatCall(chat.id, () => api().chatSend(chat.id, t, atts));
+      void sent.then((ok) => {
         if (ok) return;
         // Not sent: the attachments come back to the composer.
         for (const d of kept) useAttach.getState().put(chat.id, d);
