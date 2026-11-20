@@ -1,7 +1,7 @@
 #!/bin/sh
 # coool installer for macOS on Apple silicon.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ahmetx13/coool/master/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/mes28io/coool/master/scripts/install.sh | sh
 #
 # Downloads the latest release, checks its SHA-256, and puts coool.app in /Applications (or ~/Applications when
 # /Applications isn't writable). Nothing runs as root. A file fetched by curl carries no quarantine flag, so macOS
@@ -13,7 +13,7 @@
 #   COOOL_DIR       the folder to install into
 set -eu
 
-REPO="ahmetx13/coool"
+REPO="mes28io/coool"
 ASSET="coool-macos-arm64.tar.gz"
 
 say() { printf '%s\n' "$*"; }
