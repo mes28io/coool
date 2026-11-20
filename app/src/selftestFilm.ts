@@ -66,22 +66,23 @@ async function typeOut(t: string, sleep: (ms: number) => Promise<unknown>) {
  * Animations), and the clock JS animations read (`performance.now`, requestAnimationFrame's timestamps). Timers and
  * `Date.now` keep real time (the ages the app shows are real).
  */
-function dilate(s: number) {
+function dilate(s: number, what = "all") {
   if (s <= 1) return;
+  const rate = 1 / s;
+  setInterval(() => {
+    for (const a of document.getAnimations()) if (a.playbackRate > 0 && a.playbackRate !== rate) a.playbackRate = rate;
+  }, 5);
+  if (what !== "all") return;
   const realNow = performance.now.bind(performance);
   const base = realNow();
   performance.now = () => base + (realNow() - base) / s;
   const raf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = (cb) => raf((ts) => cb(base + (ts - base) / s));
-  const rate = 1 / s;
-  setInterval(() => {
-    for (const a of document.getAnimations()) if (a.playbackRate > 0 && a.playbackRate !== rate) a.playbackRate = rate;
-  }, 5);
 }
 
 export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   const { invoke, sleep, waitFor, step, log, dir } = k;
-  const film = (action: string, a: Record<string, unknown> = {}) => invoke("selftest_film", { action, ...a }) as Promise<{ frames?: number; ms?: number; slow?: number }>;
+  const film = (action: string, a: Record<string, unknown> = {}) => invoke("selftest_film", { action, ...a }) as Promise<{ frames?: number; ms?: number; slow?: number; dilate?: string }>;
   const chats = () => useChats.getState().chats;
   const ids = () => new Set(Object.keys(chats()).map(Number));
   const sessionOfChat = (id: number) => useStore.getState().sessions.find((s) => s.chat === id);
@@ -186,11 +187,33 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       }
     },
 
+    // A check of the slowed-down page: a chat's last reply and its turn's end must still show.
+    async "film-probe"() {
+      await step("film-probe: a chat's reply shows with the page slowed down", async () => {
+        await waitFor("the sessions", () => sessions().length >= 12, 60_000);
+        const v = await film("visible");
+        slow = v.slow ?? 1;
+        dilate(slow, v.dilate);
+        const id = await start(`${dir}/invoices`, "Invoices from March still look wrong in the export. Check it.", "acceptEdits");
+        useStore.getState().open({ kind: "chat", id });
+        await waitFor("the card", () => $("[data-allow-once]"), 60_000);
+        $("[data-allow-once]")?.click();
+        await sleep(15_000);
+        const items = chats()[id]?.items ?? [];
+        const store = items.filter((i) => i.kind === "text").map((i) => ((i as { text?: string }).text ?? "").slice(0, 30));
+        const dom = text($("[data-chat-timeline]"));
+        const anims = document.getAnimations().map((a) => `${a.playState}@${Math.round(Number(a.currentTime ?? -1))}/${a.playbackRate}:${(a.effect as KeyframeEffect | null)?.target?.className?.toString().slice(0, 40) ?? "?"}`).slice(0, 30);
+        await log(`INFO probe store=${JSON.stringify(store)} domHasReply=${/tests pass/.test(dom)} running=${chats()[id]?.running} anims=${JSON.stringify(anims)}`);
+        if (!/tests pass/.test(dom)) throw new Error("the reply is not on screen");
+      });
+    },
+
     async film() {
       await step("film: the invented sessions are listed", async () => {
         await fwait("the sessions", () => sessions().length >= 12, 60_000);
-        slow = (await film("visible")).slow ?? 1;
-        dilate(slow);
+        const v = await film("visible");
+        slow = v.slow ?? 1;
+        dilate(slow, v.dilate);
         hideLogos();
         await log(`INFO updates ${JSON.stringify(useUpdates.getState().status).slice(0, 600)}`);
         await look("dark");
@@ -309,7 +332,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
           await fsleep(3500);
           await mark("allow-click", { allow: $("[data-allow-once]") });
           $("[data-allow-once]")?.click();
-          await fwait("the turn's end", () => $all("[data-turn-end]").length > 0 || !chats()[id]?.running, 20_000).catch(() => null);
+          await fwait("the reply after the tests", () => (chats()[id]?.items ?? []).some((i) => i.kind === "text" && /tests pass/.test((i as { text?: string }).text ?? "")), 20_000).catch(() => null);
           await fsleep(3000);
           await mark("end", { timeline: $("[data-chat-timeline]") });
         });

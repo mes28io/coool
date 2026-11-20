@@ -7536,7 +7536,7 @@ scenarios["readme-shots"] = (c: Ctx) => readmeScenarios({ dir: c.cfg.dir, log, s
 
 // `film` / `film-measure` (selftestFilm.ts): motion footage for the launch film on the same invented workspace
 // (app/scripts/readme-shots/film.sh). No model calls. Not in `all`.
-for (const n of ["film", "film-measure"]) {
+for (const n of ["film", "film-measure", "film-probe"]) {
   scenarios[n] = (c: Ctx) => filmScenarios({ dir: c.cfg.dir, site: c.cfg.site, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })[n]();
 }
 

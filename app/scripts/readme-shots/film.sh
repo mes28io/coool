@@ -1,7 +1,7 @@
 #!/bin/sh
 # Motion footage of the real app for the launch film, on the README's invented workspace. From the repo:
 #
-#   sh app/scripts/readme-shots/film.sh [scenario]       # film (default) or film-measure
+#   sh app/scripts/readme-shots/film.sh [scenario]       # film (default), film-measure or film-probe
 #
 # Same setup as run.sh (read it first): the invented workspace under $FILM_ROOT (default /private/tmp/coool-film-ws,
 # wiped and made again each run), the stand-in `claude`, the live sessions, then the app (a renamed copy of
@@ -12,6 +12,7 @@
 # FILM_SLOW (default 3): the scene plays that many times slower than real time while it records (the page's
 # animations and clock, the stand-in CLIs, the live workspace), and the assembler plays it back that much faster, so
 # a capture of ~8-25 stills a second (it depends on how busy the Mac is) still makes smooth 30 fps video.
+# FILM_DILATE: `all` (default: the page's animations and its clock) or `animations` (CSS / Web Animations only).
 # FILM_WORKERS (default 2): screencapture processes taking stills at once.
 # Don't edit this file while it runs: the shell reads it as it goes.
 #
@@ -55,7 +56,7 @@ sleep 1
 env -i HOME="$H" USER="${USER:-demo}" LOGNAME="${LOGNAME:-demo}" TMPDIR="${TMPDIR:-/tmp/}" LANG=en_US.UTF-8 SHELL=/bin/zsh \
   PATH="$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin" \
   COOOL_SELFTEST="$SCENARIO" COOOL_SELFTEST_DIR="$H/code" COOOL_SELFTEST_SHOTS="$ROOT/shots" COOOL_SELFTEST_LOG="$LOG" \
-  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 COOOL_FILM_WORKERS="${FILM_WORKERS:-2}" COOOL_FILM_SLOW="$SLOW" \
+  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 COOOL_FILM_WORKERS="${FILM_WORKERS:-2}" COOOL_FILM_SLOW="$SLOW" COOOL_FILM_DILATE="${FILM_DILATE:-all}" \
   "$ROOT/app/$NAME" > "$ROOT/logs/app.out" 2>&1 &
 APP=$!
 

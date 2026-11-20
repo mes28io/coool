@@ -42,8 +42,10 @@ pub fn selftest_film(app: AppHandle, core: State<'_, Arc<Core>>, action: String,
             }
             // How many times slower than real time the scene plays while it is filmed (`COOOL_FILM_SLOW`, film.sh).
             let slow = std::env::var("COOOL_FILM_SLOW").ok().and_then(|v| v.parse::<f64>().ok()).filter(|s| *s >= 1.0).unwrap_or(1.0);
-            t.log(&format!("FILM slow {slow}"));
-            Ok(serde_json::json!({ "slow": slow }))
+            // What slows down: `all` (default: animations and the page's clock) or `animations` (CSS / Web Animations only).
+            let dilate = std::env::var("COOOL_FILM_DILATE").unwrap_or_else(|_| "all".into());
+            t.log(&format!("FILM slow {slow} {dilate}"));
+            Ok(serde_json::json!({ "slow": slow, "dilate": dilate }))
         }
         "start" => {
             if no_shots() {
