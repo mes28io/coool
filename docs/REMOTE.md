@@ -7,19 +7,19 @@ Status: design, not built. This file is the contract between the three parts (re
 An iPhone app that watches and steers the coool running on your Mac, from anywhere. First version:
 
 - See every session and its state, live.
-- Get a push notification when an agent needs you.
+- See, live while the app is open, when an agent needs you.
 - Allow or deny a permission request, answer a question, approve a plan.
 - Send a message to a chat, stop a chat.
 - Start a new chat in a project folder the Mac already knows.
 
-Not in the first version: accounts and sign-in, a terminal, file browsing, the device panels, changing settings, "always allow" answers, Bypass / full-access modes.
+Not in the first version: push notifications (decided against), accounts and sign-in, a terminal, file browsing, the device panels, changing settings, "always allow" answers, Bypass / full-access modes.
 
 ## Decisions
 
 1. **Pair by QR, no account.** The Mac shows a QR code; the phone scans it once. That pairing is the identity. Accounts can be layered on later (several Macs, a web client) without changing the message format.
 2. **It works away from home through a relay.** The QR code is only the introduction. Afterwards both sides connect outwards to the relay; the Mac opens no ports and needs no router setup.
 3. **The relay is Convex** (the owner's team `mes`, a project named `coool-remote`).
-4. **End-to-end encrypted.** The relay stores and forwards ciphertext. It never sees session titles, prompts, commands, paths or answers. It knows: which Mac id talks to which device id, when, message sizes, and the phone's push token.
+4. **End-to-end encrypted.** The relay stores and forwards ciphertext. It never sees session titles, prompts, commands, paths or answers. It knows: which Mac id talks to which device id, when, and message sizes.
 5. **Off by default.** Nothing connects to the relay until the user turns Remote on in Settings and pairs a phone.
 
 ## Threat model
@@ -67,21 +67,18 @@ Phone → Mac: `hello`, `get_snapshot`, `get_chat`, `answer` (need id, allow onc
 
 ## Relay (Convex)
 
-Tables: `macs` (macId, signing key, created), `devices` (macId, deviceId, signing key, push token, revoked, lastSeen), `pairings` (pairingId, secret hash, expiry, used), `messages` (macId, deviceId, direction, counter, ciphertext, createdAt), `presence` (macId, lastSeen).
+Tables: `macs` (macId, signing key, created), `devices` (macId, deviceId, signing key, revoked, lastSeen), `pairings` (pairingId, secret hash, expiry, used), `messages` (macId, deviceId, direction, counter, ciphertext, createdAt), `presence` (macId, lastSeen).
 
 - Messages are deleted when acknowledged, and by a scheduled sweep after 24 hours.
 - Both clients subscribe to their own queue (Convex live queries), authenticated by signature.
 - No user table and no email addresses anywhere.
 
-## Push notifications
+## No push notifications
 
-When a `need` is sent and the device is not connected, the Mac asks the relay to push. The relay sends a generic alert through APNs: "An agent needs you". No title, command or project name goes through Apple or the relay. The app fetches and decrypts the details when opened. (A later version can carry the encrypted `need` in the push and decrypt it in a notification extension.)
-
-Needs from the owner before it can work: an Apple Developer App ID with Push Notifications, and an APNs key (.p8) stored as a Convex environment variable.
+The owner decided the iPhone app sends no push notifications. The relay holds no push token and never talks to Apple. The phone learns that an agent needs you only while the app is open (it shows needs live, with a badge and a sound in the app). The Mac's own notifications are unchanged.
 
 ## Build order
 
 1. Relay and the Mac side, tested with a command-line stand-in for the phone (pair, snapshot, answer, send, stop, start, revoke, replay refused).
 2. The iPhone app (SwiftUI): pairing scanner, session list, need detail with answer buttons, chat view with composer, settings.
-3. Push notifications, once the Apple keys exist.
-4. TestFlight.
+3. TestFlight.
