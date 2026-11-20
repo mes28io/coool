@@ -154,6 +154,7 @@ pub fn kind_of(ev: &ChatEventKind) -> Option<(Kind, String)> {
         ChatEventKind::State { state: ChatState::WaitingPermission } => None,
         ChatEventKind::TurnEnd { ok: true, duration_ms } => Some((Kind::Finished, format!("Finished after {}", human(*duration_ms)))),
         ChatEventKind::TurnEnd { ok: false, .. } => Some((Kind::Failed, "The turn ended with an error".into())),
+        ChatEventKind::OpenFailed { resumed, .. } => Some((Kind::Failed, if *resumed { "Couldn't open this chat" } else { "Couldn't start this chat" }.into())),
         ChatEventKind::Exited { code: Some(c) } if *c != 0 => Some((Kind::Failed, format!("The CLI exited with code {c}"))),
         _ => None,
     }
@@ -254,6 +255,10 @@ impl Notifier {
         let (kind, detail) = kind_of(ev)?;
         if kind == Kind::Failed && self.stopped.lock().unwrap().get(&id).is_some_and(|t| t.elapsed() < STOP_GRACE) {
             return None;
+        }
+        // The exit that follows is part of the same failure: one notification for both.
+        if matches!(ev, ChatEventKind::OpenFailed { .. }) {
+            self.stopped.lock().unwrap().insert(id, Instant::now());
         }
         let p = self.prefs.lock().unwrap().clone();
         if !should(kind, &p, self.focused.load(std::sync::atomic::Ordering::Relaxed)) {

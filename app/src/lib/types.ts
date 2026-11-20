@@ -340,6 +340,9 @@ interface Ev {
   seq: number;
   ts: number;
 }
+/** Why a chat's conversation couldn't be opened (CHAT_SPEC `open_failed`): newer_cli: saved by a newer CLI than the
+ * one installed; not_found: the CLI has no such saved conversation; exited: the CLI stopped first. */
+export type OpenFailure = "newer_cli" | "not_found" | "exited" | "other";
 export type ChatEvent = Ev &
   (
     | {
@@ -368,6 +371,7 @@ export type ChatEvent = Ev &
     | { type: "compacting"; active: boolean }
     | { type: "notice"; level: "info" | "warn" | "error"; text: string; needs_terminal: boolean }
     | { type: "exited"; code: number | null }
+    | { type: "open_failed"; error: string; reason: OpenFailure; cli_version: string | null; resumed: boolean; unsent: { id: string; text: string }[] }
     | { type: "question"; request_id: string; questions: Question[] }
     | { type: "commands"; commands: CommandInfo[] }
   );

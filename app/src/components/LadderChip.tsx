@@ -5,13 +5,16 @@ import { useState } from "react";
 import { type Chat } from "../lib/chat";
 import { LADDER, LADDER_LINE, ladderOn, MAX_PARALLEL, sameLadder, setChatLadder, useChatLadder, useLadderPrefs, useLadderPreview, useLaunchedLadder } from "../lib/ladder";
 import { ROLE_WORK, rolesWord, tierRows, type LadderCap } from "../lib/ladderTiers";
+import { useSeenModels } from "../lib/prefs";
 import { useStore } from "../store";
 import { ICaret } from "./icons";
 import { Chip, cx, Popover } from "./primitives";
 import { Select, Switch } from "./settings/ui";
 
-export function LadderChip({ chat }: { chat: Chat }) {
+/** `disabled`: why the chip can't be used (its tooltip), e.g. the chat couldn't be opened. */
+export function LadderChip({ chat, disabled }: { chat: Chat; disabled?: string | null }) {
   const [open, setOpen] = useState(false);
+  const seen = useSeenModels()[chat.provider];
   const own = useChatLadder(chat);
   const prefs = useLadderPrefs();
   const launched = useLaunchedLadder(chat.id);
@@ -24,10 +27,12 @@ export function LadderChip({ chat }: { chat: Chat }) {
   const cap: LadderCap = own.cap ?? prefs.cap[chat.provider];
   const par = own.maxParallel ?? prefs.maxParallel;
   const differs = launched !== undefined && !sameLadder(launched, preview);
+  // Tiers can only be judged with the chat's model and the CLI's model list both known.
+  const unknown = !lead || !seen.length;
 
   return (
     <div className="relative" data-ladder-chip={on ? "on" : "off"}>
-      <Chip active={open} onClick={() => setOpen(!open)} title={`${LADDER}: ${on ? "on" : "off"} for this chat`}>
+      <Chip active={open} onClick={() => setOpen(!open)} title={disabled ?? `${LADDER}: ${on ? "on" : "off"} for this chat`} disabled={!!disabled}>
         <span className={cx("size-[6px] rounded-full", on ? "bg-fg/60" : "border border-faint")} />
         <span className={cx(!on && "text-faint")}>{LADDER}</span>
         <ICaret size={10} />
@@ -52,6 +57,10 @@ export function LadderChip({ chat }: { chat: Chat }) {
                   <div className="pl-[112px] text-small text-faint">{r.roles.map((x) => ROLE_WORK[x]).join("; ")}</div>
                 </div>
               ))}
+            </div>
+          ) : unknown ? (
+            <div className="border-t border-hairline pt-2.5 text-small text-dim" data-ladder-unknown>
+              {!lead ? "This chat hasn’t said which model it runs yet" : `${chat.provider === "claude" ? "Claude Code" : "Codex"} hasn’t listed its models yet`}, so the tiers can’t be shown.
             </div>
           ) : (
             <div className="border-t border-hairline pt-2.5 text-small text-dim">No cheaper model in this CLI: the lead works alone, with the same checks.</div>

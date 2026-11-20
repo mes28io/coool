@@ -18,6 +18,7 @@ import { LadderChip } from "./LadderChip";
 import { InfoPanel, type InfoTab } from "./InfoPanel";
 import { useInfoRequest } from "../lib/infoRequest";
 import { flushLocal, steer } from "../lib/steer";
+import { takeDraft } from "../lib/drafts";
 import { SteerStrip } from "./SteerStrip";
 import { LidAskBanner } from "./LidAskBanner";
 import { asksBeforeActing } from "../lib/lid";
@@ -110,7 +111,8 @@ function rankItem(it: MenuItem, q: string): number {
 }
 
 export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?: boolean; focused?: boolean }) {
-  const [text, setText] = useState("");
+  // A prompt carried over from a chat that couldn't be opened starts here, unsent.
+  const [text, setText] = useState(() => takeDraft(chat.id));
   const [sel, setSel] = useState(0);
   const [menuHidden, setMenuHidden] = useState(false);
   const [pop, setPop] = useState<null | "model" | "mode" | "info">(null);
@@ -128,8 +130,11 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   const hist = useRef<{ i: number | null; draft: string }>({ i: null, draft: "" });
   const ta = useRef<HTMLTextAreaElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const working = chat.running && chat.state !== "idle";
-  const disabled = !chat.running;
+  const failed = chat.openFailed;
+  const working = chat.running && chat.state !== "idle" && !failed;
+  const disabled = !chat.running || !!failed;
+  // Why the chips can't be used (their tooltip): the conversation never opened, or the chat ended.
+  const off = failed ? `This chat couldn't ${failed.resumed ? "be opened" : "start"}, so there's nothing to change here` : !chat.running ? "This chat has ended" : null;
   // Voice (APP_SPEC "Voice"): this textarea is a dictation target; "send when I release" sends through `send`.
   const sendRef = useRef<() => void>(() => {});
   const voiceId = useVoiceField(ta, { inline: true, send: () => sendRef.current() });
@@ -314,12 +319,15 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   useEffect(() => {
     if (seenMode.current === null) seenMode.current = chat.permissionMode;
   }, [chat.permissionMode]);
-  const placeholder = disabled
-    ? "This chat has ended"
-    : chat.pendingPermission || chat.pendingQuestion
-      ? "Answer the request above first"
-      : working
-        ? "Steer the agent…" : `Message ${chat.provider === "claude" ? "Claude" : "Codex"}…  (/ for commands)`;
+  const placeholder = failed
+    ? "This chat can't take messages"
+    : disabled
+      ? "This chat has ended"
+      : chat.pendingPermission || chat.pendingQuestion
+        ? "Answer the request above first"
+        : working
+          ? "Tell the agent more while it works…"
+          : `Message ${chat.provider === "claude" ? "Claude" : "Codex"}…  (/ for commands)`;
 
   return (
     <div className={cx("composer-dock shrink-0 pb-3", compact ? "px-3" : "px-6")}>
@@ -413,13 +421,16 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             className="selectable relative block max-h-[200px] min-h-[52px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-prose outline-none placeholder:text-faint"
           />
           </div>
-          {/* A container: the hints below fit the composer's own width (a narrow pane or a wide side panel), not the window's. */}
-          <div className="@container flex items-center gap-1 px-2 pb-2">
+          {/* Chips on the left wrap onto a second line when the pane is narrow; the buttons on the right never move out
+              of the box. A container: the newline hint fits the composer's own width (a narrow pane or a wide side
+              panel), not the window's. */}
+          <div className="@container flex items-end gap-1 px-2 pb-2" data-composer-row>
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1" data-composer-chips>
             {/* model */}
             <div className="relative">
-              <Chip active={pop === "model"} onClick={() => openPop(pop === "model" ? null : "model")} title="Model (/model)">
-                <span className="size-[6px] rounded-full" style={{ background: modelColor(model) }} />
-                {model ? modelLabel(model) : "Model"}
+              <Chip active={pop === "model"} onClick={() => openPop(pop === "model" ? null : "model")} title={off ?? "Model (/model)"} disabled={!!off}>
+                <span className="size-[6px] rounded-full" style={{ background: off ? "var(--faint)" : modelColor(model) }} />
+                <span data-model-chip={model ?? ""}>{model ? modelLabel(model) : chat.ready ? "Default model" : "Model"}</span>
                 {pendingModel && <span className="spin size-[9px] rounded-full border border-current border-t-transparent" />}
                 <Caret />
               </Chip>
@@ -439,7 +450,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             {/* permission mode */}
             {modes.length > 0 && (
               <div className="relative">
-                <Chip active={pop === "mode"} onClick={() => openPop(pop === "mode" ? null : "mode")} title="Permission mode">
+                <Chip active={pop === "mode"} onClick={() => openPop(pop === "mode" ? null : "mode")} title={off ?? "Permission mode"} disabled={!!off}>
                   <ModeGlyph id={chat.permissionMode} />
                   {/* A mode switched from elsewhere (an approval's "Allow all edits") flashes in, so it's noticed. */}
                   <motion.span
@@ -451,7 +462,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                     transition={{ duration: 0.35, ease }}
                     onAnimationComplete={() => (seenMode.current = chat.permissionMode)}
                   >
-                    {mode?.label ?? chat.permissionMode ?? "Mode"}
+                    {mode?.label ?? (chat.permissionMode || "Mode")}
                   </motion.span>
                   <Caret />
                 </Chip>
@@ -513,12 +524,17 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                 </Popover>
               </div>
             )}
-            <LadderChip chat={chat} />
+            <LadderChip chat={chat} disabled={off} />
             {/* info panel (context / status / usage) */}
             <div className="relative">
-              <Chip active={pop === "info"} onClick={() => openPop(pop === "info" ? null : "info")} title="Context, status and usage (/context, /status, /usage)">
+              <Chip
+                active={pop === "info"}
+                onClick={() => openPop(pop === "info" ? null : "info")}
+                title={failed ? "This chat couldn't be opened: nothing used, nothing to show" : "Context, status and usage (/context, /status, /usage)"}
+                disabled={!!failed}
+              >
                 <ContextRing context={chat.context} model={chat.model} window={chat.contextWindow} />
-                <span className="tnumtext-small">{fmtTokens(chat.context)}</span>
+                {!failed && <span className="tnumtext-small">{fmtTokens(chat.context)}</span>}
               </Chip>
               <Popover open={pop === "info"} onClose={() => setPop(null)} side="top" width={400}>
                 <InfoPanel chat={chat} tab={infoTab} onTab={setInfoTab} turn={infoTurn} onTurn={setInfoTurn} />
@@ -526,20 +542,10 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             </div>
             <VoiceButton target={voiceId} disabled={disabled} />
             <FixCount target={voiceId} ta={ta} />
-            <span className="flex-1" />
-            {/* One line or nothing: never wrapped or clipped. The full hint needs ~620px of composer, a short one ~470px. */}
-            {!compact && working && (
-              <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-micro text-faint @min-[620px]:flex" data-steer-hint>
-                <Kbd>↵</Kbd> next step <span>·</span> <Kbd>⌘↵</Kbd> interrupt now <span>·</span> <Kbd>esc</Kbd> stop
-              </span>
-            )}
-            {!compact && working && (
-              <span className="hidden shrink-0 items-center gap-1.5 whitespace-nowrap font-mono text-micro text-faint @min-[470px]:flex @min-[620px]:hidden" data-steer-hint-short>
-                <Kbd>⌘↵</Kbd> now <span>·</span> <Kbd>esc</Kbd> stop
-              </span>
-            )}
-            {!compact && !working && (
-              <span className="hidden shrink-0 items-center gap-1 whitespace-nowrap text-small text-faint @min-[400px]:flex">
+            </div>
+            <div className="flex h-[34px] shrink-0 items-center gap-1" data-composer-actions>
+            {!compact && !working && !disabled && (
+              <span className="mr-1 hidden shrink-0 items-center gap-1 whitespace-nowrap text-small text-faint @min-[520px]:flex">
                 <Kbd>⇧</Kbd>
                 <Kbd>↵</Kbd> newline
               </span>
@@ -554,8 +560,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   exit={{ opacity: 0, scale: 0.8 }}
                   transition={{ duration: 0.16, ease }}
                   onClick={interrupt}
-                  title="Stop this turn (Esc)"
-                  className="flex h-[34px] items-center gap-1.5 rounded-[9px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-small font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err-text"
+                  data-stop
+                  title={"Stop the agent now (Esc).\nTo add something without stopping it, type below and press Enter."}
+                  className="flex h-[34px] shrink-0 items-center gap-1.5 rounded-[9px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] px-2.5 text-small font-medium text-fg transition-colors duration-150 hover:bg-[color-mix(in_oklab,var(--error)_14%,transparent)] hover:text-err-text"
                 >
                   <IStop size={14} />
                   Stop
@@ -573,15 +580,23 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   disabled={!can}
                   whileTap={can ? { scale: 0.92 } : undefined}
                   className={cx(
-                    "flex size-[32px] items-center justify-center rounded-[9px] transition-[background-color,color] duration-150",
+                    "flex size-[32px] shrink-0 items-center justify-center rounded-[9px] transition-[background-color,color] duration-150",
                     can ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] text-faint",
                   )}
-                  title={working ? "Queue a note for the next step (↵), or interrupt now (⌘↵)" : "Send (Enter)"}
+                  data-send
+                  title={
+                    working
+                      ? "Send to the agent while it works.\nEnter: it reads this when it finishes its current step.\n⌘Enter: it stops that step and reads this now."
+                      : failed
+                        ? "This chat can't take messages"
+                        : "Send (Enter)"
+                  }
                 >
                   <IArrowUp size={17} strokeWidth={1.9} />
                 </motion.button>
               )}
             </AnimatePresence>
+            </div>
           </div>
         </div>
         <FixOffer target={voiceId} />
@@ -652,6 +667,13 @@ function ModelPicker({ chat, current, onPick }: { chat: Chat; current: string | 
           </button>
         );
       })}
+      {!chat.modelOptions.length && (
+        <div className="px-2.5 py-1.5 text-small leading-[17px] text-dim" data-model-list-unknown>
+          {!chat.ready
+            ? "The list of models comes once the chat has started. You can type a model id below meanwhile."
+            : `${chat.provider === "claude" ? "Claude Code" : "Codex"} didn’t list its models${current ? "" : " or say which one this chat uses"}. Type a model id below to switch.`}
+        </div>
+      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();

@@ -145,8 +145,12 @@ pub(crate) struct Codex {
     last_ready: Option<ChatEventKind>,
     next_id: u64,
     pending: HashMap<u64, Req>,
-    /// Prompts sent before the thread exists.
-    queue: Vec<String>,
+    /// Prompts sent before the thread exists: (`user_message` id, text).
+    queue: Vec<(String, String)>,
+    /// The thread could not be opened: the chat is over and takes no more messages.
+    open_failed: bool,
+    /// The app-server's version (from `initialize`'s `userAgent`).
+    cli_version: Option<String>,
     turn_id: Option<String>,
     in_turn: bool,
     perms: HashMap<String, (Value, PermKind)>,
@@ -195,6 +199,8 @@ impl Codex {
             next_id: 0,
             pending: HashMap::new(),
             queue: Vec::new(),
+            open_failed: false,
+            cli_version: None,
             turn_id: None,
             in_turn: false,
             perms: HashMap::new(),
@@ -260,6 +266,21 @@ impl Codex {
         } else {
             ChatState::Idle
         }
+    }
+
+    /// The thread can't be opened (or Codex can't start): the chat ends. Prompts held for the thread are reported
+    /// as not sent, held notes end unused, and the app-server is asked to exit (`exited` follows).
+    fn fail_open(&mut self, error: &str, o: &mut Out) {
+        if self.open_failed {
+            return;
+        }
+        self.open_failed = true;
+        let unsent = std::mem::take(&mut self.queue).into_iter().map(|(id, text)| UnsentPrompt { id, text }).collect();
+        self.notes.unused(|_| true, o);
+        o.ev(ChatEventKind::OpenFailed { error: error.to_string(), reason: open_failure(error), cli_version: self.cli_version.clone(), resumed: self.resume.is_some(), unsent });
+        self.in_turn = false;
+        o.ev(ChatEventKind::State { state: self.state() });
+        o.close = true;
     }
 
     fn start_thread(&mut self, o: &mut Out) {
@@ -412,14 +433,18 @@ impl Codex {
         if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
             let msg = err["message"].as_str().unwrap_or("unknown error");
             let what = match kind {
-                Req::Init => "start Codex",
+                // No thread, and none coming: the chat ends here, in the open.
+                Req::Init | Req::Thread => {
+                    self.fail_open(msg, o);
+                    return;
+                }
+                // An older or limited CLI: the chips show the thread's own model, and any id can be typed.
                 Req::ModelList => return,
                 Req::ConfigRead => {
                     // Could not read it: start the thread with the policy alone rather than not at all.
                     self.start_thread(o);
                     return;
                 }
-                Req::Thread => "open the thread",
                 Req::Turn(note) => {
                     self.in_turn = false;
                     if let Some(n) = note {
@@ -441,6 +466,7 @@ impl Codex {
         let r = &v["result"];
         match kind {
             Req::Init => {
+                self.cli_version = r["userAgent"].as_str().and_then(cli_version);
                 o.write(&json!({"jsonrpc": "2.0", "method": "initialized"}));
                 self.request("model/list", json!({}), Req::ModelList, o);
                 if self.ladder.is_some() {
@@ -478,7 +504,7 @@ impl Codex {
                     self.sandbox = s;
                 }
                 self.ready(o);
-                for text in std::mem::take(&mut self.queue) {
+                for (_, text) in std::mem::take(&mut self.queue) {
                     self.start_turn(&text, None, o);
                 }
                 self.flush_notes(o);
@@ -784,6 +810,26 @@ impl Codex {
         }
         s
     }
+}
+
+/// What a `thread/resume` / `thread/start` error says about why, from the words Codex uses (0.145):
+/// "failed to deserialize stored thread item …: unknown variant `completed`, expected one of …" when the saved
+/// thread holds an item kind this Codex doesn't know (a newer one wrote it); "no rollout found for thread id …".
+fn open_failure(error: &str) -> OpenFailure {
+    let e = error.to_lowercase();
+    if e.contains("deserialize stored") || (e.contains("stored thread") && e.contains("unknown variant")) {
+        OpenFailure::NewerCli
+    } else if e.contains("no rollout found") || e.contains("thread not found") || e.contains("no thread found") {
+        OpenFailure::NotFound
+    } else {
+        OpenFailure::Other
+    }
+}
+
+/// "coool/0.145.0 (Mac OS 27.0.1; arm64) …" -> "0.145.0".
+fn cli_version(user_agent: &str) -> Option<String> {
+    let v = user_agent.split_once('/')?.1.split_whitespace().next()?;
+    v.chars().next().is_some_and(|c| c.is_ascii_digit()).then(|| v.to_string())
 }
 
 fn slash_commands() -> Vec<SlashCommand> {
@@ -1146,6 +1192,9 @@ impl Backend for Codex {
     }
 
     fn send(&mut self, text: &str, o: &mut Out) -> Result<()> {
+        if self.open_failed {
+            bail!(OPEN_FAILED_SEND);
+        }
         if let Some((name, args)) = slash_command(text) {
             match name {
                 "compact" | "review" => {
@@ -1178,9 +1227,10 @@ impl Backend for Codex {
             }
         }
         self.user_n += 1;
-        o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string(), steer: false, note_id: None });
+        let id = format!("u{}", self.user_n);
+        o.ev(ChatEventKind::UserMessage { id: id.clone(), text: text.to_string(), steer: false, note_id: None });
         if self.thread_id.is_none() {
-            self.queue.push(text.to_string());
+            self.queue.push((id, text.to_string()));
         } else {
             self.start_turn(text, None, o);
         }
@@ -1189,6 +1239,9 @@ impl Backend for Codex {
     }
 
     fn steer(&mut self, note_id: &str, text: &str, now: bool, o: &mut Out) -> Result<()> {
+        if self.open_failed {
+            bail!(OPEN_FAILED_SEND);
+        }
         // While the person is asked, nothing is cut: the note waits for the answer.
         let now = now && self.perms.is_empty() && self.in_turn;
         self.notes.add(note_id, text, now, o);
@@ -1313,6 +1366,12 @@ impl Backend for Codex {
     }
 
     fn on_exit(&mut self, o: &mut Out) {
+        // Gone before the thread opened, with prompts waiting for it: they never reached the agent, and say so.
+        if self.thread_id.is_none() && !self.open_failed && !self.queue.is_empty() {
+            let unsent = std::mem::take(&mut self.queue).into_iter().map(|(id, text)| UnsentPrompt { id, text }).collect();
+            self.open_failed = true;
+            o.ev(ChatEventKind::OpenFailed { error: String::new(), reason: OpenFailure::Exited, cli_version: self.cli_version.clone(), resumed: self.resume.is_some(), unsent });
+        }
         self.perms.clear();
         self.spawn_ends.clear();
         self.remember.clear();
@@ -1501,6 +1560,94 @@ mod tests {
         c.send("also this", &mut o).unwrap();
         let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
         assert_eq!((last["method"].as_str(), last["params"]["expectedTurnId"].as_str()), (Some("turn/steer"), Some("turn1")));
+    }
+
+    /// The owner's case: a resumed thread an older Codex can't read. The chat ends for good: no working state, the
+    /// prompt typed meanwhile comes back as not sent, the app-server is told to exit, later sends are refused.
+    #[test]
+    fn resume_error_ends_the_chat_and_returns_queued_prompts() {
+        let sent = |o: &Out, method: &str| o.writes.iter().map(|w| serde_json::from_str::<Value>(w).unwrap()).find(|v| v["method"] == method);
+        let mut c = Codex::new(&ChatOptions { resume: Some("t-old".into()), model: None, ..opts() });
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.on_line(r#"{"id":1,"result":{"userAgent":"coool/0.145.0 (Mac OS 27.0.1; arm64) Apple_Terminal/488 (coool; 0)"}}"#, &mut o);
+        let resume = sent(&o, "thread/resume").unwrap();
+        assert_eq!(resume["params"]["threadId"], "t-old");
+        c.send("hey", &mut o).unwrap();
+        assert_eq!(c.state(), ChatState::Working, "held for the thread");
+        // model/list answered before the thread: nothing to announce yet.
+        let list = sent(&o, "model/list").unwrap()["id"].as_u64().unwrap();
+        c.on_line(&format!(r#"{{"id":{list},"result":{{"data":[{{"id":"gpt-5.6-sol","displayName":"GPT-5.6-Sol"}}]}}}}"#), &mut o);
+        let err = "failed to deserialize stored thread item subagent-completed-019a: unknown variant `completed`, expected one of `started`, `interacted`, `interrupted`";
+        let id = resume["id"].as_u64().unwrap();
+        let mut o = Out::default();
+        c.on_line(&format!(r#"{{"id":{id},"error":{{"code":-32600,"message":"{}"}}}}"#, err.replace('`', "\\u0060")), &mut o);
+        let failed = o.events.iter().find_map(|e| if let ChatEventKind::OpenFailed { error, reason, cli_version, resumed, unsent } = e { Some((error.clone(), *reason, cli_version.clone(), *resumed, unsent.clone())) } else { None });
+        let (error, reason, version, resumed, unsent) = failed.expect("open_failed");
+        assert_eq!(error, err);
+        assert_eq!((reason, version.as_deref(), resumed), (OpenFailure::NewerCli, Some("0.145.0"), true));
+        assert_eq!(unsent, vec![UnsentPrompt { id: "u1".into(), text: "hey".into() }]);
+        assert!(matches!(o.events.last(), Some(ChatEventKind::State { state: ChatState::Idle })), "{:?}", o.events);
+        assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::Ready { .. } | ChatEventKind::Notice { .. })), "no ready, no second notice: {:?}", o.events);
+        assert!(o.close, "the app-server is asked to exit");
+        assert!(o.writes.is_empty(), "no turn started: {:?}", o.writes);
+        assert_eq!(c.state(), ChatState::Idle);
+        // Later sends and notes are refused, saying why.
+        let mut o = Out::default();
+        let e = c.send("still there?", &mut o).unwrap_err().to_string();
+        assert!(e.contains("couldn't be opened") && e.contains("new chat"), "{e}");
+        assert!(c.steer("n1", "and this", false, &mut o).is_err());
+        assert!(o.events.is_empty() && o.writes.is_empty());
+        // The exit that follows reports nothing twice.
+        c.on_exit(&mut o);
+        assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::OpenFailed { .. } | ChatEventKind::TurnEnd { .. })), "{:?}", o.events);
+    }
+
+    #[test]
+    fn open_errors_are_told_apart() {
+        assert_eq!(open_failure("no rollout found for thread id 0199a0b0-0000-7000-8000-000000000001"), OpenFailure::NotFound);
+        assert_eq!(open_failure("failed to deserialize stored thread item x: unknown variant `completed`, expected one of `started`"), OpenFailure::NewerCli);
+        // A parameter Codex refuses is not a newer thread.
+        assert_eq!(open_failure("Invalid request: unknown variant `on-failure`, expected one of `untrusted`, `on-request`, `never`"), OpenFailure::Other);
+        assert_eq!(cli_version("coool_probe/0.145.0 (Mac OS 27.0.1; arm64) Apple_Terminal/488"), Some("0.145.0".into()));
+        assert_eq!(cli_version("weird"), None);
+        // A new chat whose thread/start fails ends the same way (not a resume), and so does a failed initialize.
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.on_line(r#"{"id":1,"error":{"message":"boom"}}"#, &mut o);
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::OpenFailed { resumed: false, reason: OpenFailure::Other, .. })));
+        assert!(o.close);
+        // The CLI gone before the thread opened, a prompt waiting: not sent, said once.
+        let mut c = Codex::new(&opts());
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.send("hi", &mut o).unwrap();
+        let mut o = Out::default();
+        c.on_exit(&mut o);
+        let ChatEventKind::OpenFailed { reason, unsent, error, .. } = &o.events[0] else { panic!("{:?}", o.events) };
+        assert_eq!((*reason, unsent.len(), error.as_str()), (OpenFailure::Exited, 1, ""));
+    }
+
+    /// An older CLI that refuses `model/list`: the chat still says which model it runs (from the thread) and can switch.
+    #[test]
+    fn model_list_failure_still_shows_the_current_model() {
+        let mut c = Codex::new(&ChatOptions { model: None, resume: Some("t1".into()), ..opts() });
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.on_line(r#"{"id":1,"result":{}}"#, &mut o);
+        c.on_line(r#"{"id":2,"error":{"code":-32601,"message":"method not found: model/list"}}"#, &mut o);
+        assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::Notice { .. } | ChatEventKind::OpenFailed { .. })), "{:?}", o.events);
+        c.on_line(r#"{"id":3,"result":{"thread":{"id":"t1"},"model":"gpt-5.6-terra","approvalPolicy":"on-request","sandbox":{"type":"workspaceWrite"}}}"#, &mut o);
+        let ready = o.events.iter().rev().find_map(|e| if let ChatEventKind::Ready { model, models, permission_mode, .. } = e { Some((model.clone(), models.len(), permission_mode.clone())) } else { None });
+        assert_eq!(ready, Some(("gpt-5.6-terra".into(), 0, "on-request".into())));
+        // Switching still works: the next turn carries it.
+        let mut o = Out::default();
+        c.set_model("gpt-5.6-luna", &mut o).unwrap();
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::Ready { model, .. } if model == "gpt-5.6-luna")));
+        c.send("hi", &mut o).unwrap();
+        let last: Value = serde_json::from_str(o.writes.last().unwrap()).unwrap();
+        assert_eq!((last["method"].as_str(), last["params"]["model"].as_str()), (Some("turn/start"), Some("gpt-5.6-luna")));
     }
 
     #[test]

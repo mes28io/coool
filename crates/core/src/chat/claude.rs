@@ -306,6 +306,11 @@ pub(crate) struct Claude {
     last_error: Option<String>,
     /// The CLI said `status: compacting` and hasn't moved on yet.
     compacting: bool,
+    /// Prompts written before the CLI answered `initialize`: (`user_message` id, text). Reported as not sent when
+    /// the session never opens.
+    early: Vec<(String, String)>,
+    /// The session could not be opened (a failed `--resume`): the chat is over and takes no more messages.
+    open_failed: bool,
 }
 
 /// Ladder's briefs skill (from coool's own plugin): loaded by the lead, never offered in the composer.
@@ -450,6 +455,8 @@ impl Claude {
             artifact_calls: HashMap::new(),
             last_error: None,
             compacting: false,
+            early: Vec::new(),
+            open_failed: false,
         }
     }
 
@@ -976,6 +983,26 @@ impl Claude {
     }
 
     fn on_result(&mut self, v: &Value, o: &mut Out) {
+        // An error before the CLI answered `initialize`, on a resume: the session never opened (Claude Code 2.1.329,
+        // a missing session: `error_during_execution`, `num_turns: 0`, `errors: ["No conversation found with session
+        // ID: …"]`, then exit 1). Nothing written reached a model.
+        if self.resume.is_some() && !self.init_done && v["is_error"].as_bool() == Some(true) && v["num_turns"].as_u64().unwrap_or(0) == 0 {
+            let error = v["errors"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>().join("\n"))
+                .filter(|s| !s.is_empty())
+                .or_else(|| v["result"].as_str().filter(|s| !s.is_empty()).map(str::to_string))
+                .unwrap_or_else(|| v["subtype"].as_str().unwrap_or("error").replace('_', " "));
+            let reason = if error.contains("No conversation found") { OpenFailure::NotFound } else { OpenFailure::Other };
+            self.open_failed = true;
+            self.cmds.clear();
+            let unsent = std::mem::take(&mut self.early).into_iter().map(|(id, text)| UnsentPrompt { id, text }).collect();
+            self.notes.unused(|_| true, o);
+            o.ev(ChatEventKind::OpenFailed { error, reason, cli_version: None, resumed: true, unsent });
+            o.ev(ChatEventKind::State { state: ChatState::Idle });
+            o.close = true;
+            return;
+        }
         // The lines this turn answered; older CLIs (and our fixtures) list none
         // of ours: then the oldest.
         let mut answered: Vec<String> = v["user_message_uuids"].as_array().map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect()).unwrap_or_default();
@@ -1264,6 +1291,9 @@ impl Backend for Claude {
     }
 
     fn send(&mut self, text: &str, o: &mut Out) -> Result<()> {
+        if self.open_failed {
+            bail!(OPEN_FAILED_SEND);
+        }
         if let Some((name, _)) = slash_command(text)
             && self.terminal_commands.iter().any(|c| c == name)
         {
@@ -1272,12 +1302,19 @@ impl Backend for Claude {
         }
         self.user_n += 1;
         self.write_user(&uuid_v4(), text, o);
-        o.ev(ChatEventKind::UserMessage { id: format!("u{}", self.user_n), text: text.to_string(), steer: false, note_id: None });
+        let id = format!("u{}", self.user_n);
+        if !self.init_done {
+            self.early.push((id.clone(), text.to_string()));
+        }
+        o.ev(ChatEventKind::UserMessage { id, text: text.to_string(), steer: false, note_id: None });
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
         Ok(())
     }
 
     fn steer(&mut self, note_id: &str, text: &str, now: bool, o: &mut Out) -> Result<()> {
+        if self.open_failed {
+            bail!(OPEN_FAILED_SEND);
+        }
         // While the person is asked, nothing is cut: the note waits for the answer.
         let now = now && self.perms.is_empty();
         self.notes.add(note_id, text, now, o);
@@ -1704,6 +1741,33 @@ mod tests {
         // User settings say so.
         let u = opts(r#"[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"ls"}],"behavior":"allow","destination":"userSettings"}]"#);
         assert_eq!((u[1].0.scope, u[1].0.label.as_str()), (RememberScope::User, "Always allow `ls` in every project"));
+    }
+
+    /// Claude Code 2.1.329 on `--resume` of a session it doesn't have: one `result` before any `initialize` answer,
+    /// then exit 1. The chat ends as not opened; a prompt typed meanwhile is reported as not sent.
+    #[test]
+    fn failed_resume_ends_the_chat_and_returns_the_prompt() {
+        let mut c = Claude::new(&ChatOptions { resume: Some("3f0c2d1e-0000-4000-8000-000000000001".into()), ..opts() });
+        let mut o = Out::default();
+        c.start(&mut o);
+        c.send("hey", &mut o).unwrap();
+        let mut o = Out::default();
+        c.on_line(r#"{"type":"result","subtype":"error_during_execution","duration_ms":0,"is_error":true,"num_turns":0,"session_id":"3f0c2d1e-0000-4000-8000-000000000001","errors":["No conversation found with session ID: 3f0c2d1e-0000-4000-8000-000000000001"]}"#, &mut o);
+        let ChatEventKind::OpenFailed { error, reason, resumed, unsent, .. } = &o.events[0] else { panic!("{:?}", o.events) };
+        assert!(error.starts_with("No conversation found"));
+        assert_eq!((*reason, *resumed), (OpenFailure::NotFound, true));
+        assert_eq!(unsent, &vec![UnsentPrompt { id: "u1".into(), text: "hey".into() }]);
+        assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::TurnEnd { .. } | ChatEventKind::Notice { .. })), "{:?}", o.events);
+        assert!(matches!(o.events.last(), Some(ChatEventKind::State { state: ChatState::Idle })));
+        assert!(o.close);
+        assert!(c.send("again", &mut o).unwrap_err().to_string().contains("couldn't be opened"));
+        // Not a resume: an error result is an ordinary failed turn, as before.
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("hi", &mut o).unwrap();
+        c.on_line(r#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"errors":["boom"]}"#, &mut o);
+        assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::OpenFailed { .. })));
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::TurnEnd { ok: false, .. })));
     }
 
     #[test]

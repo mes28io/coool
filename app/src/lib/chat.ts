@@ -4,7 +4,7 @@
 
 import { useRef } from "react";
 import { create } from "zustand";
-import type { Activity, ArtifactInfo, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
+import type { Activity, ArtifactInfo, ChatEvent, ChatInfo, ChatRunState, CommandInfo, ModelOption, ModelUse, OpenFailure, Provider, Question, RememberOption, SlashCommand, Tokens } from "./types";
 import { shortTitle } from "./format";
 import { isStopReason } from "./stopped";
 import { permissionWhat } from "./toolNames";
@@ -15,8 +15,18 @@ export type PermissionAnswer = "allow" | "always" | "deny" | "answered";
 /** Picked labels / typed text per question; "declined"; or "answered" when settled elsewhere. */
 export type QuestionAnswer = string[][] | "declined" | "answered";
 
+/** The chat's conversation couldn't be opened: the chat is over (see `open_failed` in CHAT_SPEC). */
+export interface OpenFailed {
+  error: string;
+  reason: OpenFailure;
+  cliVersion: string | null;
+  resumed: boolean;
+  /** Prompts shown as sent that never reached the agent. */
+  unsent: { id: string; text: string }[];
+}
+
 export type ChatItem =
-  | { kind: "prompt"; key: string; id: string; text: string; ts: number }
+  | { kind: "prompt"; key: string; id: string; text: string; ts: number; unsent?: boolean }
   | { kind: "text"; key: string; id: string; text: string; ts: number; streaming: boolean; parent: string | null; model: string | null }
   | { kind: "thinking"; key: string; id: string; text: string; ts: number; endTs: number | null; parent: string | null }
   | {
@@ -55,7 +65,8 @@ export type ChatItem =
   | { kind: "question"; key: string; requestId: string; questions: Question[]; ts: number; answer: QuestionAnswer | null; answeredTs: number | null }
   | { kind: "notice"; key: string; level: "info" | "warn" | "error"; text: string; needsTerminal: boolean; ts: number }
   | { kind: "turn"; key: string; ts: number; durationMs: number; ok: boolean; failed: boolean; tools: number; tokens: number | null }
-  | { kind: "exited"; key: string; ts: number; code: number | null };
+  | { kind: "exited"; key: string; ts: number; code: number | null }
+  | ({ kind: "open_failed"; key: string; ts: number } & OpenFailed);
 
 /** A steering note: text sent to the agent while it works (see lib/steer.ts). */
 export type NoteState = "queued" | "picked_up" | "interrupted" | "unused" | "cancelled";
@@ -116,6 +127,8 @@ export interface Chat {
   state: ChatRunState;
   running: boolean;
   exitCode: number | null;
+  /** The conversation couldn't be opened: the chat takes no messages (its process ends right after). */
+  openFailed: OpenFailed | null;
   items: ChatItem[];
   seq: number;
   /** Epoch ms the current turn started (from event timestamps), null when idle. */
@@ -173,6 +186,7 @@ export function emptyChat(id: number, info?: Partial<ChatInfo>): Chat {
     state: info?.state ?? "idle",
     running: info?.running ?? true,
     exitCode: null,
+    openFailed: null,
     items: [],
     seq: 0,
     turnStart: null,
@@ -463,6 +477,18 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
       case "notice":
         its().push({ kind: "notice", key, level: e.level, text: e.text, needsTerminal: e.needs_terminal, ts: e.ts });
         break;
+      case "open_failed": {
+        const f: OpenFailed = { error: e.error ?? "", reason: e.reason ?? "other", cliVersion: e.cli_version ?? null, resumed: !!e.resumed, unsent: e.unsent ?? [] };
+        const ids = new Set(f.unsent.map((u) => u.id));
+        const a = items ?? c.items;
+        for (let i = 0; i < a.length; i++) {
+          const it = a[i];
+          if (it.kind === "prompt" && ids.has(it.id)) patch(i, { unsent: true });
+        }
+        its().push({ kind: "open_failed", key, ts: e.ts, ...f });
+        c = { ...c, openFailed: f, state: "idle", turnStart: null, stateSince: e.ts };
+        break;
+      }
       case "exited": {
         const a = items ?? c.items;
         for (let i = 0; i < a.length; i++) {
@@ -473,7 +499,8 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
           if (it.kind === "permission" && it.answer === null) patch(i, { answer: "answered", answeredTs: e.ts });
           if (it.kind === "question" && it.answer === null) patch(i, { answer: "answered", answeredTs: e.ts });
         }
-        its().push({ kind: "exited", key, ts: e.ts, code: e.code });
+        // A chat that couldn't be opened already says it ended (its card); the exit is just the process going.
+        if (!c.openFailed) its().push({ kind: "exited", key, ts: e.ts, code: e.code });
         c = { ...c, running: false, exitCode: e.code, state: "idle", turnStart: null, pendingPermission: null, pendingQuestion: null, stateSince: e.ts };
         break;
       }

@@ -294,6 +294,19 @@ pub enum ChatEventKind {
     Exited {
         code: Option<i32>,
     },
+    /// The CLI could not open (resume) or start the chat's conversation: the chat is over. The CLI is asked to
+    /// exit, so `exited` follows; nothing sent to this chat reaches an agent any more (sends are refused).
+    OpenFailed {
+        /// The CLI's own error, as it gave it (empty when it gave none: see the notice that follows).
+        error: String,
+        reason: OpenFailure,
+        /// The CLI's version, when it said (Codex's `initialize`).
+        cli_version: Option<String>,
+        /// A resume (else a new chat that could not start).
+        resumed: bool,
+        /// Prompts the person sent that never reached the agent (shown as sent until now).
+        unsent: Vec<UnsentPrompt>,
+    },
     /// The agent asks the person something (options and/or free text). The UI
     /// answers with [`Chat::respond_question`], or declines with
     /// [`Chat::respond_permission`] (`allow: false`). The chat's state is
@@ -319,6 +332,29 @@ pub enum ChatEventKind {
         tool_id: Option<String>,
     },
 }
+
+/// Why a chat's conversation could not be opened, as far as the CLI's error says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenFailure {
+    /// The saved conversation holds something the installed CLI can't read: a newer version of it wrote it.
+    NewerCli,
+    /// The CLI has no saved conversation with that id.
+    NotFound,
+    /// The CLI stopped before the conversation opened.
+    Exited,
+    Other,
+}
+
+/// A prompt shown as sent that never reached the agent; `id` is its `user_message` id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnsentPrompt {
+    pub id: String,
+    pub text: String,
+}
+
+/// Why a send is refused once a chat could not be opened.
+pub(crate) const OPEN_FAILED_SEND: &str = "this chat couldn't be opened, so it can't take messages: start a new chat in this folder";
 
 /// Where a steering note is. `queued` is the only state that changes again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,6 +403,8 @@ pub struct ChatInfo {
 pub(crate) struct Out {
     pub writes: Vec<String>,
     pub events: Vec<ChatEventKind>,
+    /// Close the CLI's input after the writes (so it exits): the chat is over.
+    pub close: bool,
 }
 
 impl Out {
@@ -432,6 +470,8 @@ struct Shared {
     stderr_tail: VecDeque<String>,
     /// `COOOL_CHAT_TRACE=<file>`: protocol trace in the fixture format.
     trace: Option<std::fs::File>,
+    /// The backend reported `open_failed` with the CLI's error: the exit's stderr tail would only repeat it.
+    open_failed: bool,
 }
 
 impl Shared {
@@ -478,6 +518,7 @@ impl Shared {
                 self.state = eff;
                 *state = eff;
             }
+            ChatEventKind::OpenFailed { error, .. } => self.open_failed = !error.is_empty(),
             ChatEventKind::Ready { session_id, model, permission_mode, .. } => {
                 if !session_id.is_empty() {
                     self.session_id = Some(session_id.clone());
@@ -511,6 +552,9 @@ fn apply(sh: &mut Shared, writer: &Sender<WriterMsg>, o: Out) {
             sh.trace("in", Value::String(w.clone()));
         }
         let _ = writer.send(WriterMsg::Line(w));
+    }
+    if o.close {
+        let _ = writer.send(WriterMsg::Close);
     }
     for e in o.events {
         sh.push(e);
@@ -704,6 +748,7 @@ impl Chat {
             running: true,
             stderr_tail: VecDeque::new(),
             trace: std::env::var_os("COOOL_CHAT_TRACE").and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok()),
+            open_failed: false,
         }));
         let (writer, rx) = mpsc::channel::<WriterMsg>();
 
@@ -800,7 +845,7 @@ impl Chat {
                 sh.backend.on_exit(&mut o);
                 o.writes.clear();
                 apply(&mut sh, &writer, o);
-                if code != Some(0) && code.is_some() {
+                if code != Some(0) && code.is_some() && !sh.open_failed {
                     let tail: Vec<String> = sh.stderr_tail.iter().cloned().collect();
                     let text = if tail.is_empty() { format!("{} exited with code {}", provider.label(), code.unwrap_or(-1)) } else { tail.join("\n") };
                     sh.push(ChatEventKind::notice(NoticeLevel::Error, text));
