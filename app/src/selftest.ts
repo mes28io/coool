@@ -6255,7 +6255,8 @@ const codexScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const strong = await waitFor("bold owls in the reply", () => $all("[data-chat-timeline] strong").find((e) => /owls/i.test(e.textContent ?? "")), 10_000).catch(() => null);
       const shell = toolsOf(id).find((t) => t.name === "shell");
       const end = turnEnds(id)[0];
-      const footer = $all("[data-turn-end]").pop();
+      // The turn's end row fades in (a CSS one-off): wait until it is visible.
+      const footer = await waitFor("the turn's end row", () => $all("[data-turn-end]").pop(), 3_000).catch(() => null);
       const chips = $all("[data-step-chip]").map(textOf);
       await shot("codex-chat-first");
       const out = [`${deltaBatches} delta batches`, `live words ${[...live].join("/") || "none"}`, `shell ${shell ? `ok=${shell.ok} "${shell.input && (shell.input as { command?: string }).command}"` : "none"}`, `turn ${end.durationMs} ms ok=${end.ok}`, `footer "${textOf(footer ?? null)}"`, `chips [${chips.join(", ")}]`];
