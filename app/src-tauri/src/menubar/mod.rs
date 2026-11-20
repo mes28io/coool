@@ -101,9 +101,14 @@ pub fn apply(p: Prefs) {
     let _ = (hidden, test);
 }
 
-/// Quitting: the item goes first.
+/// Quitting: the item goes first. Its sampler's cost so far goes to stderr (a release build has no self-test).
 pub fn shutdown() {
-    with(|s| s.shown = false);
+    if let Some((n, ns)) = with(|s| {
+        s.shown = false;
+        (s.samples, s.busy_ns)
+    }) {
+        eprintln!("coool menubar: {n} samples, {:.1} ms in the sampler", ns as f64 / 1e6);
+    }
     #[cfg(target_os = "macos")]
     if objc2::MainThreadMarker::new().is_some() {
         ui::remove();
@@ -379,10 +384,10 @@ pub fn selftest(action: &str, arg: serde_json::Value) -> Result<serde_json::Valu
             })?;
             Ok(json!(items.into_iter().map(|(t, e, tip)| json!({ "text": t, "enabled": e, "tip": tip })).collect::<Vec<_>>()))
         }
-        // A click on menu item `index` (as "menu" listed them), without opening the menu.
+        // A click on the menu row whose text starts with `arg`, without opening the menu.
         "click" => {
-            let i = arg.as_u64().ok_or("an item index")? as usize;
-            let a = main_sync(move || ui::act_of(i))?.ok_or("that item does nothing")?;
+            let t = arg.as_str().ok_or("the row's text")?.to_string();
+            let a = main_sync(move || ui::act_of(&t))?.ok_or("no such row, or it does nothing")?;
             let what = format!("{a:?}");
             ui::on_main(move || on_act(a));
             Ok(json!(what))

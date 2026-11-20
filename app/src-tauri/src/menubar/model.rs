@@ -237,7 +237,9 @@ impl Row {
     pub fn id(&self) -> String {
         match self {
             Row::Header { text } => format!("h:{text}"),
-            Row::Stat { id, .. } | Row::Proc { id, .. } | Row::Need { id, .. } => id.clone(),
+            Row::Stat { id, .. } | Row::Need { id, .. } => id.clone(),
+            // A process row that becomes clickable (or stops being) is built anew.
+            Row::Proc { id, open, .. } => format!("{id}:{}", open.is_some()),
             Row::Note { .. } => "note".into(),
             Row::Action { id, .. } => format!("a:{id}"),
             Row::Sep => "sep".into(),

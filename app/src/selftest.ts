@@ -55,6 +55,7 @@ import { perfScenarios } from "./selftestPerf";
 import { windowScenarios } from "./selftestWindow";
 import { readmeScenarios } from "./selftestReadme";
 import { portraitScenarios } from "./selftestPortrait";
+import { menubarScenarios } from "./selftestMenubar";
 import { filmScenarios } from "./selftestFilm";
 import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
@@ -7681,6 +7682,10 @@ scenarios["readme-shots"] = (c: Ctx) => readmeScenarios({ dir: c.cfg.dir, log, s
 // `portrait` (selftestPortrait.ts): coool on a portrait screen (COOOL_SELFTEST_SIZE=1080x1920) on the same invented
 // workspace, then resized to landscape and back. No model calls. Not in `all`.
 scenarios.portrait = (c: Ctx) => portraitScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) }).portrait();
+
+// `menubar` (selftestMenubar.ts): the menu bar item, created hidden, on the same invented workspace. No model calls.
+// Not in `all`.
+scenarios.menubar = (c: Ctx) => menubarScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step }).menubar();
 
 // `film` / `film-measure` (selftestFilm.ts): motion footage for the launch film on the same invented workspace
 // (app/scripts/readme-shots/film.sh). No model calls. Not in `all`.

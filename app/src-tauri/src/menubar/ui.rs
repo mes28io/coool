@@ -260,9 +260,12 @@ pub fn create(hidden: bool, test: bool) {
     if UI.with(|u| u.borrow().is_some()) {
         return;
     }
-    let item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0 /* NSVariableStatusItemLength */);
+    // A hidden item is made zero wide and hidden in the same main-thread turn, before anything is drawn: it never takes
+    // room in the bar, not even for a frame. Then it gets the variable length a real one has (still hidden).
+    let item = NSStatusBar::systemStatusBar().statusItemWithLength(if hidden { 0.0 } else { -1.0 /* NSVariableStatusItemLength */ });
     if hidden {
         item.setVisible(false);
+        item.setLength(-1.0);
     } else {
         // Remembers where the person dragged it (⌘-drag) between launches.
         item.setAutosaveName(Some(&NSString::from_str("coool")));
@@ -384,15 +387,13 @@ pub fn menu_items() -> Vec<(String, bool, Option<String>)> {
     })
 }
 
-/// The click a menu row makes (for the self-test, which never opens the menu on screen).
-pub fn act_of(index: usize) -> Option<Act> {
+/// The click the first enabled menu row whose text starts with `text` makes (for the self-test, which never opens the
+/// menu on screen).
+pub fn act_of(text: &str) -> Option<Act> {
     UI.with(|u| {
         let g = u.borrow();
         let u = g.as_ref()?;
-        let item = u.menu.itemArray().iter().nth(index)?;
-        if !item.isEnabled() {
-            return None;
-        }
+        let item = u.menu.itemArray().iter().find(|i| i.isEnabled() && i.attributedTitle().is_some_and(|a| a.string().to_string().starts_with(text)))?;
         u.acts.get(item.tag() as usize).cloned()
     })
 }
