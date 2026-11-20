@@ -379,12 +379,6 @@ export function SessionView({
           </div>
         </div>
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
-        {isChat && !hasTerm && (chatLive || session) && (
-          <Button variant="ghost" onClick={openTerm} title="Continue this session in the real CLI, in a terminal" className={compact ? "px-2" : ""}>
-            <ITerminal size={16} />
-            {!compact && "Open in terminal"}
-          </Button>
-        )}
         {canResume && (
           <Button variant="outline" onClick={() => resumeSession(session!, leaf)} title="Resume this session inside coool">
             <IPlay size={14} />
