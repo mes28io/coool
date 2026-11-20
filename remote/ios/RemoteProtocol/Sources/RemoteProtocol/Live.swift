@@ -6,22 +6,50 @@ import Foundation
 
 extension Remote {
   /// Said in `hello`; the envelope's `v` stays 1, so an older Mac takes the messages it knows and ignores the rest.
-  public static let minor = 1
+  public static let minor = 2
   /// Raw bytes per image chunk, both ways.
   public static let chunk = 48 * 1024
   /// Largest image the phone may send (the app scales down first).
   public static let maxUpload = 2_000_000
   /// Images per message.
   public static let maxAttach = 4
+  /// Minor 2: a recording sent for transcription: at most this long, and this many bytes (compressed speech).
+  public static let maxAudioSeconds = 120.0
+  public static let maxAudio = 1_000_000
+  /// Minor 2: the file name endings the Mac keeps for a text file from the phone (anything else is stored as .txt).
+  public static let textExts: Set<String> = ["txt", "md", "markdown", "json", "yaml", "yml", "toml", "csv", "tsv", "xml", "html", "css", "js", "jsx", "ts", "tsx", "mjs", "cjs", "py", "rb", "go", "rs", "swift", "kt", "java", "c", "h", "cc", "cpp", "hpp", "m", "mm", "cs", "php", "sh", "zsh", "bash", "sql", "lua", "pl", "r", "scala", "dart", "ex", "exs", "erl", "hs", "ml", "vue", "svelte", "ini", "cfg", "conf", "log", "diff", "patch", "gradle", "proto", "graphql", "tex"]
+}
+
+/// What an upload carries (minor 2): an image (as minor 1), a file (a PDF or UTF-8 text), or a recording to transcribe.
+public enum UploadKind: String, Sendable, Equatable { case image, file, audio }
+
+/// The type the phone sends a file as, by its bytes (as the Mac checks): a PDF, or UTF-8 text without control bytes
+/// (tabs, line ends and escapes allowed): a binary is refused even when its bytes happen to be valid UTF-8.
+public func fileType(_ d: Data) -> String? {
+  if d.starts(with: Array("%PDF-".utf8)) { return "application/pdf" }
+  if d.isEmpty || d.contains(where: { $0 < 0x09 || (0x0E...0x1A).contains($0) || (0x1C...0x1F).contains($0) || $0 == 0x7F }) { return nil }
+  return String(data: d, encoding: .utf8) == nil ? nil : "text/plain"
+}
+
+/// A recording the Mac transcribes, by its bytes: AAC in an MPEG-4 container (`ftyp` at 4), or WAV.
+public func audioType(_ d: Data) -> String? {
+  let b = [UInt8](d.prefix(12))
+  if b.count >= 12, b[4..<8].elementsEqual(Array("ftyp".utf8)) { return "audio/mp4" }
+  if b.count >= 12, b[0..<4].elementsEqual(Array("RIFF".utf8)), b[8..<12].elementsEqual(Array("WAVE".utf8)) { return "audio/wav" }
+  return nil
 }
 
 /// An image as `upload` bodies: `{upload, part, parts, size, data}`, data the part's bytes in base64url.
-public func uploadParts(id: String, _ data: Data) -> [JSONValue] {
+public func uploadParts(id: String, _ data: Data, kind: UploadKind = .image, ext: String? = nil) -> [JSONValue] {
   let parts = max(1, (data.count + Remote.chunk - 1) / Remote.chunk)
   return (0..<parts).map { i in
     let lo = data.startIndex + i * Remote.chunk
     let hi = min(lo + Remote.chunk, data.endIndex)
-    return ["upload": .string(id), "part": .number(Double(i)), "parts": .number(Double(parts)), "size": .number(Double(data.count)), "data": .string(B64U.encode(data[lo..<hi]))]
+    var o: [String: JSONValue] = ["upload": .string(id), "part": .number(Double(i)), "parts": .number(Double(parts)), "size": .number(Double(data.count)), "data": .string(B64U.encode(data[lo..<hi]))]
+    // Minor 2: left out for an image, so an image's parts are byte-identical to minor 1's.
+    if kind != .image { o["kind"] = .string(kind.rawValue) }
+    if kind == .file, let e = ext?.lowercased(), Remote.textExts.contains(e) || e == "pdf" { o["ext"] = .string(e) }
+    return .object(o)
   }
 }
 
@@ -151,7 +179,10 @@ public struct ChatLive: Codable, Equatable, Sendable {
   public var agents: [LiveAgent]?
   public var tally: Tally?
   public var devices: [String]?
-  public init(state: String? = nil, text: String? = nil, thinking: Bool? = nil, step: String? = nil, agents: [LiveAgent]? = nil, tally: Tally? = nil, devices: [String]? = nil) {
+  /// Minor 2: the chat's steering notes still waiting or just settled (the Mac's strip), newest last.
+  public var notes: [LiveNote]?
+  public init(state: String? = nil, text: String? = nil, thinking: Bool? = nil, step: String? = nil, agents: [LiveAgent]? = nil, tally: Tally? = nil, devices: [String]? = nil, notes: [LiveNote]? = nil) {
+    self.notes = notes
     self.state = state
     self.text = text
     self.thinking = thinking
@@ -159,6 +190,71 @@ public struct ChatLive: Codable, Equatable, Sendable {
     self.agents = agents
     self.tally = tally
     self.devices = devices
+  }
+}
+
+/// Minor 2: a steering note as the Mac's strip shows it. States: queued, picked_up, interrupted, unused, cancelled.
+public struct LiveNote: Codable, Equatable, Sendable, Identifiable {
+  public var id: String
+  public var text: String
+  public var state: String
+  /// Attachments sent with it.
+  public var atts: Int?
+  public init(id: String, text: String, state: String, atts: Int? = nil) {
+    self.id = id
+    self.text = text
+    self.state = state
+    self.atts = atts
+  }
+}
+
+/// Minor 2: what the Mac's composer shows for a chat: its model and the models it can switch to, whether it can switch
+/// now, its permission mode (read only from the phone), context used and the window, Ladder, the CLI's slash commands.
+public struct ChatMeta: Codable, Equatable, Sendable {
+  public struct Command: Codable, Equatable, Sendable, Identifiable, Hashable {
+    public var name: String
+    public var description: String?
+    public var hint: String?
+    /// "command", "skill", "app" (coool handles it on the Mac), "terminal" (only works in the CLI's own UI).
+    public var kind: String?
+    public var id: String { name }
+    public init(name: String, description: String? = nil, hint: String? = nil, kind: String? = nil) {
+      self.name = name
+      self.description = description
+      self.hint = hint
+      self.kind = kind
+    }
+  }
+  public struct Ladder: Codable, Equatable, Sendable {
+    public var on: Bool
+    public var tiers: [String]?
+    public init(on: Bool, tiers: [String]? = nil) {
+      self.on = on
+      self.tiers = tiers
+    }
+  }
+  public var cli: String?
+  public var model: String?
+  public var models: [StartOptions.Choice]?
+  /// Nil or empty: the model can be switched; else why not.
+  public var modelLocked: String?
+  public var mode: String?
+  public var modeLabel: String?
+  public var context: Double?
+  public var window: Double?
+  public var ladder: Ladder?
+  public var commands: [Command]?
+  public init(cli: String? = nil, model: String? = nil, models: [StartOptions.Choice]? = nil, modelLocked: String? = nil, mode: String? = nil, modeLabel: String? = nil, context: Double? = nil, window: Double? = nil, ladder: Ladder? = nil, commands: [Command]? = nil) {
+    self.cli = cli
+    self.model = model
+    self.models = models
+    self.modelLocked = modelLocked
+    self.mode = mode
+    self.modeLabel = modeLabel
+    self.context = context
+    self.window = window
+    self.ladder = ladder
+    self.commands = commands
   }
 }
 
@@ -170,7 +266,10 @@ public struct ChatUpdate: Codable, Equatable, Sendable {
   public var reset: Bool?
   public var more: Bool?
   public var live: ChatLive?
-  public init(session: String, items: [LiveItem], cursor: Double? = nil, reset: Bool? = nil, more: Bool? = nil, live: ChatLive? = nil) {
+  /// Minor 2: sent when it changed (and with every reset).
+  public var meta: ChatMeta?
+  public init(session: String, items: [LiveItem], cursor: Double? = nil, reset: Bool? = nil, more: Bool? = nil, live: ChatLive? = nil, meta: ChatMeta? = nil) {
+    self.meta = meta
     self.session = session
     self.items = items
     self.cursor = cursor
@@ -375,6 +474,7 @@ public enum Delivery: String, Sendable, Equatable {
 public struct LiveLog: Equatable, Sendable {
   public private(set) var items: [LiveItem] = []
   public var live: ChatLive?
+  public var meta: ChatMeta?
   public var cursor: Double?
   public init() {}
 
@@ -384,6 +484,7 @@ public struct LiveLog: Equatable, Sendable {
       if let i = items.firstIndex(where: { $0.k == it.k }) { items[i] = it } else { items.append(it) }
     }
     if let l = u.live { live = l }
+    if let m = u.meta { meta = m }
     if let c = u.cursor { cursor = c }
     if items.count > 300 { items.removeFirst(items.count - 300) }
   }

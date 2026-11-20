@@ -32,11 +32,20 @@ cat > "$OUT/site/remote.html" <<'HTML'
 HTML
 python3 -m http.server "$SITE_PORT" --bind 127.0.0.1 --directory "$OUT/site" > "$OUT/site.log" 2>&1 &
 SITE=$!
-COOOL_ATTACH_DIR="$OUT/attach" COOOL_SELFTEST_SITE="http://127.0.0.1:$SITE_PORT" \
+COOOL_VOICE_MODEL="${VOICE_MODEL:-}" COOOL_ATTACH_DIR="$OUT/attach" COOOL_SELFTEST_SITE="http://127.0.0.1:$SITE_PORT" \
 COOOL_REMOTE_RELAY="${COOOL_REMOTE_RELAY:-https://abundant-ostrich-973.eu-west-1.convex.cloud}" COOOL_SELFTEST=remote COOOL_SELFTEST_DIR="$PROJ" COOOL_SELFTEST_LOG="$OUT/selftest.log" COOOL_SELFTEST_SHOTS="$OUT/shots" \
   COOOL_SELFTEST_BACKGROUND=1 "$OUT/bin/coool-remote-ios-e2e" > "$OUT/app.out" 2>&1 &
 APP=$!
+# Minor 2: a text file the phone attaches, and a recording it sends for dictation (the Simulator has no microphone:
+# the app hands this file over where a recording would be). The speech is made here with `say`, as AAC at 16 kHz
+# mono, the phone's own format. VOICE_MODEL: a whisper model for the Mac's dictation (read only).
+mkdir -p "$OUT/phone-files"
+printf '# Notes from the phone\nThe magic word is heliotrope.\n' > "$OUT/phone-files/notes-from-phone.md"
+say -o "$OUT/phone-files/speech.aiff" "Ask cool to add a retry with backoff to the upload client."
+afconvert -f m4af -d aac@16000 -c 1 -b 24000 "$OUT/phone-files/speech.aiff" "$OUT/phone-files/speech.m4a"
+rm -f "$OUT/phone-files/speech.aiff"
 TEST_RUNNER_COOOL_E2E_DIR="$PROJ" TEST_RUNNER_COOOL_E2E_SHOTS="$OUT/phone-shots" \
+  TEST_RUNNER_COOOL_E2E_FILE="$OUT/phone-files/notes-from-phone.md" TEST_RUNNER_COOOL_E2E_AUDIO="$OUT/phone-files/speech.m4a" \
   xcodebuild test-without-building -project "$HERE/../CooolRemote.xcodeproj" -scheme CooolRemote \
   -destination "id=$SIM" -derivedDataPath "$DERIVED" -only-testing:CooolRemoteUITests/EndToEndTests \
   > "$OUT/phone.log" 2>&1 &

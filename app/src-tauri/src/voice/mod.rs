@@ -260,6 +260,12 @@ pub fn voice_stop(app: AppHandle, v: State<'_, Arc<Voice>>, req: StopReq) -> Res
     transcribe(&app, &v, samples, &req)
 }
 
+/// The dictation's entry point for audio that didn't come from this Mac's microphone (coool Remote: a recording
+/// from the paired phone, decoded to 16 kHz mono): the same engine, model and guards as a dictation here.
+pub fn transcribe_samples(app: &AppHandle, v: &Voice, samples: Vec<f32>, req: &StopReq) -> Res<engine::Transcript> {
+    transcribe(app, v, samples, req)
+}
+
 fn transcribe(app: &AppHandle, v: &Voice, samples: Vec<f32>, req: &StopReq) -> Res<engine::Transcript> {
     if req.model.trim().is_empty() {
         return Err("No voice model yet. Download one in Settings > Voice.".into());

@@ -359,23 +359,62 @@ impl coool_remote::Host for AppHost {
         Ok(())
     }
 
-    fn send(&self, session: &str, text: &str, how: Delivery, atts: &[Value], by: &str) -> Result<(), String> {
+    fn send(&self, session: &str, text: &str, how: Delivery, atts: &[Value], by: &str) -> Result<Option<String>, String> {
         let core = self.core()?;
         let chat = self.chat_of(&core, session).ok_or("only chats coool runs can be reached from the phone")?;
         let atts = attachments(atts)?;
         // As the Mac's composer: a message, or a steering note (next step, or interrupting the one in progress).
-        match how {
-            Delivery::Send => core.with_chat(chat, |c| c.send_with(text, &atts))?,
-            Delivery::Next => core.with_chat(chat, |c| c.steer_with(text, false, &atts).map(|_| ()))?,
-            Delivery::Interrupt => core.with_chat(chat, |c| c.steer_with(text, true, &atts).map(|_| ()))?,
-        }
+        let note = match how {
+            Delivery::Send => core.with_chat(chat, |c| c.send_with(text, &atts)).map(|_| None)?,
+            Delivery::Next => core.with_chat(chat, |c| c.steer_with(text, false, &atts)).map(Some)?,
+            Delivery::Interrupt => core.with_chat(chat, |c| c.steer_with(text, true, &atts)).map(Some)?,
+        };
         let what = match how {
             Delivery::Send => "Sent",
             Delivery::Next => "Note for the next step sent",
             Delivery::Interrupt => "Interrupted and sent",
         };
         self.note(&core, chat, &format!("{what} from {by}"));
+        Ok(note)
+    }
+
+    fn note(&self, session: &str, n: &coool_remote::rules::NoteAction, by: &str) -> Result<(), String> {
+        let core = self.core()?;
+        let chat = self.chat_of(&core, session).ok_or("only chats coool runs can be reached from the phone")?;
+        // Only a note this chat holds, still queued (the Mac's strip shows the same list).
+        let handle = core.chats.lock().unwrap().get(&chat).map(|c| c.handle.clone()).ok_or("no such chat")?;
+        let (events, _) = handle.events_since(0);
+        let (text, atts) = queued_notes(&events).into_iter().find(|(id, ..)| *id == n.note).map(|(_, t, a)| (t, a)).ok_or("that note isn't queued in this chat any more")?;
+        // As the Mac's strip: remove; or Now = withdraw it and send it again, interrupting the step.
+        core.with_chat(chat, |c| c.cancel_steer(&n.note))?;
+        if n.now {
+            core.with_chat(chat, |c| c.steer_with(&text, true, &atts).map(|_| ()))?;
+        }
+        self.note(&core, chat, &format!("{} from {by}", if n.now { "Queued note delivered now" } else { "Queued note removed" }));
         Ok(())
+    }
+
+    fn chat_models(&self, session: &str) -> Vec<String> {
+        let Ok(core) = self.core() else { return vec![] };
+        let Some(chat) = self.chat_of(&core, session) else { return vec![] };
+        chat_models_of(&core, chat).into_iter().map(|(id, _)| id).collect()
+    }
+
+    fn set_model(&self, session: &str, model: &str, by: &str) -> Result<(), String> {
+        let core = self.core()?;
+        let chat = self.chat_of(&core, session).ok_or("only chats coool runs can be reached from the phone")?;
+        // The Mac's model menu does exactly this (chat_set_model): the CLI switches; Codex from the next turn.
+        core.with_chat(chat, |c| c.set_model(model))?;
+        self.note(&core, chat, &format!("Model set to {model} from {by}"));
+        Ok(())
+    }
+
+    fn transcribe(&self, job: coool_remote::Transcribe) -> Result<(), String> {
+        voice_job(&self.app, job)
+    }
+
+    fn outbox(&self) -> Vec<(String, String, Value)> {
+        std::mem::take(&mut *OUTBOX.lock().unwrap())
     }
 
     fn stop(&self, session: &str, by: &str) -> Result<(), String> {
@@ -445,6 +484,7 @@ impl coool_remote::Host for AppHost {
         let cwd = core.hub.lock().unwrap().chats().into_iter().find(|x| x.id == chat).map(|x| x.cwd).unwrap_or_default();
         let (events, _) = handle.events_since(0);
         let mut v = build_view(&events, &cwd, since);
+        v.meta = meta_of(&core, chat, &events);
         let devices = self.app.state::<Arc<crate::device::Devices>>();
         let mut panels = Vec::new();
         if crate::device::web::remote_has_page(&devices, chat) {
@@ -485,6 +525,20 @@ impl coool_remote::Host for AppHost {
     }
 
     fn store_image(&self, img: &coool_remote::live::Image) -> Result<Value, String> {
+        if img.kind == coool_remote::live::Kind::File {
+            // Minor 2: a PDF or text file, checked again by its bytes; stored as a pasted file is, under a name the
+            // Mac chooses ("iPhone file.<ending>") in coool's own store; the agent gets its path.
+            let ext = img.ext.as_deref().filter(|e| *e == "pdf" || coool_remote::live::TEXT_EXTS.contains(e)).unwrap_or("txt");
+            if coool_remote::live::file_type(&img.bytes, false).is_none() {
+                return Err("not a file coool can send".into());
+            }
+            let dir = coool_core::attach::store_dir().ok_or("no attachment store")?;
+            let a = coool_core::attach::store_bytes(&dir, &format!("iPhone file.{ext}"), &img.bytes).map_err(|e| format!("{e:#}"))?;
+            if a.kind != coool_core::attach::AttachKind::File {
+                return Err("not a file coool can send".into());
+            }
+            return serde_json::to_value(a).map_err(|e| e.to_string());
+        }
         // Checked again by its bytes; stored as a pasted image is (named by its hash in coool's own store).
         if !coool_core::attach::is_image(&img.bytes[..img.bytes.len().min(4096)]) || img.bytes.len() as u64 > coool_core::attach::MAX_IMAGE_BYTES {
             return Err("not an image coool can send".into());
@@ -508,14 +562,21 @@ impl coool_remote::Host for AppHost {
     }
 }
 
-/// Attachments the engine hands back: only ones `store_image` made (an image in coool's store).
+/// Attachments the engine hands back: only ones `store_image` made (an image or, minor 2, a file in coool's store).
 fn attachments(atts: &[Value]) -> Result<Vec<coool_core::attach::Attachment>, String> {
     atts.iter()
         .map(|v| {
             let a: coool_core::attach::Attachment = serde_json::from_value(v.clone()).map_err(|_| "a bad attachment".to_string())?;
             let dir = coool_core::attach::store_dir().ok_or("no attachment store")?;
-            let ok = a.kind == coool_core::attach::AttachKind::Image && a.key.as_deref().is_some_and(|k| coool_core::attach::stored(&dir, k).is_some_and(|(p, _)| a.path.as_deref() == Some(&*p.to_string_lossy())));
-            if ok { Ok(a) } else { Err("an image that isn't in coool's store".to_string()) }
+            let ok = match a.kind {
+                coool_core::attach::AttachKind::Image => a.key.as_deref().is_some_and(|k| coool_core::attach::stored(&dir, k).is_some_and(|(p, _)| a.path.as_deref() == Some(&*p.to_string_lossy()))),
+                coool_core::attach::AttachKind::File => a.path.as_deref().is_some_and(|p| {
+                    let p = std::path::Path::new(p);
+                    let files = dir.join("files");
+                    p.is_file() && p.canonicalize().ok().zip(files.canonicalize().ok()).is_some_and(|(p, f)| p.starts_with(f))
+                }),
+            };
+            if ok { Ok(a) } else { Err("an attachment that isn't in coool's store".to_string()) }
         })
         .collect()
 }
@@ -715,6 +776,24 @@ fn build_view(events: &[ChatEvent], cwd: &str, since: Option<u64>) -> ChatView {
             _ => {}
         }
     }
+    // Minor 2: the notes the Mac's strip shows (queued, and unused after the turn), newest last.
+    let mut notes: Vec<(String, String, &'static str, usize)> = Vec::new();
+    for e in events {
+        if let ChatEventKind::Steer { note_id, text, state, attachments, .. } = &e.kind {
+            let st = match state {
+                coool_core::chat::SteerState::Queued => "queued",
+                coool_core::chat::SteerState::Unused => "unused",
+                coool_core::chat::SteerState::PickedUp => "picked_up",
+                coool_core::chat::SteerState::Interrupted => "interrupted",
+                coool_core::chat::SteerState::Cancelled => "cancelled",
+            };
+            notes.retain(|n| &n.0 != note_id);
+            notes.push((note_id.clone(), clip(text, 600), st, attachments.len()));
+        }
+    }
+    notes.retain(|n| n.2 == "queued" || n.2 == "unused");
+    let skip = notes.len().saturating_sub(12);
+    let notes: Vec<Value> = notes.into_iter().skip(skip).map(|(id, text, st, n)| json!({"id": id, "text": text, "state": st, "atts": n})).collect();
     let cursor = events.last().map(|e| e.seq).unwrap_or(0);
     let tail: String = {
         let n = stream.chars().count();
@@ -727,6 +806,7 @@ fn build_view(events: &[ChatEvent], cwd: &str, since: Option<u64>) -> ChatView {
         "step": running.last().map(|(_, s)| s.clone()),
         "agents": agents.iter().map(|a| json!({"id": a.0, "label": a.1, "steps": a.2, "step": a.3, "done": a.4})).collect::<Vec<_>>(),
         "tally": {"steps": steps, "edits": edits, "since": turn_start},
+        "notes": notes,
     });
     let mut out: Vec<Value> = items.into_iter().filter(|(q, _)| since.is_none_or(|c| *q > c)).map(|(_, v)| v).collect();
     if since.is_none() {
@@ -734,7 +814,187 @@ fn build_view(events: &[ChatEvent], cwd: &str, since: Option<u64>) -> ChatView {
         let skip = out.len().saturating_sub(80);
         out.drain(..skip);
     }
-    ChatView { items: out, cursor, live }
+    ChatView { items: out, cursor, live, meta: Value::Null }
+}
+
+/// A chat's queued notes: (id, text, attachments), from its events.
+fn queued_notes(events: &[ChatEvent]) -> Vec<(String, String, Vec<coool_core::attach::Attachment>)> {
+    let mut out: Vec<(String, String, Vec<coool_core::attach::Attachment>, bool)> = Vec::new();
+    for e in events {
+        if let ChatEventKind::Steer { note_id, text, state, attachments, .. } = &e.kind {
+            out.retain(|n| &n.0 != note_id);
+            out.push((note_id.clone(), text.clone(), attachments.clone(), *state == coool_core::chat::SteerState::Queued));
+        }
+    }
+    out.into_iter().filter(|n| n.3).map(|(a, b, c, _)| (a, b, c)).collect()
+}
+
+/// The models a chat can switch to, as the Mac's model menu lists them: the CLI's own list for that chat, else Settings
+/// > General's list for its CLI.
+fn chat_models_of(core: &Core, chat: usize) -> Vec<(String, String)> {
+    let Some(handle) = core.chats.lock().unwrap().get(&chat).map(|c| c.handle.clone()) else { return vec![] };
+    let (events, _) = handle.events_since(0);
+    let own = events.iter().rev().find_map(|e| match &e.kind {
+        ChatEventKind::Ready { models, .. } if !models.is_empty() => Some(models.iter().map(|m| (m.id.clone(), m.label.clone())).collect::<Vec<_>>()),
+        _ => None,
+    });
+    if let Some(o) = own {
+        return o;
+    }
+    let provider = core.hub.lock().unwrap().chats().into_iter().find(|c| c.id == chat).map(|c| c.provider);
+    let cli = if provider == Some(coool_core::model::Provider::Codex) { Cli::Codex } else { Cli::Claude };
+    view(|v| v.models.get(&cli).cloned().unwrap_or_default())
+}
+
+/// Minor 2: what the Mac's composer shows for a chat: its model and the models it can switch to, its mode (read only
+/// on the phone), context used and the window, and the CLI's slash commands (those coool answers itself marked
+/// `app`, terminal-only ones `terminal`).
+fn meta_of(core: &Core, chat: usize, events: &[ChatEvent]) -> Value {
+    let Some(info) = core.hub.lock().unwrap().chats().into_iter().find(|c| c.id == chat) else { return Value::Null };
+    let codex = info.provider == coool_core::model::Provider::Codex;
+    let (mut context, mut window) = (0u64, None);
+    let mut slash: Vec<Value> = Vec::new();
+    let mut rich: Option<Vec<Value>> = None;
+    for e in events {
+        match &e.kind {
+            ChatEventKind::Ready { slash_commands, context_window, .. } => {
+                slash = slash_commands.iter().map(|c| json!({"name": c.name, "description": c.description.chars().take(160).collect::<String>(), "kind": "command"})).collect();
+                window = context_window.or(window);
+            }
+            ChatEventKind::Commands { commands } => {
+                rich = Some(commands.iter().map(|c| json!({"name": c.name, "description": c.description.chars().take(160).collect::<String>(), "hint": c.argument_hint, "kind": match c.kind { coool_core::chat::CommandKind::Command => "command", coool_core::chat::CommandKind::Skill => "skill", coool_core::chat::CommandKind::Terminal => "terminal" }})).collect());
+            }
+            ChatEventKind::Usage { tokens, context_window, .. } => {
+                if tokens.context > 0 {
+                    context = tokens.context;
+                }
+                window = context_window.or(window);
+            }
+            _ => {}
+        }
+    }
+    let mut commands = rich.unwrap_or(slash);
+    // The ones the Mac's composer handles itself (ChatComposer's NATIVE): the phone opens its own equivalents.
+    for (name, what) in [("model", "Switch the model"), ("context", "Context used"), ("usage", "Plan usage"), ("status", "This chat's status"), ("clear", "Start over in a new chat")] {
+        commands.retain(|c| c["name"] != name);
+        commands.push(json!({"name": name, "description": what, "kind": "app"}));
+    }
+    commands.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    commands.truncate(200);
+    let mode_label = match info.permission_mode.as_str() {
+        "default" => "Ask",
+        "acceptEdits" => "Accept edits",
+        "plan" => "Plan",
+        "bypassPermissions" => "Bypass",
+        "untrusted" => "Untrusted",
+        "on-request" => "On request",
+        "never" => "Never ask",
+        m => m,
+    };
+    let models: Vec<Value> = chat_models_of(core, chat).into_iter().map(|(id, label)| json!({"id": id, "label": if label.is_empty() { id.clone() } else { label }})).collect();
+    json!({
+        "cli": if codex { "codex" } else { "claude" },
+        "model": info.model,
+        "models": models,
+        "model_locked": if models.is_empty() { json!("This chat hasn't listed its models yet") } else { Value::Null },
+        "mode": info.permission_mode,
+        "mode_label": mode_label,
+        "context": context,
+        "window": window,
+        "commands": commands,
+    })
+}
+
+// ---------------------------------------------------------------- voice from the phone (minor 2)
+
+/// Messages for the engine to send (a transcription's result), taken every tick.
+static OUTBOX: Mutex<Vec<(String, String, Value)>> = Mutex::new(Vec::new());
+/// Recordings waiting for the page's voice settings and then the dictation: by job id, the device, the command's id
+/// and the samples (16 kHz mono). In memory only, and gone when the job ends.
+static VOICE: Mutex<Option<HashMap<String, (String, String, Vec<f32>, u64)>>> = Mutex::new(None);
+
+fn voice_reply(device: &str, of: &str, r: Result<(String, String), String>) {
+    let b = match r {
+        Ok((text, heard)) => json!({"of": of, "t": "transcribe", "ok": true, "text": text, "heard": heard}),
+        Err(e) => json!({"of": of, "t": "transcribe", "ok": false, "error": e}),
+    };
+    OUTBOX.lock().unwrap().push((device.to_string(), "result".into(), b));
+}
+
+/// Decodes a recording from the phone to 16 kHz mono with macOS's own `afconvert` (AAC can't be read otherwise),
+/// in a private temporary folder that is deleted at once.
+fn decode_audio(audio: &[u8], mime: &str) -> Result<Vec<f32>, String> {
+    if mime == "audio/wav" {
+        return coool_whisper::audio::parse_wav(audio);
+    }
+    let dir = std::env::temp_dir().join(format!("coool-remote-voice-{}", coool_remote::proto::random_id()));
+    std::fs::create_dir(&dir).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let (inp, out) = (dir.join("in.m4a"), dir.join("out.wav"));
+    let r = (|| {
+        std::fs::write(&inp, audio).map_err(|e| e.to_string())?;
+        let st = std::process::Command::new("/usr/bin/afconvert").arg("-f").arg("WAVE").arg("-d").arg("LEI16@16000").arg("-c").arg("1").arg(&inp).arg(&out).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map_err(|e| e.to_string())?;
+        if !st.success() {
+            return Err("that recording can't be read".to_string());
+        }
+        coool_whisper::audio::read_wav(&out)
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    r
+}
+
+/// A recording from the phone: decoded and checked here, then the page is asked to run it through coool's own
+/// dictation with the person's voice settings (`remote_voice_run`), and to clean it and apply their word memory
+/// (`remote_voice_done`), as a dictation on the Mac is. The answer goes back as the command's result.
+fn voice_job(app: &AppHandle, job: coool_remote::Transcribe) -> Result<(), String> {
+    let samples = decode_audio(&job.audio, job.mime)?;
+    let secs = samples.len() as f32 / 16_000.0;
+    if secs > coool_remote::live::MAX_AUDIO_SECS {
+        return Err(format!("that recording is {secs:.0} s long; two minutes at most"));
+    }
+    let id = coool_remote::proto::random_id();
+    VOICE.lock().unwrap().get_or_insert_with(HashMap::new).insert(id.clone(), (job.device.clone(), job.of.clone(), samples, now_ms()));
+    app.emit("remote-voice", json!({"id": id})).map_err(|e| e.to_string())?;
+    // No answer from the page within two minutes: say so, and forget the recording.
+    let (device, of) = (job.device, job.of);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(120));
+        if VOICE.lock().unwrap().as_mut().and_then(|m| m.remove(&id)).is_some() {
+            voice_reply(&device, &of, Err("coool on the Mac didn't transcribe it (is its window open?)".into()));
+        }
+    });
+    Ok(())
+}
+
+/// The page runs a phone's recording through the dictation engine with the person's settings (model, translate or
+/// transcribe, language, their words). Returns the raw transcript, which the page cleans before `remote_voice_done`.
+#[tauri::command(async)]
+pub fn remote_voice_run(app: AppHandle, v: State<'_, Arc<crate::voice::Voice>>, id: String, req: crate::voice::StopReq) -> Res<crate::voice::engine::Transcript> {
+    let samples = VOICE.lock().unwrap().as_mut().and_then(|m| m.get_mut(&id).map(|x| std::mem::take(&mut x.2))).ok_or("no such recording")?;
+    let r = crate::voice::transcribe_samples(&app, &v, samples, &req);
+    if let Err(e) = &r
+        && let Some((device, of, _, _)) = VOICE.lock().unwrap().as_mut().and_then(|m| m.remove(&id))
+    {
+        voice_reply(&device, &of, Err(e.clone()));
+    }
+    r
+}
+
+/// The page's cleaned, corrected text for a phone's recording (or why there is none): sent back to the phone.
+#[tauri::command(async)]
+pub fn remote_voice_done(remote: State<'_, RemoteState>, id: String, text: Option<String>, heard: Option<String>, error: Option<String>) -> Res<()> {
+    let Some((device, of, _, _)) = VOICE.lock().unwrap().as_mut().and_then(|m| m.remove(&id)) else { return Ok(()) };
+    let r = match error {
+        Some(e) => Err(e),
+        None => Ok((text.unwrap_or_default().chars().take(coool_remote::rules::MAX_TEXT).collect(), heard.unwrap_or_else(|| "words".into()))),
+    };
+    voice_reply(&device, &of, r);
+    remote.0.nudge();
+    Ok(())
 }
 
 /// Mission control for the phone: per project, the live sessions with their sub-agents, the changes ledger, the

@@ -202,6 +202,64 @@ Sizes and rates (the relay takes a ciphertext of at most 131 072 base64url chara
 
 No relay function or schema changed for minor 1.
 
+## Minor 2: a message box with what the Mac's has
+
+The phone says `minor: 2` in `hello`; the Mac answers `snapshot` with its own minor. Still envelope `v: 1`, new types
+and optional fields only.
+
+Phone → Mac (new): `note` (`{session, note, do: "cancel" | "now"}`: withdraw a queued steering note, or deliver it
+now by interrupting the step, as the Mac's strip does; only a note that chat lists as queued), `set_model`
+(`{session, model}`), `transcribe` (`{upload, session?}`: a recording sent first with `upload`). `upload` gains `kind`
+(`image` when absent, `file`, `audio`) and, for a file, `ext` (a suggested ending, used only if it is on the Mac's
+fixed list). Mac → phone (new fields): `chat` gains `meta` (`cli`, `model`, `models` the chat can switch to,
+`model_locked` when it can't, `mode` and `mode_label` (read only on the phone), `context` and `window`, `commands`:
+the CLI's slash commands with `kind` `command`, `skill`, `terminal` (works only in the CLI's own UI) or `app` (the
+Mac's composer answers it itself; the phone opens its own equivalent)), sent only to a minor 2 phone and only when it
+changed; `live` gains `notes` (the strip's queued and unused notes: id, text, state, attachments); `result` gains
+`note` (a send that went in as a note), `text` and `heard` (a transcription).
+
+Rules (crates/remote, tested):
+- `note`: the id must be a note of that chat that is still queued (the app checks its events); `cancel` or `now`
+  only. Recorded ("removed a queued note", "delivered a queued note now").
+- `set_model`: only a model the Mac offers for that chat (the CLI's own list for it, else Settings > General's list
+  for its CLI), through the Mac's own path (`chat_set_model`: Claude switches at once; Codex from its next turn). The
+  body's other fields are never read: there is still no message that changes a running chat's permission mode, and
+  the phone shows the mode read only, saying it can be changed on the Mac.
+- Files: a PDF (by `%PDF-`) or UTF-8 text without control bytes, checked on the first part and again whole, at most
+  2 MB, four attachments per message as before. The Mac stores it with `attach::store_bytes` in coool's own store as
+  `iPhone file.<ending>` (the ending from a fixed list, `.pdf` for a PDF, else `.txt`); the agent gets its path, as
+  the Mac's own attachments. Recorded ("sent a file (N KB)").
+- Recordings: AAC in MPEG-4 or WAV by their bytes, at most 1 MB and 120 s (checked once decoded), kept in the engine's
+  memory until their `transcribe` (two minutes at most), used once, never stored as an attachment. The Mac decodes
+  AAC with macOS's `afconvert` in a private temporary folder (mode 700) deleted as soon as it is read, runs the
+  samples through its own dictation (`voice::transcribe_samples`: the person's model, translate or transcribe,
+  language and guards), and the page cleans the text and applies the person's word memory as a dictation on the Mac
+  is. The samples are dropped when the job ends (or after two minutes without the page); nothing is written to the
+  voice folder. The text goes back as the `transcribe`'s `result`, to the phone's field for review: never sent
+  without the person. Recorded ("sent a recording to transcribe (N KB)", "asked for a transcription").
+- Per device per minute: notes 30, model switches 10, transcriptions 6; their parts count as uploads (90). Like every
+  command, older than 60 s: dropped.
+
+Sizes: a recording is AAC at 16 kHz mono, about 24 kbit/s (3 KB a second: a 10 s request is about 30 KB, one
+message; two minutes about 360 KB, eight messages). Files as images: 48 KiB per message, at most 42 messages.
+
+Mixed versions: a minor 1 Mac ignores `note`, `set_model` and `transcribe` and sends no `meta` or `notes`: the phone
+then shows no model, mode or command chips and no notes strip, and offers dictation only when the Mac's snapshot says
+minor 2 or later (nothing is sent to a Mac that can't transcribe). A file sent to a minor 1 Mac is refused there as
+"not an image". A minor 1 phone (or remote/phone, the stand-in) gets nothing new from a minor 2 Mac.
+
+The phone (remote/ios): the chat's message box is a compact bar (add, the field with the microphone, one button that
+morphs between send and stop), the notes strip above it, the chat's state as chips (model, mode, context, commands)
+and a tray for pictures, files, the model, the mode and commands. Messages appear at once and settle into the Mac's
+copy; replies stream a word at a time. Drafts are kept per chat. On-device speech recognition is not used: dictation
+needs the Mac.
+
+Not in minor 2: the Ladder chip (its per-chat state lives in the Mac's page, not in the backend; the phone shows a
+`ladder` field if the Mac ever sends one), changing a running chat's mode (deliberately), on-device speech
+recognition.
+
+No relay function or limit changed for minor 2.
+
 ## No push notifications
 
 The owner decided the iPhone app sends no push notifications. The relay holds no push token and never talks to Apple. The phone learns that an agent needs you only while the app is open (it shows needs live, with a badge and a sound in the app). The Mac's own notifications are unchanged.

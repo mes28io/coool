@@ -325,6 +325,33 @@ pub fn check_delivery(body: &Value) -> Result<Delivery, String> {
     }
 }
 
+/// Minor 2, `note`: a queued steering note of a chat, to withdraw (`cancel`) or deliver now (`now`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoteAction {
+    pub note: String,
+    pub now: bool,
+}
+
+pub fn check_note(body: &Value) -> Result<NoteAction, String> {
+    let note = body.get("note").and_then(Value::as_str).filter(|n| !n.is_empty() && n.len() <= 64 && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')).ok_or("not a note id")?;
+    let now = match body.get("do").and_then(Value::as_str) {
+        Some("cancel") => false,
+        Some("now") => true,
+        _ => return Err("a note can be cancelled or delivered now".into()),
+    };
+    Ok(NoteAction { note: note.to_string(), now })
+}
+
+/// Minor 2, `set_model`: the model must be one the Mac offers for that chat. A mode field is never read: no message
+/// changes a running chat's permission mode.
+pub fn check_set_model(body: &Value, offered: &[String]) -> Result<String, String> {
+    let m = body.get("model").and_then(Value::as_str).unwrap_or("");
+    if m.is_empty() || !offered.iter().any(|x| x == m) {
+        return Err("not a model this Mac offers for that chat".into());
+    }
+    Ok(m.to_string())
+}
+
 pub fn check_text(body: &Value) -> Result<String, String> {
     let t = body.get("text").and_then(Value::as_str).unwrap_or("");
     let images = body.get("attachments").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
@@ -358,6 +385,9 @@ impl Limiter {
             "send" | "stop" => 20,
             "start" => 5,
             "upload" => 90,
+            "note" => 30,
+            "set_model" => 10,
+            "transcribe" => 6,
             "get_image" => 12,
             "watch" => 30,
             _ => 60,
@@ -432,6 +462,22 @@ mod tests {
         assert!(check_start(&json!({"project": project_id(path), "cwd": path, "cli": "claude", "text": "hi"}), &ps, bypass).is_err());
         assert!(check_start(&json!({"project": project_id(path), "cli": "sh", "text": "hi"}), &ps, bypass).is_err());
         assert!(check_start(&json!({"project": project_id(path), "cli": "claude", "text": "  "}), &ps, bypass).is_err());
+    }
+
+    #[test]
+    fn notes_and_model_switches_are_narrow() {
+        assert_eq!(check_note(&json!({"note": "3f2a-77", "do": "now"})), Ok(NoteAction { note: "3f2a-77".into(), now: true }));
+        assert_eq!(check_note(&json!({"note": "3f2a-77", "do": "cancel"})), Ok(NoteAction { note: "3f2a-77".into(), now: false }));
+        for bad in [json!({"note": "x", "do": "edit"}), json!({"note": "../x", "do": "now"}), json!({"do": "now"}), json!({"note": "x"})] {
+            assert!(check_note(&bad).is_err(), "{bad}");
+        }
+        let offered = vec!["haiku".to_string(), "sonnet".to_string()];
+        assert_eq!(check_set_model(&json!({"model": "haiku"}), &offered), Ok("haiku".into()));
+        assert!(check_set_model(&json!({"model": "opus"}), &offered).is_err(), "a model not on the Mac's list");
+        assert!(check_set_model(&json!({"model": ""}), &offered).is_err());
+        assert!(check_set_model(&json!({"model": "haiku"}), &[]).is_err(), "nothing offered: nothing switches");
+        // A mode riding along is never read (there is no field for it in what comes out).
+        assert_eq!(check_set_model(&json!({"model": "haiku", "mode": "bypassPermissions", "permission_mode": "bypassPermissions"}), &offered), Ok("haiku".into()));
     }
 
     #[test]

@@ -58,7 +58,7 @@ final class LiveTests: XCTestCase {
   }
 
   func testHelloSaysMinorAndOldShapesStayTheSame() {
-    XCTAssertEqual(Command.hello(name: "x").body["minor"], .number(1))
+    XCTAssertEqual(Command.hello(name: "x").body["minor"], .number(Double(Remote.minor)))
     // Without the new options, a send and a start are exactly what an older Mac reads.
     XCTAssertEqual(Command.send(session: "s", text: "hi").body, ["session": "s", "text": "hi"])
     XCTAssertEqual(Command.start(Project(id: "p", name: "n"), .claude, text: "hi").body, ["project": "p", "cli": "claude", "text": "hi"])

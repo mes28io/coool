@@ -3,7 +3,7 @@
 use crate::live;
 use crate::mac::{ChatView, Engine, Host, RelayApi, Saved};
 use crate::proto::{self, Claim, Dir, Envelope, Identity};
-use crate::rules::{Answer, Cli, Delivery, Need, Project, SessionInfo, Start, project_id};
+use crate::rules::{self, Answer, Cli, Delivery, Need, Project, SessionInfo, Start, project_id};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 
@@ -46,6 +46,12 @@ struct FakeHost {
     live: Mutex<Value>,
     frames: Mutex<Vec<Vec<u8>>>,
     stored: Mutex<Vec<(usize, &'static str)>>,
+    /// Minor 2.
+    meta: Mutex<Value>,
+    notes: Mutex<Vec<String>>,
+    model: Mutex<Vec<String>>,
+    heard: Mutex<Vec<(usize, &'static str)>>,
+    outq: Mutex<Vec<(String, String, Value)>>,
 }
 
 const PROJECT: &str = "/private/tmp/coool-remote-test/app";
@@ -75,10 +81,10 @@ impl Host for FakeHost {
         self.answers.lock().unwrap().push(a.clone());
         Ok(())
     }
-    fn send(&self, s: &str, text: &str, how: Delivery, atts: &[Value], by: &str) -> Result<(), String> {
+    fn send(&self, s: &str, text: &str, how: Delivery, atts: &[Value], by: &str) -> Result<Option<String>, String> {
         self.calls.lock().unwrap().push(format!("send {s} {text} by {by}{}", if how == Delivery::Send { String::new() } else { format!(" ({how:?})") }));
         self.atts.lock().unwrap().extend(atts.iter().cloned());
-        Ok(())
+        Ok((how != Delivery::Send).then(|| "note-1".to_string()))
     }
     fn stop(&self, s: &str, by: &str) -> Result<(), String> {
         self.calls.lock().unwrap().push(format!("stop {s} by {by}"));
@@ -110,7 +116,7 @@ impl Host for FakeHost {
         }
         let ev = self.events.lock().unwrap();
         let items = ev.iter().filter(|(q, _)| since.is_none_or(|c| *q > c)).map(|(_, v)| v.clone()).collect();
-        Ok(ChatView { items, cursor: ev.last().map(|(q, _)| *q).unwrap_or(0), live: self.live.lock().unwrap().clone() })
+        Ok(ChatView { items, cursor: ev.last().map(|(q, _)| *q).unwrap_or(0), live: self.live.lock().unwrap().clone(), meta: self.meta.lock().unwrap().clone() })
     }
     fn chat_image(&self, session: &str, key: &str) -> Result<Vec<u8>, String> {
         if session == "claude:chat1" && key == "k1" { Ok(vec![0xff, 0xd8, 0xff, 1, 2, 3]) } else { Err("no such image".into()) }
@@ -122,8 +128,31 @@ impl Host for FakeHost {
         Ok(self.frames.lock().unwrap().pop())
     }
     fn store_image(&self, img: &live::Image) -> Result<Value, String> {
+        assert_ne!(img.kind, live::Kind::Audio, "a recording is never stored as an attachment");
         self.stored.lock().unwrap().push((img.bytes.len(), img.mime));
-        Ok(json!({"name": "iPhone image.png", "mime": img.mime, "size": img.bytes.len(), "kind": "image", "key": "abc"}))
+        Ok(json!({"name": format!("iPhone file.{}", img.ext.clone().unwrap_or("png".into())), "mime": img.mime, "size": img.bytes.len(), "kind": if img.kind == live::Kind::File { "file" } else { "image" }, "key": "abc"}))
+    }
+    fn note(&self, session: &str, n: &rules::NoteAction, by: &str) -> Result<(), String> {
+        if n.note != "note-1" {
+            return Err("no such queued note in that chat".into());
+        }
+        self.notes.lock().unwrap().push(format!("{} {session} {} by {by}", if n.now { "now" } else { "cancel" }, n.note));
+        Ok(())
+    }
+    fn chat_models(&self, session: &str) -> Vec<String> {
+        if session == "claude:chat1" { vec!["haiku".into(), "sonnet".into()] } else { vec![] }
+    }
+    fn set_model(&self, session: &str, model: &str, by: &str) -> Result<(), String> {
+        self.model.lock().unwrap().push(format!("{session} {model} by {by}"));
+        Ok(())
+    }
+    fn transcribe(&self, job: crate::Transcribe) -> Result<(), String> {
+        self.heard.lock().unwrap().push((job.audio.len(), job.mime));
+        self.outq.lock().unwrap().push((job.device.clone(), "result".into(), json!({"of": job.of, "t": "transcribe", "ok": true, "text": "add a retry", "heard": "words"})));
+        Ok(())
+    }
+    fn outbox(&self) -> Vec<(String, String, Value)> {
+        std::mem::take(&mut *self.outq.lock().unwrap())
     }
 }
 
@@ -535,7 +564,7 @@ fn hello_with_minor_gets_options_and_overview_and_an_old_phone_does_not() {
     let got = phone.received(&mac, &mbp, &relay);
     let ts: Vec<&str> = got.iter().map(|e| e.t.as_str()).collect();
     assert_eq!(&ts[2..], ["snapshot", "projects", "options", "overview"]);
-    assert_eq!(got[2].b["minor"], 1);
+    assert_eq!(got[2].b["minor"], proto::MINOR);
     // The overview goes again only when it changed.
     mac.tick(&relay, &host, NOW + 5_000);
     mac.tick(&relay, &host, NOW + 10_000);
@@ -698,4 +727,141 @@ fn a_plan_can_keep_planning_with_a_note_but_a_permission_cannot() {
         ("answer", json!({"need": "1:plan", "choice": "keep_planning", "note": "Use SQLite instead"})),
     ], NOW);
     assert_eq!(*host.answers.lock().unwrap(), vec![Answer::KeepPlanning(Some("Use SQLite instead".into()))]);
+}
+
+// ---------------------------------------------------------------- minor 2
+
+fn kind_parts(id: &str, bytes: &[u8], kind: &str, ext: Option<&str>) -> Vec<Value> {
+    live::chunks(bytes, &json!({"upload": id}))
+        .into_iter()
+        .map(|mut b| {
+            b["kind"] = json!(kind);
+            if let Some(e) = ext {
+                b["ext"] = json!(e);
+            }
+            b
+        })
+        .collect()
+}
+
+#[test]
+fn a_note_sent_from_the_phone_can_be_removed_or_delivered_now_only_in_its_chat() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("send", json!({"session": "claude:chat1", "text": "also the docs", "when": "next"}))], NOW);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs[0]["note"], "note-1", "the note's id comes back, for remove / now");
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![
+        ("note", json!({"session": "claude:chat1", "note": "note-1", "do": "now"})),
+        ("note", json!({"session": "claude:chat1", "note": "note-1", "do": "cancel"})),
+        ("note", json!({"session": "claude:chat1", "note": "note-9", "do": "cancel"})),
+        ("note", json!({"session": "claude:term", "note": "note-1", "do": "cancel"})),
+        ("note", json!({"session": "claude:chat1", "note": "note-1", "do": "edit", "text": "rm -rf"})),
+    ], NOW + 1);
+    assert_eq!(*host.notes.lock().unwrap(), vec!["now claude:chat1 note-1 by Ada's iPhone", "cancel claude:chat1 note-1 by Ada's iPhone"]);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs.iter().filter(|r| r["t"] == "note" && r["ok"] == false).count(), 3);
+    assert!(mac.actions.iter().any(|a| a.kind == "note" && a.detail == "delivered a queued note now" && a.device == "Ada's iPhone"));
+}
+
+#[test]
+fn a_model_switch_takes_only_a_model_the_mac_offers_for_that_chat_and_never_a_mode() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![
+        ("set_model", json!({"session": "claude:chat1", "model": "sonnet", "mode": "bypassPermissions"})),
+        ("set_model", json!({"session": "claude:chat1", "model": "claude-opus-9-unknown"})),
+        ("set_model", json!({"session": "claude:term", "model": "haiku"})),
+        ("set_permission_mode", json!({"session": "claude:chat1", "mode": "bypassPermissions"})),
+        ("set_mode", json!({"session": "claude:chat1", "mode": "bypassPermissions"})),
+    ], NOW);
+    assert_eq!(*host.model.lock().unwrap(), vec!["claude:chat1 sonnet by Ada's iPhone"]);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs.len(), 3, "the mode-changing types are unknown: ignored, no answer");
+    assert_eq!((rs[0]["ok"].as_bool(), rs[0]["model"].as_str()), (Some(true), Some("sonnet")));
+    assert_eq!(rs[1]["error"], "not a model this Mac offers for that chat");
+    assert_eq!(rs[2]["error"], "only chats coool runs can be reached from the phone");
+    assert!(host.calls().is_empty() && host.answers.lock().unwrap().is_empty(), "nothing else happened");
+    assert!(mac.actions.iter().any(|a| a.kind == "set_model" && a.ok && a.detail == "switched the model to sonnet"));
+}
+
+#[test]
+fn a_file_from_the_phone_is_stored_by_the_mac_and_goes_with_a_send() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    let id = "00000000000000000000000000000011";
+    let text = b"# Notes\nThe magic word is pelican.\n".to_vec();
+    let msgs: Vec<(&str, Value)> = kind_parts(id, &text, "file", Some("md")).into_iter().map(|b| ("upload", b)).collect();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, msgs, NOW);
+    assert_eq!(*host.stored.lock().unwrap(), vec![(text.len(), "text/plain")]);
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("send", json!({"session": "claude:chat1", "text": "quote it", "attachments": [id]}))], NOW + 1);
+    assert_eq!(host.atts.lock().unwrap()[0]["name"], "iPhone file.md");
+    assert!(mac.actions.iter().any(|a| a.kind == "upload" && a.detail.starts_with("sent a file")));
+    // A binary that isn't a PDF never reaches the store.
+    let elf = b"\x7fELF\x02\x01\x01\x00\x00\x00".to_vec();
+    let msgs: Vec<(&str, Value)> = kind_parts("00000000000000000000000000000012", &elf, "file", Some("txt")).into_iter().map(|b| ("upload", b)).collect();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, msgs, NOW + 2);
+    assert_eq!(host.stored.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_recording_is_transcribed_by_the_mac_and_never_stored() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    let id = "00000000000000000000000000000021";
+    let m4a = [b"\x00\x00\x00\x1cftypM4A ".as_slice(), &vec![3u8; live::CHUNK + 500]].concat();
+    let msgs: Vec<(&str, Value)> = kind_parts(id, &m4a, "audio", None).into_iter().map(|b| ("upload", b)).collect();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, msgs, NOW);
+    assert!(host.stored.lock().unwrap().is_empty(), "a recording is not an attachment");
+    let seen = results(&phone, &mac, &mbp, &relay).len();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("transcribe", json!({"upload": id, "session": "claude:chat1"}))], NOW + 1);
+    assert_eq!(*host.heard.lock().unwrap(), vec![(m4a.len(), "audio/mp4")]);
+    // The text comes back with the next tick, as the command's result.
+    mac.tick(&relay, &host, NOW + 2);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs.len(), seen + 1);
+    assert_eq!((rs[seen]["t"].as_str(), rs[seen]["ok"].as_bool(), rs[seen]["text"].as_str()), (Some("transcribe"), Some(true), Some("add a retry")));
+    let seen = rs.len();
+    // Used once; an unknown id, or a too-long recording, is refused.
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("transcribe", json!({"upload": id}))], NOW + 3);
+    let mut long = kind_parts("00000000000000000000000000000022", &m4a, "audio", None).remove(0);
+    long["size"] = json!(live::MAX_AUDIO + 1);
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("upload", long)], NOW + 4);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs.len(), seen + 2);
+    assert!(rs[seen..].iter().all(|r| r["ok"] == false), "{rs:?}");
+    assert_eq!(host.heard.lock().unwrap().len(), 1);
+    assert!(mac.actions.iter().any(|a| a.detail.starts_with("sent a recording to transcribe")));
+}
+
+#[test]
+fn a_chat_meta_goes_to_a_minor_2_phone_and_only_when_it_changed() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    *host.meta.lock().unwrap() = json!({"model": "haiku", "mode": "default", "context": 1200});
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("hello", json!({"name": "x", "minor": 2})), ("watch", json!({"session": "claude:chat1"}))], NOW);
+    let chats = |m: &Engine, r: &FakeRelay| phone.received(m, &mbp, r).into_iter().filter(|e| e.t == "chat").map(|e| e.b).collect::<Vec<_>>();
+    let c = chats(&mac, &relay);
+    assert_eq!(c[0]["meta"]["model"], "haiku");
+    *host.live.lock().unwrap() = json!({"text": "x"});
+    mac.tick(&relay, &host, NOW + 1_000);
+    let c = chats(&mac, &relay);
+    assert!(c.last().unwrap().get("meta").is_none(), "unchanged: not sent again");
+    *host.meta.lock().unwrap() = json!({"model": "sonnet", "mode": "default", "context": 1200});
+    mac.tick(&relay, &host, NOW + 2_000);
+    assert_eq!(chats(&mac, &relay).last().unwrap()["meta"]["model"], "sonnet");
+    // A minor 1 phone never gets it.
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    *host.meta.lock().unwrap() = json!({"model": "haiku"});
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("hello", json!({"name": "x", "minor": 1})), ("watch", json!({"session": "claude:chat1"}))], NOW);
+    assert!(phone.received(&mac, &mbp, &relay).iter().filter(|e| e.t == "chat").all(|e| e.b.get("meta").is_none()));
+}
+
+#[test]
+fn files_and_recordings_cross_the_relay_only_sealed() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    let secret = b"The magic word is pelican-7731 and nobody else may read it.".repeat(10);
+    let (c, ct) = phone.seal(&mac, &mbp, "upload", kind_parts("00000000000000000000000000000031", &secret, "file", Some("txt")).remove(0), NOW, 0);
+    assert!(!ct.contains("pelican") && !ct.contains(&proto::b64u(b"pelican-7731")), "the relay sees no plaintext");
+    deliver(&mut mac, &relay, &host, &phone, c, &ct, NOW);
+    // The Mac's answers (results, transcripts) are sealed too.
+    for (_, a) in relay.calls.lock().unwrap().iter() {
+        let all = a.to_string();
+        assert!(!all.contains("pelican") && !all.contains("upload"), "{all}");
+    }
 }

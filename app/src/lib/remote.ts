@@ -113,10 +113,34 @@ function syncNotes() {
     import("@tauri-apps/api/core").then(({ invoke }) => invoke("remote_set_need_notes", { notes: n }).catch(() => (lastNotes = "")));
   });
 }
+/**
+ * Minor 2, voice to prompt from the phone: the Mac decoded the phone's recording; it goes through this Mac's own
+ * dictation with the person's settings (their model, translate or transcribe, language, their words), then is cleaned
+ * and corrected from their word memory as a dictation here is (lib/voice), and the text goes back to the phone to be
+ * checked before it is sent. The recording itself stays in the backend's memory and is dropped when this ends.
+ */
+async function remoteVoice(id: string) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    const { getVoicePrefs, loadMemory } = await import("./voice/prefs");
+    const { echoWords, applyMemory } = await import("./voice/memory");
+    const { cleanTranscript } = await import("./voice/clean");
+    const p = getVoicePrefs();
+    if (!p.model) throw new Error("No voice model on this Mac yet: download one in Settings > Voice.");
+    const mem = await loadMemory();
+    const r = (await invoke("remote_voice_run", { id, req: { model: p.model, task: p.task, language: p.language === "auto" ? null : p.language, vocabulary: echoWords(mem), keep: false } })) as { text: string; heard: string };
+    let text = r.heard === "words" ? cleanTranscript(r.text, p.cleanup) : "";
+    if (text) text = applyMemory(mem, text).text;
+    await invoke("remote_voice_done", { id, text, heard: text ? r.heard : r.heard === "words" ? "unclear" : r.heard, error: null });
+  } catch (e) {
+    await invoke("remote_voice_done", { id, text: null, heard: null, error: e instanceof Error ? e.message : String(e) }).catch(() => {});
+  }
+}
 if (isTauri && typeof window !== "undefined") {
   syncDefaults();
   setInterval(syncDefaults, 5_000);
   setInterval(syncNotes, 1_500);
+  void import("@tauri-apps/api/event").then(({ listen }) => listen<{ id: string }>("remote-voice", (e) => void remoteVoice(e.payload.id)));
 }
 
 /** "Seen 3 min ago" style words for a device's last-seen time. */

@@ -19,7 +19,8 @@ use zeroize::{Zeroize, Zeroizing};
 pub const VERSION: u32 = 1;
 /// The protocol's minor version (docs/REMOTE.md "Minor 1"): said in `hello` and `snapshot`. A minor adds message
 /// types and optional fields only; each side ignores what it doesn't know, so the envelope's `v` stays 1.
-pub const MINOR: u32 = 1;
+/// Minor 2: queued notes, the chat's composer state (`meta`), model switching, files and recordings from the phone.
+pub const MINOR: u32 = 2;
 pub const PROTOCOL: &str = "coool-remote/1";
 
 type HmacSha256 = Hmac<Sha256>;

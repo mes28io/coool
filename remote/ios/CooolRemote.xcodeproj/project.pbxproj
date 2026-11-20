@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0550276A7D44EA9EA549E543 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6325C918B9FD167C019411D6 /* Composer.swift */; };
+		06DACF4B78EDABE5069D3733 /* ChatParts.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1344D9BFC8F06994842F895 /* ChatParts.swift */; };
 		1A544A9C267BAB1BF448FFD3 /* NeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4545CA28D6F10D143424A97C /* NeedView.swift */; };
 		357869C0DD1E36C04426C082 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 262C01CE32887B029EC8C2E5 /* Assets.xcassets */; };
 		3595ED7088A223DA2A30A8E6 /* Vault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89AF8AAE849B281A3A26742D /* Vault.swift */; };
@@ -17,13 +19,16 @@
 		4BAC5C5A4BBDC4286CEA8030 /* Widgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31B6C5B8EE12E98EC03933F1 /* Widgets.swift */; };
 		5E0C7B4246F92FEC62262512 /* ConvexMobile in Frameworks */ = {isa = PBXBuildFile; productRef = F454D9F1B75C06E24D16CBDD /* ConvexMobile */; };
 		7CD0636B95DE4A299E067BA6 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EAC987FF2C907D82075A638 /* ChatView.swift */; };
+		7DA612FF78FB0CC563515AE1 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4917E9995405E15E63EA8242 /* Voice.swift */; };
 		7DECBA1ECFB8A355E3C702A5 /* NewChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15523836B91BEFF840A5511 /* NewChatView.swift */; };
 		7E89E5C06C162E98CEC9B3BC /* RemoteProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 18599B0636122927C64A58E0 /* RemoteProtocol */; };
 		87607EB52A3D51FE35D8B1D3 /* Support.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99809F67D604D49EC565B9D2 /* Support.swift */; };
+		92139BD28EBD78577EECF43C /* Outbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFBDF900C99C53D64E536C6B /* Outbox.swift */; };
 		A05DC9C5CEEE8F673E052F83 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9FE3E20237DF3A754DCA478 /* SettingsView.swift */; };
 		A7F65ED923FD619A8007752E /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D935561586B47BD0439EC0 /* PairingView.swift */; };
 		B033FA2F5A4D7FA866533E70 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77829BD2160DA5F0146FBD92 /* SessionsView.swift */; };
 		B41040B7D4525F3A2452C33E /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F755E533D2C0BD22726220A /* ScreenshotTests.swift */; };
+		B5CD143A3328F616AB539BFE /* FeelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC51F3AB86CE565053CAEE37 /* FeelTests.swift */; };
 		BAF521DB6C00E5F62619FC2B /* EndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4948DE94D96C69B4605E35C3 /* EndToEndTests.swift */; };
 		BC03455D97B7E5080797150D /* CooolRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5297C596167079E74D28D47 /* CooolRemoteApp.swift */; };
 		FE86641557D345E87D294321 /* Demo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A06CCC83EC31D519D8962532 /* Demo.swift */; };
@@ -48,8 +53,10 @@
 		2F755E533D2C0BD22726220A /* ScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotTests.swift; sourceTree = "<group>"; };
 		31B6C5B8EE12E98EC03933F1 /* Widgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Widgets.swift; sourceTree = "<group>"; };
 		4545CA28D6F10D143424A97C /* NeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeedView.swift; sourceTree = "<group>"; };
+		4917E9995405E15E63EA8242 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		4948DE94D96C69B4605E35C3 /* EndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndToEndTests.swift; sourceTree = "<group>"; };
 		52F0B5DFF66BDEF0840FB507 /* Kit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Kit.swift; sourceTree = "<group>"; };
+		6325C918B9FD167C019411D6 /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		6BE85E8726B027F7D4B47394 /* RemoteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteStore.swift; sourceTree = "<group>"; };
 		77829BD2160DA5F0146FBD92 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		84ED76EDCED12A6CF224E009 /* RelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayClient.swift; sourceTree = "<group>"; };
@@ -60,8 +67,11 @@
 		A5297C596167079E74D28D47 /* CooolRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CooolRemoteApp.swift; sourceTree = "<group>"; };
 		B15523836B91BEFF840A5511 /* NewChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewChatView.swift; sourceTree = "<group>"; };
 		C9FE3E20237DF3A754DCA478 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		E1344D9BFC8F06994842F895 /* ChatParts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatParts.swift; sourceTree = "<group>"; };
 		ECE5CC68413B6A858C619BB8 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		F0DA23F7F3CA79EC4F3DDA60 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		FC51F3AB86CE565053CAEE37 /* FeelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeelTests.swift; sourceTree = "<group>"; };
+		FFBDF900C99C53D64E536C6B /* Outbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Outbox.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -80,6 +90,7 @@
 		1CB5F60799C22DB9ABC3B9E8 /* Model */ = {
 			isa = PBXGroup;
 			children = (
+				FFBDF900C99C53D64E536C6B /* Outbox.swift */,
 				84ED76EDCED12A6CF224E009 /* RelayClient.swift */,
 				6BE85E8726B027F7D4B47394 /* RemoteStore.swift */,
 				89AF8AAE849B281A3A26742D /* Vault.swift */,
@@ -91,6 +102,7 @@
 			isa = PBXGroup;
 			children = (
 				4948DE94D96C69B4605E35C3 /* EndToEndTests.swift */,
+				FC51F3AB86CE565053CAEE37 /* FeelTests.swift */,
 				2F755E533D2C0BD22726220A /* ScreenshotTests.swift */,
 				99809F67D604D49EC565B9D2 /* Support.swift */,
 			);
@@ -132,7 +144,9 @@
 		B95EA972467D7EE49C754523 /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				E1344D9BFC8F06994842F895 /* ChatParts.swift */,
 				1EAC987FF2C907D82075A638 /* ChatView.swift */,
+				6325C918B9FD167C019411D6 /* Composer.swift */,
 				52F0B5DFF66BDEF0840FB507 /* Kit.swift */,
 				4545CA28D6F10D143424A97C /* NeedView.swift */,
 				B15523836B91BEFF840A5511 /* NewChatView.swift */,
@@ -140,6 +154,7 @@
 				77829BD2160DA5F0146FBD92 /* SessionsView.swift */,
 				C9FE3E20237DF3A754DCA478 /* SettingsView.swift */,
 				ECE5CC68413B6A858C619BB8 /* Theme.swift */,
+				4917E9995405E15E63EA8242 /* Voice.swift */,
 				31B6C5B8EE12E98EC03933F1 /* Widgets.swift */,
 			);
 			path = UI;
@@ -256,6 +271,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BAF521DB6C00E5F62619FC2B /* EndToEndTests.swift in Sources */,
+				B5CD143A3328F616AB539BFE /* FeelTests.swift in Sources */,
 				B41040B7D4525F3A2452C33E /* ScreenshotTests.swift in Sources */,
 				87607EB52A3D51FE35D8B1D3 /* Support.swift in Sources */,
 			);
@@ -265,12 +281,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				06DACF4B78EDABE5069D3733 /* ChatParts.swift in Sources */,
 				7CD0636B95DE4A299E067BA6 /* ChatView.swift in Sources */,
+				0550276A7D44EA9EA549E543 /* Composer.swift in Sources */,
 				BC03455D97B7E5080797150D /* CooolRemoteApp.swift in Sources */,
 				FE86641557D345E87D294321 /* Demo.swift in Sources */,
 				36F390697DB13C8AA3164BD3 /* Kit.swift in Sources */,
 				1A544A9C267BAB1BF448FFD3 /* NeedView.swift in Sources */,
 				7DECBA1ECFB8A355E3C702A5 /* NewChatView.swift in Sources */,
+				92139BD28EBD78577EECF43C /* Outbox.swift in Sources */,
 				A7F65ED923FD619A8007752E /* PairingView.swift in Sources */,
 				4A299A98E21669A3D5F98072 /* RelayClient.swift in Sources */,
 				4AA22AE88CA3FD21E0A90231 /* RemoteStore.swift in Sources */,
@@ -278,6 +297,7 @@
 				A05DC9C5CEEE8F673E052F83 /* SettingsView.swift in Sources */,
 				400D6D2137211CEF2E7755E9 /* Theme.swift in Sources */,
 				3595ED7088A223DA2A30A8E6 /* Vault.swift in Sources */,
+				7DA612FF78FB0CC563515AE1 /* Voice.swift in Sources */,
 				4BAC5C5A4BBDC4286CEA8030 /* Widgets.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

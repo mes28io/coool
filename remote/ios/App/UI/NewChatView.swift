@@ -15,7 +15,9 @@ struct NewChatView: View {
   @State private var model: String?
   @State private var mode: String?
   @State private var prompt = ""
-  @State private var pics: [UIImage] = []
+  @State private var atts: [Attachment] = []
+  @State private var voice = VoiceCapture()
+  @State private var voiceNote: String?
   @State private var busy = false
   @State private var error: String?
   @State private var seeded = false
@@ -116,16 +118,23 @@ struct NewChatView: View {
           }
 
           section("Prompt") {
-            TextField("What should it do?", text: $prompt, axis: .vertical)
-              .lineLimit(4...10)
-              .padding(14).tile(padding: 0)
-              .accessibilityLabel("Prompt")
-              .accessibilityIdentifier("new.prompt")
-            HStack(spacing: 10) {
-              AttachMenu(pics: $pics)
-              if pics.isEmpty { Text("Add a picture").font(.footnote).foregroundStyle(Theme.faint) } else { PicStrip(pics: $pics) }
-              Spacer(minLength: 0)
+            if voice.phase != .idle {
+              RecordingBar(voice: voice, done: { Task { await finishVoice() } }, cancel: { voice.cancel() })
+            } else {
+              HStack(alignment: .top, spacing: 2) {
+                TextField("What should it do?", text: $prompt, axis: .vertical)
+                  .lineLimit(4...10)
+                  .padding(14)
+                  .accessibilityLabel("Prompt")
+                  .accessibilityIdentifier("new.prompt")
+                if store.macMinor >= 2 || store.demo { MicButton(voice: voice, start: { Task { if let e = await voice.start() { error = e } } }, finish: { Task { await finishVoice() } })
+                  .padding(.top, 4).padding(.trailing, 4) }
+              }
+              .tile(padding: 0)
             }
+            if let v = voiceNote { Label(v, systemImage: "waveform").labelStyle(TightLabel()).font(.caption).foregroundStyle(Theme.faint) }
+            if !atts.isEmpty { AttachStrip(atts: $atts) }
+            AttachSources(atts: $atts, error: $error)
           }
 
           if !store.recents.isEmpty && seed == nil {
@@ -171,12 +180,14 @@ struct NewChatView: View {
           } else {
             Button("Start") { Task { await start() } }
               .fontWeight(.semibold)
-              .disabled(project == nil || (prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pics.isEmpty))
+              .disabled(project == nil || (prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && atts.isEmpty))
               .accessibilityIdentifier("new.start")
           }
         }
       }
+      .onChange(of: prompt) { _, t in if seed == nil { Drafts.set("new", t) } }
       .task {
+        if seed == nil, !seeded, prompt.isEmpty { prompt = Drafts.get("new") }
         if let s = seed, !seeded { fill(s) }
         if mode == nil { mode = opts?.mode }
         await store.refresh()
@@ -203,6 +214,24 @@ struct NewChatView: View {
     }
   }
 
+  private func finishVoice() async {
+    guard let audio = voice.finish() else { return }
+    voice.phase = .transcribing
+    do {
+      let r = try await store.transcribe(audio, session: nil)
+      voice.phase = .idle
+      guard r.heard == "words", !r.text.isEmpty else {
+        error = "Didn't catch any words. Try again a little closer."
+        return
+      }
+      prompt = prompt.isEmpty ? r.text : "\(prompt) \(r.text)"
+      voiceNote = "Transcribed on your Mac. Check it, then start."
+    } catch {
+      voice.phase = .idle
+      self.error = error.localizedDescription
+    }
+  }
+
   @ViewBuilder private func check(_ t: String, _ on: Bool) -> some View {
     if on { Label(t, systemImage: "checkmark") } else { Text(t) }
   }
@@ -220,8 +249,8 @@ struct NewChatView: View {
     error = nil
     defer { busy = false }
     var ids: [String] = []
-    if !pics.isEmpty {
-      do { ids = try await store.upload(pics) } catch {
+    if !atts.isEmpty {
+      do { ids = try await store.upload(atts) } catch {
         self.error = error.localizedDescription
         return
       }
@@ -237,6 +266,7 @@ struct NewChatView: View {
       store.started(s, project: project.name, cli: cli, mode: res.mode ?? "")
       store.remember(.init(text: text, project: project.id, projectName: project.name, cli: cli, model: m, mode: md, at: Date().timeIntervalSince1970))
       UINotificationFeedbackGenerator().notificationOccurred(.success)
+      Drafts.set("new", "")
       started(s)
     case .success(let res):
       UINotificationFeedbackGenerator().notificationOccurred(.error)

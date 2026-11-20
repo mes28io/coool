@@ -18,7 +18,7 @@ pub mod proto;
 pub mod relay;
 pub mod rules;
 
-pub use mac::{Action, ChatView, Device, DeviceView, Engine, Host, PairingView, Status};
+pub use mac::{Action, ChatView, Device, DeviceView, Engine, Host, PairingView, Status, Transcribe};
 
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
