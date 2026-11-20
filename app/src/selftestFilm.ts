@@ -123,7 +123,8 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   /** The window as a person would leave it, minus the provider logos. */
   async function look(theme: "dark" | "light") {
     setGlassPref(true);
-    setBackdrop("desktop");
+    // The film's look (the owner's choice): the light theme, glass on, and the window backdrop "Colours".
+    setBackdrop("colours");
     useStore.getState().setThemePref(theme);
     useStore.getState().setSheet(null);
     for (const t of useStore.getState().toasts ?? []) useStore.getState().dismissToast(t.id);
@@ -133,7 +134,9 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   function hideLogos() {
     const s = document.createElement("style");
     s.dataset.filmNoLogos = "";
-    s.textContent = `[role="img"][aria-label="Claude"], [role="img"][aria-label="Codex (OpenAI)"] { visibility: hidden !important; }`;
+    // Also: the backdrop's colours drift as they do for a window in front (this one is never focused, which rests them).
+    s.textContent = `[role="img"][aria-label="Claude"], [role="img"][aria-label="Codex (OpenAI)"] { visibility: hidden !important; }
+[data-backdrop-rest] .backdrop-layer { animation-play-state: running !important; }`;
     document.head.appendChild(s);
   }
 
@@ -217,7 +220,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         dilate(slow, v.dilate);
         hideLogos();
         await log(`INFO updates ${JSON.stringify(useUpdates.getState().status).slice(0, 400)}`);
-        await look("dark");
+        await look("light");
         await sleep(4000);
         return `${sessions().length} sessions, slow ${slow} (${v.dilate}), mac ${mac}`;
       });
@@ -247,7 +250,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       });
 
       // 1. The whole window, steady, with gentle life (steps ticking), every state in it, dark then light.
-      for (const theme of ["dark", "light"] as const) {
+      for (const theme of ["light"] as const) {
         await step(`film: the whole window, ${theme} (hero-${theme})`, async () => {
           await missionTab("atlas-api");
           await look(theme);
@@ -259,7 +262,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
           });
         });
       }
-      await look("dark");
+      await look("light");
 
       // 4. What changed: written, edited, committed, pushed, merged; then two sessions on one file.
       await step("film: the changes fill in, then the overlap warning (changes)", async () => {
@@ -466,32 +469,6 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
 
       roomy(false);
 
-      // Sub-agents at work (lower priority).
-      await step("film: a lead with three subagents (agents)", async () => {
-        const id = await start(`${dir}/atlas-api`, "Audit every /v2 route for handlers that skip the auth layer. Use one agent per route group and fix what they find.");
-        useStore.getState().open({ kind: "chat", id });
-        await burst("agents", async () => {
-          await fwait("three subagents at work", () => (chats()[id]?.items ?? []).filter((i) => i.kind === "tool" && i.parent).length >= 8, 60_000);
-          await mark("agents", { timeline: $("[data-chat-timeline]") });
-          await fsleep(8000);
-        });
-        await api().chatStop(id);
-      });
-
-      // Cutaway: the theme switch on Mission control.
-      await step("film: the light / dark switch (theme)", async () => {
-        await missionTab("atlas-api");
-        await sleep(2000);
-        await burst("theme", async () => {
-          await fsleep(2500);
-          await mark("to-light");
-          useStore.getState().setThemePref("light");
-          await fsleep(4000);
-          await mark("to-dark");
-          useStore.getState().setThemePref("dark");
-          await fsleep(4000);
-        });
-      });
     },
   };
 }
