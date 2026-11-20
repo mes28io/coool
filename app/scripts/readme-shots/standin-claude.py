@@ -231,6 +231,111 @@ def fanout_turn(prompt, start):
     result(start)
 
 
+# ------------------------------------------------------------------------------------------------ device tools
+# The film (film.sh): a chat that drives coool's own panels through the `coool-device` MCP server coool hands every
+# chat (--mcp-config), as the real CLI would: the tools act for real and their results stream into the chat.
+
+class Mcp:
+    def __init__(self):
+        cfg = next((a.split("=", 1)[1] for a in ARGS if a.startswith("--mcp-config=")), None)
+        if not cfg:
+            raise RuntimeError("no --mcp-config")
+        srv = json.loads(Path(cfg).read_text())["mcpServers"]["coool-device"]
+        import subprocess
+        self.p = subprocess.Popen([srv["command"], *srv.get("args", [])], env={**os.environ, **srv.get("env", {})}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.n = 0
+        self.call_raw("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "claude-code", "version": "2.9.0"}})
+        self.p.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        self.p.stdin.flush()
+
+    def call_raw(self, method, params):
+        self.n += 1
+        self.p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params}) + "\n")
+        self.p.stdin.flush()
+        while True:
+            line = self.p.stdout.readline()
+            if not line:
+                raise RuntimeError("the MCP server closed")
+            v = json.loads(line)
+            if v.get("id") == self.n:
+                return v.get("result") or {"content": [{"type": "text", "text": json.dumps(v.get("error"))}], "isError": True}
+
+    def tool(self, name, args):
+        """A step in the chat (mcp__coool-device__<name>) whose result is the tool's real answer."""
+        tid = f"toolu_{uuid.uuid4().hex[:24]}"
+        assistant([{"type": "tool_use", "id": tid, "name": f"mcp__coool-device__{name}", "input": args}], ctx=30_000)
+        r = self.call_raw("tools/call", {"name": name, "arguments": args})
+        txt = "\n".join(c.get("text", "") for c in r.get("content", []) if c.get("type") == "text")
+        tool_result(tid, txt, error=bool(r.get("isError")))
+        return txt
+
+    def close(self):
+        try:
+            self.p.stdin.close()
+            self.p.wait(timeout=3)
+        except Exception:
+            self.p.kill()
+
+
+def element(page, role, name, exact=False):
+    """The id of the first `[id] role "name"` line in an observe result (browser or iPhone)."""
+    import re
+    for m in re.finditer(r'^\s*\[([^\]]+)\]\s+(\S+)\s+"([^"]*)"', page, re.M):
+        if (role is None or m.group(2) == role) and (m.group(3) == name if exact else name.lower() in m.group(3).lower()):
+            return m.group(1)
+    return None
+
+
+def browser_turn(prompt, start):
+    import re
+    url = re.search(r"https?://\S+", prompt).group(0).rstrip(".,)")
+    thinking("The console runs locally; I can create the key in the Browser panel and read back what the page says.")
+    time.sleep(0.6)
+    text("I'll do it in the Browser panel.")
+    m = Mcp()
+    try:
+        look = lambda txt: txt if element(txt, None, "") else m.tool("browser_observe", {})
+        page = look(m.tool("browser_navigate", {"url": url}))
+        time.sleep(0.8)
+        page = look(m.tool("browser_click", {"id": int(element(page, "button", "Create key"))}))
+        time.sleep(0.6)
+        page = look(m.tool("browser_type", {"id": int(element(page, "textbox", "Key name") or element(page, "textbox", "")), "text": "ci-runner"}))
+        time.sleep(0.6)
+        page = look(m.tool("browser_select", {"id": int(element(page, "combobox", "Budget") or element(page, "combobox", "")), "value": "60 / min"}))
+        time.sleep(0.6)
+        page = m.tool("browser_click", {"id": int(element(page, "button", "Create", exact=True))})
+        title("Create a CI key in the local console")
+        time.sleep(0.6)
+        text('Done: the console shows **Key "ci-runner" created with a budget of 60 / min.** It is first in the list.')
+    finally:
+        m.close()
+    result(start)
+
+
+def iphone_turn(prompt, start):
+    thinking("Settings > General > About shows the iOS version; three taps from the home screen.")
+    time.sleep(0.6)
+    text("Opening Settings on the iPhone.")
+    m = Mcp()
+    try:
+        scr = m.tool("app", {"action": "launch", "bundle_id": "com.apple.Preferences"})
+        time.sleep(0.8)
+        title("Read the iOS version on the simulator")
+        for label in ["General", "About"]:
+            target = element(scr, None, label)
+            if target is None:
+                scr = m.tool("wait_for", {"text": label, "timeout_ms": 5000})
+                target = element(scr, None, label)
+            scr = m.tool("tap", {"target": target})
+            time.sleep(0.8)
+        import re
+        v = re.search(r'"iOS Version"\s+value=([^\s(]+)', scr) or re.search(r"iOS Version\D+([\d.]+)", scr)
+        text(f"iOS version: {v.group(1) if v else 'shown on the About screen'}")
+    finally:
+        m.close()
+    result(start)
+
+
 def generic_turn(prompt, start):
     text("Done.")
     result(start)
@@ -246,12 +351,22 @@ def run_turn(prompt):
     try:
         if "march" in low:
             invoices_turn(prompt, start)
+        elif "browser panel" in low:
+            browser_turn(prompt, start)
+        elif "iphone" in low:
+            iphone_turn(prompt, start)
         elif "agent" in low:
             fanout_turn(prompt, start)
         else:
             generic_turn(prompt, start)
     except BrokenPipeError:
         pass
+    except Exception:
+        import traceback
+        with open(HOME / "standin.err", "a") as f:
+            f.write(traceback.format_exc())
+        text("(the stand-in's scripted turn failed; see standin.err in the workspace)")
+        result(start)
 
 
 def main():
