@@ -9,8 +9,6 @@ scenario (app/src/selftestFilm.ts), so each moment happens while a burst is reco
   changes         atlas-api: the `terminal` session writes, edits, commits, pushes, and merges a docs branch
   overlap         a second atlas-api session edits src/config.rs, which another live session has uncommitted edits to
   needs           sessions that were working stop and wait for the person (registry `waiting`), one after another
-  commit-atlas    atlas-api: a session commits its work for real (git) and pushes it to the local origin
-  commit-pixel    pixelforge: a session writes a shader, commits, then merges its branch into main (all real git)
 
 Sessions that wait for the person in the README start out working here; `needs` makes them wait. What a terminal
 would show for `terminal` / `terminal-codex` is written to <root>/terminal-<name>.json (seconds after the cue, line).
@@ -262,7 +260,7 @@ def run(root: Path, cues: Path, ws):
         claude_step(e, "Bash", {"command": "cargo test -p atlas-api", "description": "Run all tests"})
         e["scripted"] = False
 
-    moments = {"changes": changes, "terminal": terminal, "terminal-codex": terminal_codex, "overlap": overlap, "needs": needs, "commit-atlas": commit_atlas, "commit-pixel": commit_pixel}
+    moments = {"changes": changes, "terminal": terminal, "terminal-codex": terminal_codex, "overlap": overlap, "needs": needs}
 
     # ---------------------------------------------------------------- the run
 
