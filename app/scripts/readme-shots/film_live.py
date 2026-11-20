@@ -40,8 +40,8 @@ def run(root: Path, cues: Path, ws):
     def title_of(e):
         if e["provider"] != "claude":
             return ""
-        last = Path(e["path"]).read_text().splitlines()[-1]
-        return json.loads(last).get("aiTitle", "")
+        rows = [json.loads(line) for line in Path(e["path"]).read_text().splitlines()]
+        return next((r["aiTitle"] for r in rows if r.get("type") == "ai-title"), "")
 
     for e in entries:
         e["title"] = title_of(e)
@@ -63,26 +63,25 @@ def run(root: Path, cues: Path, ws):
     # ---------------------------------------------------------------- transcripts
 
     def append_claude(e, recs):
-        """Rows appended to a Claude transcript (its ai-title line stays last)."""
+        """Rows appended to a Claude transcript. Only ever appended (as the CLI does): coool reads a transcript from
+        where it left off, so rewriting the file (moving its title line) would cut the first new row."""
         with LOCK:
             p = Path(e["path"])
-            lines = p.read_text().splitlines()
-            body, title = lines[:-1], lines[-1]
-            parent = json.loads(body[-1]).get("uuid") if body else None
+            rows_now = [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
+            parent = next((r.get("uuid") for r in reversed(rows_now) if r.get("uuid")), None)
             base = {"isSidechain": False, "userType": "external", "cwd": e["cwd"], "sessionId": e["sessionId"], "version": ws.VERSION, "gitBranch": e.get("branch", "main"), "entrypoint": "cli"}
-            rows = []
-            for o in recs:
-                u = str(uuid.uuid4())
-                rows.append({**base, "parentUuid": parent, **o, "uuid": u, "timestamp": ws.iso(time.time())})
-                parent = u
-            p.write_text("\n".join(body + [json.dumps(r, separators=(",", ":")) for r in rows] + [title]) + "\n")
+            with open(p, "a") as f:
+                for o in recs:
+                    u = str(uuid.uuid4())
+                    f.write(json.dumps({**base, "parentUuid": parent, **o, "uuid": u, "timestamp": ws.iso(time.time())}, separators=(",", ":")) + "\n")
+                    parent = u
 
     def msg(e, content):
         return {"id": f"msg_{uuid.uuid4().hex[:24]}", "type": "message", "role": "assistant", "model": e["model"], "content": content, "stop_reason": None,
                 "usage": {"input_tokens": 8, "cache_read_input_tokens": 42000, "output_tokens": 140}}
 
     def open_ids(e):
-        recs = [json.loads(line) for line in Path(e["path"]).read_text().splitlines()[:-1]]
+        recs = [json.loads(line) for line in Path(e["path"]).read_text().splitlines()]
         done = {c.get("tool_use_id") for r in recs if r.get("type") == "user" and isinstance(r["message"]["content"], list) for c in r["message"]["content"]}
         return [c["id"] for r in recs if r.get("type") == "assistant" for c in r["message"]["content"] if c.get("type") == "tool_use" and c["id"] not in done]
 

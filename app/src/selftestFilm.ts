@@ -17,6 +17,7 @@ import { newChat } from "./lib/actions";
 import { api } from "./lib/backend";
 import { chatPanelKey } from "./lib/browserAgent";
 import { useChats } from "./lib/chat";
+import { useUpdates } from "./lib/update";
 import { setBackdrop, setGlassPref } from "./lib/glass";
 import { sessionKey } from "./lib/types";
 import { resolveTarget, useStore } from "./store";
@@ -77,7 +78,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   }
   async function burst(name: string, f: () => Promise<void>) {
     current = name;
-    await film("start", { name, workers: 3, format: "png" });
+    await film("start", { name, workers: 4, format: "png" });
     try {
       await f();
     } finally {
@@ -168,6 +169,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         await waitFor("the sessions", () => sessions().length >= 12, 60_000);
         await film("visible");
         hideLogos();
+        await log(`INFO updates ${JSON.stringify(useUpdates.getState().status).slice(0, 600)}`);
         await look("dark");
         await sleep(4000);
         return `${sessions().length} sessions`;
@@ -238,17 +240,21 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       let invoices = -1;
       await step("film: the Needs you page fills, one request is read and allowed (needs)", async () => {
         invoices = await start(`${dir}/invoices`, "Why do invoices from March show the wrong month?", "acceptEdits");
+        // A Codex chat too (the stand-in `codex app-server`): it asks to force-push a rebased branch.
+        const before = ids();
+        await newChat({ provider: "codex", cwd: `${dir}/atlas-api`, model: "gpt-5.6", prompt: "Rebase the v3 errors branch on main and push it." });
+        const codex = (await waitFor("the Codex chat", () => { const i = [...ids()].find((x) => !before.has(x)); return i === undefined ? null : { i }; }, 15_000)).i;
         useStore.getState().openNeeds(null);
         await waitFor("the Needs page", () => $("[data-needs-page]"), 10_000);
         await burst("needs", async () => {
           await sleep(1200);
           await mark("start", { list: $("[data-needs-list]") });
-          await waitFor("the chat's request", () => chats()[invoices]?.pendingPermission && $all("[data-needs-item]").length >= 1, 30_000);
+          await waitFor("the chats' requests", () => chats()[invoices]?.pendingPermission && $all("[data-needs-item]").length >= 1, 30_000);
           await mark("first-item", { list: $("[data-needs-list]") });
           await sleep(1500);
           await cue("needs");
-          await waitFor("three requests", () => $all("[data-needs-item]").length >= 3, 20_000);
-          await mark("three-items", { list: $("[data-needs-list]") });
+          await waitFor("four requests", () => $all("[data-needs-item]").length >= 4, 20_000).catch(() => log(`WARN needs: ${$all("[data-needs-item]").length} items; codex chat ${JSON.stringify(chats()[codex]?.pendingPermission ?? null).slice(0, 120)}`));
+          await mark("all-items", { list: $("[data-needs-list]") });
           await sleep(1800);
           const s = sessionOfChat(invoices);
           const item = $all("[data-needs-item]").find((i) => text(i).includes("rm -rf node_modules") || text(i).includes("Why do invoices"));
@@ -313,7 +319,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
             await sleep(800);
             await mark("typing", { composer: $("[data-main] textarea") });
             await typeOut(`In the Browser panel, open ${k.site} and create an API key named ci-runner with a 60 / min budget.`, sleep);
-            await waitFor("the panel driven", () => $("[data-browser-driving]"), 40_000);
+            await waitFor("the panel driven", () => $("[data-browser-driving]"), 30_000).catch(() => log("WARN browser: no driving mark"));
             await mark("driving", { panel: $("[data-right-panel]") });
             await waitFor("the turn's end", () => !chats()[id]?.running || /ci-runner/.test(text($("[data-chat-timeline]")).split("Done:")[1] ?? ""), 90_000);
             await sleep(3500);
@@ -349,7 +355,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
             await typeOut("On the iPhone in the panel, open Settings and read the iOS version in General > About.", sleep);
             await waitFor("the phone driven", () => $("[data-sim-driving]"), 40_000).catch(() => null);
             await mark("driving", { panel: $("[data-right-panel]") });
-            await waitFor("the turn's end", () => /iOS version/.test(text($("[data-chat-timeline]"))) , 90_000);
+            await waitFor("the turn's end", () => !chats()[id]?.running || (chats()[id]?.items ?? []).some((i) => i.kind === "text" && /iOS version:|failed/.test((i as { text?: string }).text ?? "")), 90_000);
             await sleep(3000);
             await mark("end", { panel: $("[data-right-panel]") });
           });

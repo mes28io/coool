@@ -54,6 +54,9 @@ def arg(name, default=None):
     return ARGS[ARGS.index(name) + 1] if name in ARGS and ARGS.index(name) + 1 < len(ARGS) else default
 
 
+# coool removes the MCP config file once the CLI has started: read it now, as the CLI does.
+_mcp = next((a.split("=", 1)[1] for a in ARGS if a.startswith("--mcp-config=")), None)
+MCP_CONFIG = json.loads(Path(_mcp).read_text()) if _mcp and Path(_mcp).exists() else None
 SID = arg("--session-id") or arg("--resume") or str(uuid.uuid4())
 ALIAS = arg("--model", "opus")
 MODEL = next((m["resolvedModel"] for m in MODELS if m["value"] == ALIAS), ALIAS if ALIAS.startswith("claude-") else "claude-opus-5-5")
@@ -237,10 +240,9 @@ def fanout_turn(prompt, start):
 
 class Mcp:
     def __init__(self):
-        cfg = next((a.split("=", 1)[1] for a in ARGS if a.startswith("--mcp-config=")), None)
-        if not cfg:
+        if not MCP_CONFIG:
             raise RuntimeError("no --mcp-config")
-        srv = json.loads(Path(cfg).read_text())["mcpServers"]["coool-device"]
+        srv = MCP_CONFIG["mcpServers"]["coool-device"]
         import subprocess
         self.p = subprocess.Popen([srv["command"], *srv.get("args", [])], env={**os.environ, **srv.get("env", {})}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.n = 0

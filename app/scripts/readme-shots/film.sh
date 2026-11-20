@@ -29,7 +29,7 @@ fi
 python3 -I "$HERE/workspace.py" build --film --root "$ROOT"
 touch "$ROOT/.coool-film"
 cp "$HERE/standin-claude.py" "$ROOT/bin/claude"
-printf '#!/bin/sh\nexit 1\n' > "$ROOT/bin/codex"
+cp "$HERE/standin-codex.py" "$ROOT/bin/codex"
 chmod +x "$ROOT/bin/claude" "$ROOT/bin/codex"
 mkdir -p "$ROOT/app" "$ROOT/shots" "$ROOT/logs"
 cp "$BIN" "$ROOT/app/$NAME"
