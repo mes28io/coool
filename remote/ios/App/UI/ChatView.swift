@@ -61,7 +61,7 @@ struct ChatView: View {
       // The tail, now and then again while the chat works (the Mac sends state changes, not every line).
       while !Task.isCancelled {
         if session?.chat ?? true { await store.requestTail(sessionId) }
-        try? await Task.sleep(for: .seconds(working ? 3 : 12))
+        try? await Task.sleep(for: .seconds(session == nil || working ? 3 : 12))
       }
     }
     .onChange(of: session?.state) { _, _ in Task { await store.requestTail(sessionId) } }

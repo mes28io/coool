@@ -125,8 +125,9 @@ final class EndToEndTests: XCTestCase {
     put("remote-phone-refusals.txt", "not sent: the app offers no always-allow, no path, no unknown project (refusals are covered by crates/remote tests and remote/phone e2e)")
     put("remote-phone-started.txt", String(decoding: try JSONSerialization.data(withJSONObject: ["session": sp[1], "mode": sp[2]]), as: UTF8.self))
     log("started \(sp[1]) in \(sp[2])")
-    _ = wait("the started chat's reply", timeout: 90) { elements(app, "chat.assistant").count > 0 }
+    let replied = wait("the started chat's reply", timeout: 30) { elements(app, "chat.assistant").count > 0 }
     shot(shots, "e2e-9-started")
+    if !replied { log("tree: \(app.debugDescription)") }
 
     // 6. Removed on the Mac: back to pairing, with the reason.
     try step("the Mac removed the device", waitFile("remote-app-removed.txt", 300) != nil)
