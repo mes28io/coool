@@ -8,6 +8,7 @@ import { useChats, type PermissionAnswer } from "./chat";
 import { getChatDefaults, seenModelsNow } from "./prefs";
 import { chatLadderOf, ladderOptions, noteLaunched, setChatLadder, type ChatLadder } from "./ladder";
 import { estimateSize } from "./termlite";
+import { setDraft } from "./drafts";
 import type { Provider, RememberOption, ResetOutcome, Session } from "./types";
 import { sessionKey } from "./types";
 
@@ -20,7 +21,8 @@ function place(target: { kind: "chat"; id: number } | { kind: "pty"; id: number 
 }
 
 /** New chat (default for anything coool starts). Falls back to a terminal session. */
-export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; leaf?: string; model?: string | null; permissionMode?: string | null; ladder?: ChatLadder }): Promise<boolean> {
+/** `draft`: text put in the new chat's composer, not sent. */
+export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; draft?: string; leaf?: string; model?: string | null; permissionMode?: string | null; ladder?: ChatLadder }): Promise<boolean> {
   try {
     // Settings > General: what a new chat starts with, unless the caller chose.
     const d = getChatDefaults()[a.provider];
@@ -33,6 +35,7 @@ export async function newChat(a: { provider: Provider; cwd: string; prompt?: str
     // The sheet's own choice is this chat's from now on (its chip shows it; a resume keeps it once the session is known).
     if (a.ladder) setChatLadder({ id, provider: a.provider, sessionId: null }, a.ladder);
     useChats.getState().ensure({ id, provider: a.provider, cwd: a.cwd, session_id: null, model: model ?? null, state: "idle", running: true });
+    if (a.draft) setDraft(id, a.draft);
     place({ kind: "chat", id }, a.leaf);
     if (a.prompt?.trim()) await api().chatSend(id, a.prompt.trim());
     return true;

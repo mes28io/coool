@@ -430,6 +430,25 @@ export class MockChat {
     this.emit({ type: "exited", code });
   }
 
+  /**
+   * Like a Codex chat resumed from a thread the installed Codex can't read (real error text, codex-cli 0.145): the
+   * person typed `typed` while it started, then `thread/resume` failed; the backend ends the chat (CHAT_SPEC
+   * `open_failed`), with the prompt reported as not sent, and the app-server exits.
+   */
+  async failOpen(typed: string, after = 900) {
+    this.model = "";
+    this.mode = "";
+    this.emit({ type: "user_message", id: "u1", text: typed, steer: false, note_id: null });
+    this.setState("working");
+    await sleepReal(after);
+    const error =
+      "failed to deserialize stored thread item subagent-completed-019a4c2e-7d1b-7c3e: unknown variant `completed`, expected one of `started`, `interacted`, `interrupted`";
+    this.emit({ type: "open_failed", error, reason: "newer_cli", cli_version: "0.145.0", resumed: true, unsent: [{ id: "u1", text: typed }] });
+    this.setState("idle");
+    await sleepReal(120);
+    this.stop(0);
+  }
+
   // ---------- scripted turns ----------
 
   private async stream(type: "text_delta" | "thinking_delta", id: string, text: string, parent: string | null, gen: number) {

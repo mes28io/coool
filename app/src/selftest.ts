@@ -27,7 +27,9 @@
 // the Reduce motion state and the beam (with Reduce motion as it is, then Off).
 // `needs` (the Needs you page: a Haiku chat in Ask mode; a Write and an Edit allowed, a command denied and a question
 // answered from the page). `why` ("What this does and why": the agent's claim at once, the AI read on the insights key,
-// a description that doesn't match its command, Allow / Deny before and after the read). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
+// a description that doesn't match its command, Allow / Deny before and after the read). `codex-open-failed` (a Codex
+// resume of a thread id Codex doesn't have: the chat ends as not opened; no model use) and `codex-model-chip` (a new
+// Codex thread, no turn: the Model chip and menu). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { glassState } from "./lib/glass";
 import { openOnboarding } from "./lib/onboarding";
@@ -3793,7 +3795,7 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 
   async "sweep-composer"(ctx) {
-    await step("composer: the hint row never wraps or clips while a turn runs, at any pane width", async () => {
+    await step("composer: the bottom row never overflows the composer while a turn runs, at any pane width", async () => {
       const id = await startIn(ctx.cfg.dir, "bypassPermissions");
       await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 25 127.0.0.1 > /dev/null . Then reply with: done");
       await waitFor("working", () => chat(id)?.turnStart, 30_000);
@@ -3805,12 +3807,14 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
         else useStore.getState().setRightPanel(key, "closed");
         await sleep(900);
         const comp = composer().closest(".composer-dock") as HTMLElement | null;
-        const hint = ($("[data-steer-hint]") ?? $("[data-steer-hint-short]")) as HTMLElement | null;
-        const row = hint?.parentElement;
-        const bad = hint && (hint.getBoundingClientRect().height > 30 || hint.scrollWidth > hint.clientWidth + 1 || (row && hint.getBoundingClientRect().right > row.getBoundingClientRect().right + 1));
+        // The composer's box: every chip and the Stop / send buttons stay inside it.
+        const row = $("[data-composer-row]");
+        const box = row?.parentElement?.getBoundingClientRect();
+        const rights = row ? [...row.querySelectorAll("button")].map((b) => b.getBoundingClientRect().right) : [];
+        const bad = !box || rights.some((r) => r > box.right + 1);
         const name = `sweep-composer-${w}-${panel}`;
         await shot(name, undefined, 200);
-        out.push(`${w}/${panel}: composer ${Math.round(comp?.getBoundingClientRect().width ?? 0)}px, hint ${hint ? `"${textOf(hint)}" h=${Math.round(hint.getBoundingClientRect().height)}` : "hidden"}${bad ? " BROKEN" : ""}`);
+        out.push(`${w}/${panel}: composer ${Math.round(comp?.getBoundingClientRect().width ?? 0)}px, row h=${Math.round(row?.getBoundingClientRect().height ?? 0)}${bad ? " BROKEN" : ""}`);
       }
       await invoke("selftest_resize", { width: 1440, height: 900 });
       useStore.getState().setRightPanel(key, "closed");
@@ -6934,6 +6938,69 @@ const codexUsage = () => {
 };
 
 const codexScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
+  /**
+   * A Codex chat resumed from a thread id Codex has no rollout for (`thread/resume` fails at once; no model use). The
+   * chat ends as not opened: no working row, a card saying so, a prompt typed meanwhile shown as not sent (or refused,
+   * if it came after), the composer and its chips disabled, later sends refused.
+   */
+  async "codex-open-failed"(ctx) {
+    await step("codex-open-failed: a thread Codex can't open ends the chat plainly, nothing queued, chips disabled", async () => {
+      const thread = "0199a0b0-0000-7000-8000-00000000c0f1";
+      const id = await api().startChat({ provider: "codex", cwd: ctx.cfg.dir, resume: thread, model: null });
+      useChats.getState().ensure({ id, provider: "codex", cwd: ctx.cfg.dir, session_id: thread, model: null, state: "idle", running: true });
+      useStore.getState().open({ kind: "chat", id });
+      // Typed while it starts: held for the thread, then reported as not sent (or refused if the failure came first).
+      const early = await api().chatSend(id, "hey").then(() => "accepted", (e) => `refused (${String(e).slice(0, 80)})`);
+      const c = await waitFor("open_failed", () => chat(id)?.openFailed && chat(id), 30_000);
+      await waitFor("the process to end", () => !chat(id)?.running, 15_000);
+      await sleep(800);
+      const card = await waitFor("the card", () => $("[data-open-failed]"), 10_000);
+      const ta = composer();
+      const chips = $all("[data-composer-chips] [data-chip-disabled]").map(textOf);
+      const unsentShown = $all("[data-prompt-unsent]").length;
+      const live = $all("[data-chat-timeline]").some((t) => /Thinking|Working|Puzzling|Starting codex/.test(t.textContent ?? ""));
+      const later = await api().chatSend(id, "still there?").then(() => "accepted", (e) => String(e).slice(0, 100));
+      const f = c.openFailed!;
+      await shot("codex-open-failed");
+      const out = `early send ${early}; reason ${f.reason}; version ${f.cliVersion}; unsent ${f.unsent.map((u) => u.text).join("|") || "none"} (${unsentShown} bubbles); state ${chat(id)?.state}; card "${textOf(card).slice(0, 140)}"; error "${f.error.slice(0, 90)}"; placeholder "${ta.placeholder}" disabled ${ta.disabled}; disabled chips ${chips.length} [${chips.join(",")}]; later send ${later}`;
+      if (chat(id)?.state !== "idle" || live) throw new Fail(`still looks alive: ${out}`);
+      if (f.reason !== "not_found" || !/no rollout found/.test(f.error)) throw new Fail(`reason: ${out}`);
+      if (early === "accepted" && (f.unsent.length !== 1 || unsentShown !== 1)) throw new Fail(`the early prompt isn't reported as not sent: ${out}`);
+      if (!ta.disabled || !/can't take messages/.test(ta.placeholder)) throw new Fail(`composer: ${out}`);
+      if (chips.length < 3) throw new Fail(`chips not disabled: ${out}`);
+      if (later === "accepted") throw new Fail(`a later send went through: ${out}`);
+      if (!/couldn’t be opened/.test(textOf(card))) throw new Fail(`card: ${out}`);
+      return out;
+    });
+  },
+
+  /** A healthy Codex chat (a new thread, no turn: no model use) shows its model in the chip and lists models to switch to. */
+  async "codex-model-chip"(ctx) {
+    await step("codex-model-chip: the Model chip names the chat's model, its menu lists Codex's models", async () => {
+      const id = await startCodex(ctx.cfg.dir, "untrusted");
+      useStore.getState().open({ kind: "chat", id });
+      await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+      await sleep(800);
+      const chip = await waitFor("the model chip", () => $("[data-model-chip]"), 10_000);
+      const label = textOf(chip);
+      (chip.closest("button") as HTMLElement).click();
+      await sleep(500);
+      const opts = $all("[data-model-option]").map((o) => o.dataset.modelOption ?? "");
+      const unknownNote = !!$("[data-model-list-unknown]");
+      const mode = $("[data-mode-chip]")?.dataset.modeChip ?? "";
+      await shot("codex-model-chip");
+      (chip.closest("button") as HTMLElement).click();
+      const c = chat(id)!;
+      const out = `model ${c.model}; chip "${label}"; ${opts.length} options [${opts.slice(0, 6).join(",")}]; list note ${unknownNote}; mode ${mode}`;
+      void api().chatStop(id);
+      if (!c.model || !label || label === "Model") throw new Fail(`bare chip: ${out}`);
+      if (c.model !== CODEX_MODEL) throw new Fail(`wrong model: ${out}`);
+      if (!opts.includes(CODEX_MODEL)) throw new Fail(`menu: ${out}`);
+      if (mode !== "untrusted") throw new Fail(`mode: ${out}`);
+      return out;
+    });
+  },
+
   async "codex-chat"(ctx) {
     const dir = ctx.cfg.dir;
     await log(`INFO codex usage at start: ${codexUsage()}`);

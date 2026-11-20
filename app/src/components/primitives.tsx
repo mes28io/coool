@@ -400,22 +400,27 @@ export function Chip({
   active,
   title,
   className,
+  disabled,
 }: {
   children: ReactNode;
   onClick?: () => void;
   active?: boolean;
   title?: string;
   className?: string;
+  /** Shown but not usable; still hoverable, so its `title` can say why (a disabled button gets no pointer events). */
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       data-pop-anchor
       title={title}
-      onClick={onClick}
+      aria-disabled={disabled || undefined}
+      data-chip-disabled={disabled || undefined}
+      onClick={disabled ? undefined : onClick}
       className={cx(
         "inline-flex h-[28px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[8px] px-2 text-small font-medium transition-[background-color,color] duration-150",
-        active ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
+        disabled ? "cursor-default text-faint opacity-70" : active ? "bg-press text-fg" : "text-dim hover:bg-hover hover:text-fg",
         className,
       )}
     >

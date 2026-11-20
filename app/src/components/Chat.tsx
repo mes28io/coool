@@ -5,7 +5,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { answerPermission, answerQuestion } from "../lib/actions";
+import { answerPermission, answerQuestion, newChat } from "../lib/actions";
 import { type Chat, type ChatItem, chatTitle, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { permissionWhat, rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
@@ -606,7 +606,7 @@ function ItemView({ item, chat, onOpenTerminal, onResume }: { item: ChatItem; ch
   countRender("Chat.ItemView");
   switch (item.kind) {
     case "prompt":
-      return <PromptBubble text={item.text} stamp={clockTime(item.ts)} />;
+      return <PromptBubble text={item.text} stamp={item.unsent ? `${clockTime(item.ts)} · not sent` : clockTime(item.ts)} unsent={item.unsent} />;
     case "text":
       return <AssistantText text={item.text} streaming={item.streaming} />;
     case "thinking":
@@ -621,6 +621,8 @@ function ItemView({ item, chat, onOpenTerminal, onResume }: { item: ChatItem; ch
       return <TurnEnd item={item} chat={chat} />;
     case "exited":
       return <Exited item={item} onResume={onResume} />;
+    case "open_failed":
+      return <OpenFailedCard item={item} chat={chat} />;
     default:
       return null;
   }
@@ -1554,6 +1556,78 @@ function Exited({ item, onResume }: { item: Extract<ChatItem, { kind: "exited" }
           Resume
         </Button>
       )}
+    </div>
+  );
+}
+
+/** What we know about why, in plain words (never more than the CLI's error says). */
+function openFailedWhy(f: Extract<ChatItem, { kind: "open_failed" }>, cli: string): string {
+  switch (f.reason) {
+    case "newer_cli":
+      return `It was saved by a newer version of ${cli} than the one installed here${f.cliVersion ? ` (${f.cliVersion})` : ""}, which can't read part of it. Updating ${cli} should let it open.`;
+    case "not_found":
+      return `${cli} couldn't find this conversation among its saved ones.`;
+    case "exited":
+      return `${cli} stopped before the conversation opened.`;
+    default:
+      return `${cli} reported an error while ${f.resumed ? "opening" : "starting"} it.`;
+  }
+}
+
+function OpenFailedCard({ item, chat }: { item: Extract<ChatItem, { kind: "open_failed" }>; chat: Chat }) {
+  const cli = chat.provider === "claude" ? "Claude Code" : "Codex";
+  // The raw error is secondary when we could say it plainly; the only thing to read when we couldn't.
+  const [raw, setRaw] = useKept(`open-failed:${item.key}`, item.reason === "other");
+  const [copied, setCopied] = useState<number | null>(null);
+  const draft = item.unsent.map((u) => u.text).join("\n\n");
+  const copy = (i: number, t: string) =>
+    void navigator.clipboard?.writeText(t).then(() => {
+      setCopied(i);
+      setTimeout(() => setCopied((c) => (c === i ? null : c)), 1400);
+    });
+  return (
+    <div className="flex flex-col gap-2.5 rounded-[12px] border border-[color-mix(in_oklab,var(--error)_30%,var(--border))] bg-[color-mix(in_oklab,var(--error)_5%,transparent)] px-4 py-3" data-open-failed={item.reason}>
+      <div className="flex items-start gap-2.5">
+        <IAlert size={17} className="mt-[2px] shrink-0 text-err-text" />
+        <div className="min-w-0 flex-1">
+          <div className="text-base font-semibold text-fg">This chat couldn’t {item.resumed ? "be opened" : "start"}</div>
+          <p className="mt-0.5 text-base leading-[21px] text-dim">
+            {openFailedWhy(item, cli)} It can’t take messages; nothing you send here reaches an agent.
+          </p>
+        </div>
+      </div>
+      {item.unsent.length > 0 && (
+        <div className="flex flex-col gap-1.5 pl-[27px]" data-open-failed-unsent={item.unsent.length}>
+          <div className="text-small font-medium text-dim">{item.unsent.length === 1 ? "Not sent" : `Not sent (${item.unsent.length})`}</div>
+          {item.unsent.map((u, i) => (
+            <div key={u.id} className="flex items-start gap-2 rounded-[8px] border border-hairline bg-raised px-2.5 py-1.5">
+              <span className="selectable min-w-0 flex-1 whitespace-pre-wrap break-words text-base text-fg">{u.text}</span>
+              <button type="button" onClick={() => copy(i, u.text)} className="shrink-0 rounded-[6px] px-1.5 text-small text-dim hover:bg-hover hover:text-fg" title="Copy this message">
+                {copied === i ? "Copied" : "Copy"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2 pl-[27px]">
+        <Button
+          variant="outline"
+          data-open-failed-new
+          onClick={() => void newChat({ provider: chat.provider, cwd: chat.cwd, draft: draft || undefined })}
+          title={draft ? `A fresh ${cli} chat in ${folderName(chat.cwd)}, with the message that wasn't sent in its composer (not sent yet). It doesn't have this chat's history.` : `A fresh ${cli} chat in ${folderName(chat.cwd)}. It doesn't have this chat's history.`}
+        >
+          New chat in this folder
+        </Button>
+        {item.error && (
+          <button type="button" onClick={() => setRaw(!raw)} className="flex items-center gap-1 text-small text-dim hover:text-fg" data-open-failed-raw-toggle>
+            <motion.span animate={{ rotate: raw ? 90 : 0 }} transition={{ duration: 0.18, ease }} className="flex text-faint">
+              <IChevron size={12} />
+            </motion.span>
+            {cli}’s message
+          </button>
+        )}
+      </div>
+      {raw && item.error && <div className="selectable ml-[27px] whitespace-pre-wrap break-words rounded-[8px] bg-[color-mix(in_oklab,var(--text)_5%,transparent)] px-2.5 py-1.5 font-mono text-mono-small text-dim" data-open-failed-raw>{item.error}</div>}
     </div>
   );
 }

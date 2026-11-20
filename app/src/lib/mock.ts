@@ -1330,6 +1330,15 @@ export function mockBackend(): Backend {
         st.touchSeen([APP_SEEN]);
       });
   }
+  // `?resume=fail`: a Codex chat resumed from a thread saved by a newer Codex than the installed one: it ends as not
+  // opened, the prompt typed meanwhile not sent, the chips disabled (mockChat.ts `failOpen`). Opened on load.
+  if (location.search.includes("resume=fail")) {
+    const c = new MockChat(chats.length, "codex", `${HOME}/code/relay`, host, flushChat, { resume: "019a4c2e-7d1b-7c3e-9f00-5b2a1d6e8c41" });
+    chats.push(c);
+    chatReady.set(c.id, Promise.resolve());
+    void c.failOpen("hey");
+    void import("../store").then(({ useStore }) => setTimeout(() => useStore.getState().open({ kind: "chat", id: c.id }), 300));
+  }
   // `?needs=demo`: more for the Needs you page (the notes chat above already asks to run something, atlas to edit):
   // a chat with a pending question, one whose Browser step the device gate asks about, and a plan to approve.
   if (location.search.includes("needs=demo")) {
