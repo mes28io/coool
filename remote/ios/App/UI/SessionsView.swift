@@ -34,7 +34,13 @@ enum Filter: String, CaseIterable, Identifiable {
 
 struct SessionsView: View {
   @Environment(RemoteStore.self) private var store
-  @State private var path: [Route] = []
+  @State private var path: [Route] = {
+    #if DEBUG
+      // Screenshots: open a chat straight away (`--open chat:4`).
+      if let id = Demo.arg("--open") { return [.session(id)] }
+    #endif
+    return []
+  }()
   @State private var newChat = false
   @State private var settings = false
   @State private var filter: Filter = .all

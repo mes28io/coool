@@ -58,6 +58,15 @@ final class RemoteStore {
   var images: [String: UIImage] = [:]
   var frames: [String: (image: UIImage, seq: Int, at: Date)] = [:]
   var frameErrors: [String: String] = [:]
+  // Minor 2 and the feel of sending (Outbox.swift).
+  /// Per chat (its live id), what was sent from here and hasn't settled into the chat yet.
+  var outbox: [String: [Outgoing]] = [:]
+  /// Row identities: an item that is the Mac's copy of an outgoing message keeps that message's row (it settles in
+  /// place), and a reply that ends a stream keeps the stream's row (the text doesn't jump).
+  var rowIds: [String: String] = [:]
+  /// Per chat, the row id of the reply streaming in now.
+  var streamIds: [String: String] = [:]
+  @ObservationIgnored private var streamSeq = 0
   /// When each item key was first seen here (for the live view's entrance animation).
   @ObservationIgnored private var imageJoin = ChunkJoin()
   @ObservationIgnored private var askedImages: Set<String> = []
@@ -220,6 +229,9 @@ final class RemoteStore {
     projects = []
     tails = [:]
     logs = [:]
+    outbox = [:]
+    rowIds = [:]
+    streamIds = [:]
     overview = nil
     options = nil
     macMinor = 0
@@ -322,7 +334,8 @@ final class RemoteStore {
 
   func apply(_ m: Inbound) {
     switch m {
-    case .snapshot(let ss, let ns):
+    case .snapshot(let ss, let ns, let minor):
+      macMinor = max(macMinor, minor)
       sessions = Dictionary(ss.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
       let ids = Set(ns.map(\.id))
       unseen.formIntersection(ids)
@@ -350,9 +363,7 @@ final class RemoteStore {
     case .projects(let p): projects = p
     case .chat(let u):
       macMinor = max(macMinor, 1)
-      var l = logs[u.session] ?? LiveLog()
-      l.apply(u)
-      logs[u.session] = l
+      took(u)
     case .overview(let o):
       macMinor = max(macMinor, 1)
       withAnimation(Theme.calm) { overview = o }
@@ -369,6 +380,167 @@ final class RemoteStore {
         frames[k] = (img, f.seq ?? 0, Date())
       }
     case .unknown, .malformed: break  // either side can be newer
+    }
+  }
+
+  /// One `chat` message: the items upserted, the stream's row handed to the reply that ends it, and what this phone
+  /// sent settled into the Mac's copies. Animated except for a whole view (a reset arrives all at once, still).
+  func took(_ u: ChatUpdate) {
+    let s = u.session
+    let old = logs[s] ?? LiveLog()
+    let before = Set(old.items.map(\.k))
+    var l = old
+    l.apply(u)
+    let streamed = !(old.live?.text ?? "").isEmpty
+    let streaming = !(l.live?.text ?? "").isEmpty
+    if streamed, let a = l.items.first(where: { $0.role == "assistant" && !before.contains($0.k) }), rowIds[a.k] == nil {
+      rowIds[a.k] = streamId(s)
+    }
+    if streamed && !streaming { nextStream(s) }
+    var out = outbox[s] ?? []
+    let taken = Set(rowIds.keys)
+    for (o, k) in Settle.match(out.filter { !$0.isNote }, items: l.items, taken: taken) {
+      rowIds[k] = o
+      out.removeAll { $0.id == o }
+    }
+    // Notes: settled once the Mac lists them (its strip shows them from then on) or their copy arrived.
+    let noted = Settle.notes(out, notes: l.live?.notes ?? [], taken: [])
+    let delivered = Settle.match(out.filter(\.isNote), items: l.items.filter { $0.steer == true }, taken: taken)
+    out.removeAll { noted[$0.id] != nil || delivered[$0.id] != nil }
+    let quiet = u.reset == true && old.items.isEmpty
+    let change = {
+      self.logs[s] = l
+      self.outbox[s] = out
+    }
+    if quiet { change() } else { withAnimation(Theme.settle) { change() } }
+  }
+
+  func streamId(_ session: String) -> String {
+    if let id = streamIds[session] { return id }
+    let id = "stream:\(streamSeq)"
+    streamSeq += 1
+    streamIds[session] = id
+    return id
+  }
+
+  private func nextStream(_ session: String) { streamIds[session] = nil }
+
+  /// The row a live item is shown in.
+  func rowId(_ item: LiveItem) -> String { rowIds[item.k] ?? item.k }
+
+  // ---------------------------------------------------------------- sending (optimistic)
+
+  /// Sends a message or a note: it shows at once as sending, then sent, and settles into the Mac's copy.
+  func submit(session: String, text: String, attachments: [Attachment], how: Delivery) {
+    let known = Set((logs[session]?.items ?? []).filter { $0.role == "user" }.map(\.k))
+    let o = Outgoing(id: "out:\(randomId())", session: session, text: text, attachments: attachments, how: how, known: known)
+    withAnimation(Theme.settle) { outbox[session, default: []].append(o) }
+    Task { await deliver(o) }
+  }
+
+  func retry(_ o: Outgoing) {
+    update(o) { $0.state = .sending }
+    Task { await deliver(o) }
+  }
+
+  func discard(_ o: Outgoing) {
+    withAnimation(Theme.settle) { outbox[o.session]?.removeAll { $0.id == o.id } }
+  }
+
+  private func update(_ o: Outgoing, _ f: (inout Outgoing) -> Void) {
+    guard var list = outbox[o.session], let i = list.firstIndex(where: { $0.id == o.id }) else { return }
+    f(&list[i])
+    withAnimation(Theme.settle) { outbox[o.session] = list }
+  }
+
+  private func deliver(_ o: Outgoing) async {
+    var ids: [String] = []
+    if !o.attachments.isEmpty {
+      do { ids = try await upload(o.attachments) } catch {
+        update(o) { $0.state = .failed(error.localizedDescription) }
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        return
+      }
+    }
+    let r = await perform(.send(session: o.session, text: o.text, when: o.how, attachments: ids))
+    switch r {
+    case .success(let res) where res.ok:
+      update(o) {
+        $0.state = .sent
+        $0.note = res.note
+      }
+      if demo { demoEcho(o) }
+    case .success(let res):
+      update(o) { $0.state = .failed(res.error ?? "Your Mac refused it.") }
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+    case .failure(let e):
+      update(o) { $0.state = .failed(e.localizedDescription) }
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
+  }
+
+  /// Demo only: the Mac's copy of a message arrives a moment later, then a reply streams in lumps as the Mac sends it.
+  private func demoEcho(_ o: Outgoing) {
+    #if DEBUG
+      Demo.echo(self, o)
+    #endif
+  }
+
+  // ---------------------------------------------------------------- notes, model, voice (minor 2)
+
+  /// Withdraws a queued note, or delivers it now (interrupting the step), as the Mac's strip does.
+  func note(_ session: String, _ id: String, _ action: NoteAction) async -> String? {
+    if demo {
+      if var l = logs[session], var live = l.live {
+        live.notes?.removeAll { $0.id == id }
+        l.live = live
+        withAnimation(Theme.settle) { logs[session] = l }
+      }
+      return nil
+    }
+    switch await perform(.note(session: session, note: id, action: action)) {
+    case .success(let r) where r.ok: return nil
+    case .success(let r): return r.error ?? "Your Mac refused."
+    case .failure(let e): return e.localizedDescription
+    }
+  }
+
+  /// Switches a chat's model (the Mac checks it is one it offers for that chat).
+  func setModel(_ session: String, _ model: String) async -> String? {
+    if demo {
+      if var l = logs[session] {
+        l.meta?.model = model
+        logs[session] = l
+      }
+      return nil
+    }
+    switch await perform(.setModel(session: session, model: model)) {
+    case .success(let r) where r.ok: return nil
+    case .success(let r): return r.error ?? "Your Mac refused."
+    case .failure(let e): return e.localizedDescription
+    }
+  }
+
+  enum VoiceError: LocalizedError {
+    case tooLong, refused(String), noAnswer
+    var errorDescription: String? {
+      switch self {
+      case .tooLong: "That recording is too long to send. Keep it under two minutes."
+      case .refused(let e): e
+      case .noAnswer: "Your Mac didn't transcribe it. It may be asleep, or coool isn't running."
+      }
+    }
+  }
+
+  /// Sends a recording to the Mac (encrypted, in parts) and returns the text its dictation made of it.
+  func transcribe(_ audio: Data, session: String?) async throws -> (text: String, heard: String) {
+    if demo { return ("Add a retry with backoff to the upload client, and log each attempt.", "words") }
+    guard audio.count <= Remote.maxAudio, audioType(audio) != nil else { throw VoiceError.tooLong }
+    let id = try await sendParts(audio, kind: .audio, ext: nil)
+    switch await perform(.transcribe(upload: id, session: session), timeout: 120) {
+    case .success(let r) where r.ok: return (r.text ?? "", r.heard ?? "words")
+    case .success(let r): throw VoiceError.refused(r.error ?? "Your Mac couldn't transcribe it.")
+    case .failure: throw VoiceError.noAnswer
     }
   }
 
@@ -488,40 +660,58 @@ final class RemoteStore {
     var errorDescription: String? {
       switch self {
       case .tooLarge: "That picture is too large to send, even scaled down."
-      case .noAnswer: "Your Mac didn't take the picture. It may be asleep, or coool isn't running."
-      case .refused(let e): "Your Mac refused the picture: \(e)"
+      case .noAnswer: "Your Mac didn't take the attachment. It may be asleep, or coool isn't running."
+      case .refused(let e): "Your Mac refused the attachment: \(e)"
       }
     }
   }
 
   /// Sends pictures to the Mac (scaled down first, encrypted like everything else); returns their upload ids.
   func upload(_ pics: [UIImage]) async throws -> [String] {
-    if demo { return pics.map { _ in randomId() } }
+    try await upload(pics.map { Attachment(image: $0) })
+  }
+
+  /// Sends pictures and files to the Mac (pictures scaled down first; files as they are, a PDF or text within the
+  /// size limit; encrypted like everything else); returns their upload ids.
+  func upload(_ atts: [Attachment]) async throws -> [String] {
+    if demo { return atts.map { _ in randomId() } }
     var ids: [String] = []
-    for p in pics.prefix(Remote.maxAttach) {
-      guard let data = Self.shrink(p) else { throw UploadError.tooLarge }
-      let id = randomId()
-      let r: CommandResult? = await withCheckedContinuation { c in
-        uploadWaiters[id] = c
-        Task {
-          do {
-            for part in uploadParts(id: id, data) {
-              let env = try await self.send(.upload(part))
-              self.uploadOf[env] = id
-            }
-          } catch {
-            if let w = self.uploadWaiters.removeValue(forKey: id) { w.resume(returning: nil) }
-            return
-          }
-          try? await Task.sleep(for: .seconds(45))
-          if let w = self.uploadWaiters.removeValue(forKey: id) { w.resume(returning: nil) }
-        }
+    for a in atts.prefix(Remote.maxAttach) {
+      switch a.kind {
+      case .image:
+        guard let img = a.image, let data = Self.shrink(img) else { throw UploadError.tooLarge }
+        ids.append(try await sendParts(data, kind: .image, ext: nil))
+      case .file:
+        guard let data = a.data else { throw UploadError.tooLarge }
+        if let why = Attachment.refusal(file: data) { throw UploadError.refused(why) }
+        ids.append(try await sendParts(data, kind: .file, ext: a.ext))
       }
-      guard let r else { throw UploadError.noAnswer }
-      guard r.ok else { throw UploadError.refused(r.error ?? "unknown") }
-      ids.append(id)
     }
     return ids
+  }
+
+  /// One upload in parts; waits for the Mac's answer to the last one. Returns the upload id.
+  private func sendParts(_ data: Data, kind: UploadKind, ext: String?) async throws -> String {
+    let id = randomId()
+    let r: CommandResult? = await withCheckedContinuation { c in
+      uploadWaiters[id] = c
+      Task {
+        do {
+          for part in uploadParts(id: id, data, kind: kind, ext: ext) {
+            let env = try await self.send(.upload(part))
+            self.uploadOf[env] = id
+          }
+        } catch {
+          if let w = self.uploadWaiters.removeValue(forKey: id) { w.resume(returning: nil) }
+          return
+        }
+        try? await Task.sleep(for: .seconds(45))
+        if let w = self.uploadWaiters.removeValue(forKey: id) { w.resume(returning: nil) }
+      }
+    }
+    guard let r else { throw UploadError.noAnswer }
+    guard r.ok else { throw UploadError.refused(r.error ?? "unknown") }
+    return id
   }
 
   /// JPEG, 1600 px on the long side at most, under the protocol's limit.

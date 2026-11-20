@@ -7,6 +7,56 @@
 
   @MainActor
   enum Demo {
+    /// The value after a launch argument (`--e2e-audio <path>`).
+    static func arg(_ name: String) -> String? {
+      let a = ProcessInfo.processInfo.arguments
+      guard let i = a.firstIndex(of: name), i + 1 < a.count else { return nil }
+      return a[i + 1]
+    }
+
+    /// Screenshots of the composer's states (`--compose text|attachments|recording|transcribing|slash|error`).
+    static func compose(_ store: RemoteStore, session: String, text: inout String, atts: inout [Attachment], voice: VoiceCapture, error: inout String?) {
+      guard store.demo, let state = arg("--compose") else { return }
+      switch state {
+      case "text": text = "Also cover the 429 path in the integration tests"
+      case "attachments":
+        text = "Does the limiter match this sketch?"
+        atts = [Attachment(image: sketch(), name: "sketch.jpg"), Attachment(image: frame(), name: "screen.png"), Attachment(file: Data("[limits]\nper_minute = 60\n".utf8), name: "limits.toml")]
+      case "recording": voice.pretend(.recording)
+      case "transcribing": voice.pretend(.transcribing)
+      case "slash": text = "/re"
+      case "error": error = "Your Mac refused the attachment: only PDFs and text files can be sent"
+      default: break
+      }
+    }
+
+    /// The Mac's side of a demo send: its copy of the message a moment later, then (for a message) a reply that
+    /// streams in about once a second, as the Mac packs it.
+    static func echo(_ s: RemoteStore, _ o: Outgoing) {
+      let id = o.session
+      Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(700))
+        if o.isNote {
+          var live = s.logs[id]?.live ?? ChatLive(state: "working")
+          live.notes = (live.notes ?? []) + [LiveNote(id: randomId(), text: o.text, state: "queued")]
+          s.took(ChatUpdate(session: id, items: [], live: live))
+          return
+        }
+        let k = "u:\(randomId())"
+        s.took(ChatUpdate(session: id, items: [LiveItem(k: k, role: "user", text: o.text)], live: ChatLive(state: "working", thinking: true, tally: Tally(steps: 0, since: Double(nowMs())))))
+        let reply = "Here is the plan:\n\n1. Add a `RetryPolicy` with exponential backoff (200 ms, doubling, at most 5 tries) and jitter.\n2. Wrap each upload attempt and log the attempt number, the status and the delay.\n3. Stop retrying on 4xx except 429, which honours `Retry-After`.\n\nI'll start with the policy and its tests, then wire it into the client so every call site gets it for free."
+        let words = reply.split(separator: " ", omittingEmptySubsequences: false)
+        var n = 0
+        while n < words.count {
+          try? await Task.sleep(for: .milliseconds(950))
+          n = min(words.count, n + 9)
+          s.took(ChatUpdate(session: id, items: [], live: ChatLive(state: "working", text: words[..<n].joined(separator: " "), tally: Tally(steps: 0, since: Double(nowMs())))))
+        }
+        try? await Task.sleep(for: .milliseconds(700))
+        s.took(ChatUpdate(session: id, items: [LiveItem(k: "a:\(randomId())", role: "assistant", text: reply)], live: ChatLive(state: "idle", tally: Tally(steps: 0))))
+      }
+    }
+
     static func store(_ screen: String) -> RemoteStore {
       let s = RemoteStore()
       s.demo = true
@@ -90,14 +140,30 @@
         LiveItem(k: "t3", role: "tool", text: "src/middleware/rate_limit.rs", tool: "Edit", ok: true, diff: Diff(path: "src/middleware/rate_limit.rs", before: "pub fn limit(key: &str) -> bool {\n    // TODO: real budget\n    true\n}", after: "pub fn limit(key: &str, budget: &Budget) -> bool {\n    let bucket = BUCKETS.entry(key);\n    bucket.take(1, budget.per_minute)\n}")),
         LiveItem(k: "n1", role: "notice", text: "Allowed Bash from Ada's iPhone"),
         LiveItem(k: "t4", role: "tool", text: "cargo test -p api rate_limit", tool: "Bash"),
-      ], reset: true, live: ChatLive(state: "working", text: "The limiter is in and its tests pass. Now reading the budgets from config so they", step: "Bash · cargo test -p api rate_limit", agents: [LiveAgent(id: "g1", label: "Find every /v2 route", steps: 7, done: true), LiveAgent(id: "g2", label: "Read the config loader", steps: 4, step: "Read · src/config.rs")], tally: Tally(steps: 14, edits: 3, since: now - 192_000), devices: ["browser"])))
+      ], reset: true, live: ChatLive(state: "working", text: "The limiter is in and its tests pass. Now reading the budgets from config so they", step: "Bash · cargo test -p api rate_limit", agents: [LiveAgent(id: "g1", label: "Find every /v2 route", steps: 7, done: true), LiveAgent(id: "g2", label: "Read the config loader", steps: 4, step: "Read · src/config.rs")], tally: Tally(steps: 14, edits: 3, since: now - 192_000), devices: ["browser"], notes: [LiveNote(id: "n-demo", text: "Keep the old limit for the /health route", state: "queued")]), meta: meta(cli: "claude", model: "claude-sonnet")))
       s.logs["chat:2"] = log
+      var idle = LiveLog()
+      idle.apply(ChatUpdate(session: "chat:4", items: [
+        LiveItem(k: "u1", role: "user", text: "Return 429 with a Retry-After header when the limiter says no."),
+        LiveItem(k: "t1", role: "tool", text: "src/middleware/rate_limit.rs", tool: "Edit", ok: true),
+        LiveItem(k: "a1", role: "assistant", text: "Done: a refused request now gets **429** and `Retry-After` set to the seconds until the bucket refills. The tests cover both."),
+      ], reset: true, live: ChatLive(state: "idle", tally: Tally(steps: 3, edits: 1)), meta: meta(cli: "claude", model: "haiku")))
+      s.logs["chat:4"] = idle
       s.images["demo-sketch"] = sketch()
       s.frames["chat:2|browser"] = (frame(), 12, Date().addingTimeInterval(-1))
       s.recents = [
         .init(text: "Run the search benchmarks and tell me what got slower", project: "a", projectName: "atlas-api", cli: .claude, model: "sonnet", mode: "default", at: now / 1000 - 3600),
         .init(text: "Write the release notes for 2.4 from the merged PRs", project: "b", projectName: "invoices", cli: .claude, model: "haiku", mode: "plan", at: now / 1000 - 86_400),
       ]
+    }
+
+    static func meta(cli: String, model: String) -> ChatMeta {
+      ChatMeta(cli: cli, model: model, models: [.init(id: "opus", label: "Opus"), .init(id: "claude-sonnet", label: "Sonnet"), .init(id: "haiku", label: "Haiku")], mode: "default", modeLabel: "Ask before edits", context: 84_000, window: 200_000, ladder: .init(on: true, tiers: ["haiku", "sonnet"]), commands: [
+        .init(name: "review", description: "Review the current changes", kind: "command"), .init(name: "compact", description: "Summarize the conversation to free context", hint: "[instructions]", kind: "command"),
+        .init(name: "context", description: "Context used, as a ring", kind: "app"), .init(name: "model", description: "Switch the model", kind: "app"),
+        .init(name: "release-notes", description: "Draft release notes from the merged PRs", kind: "skill"), .init(name: "resume", description: "Pick up a past conversation", kind: "terminal"),
+        .init(name: "init", description: "Write a CLAUDE.md for this project", kind: "command"), .init(name: "security-review", description: "Look for security problems in the diff", kind: "skill"),
+      ])
     }
 
     /// An invented whiteboard sketch for the chat's image.

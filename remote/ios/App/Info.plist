@@ -35,6 +35,8 @@
 	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>coool Remote uses the camera to scan the pairing code your Mac shows, and to take a photo you send to a chat.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>coool Remote records what you dictate and sends it, encrypted, to coool on your Mac, which turns it into text for your message. Nothing is kept.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

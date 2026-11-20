@@ -38,6 +38,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSCameraUsageDescription: coool Remote uses the camera to scan the pairing code your Mac shows, and to take a photo you send to a chat.
+        NSMicrophoneUsageDescription: coool Remote records what you dictate and sends it, encrypted, to coool on your Mac, which turns it into text for your message. Nothing is kept.
         ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
           - CFBundleURLName: sh.coool.remote.pair

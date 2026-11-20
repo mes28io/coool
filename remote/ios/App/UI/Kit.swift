@@ -9,6 +9,10 @@ extension Theme {
   static let needsSoft = needs.opacity(0.18)
   static let doneSoft = done.opacity(0.16)
   static let spring = Animation.spring(response: 0.42, dampingFraction: 0.86)
+  /// Rows arriving and settling, the composer's controls changing: quick, no overshoot, interruptible.
+  static let settle = Animation.spring(response: 0.32, dampingFraction: 0.9)
+  /// The send / stop button morphing: a touch of bounce.
+  static let morph = Animation.spring(response: 0.28, dampingFraction: 0.72)
   static let mono = Font.system(.footnote, design: .monospaced)
 }
 

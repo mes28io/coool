@@ -239,7 +239,16 @@ public struct CommandResult: Codable, Equatable, Sendable {
   /// Minor 1: the model a `start` used; the upload an `upload`'s last part finished.
   public var model: String?
   public var upload: String?
-  public init(of: String, t: String, ok: Bool, error: String? = nil, session: String? = nil, mode: String? = nil, model: String? = nil, upload: String? = nil) {
+  /// Minor 2, a `transcribe`'s answer: the text (cleaned and corrected as the Mac's own dictation is), and what was
+  /// heard: "words", "silence", "unclear" or "echo".
+  public var text: String?
+  public var heard: String?
+  /// Minor 2, a `send` that went in as a note: its id (for `note` cancel / now).
+  public var note: String?
+  public init(of: String, t: String, ok: Bool, error: String? = nil, session: String? = nil, mode: String? = nil, model: String? = nil, upload: String? = nil, text: String? = nil, heard: String? = nil, note: String? = nil) {
+    self.text = text
+    self.heard = heard
+    self.note = note
     self.model = model
     self.upload = upload
     self.of = of
@@ -253,7 +262,7 @@ public struct CommandResult: Codable, Equatable, Sendable {
 
 /// A message from the Mac, typed. Unknown types are ignored (`unknown`), so the Mac can be newer.
 public enum Inbound: Equatable, Sendable {
-  case snapshot(sessions: [SessionInfo], needs: [Need])
+  case snapshot(sessions: [SessionInfo], needs: [Need], minor: Int = 0)
   case session(SessionInfo)
   case sessionGone(String)
   case need(Need)
@@ -271,7 +280,7 @@ public enum Inbound: Equatable, Sendable {
   /// A known type whose body this version can't read: ignored as well, but worth a log line.
   case malformed(String)
 
-  private struct Snap: Decodable { var sessions: [SessionInfo]; var needs: [Need]? }
+  private struct Snap: Decodable { var sessions: [SessionInfo]; var needs: [Need]?; var minor: Int? }
   private struct Tail: Decodable { var session: String; var items: [ChatItem] }
   private struct Projects: Decodable { var projects: [Project] }
 
@@ -280,7 +289,7 @@ public enum Inbound: Equatable, Sendable {
       switch e.t {
       case "snapshot":
         let s = try e.b.decode(Snap.self)
-        return .snapshot(sessions: s.sessions, needs: s.needs ?? [])
+        return .snapshot(sessions: s.sessions, needs: s.needs ?? [], minor: s.minor ?? 0)
       case "session":
         if case .bool(true) = e.b["gone"], let id = e.b["id"]?.string { return .sessionGone(id) }
         return .session(try e.b.decode(SessionInfo.self))
@@ -320,6 +329,8 @@ public enum Choice: Equatable, Sendable {
   case keepPlanning(note: String?)
 }
 
+public enum NoteAction: String, Sendable, Equatable { case cancel, now }
+
 public enum Command: Equatable, Sendable {
   case hello(name: String)
   case getSnapshot
@@ -338,8 +349,15 @@ public enum Command: Equatable, Sendable {
   case watchDevice(session: String, device: String)
   case unwatchDevice
   case getImage(session: String, key: String)
-  /// One part of an image (see `uploadParts`).
+  /// One part of an image (see `uploadParts`); minor 2: of a file or a recording too.
   case upload(JSONValue)
+  /// Minor 2: a queued steering note of a chat: withdraw it (`cancel`) or deliver it now, interrupting the step
+  /// (`now`), as the Mac's strip does. Only notes the Mac lists for that chat.
+  case note(session: String, note: String, action: NoteAction)
+  /// Minor 2: switch a chat's model (one the Mac offers for it). There is no mode to change.
+  case setModel(session: String, model: String)
+  /// Minor 2: transcribe a recording sent first with `upload` (kind audio), through the Mac's own dictation.
+  case transcribe(upload: String, session: String?)
 
   public var type: String {
     switch self {
@@ -356,6 +374,9 @@ public enum Command: Equatable, Sendable {
     case .unwatchDevice: "unwatch_device"
     case .getImage: "get_image"
     case .upload: "upload"
+    case .note: "note"
+    case .setModel: "set_model"
+    case .transcribe: "transcribe"
     }
   }
 
@@ -387,6 +408,9 @@ public enum Command: Equatable, Sendable {
     case .watchDevice(let s, let d): ["session": .string(s), "device": .string(d)]
     case .getImage(let s, let k): ["session": .string(s), "key": .string(k)]
     case .upload(let b): b
+    case .note(let s, let n, let a): ["session": .string(s), "note": .string(n), "do": .string(a.rawValue)]
+    case .setModel(let s, let m): ["session": .string(s), "model": .string(m)]
+    case .transcribe(let u, let s): Self.object(["upload": .string(u)], s.map { ("session", .string($0)) })
     }
   }
 
