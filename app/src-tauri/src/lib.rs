@@ -24,6 +24,7 @@ mod power;
 mod prefs;
 mod selftest;
 mod trace;
+mod update;
 mod voice;
 
 use base64::Engine;
@@ -1470,6 +1471,9 @@ mod settings {
         /// What the person builds (the onboarding's "What are you building?"): "mobile", "web", "desktop", "other".
         #[serde(default)]
         pub building: Vec<String>,
+        /// Look for a newer coool at launch and a few times a day (update.rs). Installing always waits for a click.
+        #[serde(default = "yes")]
+        pub update_checks: bool,
     }
 
     fn system() -> String {
@@ -1482,7 +1486,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new() }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new(), update_checks: true }
         }
     }
 
@@ -1679,6 +1683,12 @@ pub fn device_serve_headless(dir: &std::path::Path) -> i32 {
 
 pub const DEVICE_MCP_FLAG: &str = device::mcp::PROXY_FLAG;
 
+/// `coool --coool-update-selftest [version]` (debug builds only): the in-app update without the UI (update.rs).
+#[cfg(debug_assertions)]
+pub fn update_selftest(args: &[String]) -> i32 {
+    update::selftest_cli(args)
+}
+
 pub fn run() {
     // A Finder-launched app gets a minimal PATH; adopt the login shell's so
     // `claude` / `codex` resolve. Must happen before any thread starts.
@@ -1792,6 +1802,7 @@ pub fn run() {
         .manage(core.clone())
         .manage(devices.clone())
         .manage(Arc::new(voice::Voice::new()))
+        .manage(update::Updater::default())
         .invoke_handler(tauri::generate_handler![
             list_sessions,
             spawn_session,
@@ -1960,6 +1971,10 @@ pub fn run() {
             selftest::selftest_notify,
             selftest::selftest_notify_click,
             selftest::selftest_notify_post,
+            update::update_status,
+            update::update_check,
+            update::update_set_auto,
+            update::update_install,
         ])
         .setup(move |app| {
             perf::boot_mark("setup");

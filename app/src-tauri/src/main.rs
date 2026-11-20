@@ -16,5 +16,11 @@ fn main() {
         println!("{}", coool_app_lib::pilot_eval_report(std::path::Path::new(&file)));
         return;
     }
+    // The in-app update's steps without the UI, for the end-to-end test (debug builds only; update.rs).
+    #[cfg(debug_assertions)]
+    if std::env::args().nth(1).as_deref() == Some("--coool-update-selftest") {
+        let rest: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(coool_app_lib::update_selftest(&rest));
+    }
     coool_app_lib::run()
 }
