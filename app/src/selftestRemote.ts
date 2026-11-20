@@ -64,6 +64,15 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
       let deviceId = "";
       let deviceName = "";
       let chatId = -1;
+      // Minor 2: the phone's dictation runs through this Mac's voice settings: the self-test's own model (read only)
+      // and data folder, translating to English, with one learned word (heard "cool", written "coool").
+      const venv = (await h.invoke("voice_selftest_env").catch(() => null)) as { model: string | null } | null;
+      if (venv?.model) {
+        const { setVoicePrefs, updateMemory } = await import("./lib/voice/prefs");
+        const { addWord } = await import("./lib/voice/memory");
+        setVoicePrefs({ enabled: true, model: venv.model, modelId: null, task: "translate", language: "auto", cleanup: true });
+        updateMemory((m) => addWord(m, "coool", ["cool"], "you", Date.now()));
+      }
       // A remote start must not take the default mode when it is Bypass (rules::start_mode).
       await h.invoke("remote_set_defaults", {
         defaults: { claude: { model: "haiku", mode: "bypassPermissions" }, codex: { model: null, mode: "danger-full-access" }, models: { claude: [{ id: "haiku", label: "Haiku (latest)" }, { id: "sonnet", label: "Sonnet (latest)" }], codex: [] } },
@@ -175,6 +184,58 @@ export function remoteScenarios(h: H): Record<string, (ctx: { cfg: { dir: string
         await h.waitFor("the chat idle after the stop", () => chat(chatId)?.state === "idle", 30_000);
         return stopped.trim();
       });
+
+      if (minor) {
+        await h.step("remote (minor 2): a note queued on the phone during a Haiku turn shows in the Mac's strip, then is picked up", async () => {
+          await phone("remote-phone-note-sending.txt", 240_000);
+          // The Mac's own strip (SteerStrip) shows the phone's note while it waits for the agent's next step.
+          const seen = await h.waitFor("the note in the Mac's queued strip", () => (chat(chatId)?.notes ?? []).some((n) => n.state === "queued" && /pelican/.test(n.text)) && $("[data-steer-queued]"), 30_000).catch(() => null);
+          if (seen) await h.shot("remote-note-strip");
+          const done = await phone("remote-phone-noted.txt", 180_000);
+          const note = (chat(chatId)?.notes ?? []).find((n) => /pelican/.test(n.text));
+          if (!note || !["picked_up", "interrupted"].includes(note.state)) throw h.fail(`the note wasn't picked up: ${note?.state ?? "missing"}`);
+          if (!seen) throw h.fail("the note never showed in the Mac's strip");
+          if (!notices(chatId).includes(`Note for the next step sent from ${deviceName}`)) throw h.fail("the note isn't recorded in the chat");
+          return `${done.trim()}; on the Mac: in the strip while queued, then ${note.state}`;
+        });
+
+        await h.step("remote (minor 2): a picture and a text file from the phone go to the running chat; the agent reads both", async () => {
+          const said = await phone("remote-phone-attached.txt", 240_000);
+          const prompts = (chat(chatId)?.items ?? []).filter((i) => i.kind === "prompt") as { attachments?: { kind: string; name: string; path?: string }[] }[];
+          const atts = prompts[prompts.length - 1]?.attachments ?? [];
+          const img = atts.find((a) => a.kind === "image");
+          const file = atts.find((a) => a.kind === "file");
+          if (!img || !file) throw h.fail(`attachments: ${atts.map((a) => `${a.kind} ${a.name}`).join(", ")}`);
+          if (file.name !== "iPhone file.md") throw h.fail(`the Mac didn't name the file: ${file.name}`);
+          if (!/heliotrope/i.test(said)) throw h.fail(`the agent didn't quote the file: ${said.slice(0, 120)}`);
+          const s = await status();
+          if (!s.actions.some((a) => a.kind === "upload" && /sent a file/.test(a.detail))) throw h.fail("the file isn't recorded");
+          return `${img.name} + ${file.name} (stored by the Mac); it said: ${said.trim().slice(0, 100)}`;
+        });
+
+        const voiceEnv = (await h.invoke("voice_selftest_env").catch(() => null)) as { model: string | null } | null;
+        if (voiceEnv?.model) {
+          await h.step("remote (minor 2): a recording from the phone goes through the Mac's dictation and comes back as text", async () => {
+            const heard = await phone("remote-phone-dictated.txt", 240_000);
+            const s = await status();
+            if (!s.actions.some((a) => a.kind === "upload" && /sent a recording/.test(a.detail))) throw h.fail("the recording isn't recorded");
+            if (!s.actions.some((a) => a.kind === "transcribe" && a.ok)) throw h.fail("the transcription isn't recorded");
+            if (!/retry/i.test(heard)) throw h.fail(`heard: ${heard}`);
+            if (!/coool/.test(heard)) throw h.fail(`the word memory (cool -> coool) wasn't applied: ${heard}`);
+            return `the phone got: "${heard.trim()}" (whisper on this Mac, cleaned, the word memory applied)`;
+          });
+        }
+
+        await h.step("remote (minor 2): the phone switches the chat's model through the Mac's own path; its mode stays", async () => {
+          const want = (await phone("remote-phone-model.txt", 240_000)).trim();
+          const mode = chat(chatId)?.permissionMode;
+          await h.waitFor(`the chat on ${want}`, () => (chat(chatId)?.model ?? "").includes("sonnet"), 30_000);
+          if (chat(chatId)?.permissionMode !== mode) throw h.fail("the mode changed");
+          const s = await status();
+          if (!s.actions.some((a) => a.kind === "set_model" && a.ok)) throw h.fail("the switch isn't recorded");
+          return `model now ${chat(chatId)?.model}; mode still ${mode}`;
+        });
+      }
 
       await h.step(minor ? "remote: Bypass from the phone is refused; it starts a chat with the model and mode it chose (Haiku, acceptEdits) and a picture the agent describes" : "remote: the phone starts a chat in this folder, in the asking mode (not the Bypass default)", async () => {
         const started = JSON.parse(await phone("remote-phone-started.txt", 240_000)) as { session: string; mode: string; model?: string; reply?: string };

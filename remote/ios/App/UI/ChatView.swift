@@ -107,6 +107,8 @@ struct ChatView: View {
       }
       .modifier(StickToBottom(atBottom: $atBottom))
       .scrollDismissesKeyboard(.interactively)
+      // A tap on the conversation puts the keyboard away (and brings back the chat's state row under the field).
+      .simultaneousGesture(TapGesture().onEnded { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) })
       .refreshable { _ = try? await store.send(.watch(session: liveId, reset: true)) }
       .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
       .onChange(of: rows.count) { old, new in

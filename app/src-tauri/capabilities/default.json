@@ -67,7 +67,7 @@
     "allow-selftest-device-tool", "allow-selftest-notify", "allow-selftest-notify-click", "allow-selftest-notify-post", "allow-update-status", "allow-update-check", "allow-update-set-auto", "allow-update-install", "allow-update-cli-now", "allow-update-restart", "allow-update-launch-skip", "allow-update-welcome",
     "allow-remote-status", "allow-remote-set-enabled", "allow-remote-pair-start", "allow-remote-pair-confirm",
     "allow-remote-pair-cancel", "allow-remote-remove-device", "allow-remote-set-defaults",
-    "allow-remote-set-need-notes", "allow-remote-selftest-read",
+    "allow-remote-set-need-notes", "allow-remote-voice-run", "allow-remote-voice-done", "allow-remote-selftest-read",
     "allow-remote-selftest-write"
   ]
 }

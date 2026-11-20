@@ -41,6 +41,10 @@ final class EndToEndTests: XCTestCase {
     continueAfterFailure = true
     // `--e2e-image`: the attach menu offers an invented picture, and New chat a button that asks for Bypass (refused).
     app.launchArguments = ["--reset", "--e2e-image"]
+    // Minor 2: a text file to attach, and a recording handed over where the microphone's would be (the Simulator
+    // has no microphone).
+    if let f = env["COOOL_E2E_FILE"] { app.launchArguments += ["--e2e-file", f] }
+    if let a = env["COOOL_E2E_AUDIO"] { app.launchArguments += ["--e2e-audio", a] }
     app.launch()
     put("remote-phone-minor.txt", "1")
 
@@ -134,6 +138,12 @@ final class EndToEndTests: XCTestCase {
     input.tap()
     typeInto(input, "Count from 1 to 400, one number per line, nothing else.")
     app.buttons["chat.send"].tap()
+    // The message shows at once, before the Mac has it, and the field is empty again.
+    // (Optimistic first, then the Mac's copy in the same row: often within the second, so either counts here; the
+    // Simulator recording shows the timing.)
+    let bubble = app.staticTexts["Count from 1 to 400, one number per line, nothing else."]
+    try step("the message shows at once as a bubble", bubble.waitForExistence(timeout: 1))
+    XCTAssertFalse(((input.value as? String) ?? "").contains("Count from"), "the field still holds the message")
     let stop = app.buttons["chat.stop"]
     try step("the chat working after the message", stop.waitForExistence(timeout: 60))
     _ = wait("the step or the text streaming in", timeout: 15) { app.descendants(matching: .any)["chat.stream"].exists || app.descendants(matching: .any)["chat.live.step"].exists }
@@ -144,6 +154,91 @@ final class EndToEndTests: XCTestCase {
     put("remote-phone-stopped.txt", "sent, then stopped \(session) from the app")
     _ = wait("the stop line in the tail", timeout: 20) { app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Stopped from'")).count > 0 }
     shot(shots, "e2e-14-chat-stopped")
+    try step("the bubble settled into the Mac's copy (same row, no status left)", wait("settled", timeout: 30) { !self.elements(self.app, "chat.out|").firstMatch.exists })
+
+    // 4b (minor 2). A note queued while a real Haiku turn runs: in the strip with its state, then picked up.
+    _ = wait("idle after the stop", timeout: 30) { (state.value as? String) == "idle" }
+    input.tap()
+    typeInto(input, "Use the Read tool to read notes.txt, then remote-ok.txt, then notes.txt again, then remote-ok.txt again: one Read call at a time, each only after the previous result. Then reply with one word: done")
+    app.buttons["chat.send"].tap()
+    try step("working on the reads", stop.waitForExistence(timeout: 60))
+    input.tap()
+    typeInto(input, "Also end your reply with the word pelican.")
+    try step("while it works, the message would go in at its next step", app.buttons["chat.when|next"].waitForExistence(timeout: 5))
+    put("remote-phone-note-sending.txt", "1")
+    app.buttons["chat.send"].tap()
+    let strip = app.descendants(matching: .any)["notes.strip"]
+    try step("the note shows in the queued strip at once", strip.waitForExistence(timeout: 2))
+    shot(shots, "e2e-16-note-queued")
+    let picked = wait("the reply with the note's word", timeout: 120) {
+      (state.value as? String) == "idle" && self.elements(self.app, "chat.assistant").allElementsBoundByIndex.contains { $0.label.lowercased().contains("pelican") }
+    }
+    shot(shots, "e2e-17-note-picked")
+    try step("the agent took the note in (its reply ends with pelican)", picked)
+    XCTAssertFalse(app.descendants(matching: .any)["notes.strip"].exists, "the strip empties once the note is picked up")
+    put("remote-phone-noted.txt", "queued from the phone during the turn, shown in the strip, picked up")
+
+    // 4c. A picture and a text file, attached to this chat.
+    input.tap()
+    typeInto(input, "In at most twelve words: what is in the attached picture, and what is the magic word in the attached file?")
+    app.buttons["chat.attach"].tap()
+    let testPic = app.buttons["attach.test"]
+    try step("the tray offers pictures and files", testPic.waitForExistence(timeout: 5))
+    testPic.tap()
+    app.buttons["chat.attach"].tap()
+    let testFile = app.buttons["attach.testfile"]
+    try step("a text file to attach", testFile.waitForExistence(timeout: 5))
+    testFile.tap()
+    try step("a picture and a file ready", elements(app, "attach.pic|").firstMatch.waitForExistence(timeout: 5) && elements(app, "attach.file|").firstMatch.exists)
+    shot(shots, "e2e-18-attachments")
+    app.buttons["chat.send"].tap()
+    let described = wait("the reply about the attachments", timeout: 150) {
+      (state.value as? String) == "idle" && self.elements(self.app, "chat.assistant").allElementsBoundByIndex.contains { $0.label.lowercased().contains("heliotrope") }
+    }
+    shot(shots, "e2e-19-attachments-reply")
+    let quoted = elements(app, "chat.assistant").allElementsBoundByIndex.last?.label ?? ""
+    try step("the agent read the picture and quoted the file (\(quoted.prefix(80)))", described)
+    put("remote-phone-attached.txt", quoted)
+
+    // 4d. Dictation through the Mac's pipeline: the injected recording goes to the Mac, the text comes back to review.
+    if env["COOOL_E2E_AUDIO"] != nil {
+      dismissKeyboard()
+      let mic = app.descendants(matching: .any)["chat.mic"]
+      try step("the microphone in the field", mic.waitForExistence(timeout: 5))
+      mic.tap()
+      let rec = app.descendants(matching: .any)["voice.recording"]
+      try step("recording, with its level and time", rec.waitForExistence(timeout: 5))
+      Thread.sleep(forTimeInterval: 1.5)
+      shot(shots, "e2e-20-recording")
+      app.buttons["voice.done"].tap()
+      let note = app.descendants(matching: .any)["voice.note"]
+      let ok = note.waitForExistence(timeout: 120)
+      let heard = (input.value as? String) ?? ""
+      shot(shots, "e2e-21-dictated")
+      if !ok { log("voice error: \(app.descendants(matching: .any)["chat.error"].label)") }
+      try step("the Mac's dictation put the text in the field to review (\(heard.prefix(80)))", ok && heard.lowercased().contains("retry"))
+      put("remote-phone-dictated.txt", heard)
+      // Not sent: cleared, as a person would after reading it.
+      input.tap()
+      input.press(forDuration: 1.2)
+      if app.menuItems["Select All"].waitForExistence(timeout: 2) { app.menuItems["Select All"].tap(); input.typeText(XCUIKeyboardKey.delete.rawValue) }
+    }
+
+    // 4e. Switch the chat's model from its own list (the Mac's model menu does the same); the mode is read only.
+    dismissKeyboard()
+    let modeChip = elements(app, "meta.mode|").firstMatch
+    try step("the chat's mode shown (read only)", modeChip.waitForExistence(timeout: 10))
+    let modelChip = app.buttons["meta.model"].firstMatch
+    try step("the model chip", modelChip.waitForExistence(timeout: 10))
+    modelChip.tap()
+    let sonnet = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'meta.model|' AND identifier CONTAINS[c] 'sonnet'")).firstMatch
+    try step("the Mac's models for this chat", sonnet.waitForExistence(timeout: 5))
+    let chosen = String(sonnet.identifier.dropFirst("meta.model|".count))
+    shot(shots, "e2e-22-model-menu")
+    sonnet.tap()
+    put("remote-phone-model.txt", chosen)
+    Thread.sleep(forTimeInterval: 2)
+    shot(shots, "e2e-23-model-switched")
 
     // 5. Start a chat in this folder: Bypass is refused; then Haiku, acceptEdits, with a picture.
     app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -204,6 +299,14 @@ final class EndToEndTests: XCTestCase {
 }
 
 extension EndToEndTests {
+  /// Puts the keyboard away (a tap on the conversation, as a person would).
+  func dismissKeyboard() {
+    if app.keyboards.firstMatch.exists {
+      app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+      _ = wait("the keyboard away", timeout: 5) { !self.app.keyboards.firstMatch.exists }
+    }
+  }
+
   /// Types into a field once the keyboard is up (on a small screen the first tap can land before focus does).
   func typeInto(_ el: XCUIElement, _ text: String) {
     if !app.keyboards.firstMatch.waitForExistence(timeout: 3) { el.tap() }

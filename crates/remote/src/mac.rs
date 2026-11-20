@@ -31,6 +31,20 @@ pub struct ChatView {
     pub items: Vec<Value>,
     pub cursor: u64,
     pub live: Value,
+    /// Minor 2: what the Mac's composer shows for the chat (model and the models it can switch to, mode, context,
+    /// Ladder, slash commands). Sent when it changed.
+    pub meta: Value,
+}
+
+/// Minor 2: a recording the phone sent, to transcribe with the Mac's own dictation. The app answers later through
+/// [`Host::outbox`] with a `result` for `of` (the `transcribe` command's id).
+#[derive(Debug)]
+pub struct Transcribe {
+    pub device: String,
+    pub of: String,
+    pub session: Option<String>,
+    pub audio: Vec<u8>,
+    pub mime: &'static str,
 }
 
 /// The app's side: what the phone may see, and the app's own paths for what it may do.
@@ -43,8 +57,8 @@ pub trait Host: Send + Sync + 'static {
     fn chat_tail(&self, session: &str, n: usize) -> Result<Value, String>;
     /// Each action below names the device (`by`) so the app can show "Allowed from <name>" where it happened.
     fn answer(&self, need: &Need, answer: &Answer, by: &str) -> Result<(), String>;
-    /// `atts`: images the phone sent first, as [`Host::store_image`] returned them.
-    fn send(&self, session: &str, text: &str, how: Delivery, atts: &[Value], by: &str) -> Result<(), String>;
+    /// `atts`: images the phone sent first, as [`Host::store_image`] returned them. Returns the note's id for a note.
+    fn send(&self, session: &str, text: &str, how: Delivery, atts: &[Value], by: &str) -> Result<Option<String>, String>;
     fn stop(&self, session: &str, by: &str) -> Result<(), String>;
     /// Starts a chat as checked by [`rules::check_start_with`] (that mode and model, nothing else); `atts` as for
     /// `send`. Returns its session id or key.
@@ -81,6 +95,28 @@ pub trait Host: Send + Sync + 'static {
     /// Stores an image the phone sent in coool's attachment store (as a pasted image is), returning the attachment.
     fn store_image(&self, _img: &live::Image) -> Result<Value, String> {
         Err("this Mac can't take images from the phone".into())
+    }
+    // Minor 2.
+
+    /// A queued note of that chat: withdraw it, or deliver it now (interrupting the step), as the Mac's strip does.
+    fn note(&self, _session: &str, _note: &rules::NoteAction, _by: &str) -> Result<(), String> {
+        Err("this Mac can't change notes from the phone".into())
+    }
+    /// The models that chat can switch to (empty: none, so nothing switches).
+    fn chat_models(&self, _session: &str) -> Vec<String> {
+        Vec::new()
+    }
+    /// Switches the chat's model through the app's own path (as checked by [`rules::check_set_model`]).
+    fn set_model(&self, _session: &str, _model: &str, _by: &str) -> Result<(), String> {
+        Err("this Mac can't switch a chat's model from the phone".into())
+    }
+    /// Starts transcribing a recording; the answer comes later through [`Host::outbox`].
+    fn transcribe(&self, _job: Transcribe) -> Result<(), String> {
+        Err("this Mac can't transcribe".into())
+    }
+    /// Messages the app has for devices (device id, type, body): a transcription's `result`. Taken every tick.
+    fn outbox(&self) -> Vec<(String, String, Value)> {
+        Vec::new()
     }
     /// Remote's status changed (devices, pairing, connection, a new action): the UI should look again.
     fn changed(&self);
@@ -197,6 +233,8 @@ struct Watch {
     cursor: Option<u64>,
     live: Value,
     checked: u64,
+    /// The `meta` last sent (minor 2), as JSON.
+    meta: String,
 }
 
 struct FrameWatch {
@@ -215,6 +253,9 @@ pub struct Engine {
     uploads: Uploads,
     /// Finished uploads by (device, id): the stored attachment, and when it finished.
     uploaded: HashMap<(String, String), (Value, u64)>,
+    /// Minor 2: finished recordings by (device, id), waiting for their `transcribe` (two minutes at most; never
+    /// written to disk here).
+    recordings: HashMap<(String, String), (Vec<u8>, &'static str, u64)>,
     watches: HashMap<String, Watch>,
     frames: HashMap<String, FrameWatch>,
     overview: (String, u64),
@@ -245,7 +286,7 @@ impl Engine {
         if saved.mac_id.is_none() {
             saved.mac_id = Some(proto::random_id());
         }
-        Engine { saved, minor: HashMap::new(), uploads: Uploads::default(), uploaded: HashMap::new(), watches: HashMap::new(), frames: HashMap::new(), overview: (String::new(), 0), dir, identity, pairing: None, keys: HashMap::new(), limiter: Limiter::default(), last_sessions: HashMap::new(), last_needs: HashMap::new(), seen: HashMap::new(), actions: Vec::new(), connected: false, error: None, access: None }
+        Engine { saved, minor: HashMap::new(), uploads: Uploads::default(), uploaded: HashMap::new(), recordings: HashMap::new(), watches: HashMap::new(), frames: HashMap::new(), overview: (String::new(), 0), dir, identity, pairing: None, keys: HashMap::new(), limiter: Limiter::default(), last_sessions: HashMap::new(), last_needs: HashMap::new(), seen: HashMap::new(), actions: Vec::new(), connected: false, error: None, access: None }
     }
 
     pub fn load_saved(dir: &std::path::Path) -> Saved {
@@ -422,6 +463,7 @@ impl Engine {
         self.frames.remove(device_id);
         self.uploads.forget_device(device_id);
         self.uploaded.retain(|(d, _), _| d != device_id);
+        self.recordings.retain(|(d, _), _| d != device_id);
         let revoked = relay.map(|r| self.revoke_at_relay(r, device_id, now).is_ok()).unwrap_or(false);
         if !revoked && !self.saved.pending_revokes.iter().any(|x| x == device_id) {
             self.saved.pending_revokes.push(device_id.to_string());
@@ -591,11 +633,14 @@ impl Engine {
         let Some(w) = self.watches.get(device_id) else { return Ok(()) };
         let (session, since) = (w.session.clone(), if reset { None } else { w.cursor });
         let v = host.chat_view(&session, since)?;
-        let changed = reset || !v.items.is_empty() || v.live != w.live;
+        let meta = if v.meta.is_null() { String::new() } else { v.meta.to_string() };
+        let meta_changed = reset || w.meta != meta;
+        let changed = reset || !v.items.is_empty() || v.live != w.live || meta_changed;
         if let Some(w) = self.watches.get_mut(device_id) {
             w.cursor = Some(v.cursor);
             w.live = v.live.clone();
             w.checked = now;
+            w.meta = meta;
         }
         if !changed {
             return Ok(());
@@ -607,6 +652,9 @@ impl Engine {
             let mut b = json!({"session": session, "items": items, "cursor": v.cursor, "reset": reset && i == 0});
             if last {
                 b["live"] = v.live.clone();
+                if meta_changed && !v.meta.is_null() && self.minor.get(device_id).copied().unwrap_or(0) >= 2 {
+                    b["meta"] = v.meta.clone();
+                }
             } else {
                 b["more"] = json!(true);
             }
@@ -617,7 +665,7 @@ impl Engine {
 
     fn dispatch(&mut self, relay: &dyn RelayApi, host: &dyn Host, device_id: &str, env: Envelope, queued: u64, now: u64) -> bool {
         let t = env.t.as_str();
-        let acting = matches!(t, "answer" | "send" | "stop" | "start" | "upload");
+        let acting = matches!(t, "answer" | "send" | "stop" | "start" | "upload" | "note" | "set_model" | "transcribe");
         if acting && rules::expired(env.at, queued, now) {
             self.refuse(host, device_id, &format!("an expired {t} (older than 60 seconds)"), now);
             self.reply(relay, device_id, &env.id, t, Err("expired".into()), now);
@@ -644,13 +692,23 @@ impl Engine {
                 let upload = env.b.get("upload").and_then(Value::as_str).unwrap_or("").to_string();
                 match self.uploads.take(device_id, &env.b, now) {
                     Ok(live::Step::More) => true,
+                    Ok(live::Step::Done(img)) if img.kind == live::Kind::Audio => {
+                        // A recording: kept here (in memory) until its `transcribe`, never stored as an attachment.
+                        let kb = img.bytes.len().div_ceil(1024);
+                        self.recordings.retain(|_, (_, _, at)| now.saturating_sub(*at) < live::OPEN_MS);
+                        self.recordings.insert((device_id.to_string(), img.id.clone()), (img.bytes, img.mime, now));
+                        self.record(host, Action { at: now, device_id: device_id.into(), device: name, kind: "upload".into(), session: None, detail: format!("sent a recording to transcribe ({kb} KB)"), ok: true });
+                        self.reply(relay, device_id, &env.id, t, Ok(json!({"upload": upload})), now);
+                        true
+                    }
                     Ok(live::Step::Done(img)) => {
                         let kb = img.bytes.len().div_ceil(1024);
                         let r = host.store_image(&img);
                         let ok = r.is_ok();
+                        let what = if img.kind == live::Kind::File { "a file" } else { "an image" };
                         let detail = match &r {
-                            Ok(_) => format!("sent an image ({kb} KB)"),
-                            Err(e) => format!("image refused: {e}"),
+                            Ok(_) => format!("sent {what} ({kb} KB)"),
+                            Err(e) => format!("{} refused: {e}", if img.kind == live::Kind::File { "file" } else { "image" }),
                         };
                         if let Ok(a) = &r {
                             self.uploaded.retain(|_, (_, at)| now.saturating_sub(*at) < live::DONE_MS);
@@ -661,7 +719,7 @@ impl Engine {
                         ok
                     }
                     Err(e) => {
-                        self.record(host, Action { at: now, device_id: device_id.into(), device: name, kind: "upload".into(), session: None, detail: format!("image refused: {e}"), ok: false });
+                        self.record(host, Action { at: now, device_id: device_id.into(), device: name, kind: "upload".into(), session: None, detail: format!("upload refused: {e}"), ok: false });
                         self.reply(relay, device_id, &env.id, t, Err(e), now);
                         false
                     }
@@ -679,11 +737,37 @@ impl Engine {
                 }
                 true
             }
-            "answer" | "send" | "stop" | "start" => {
+            "transcribe" => {
+                if !self.limiter.allow(device_id, "transcribe", now) {
+                    self.refuse(host, device_id, "too many recordings in a minute", now);
+                    self.reply(relay, device_id, &env.id, t, Err("rate_limited".into()), now);
+                    return false;
+                }
+                let id = env.b.get("upload").and_then(Value::as_str).unwrap_or("").to_string();
+                let session = env.b.get("session").and_then(Value::as_str).map(str::to_string);
+                let r = match self.recordings.remove(&(device_id.to_string(), id)) {
+                    None => Err("a recording that hasn't arrived (or has expired): record it again".to_string()),
+                    Some((audio, mime, _)) => host.transcribe(Transcribe { device: device_id.to_string(), of: env.id.clone(), session: session.clone(), audio, mime }),
+                };
+                let ok = r.is_ok();
+                let detail = match &r {
+                    Ok(()) => "asked for a transcription".to_string(),
+                    Err(e) => format!("transcription refused: {e}"),
+                };
+                self.record(host, Action { at: now, device_id: device_id.into(), device: name, kind: "transcribe".into(), session, detail, ok });
+                // Done: the answer comes from the app's outbox when the dictation finishes.
+                if let Err(e) = r {
+                    self.reply(relay, device_id, &env.id, t, Err(e), now);
+                }
+                ok
+            }
+            "answer" | "send" | "stop" | "start" | "note" | "set_model" => {
                 let kind: &'static str = match t {
                     "answer" => "answer",
                     "send" => "send",
                     "stop" => "stop",
+                    "note" => "note",
+                    "set_model" => "set_model",
                     _ => "start",
                 };
                 if !self.limiter.allow(device_id, kind, now) {
@@ -757,7 +841,7 @@ impl Engine {
                         return true;
                     }
                 }
-                self.watches.insert(device_id.to_string(), Watch { session, until: now + live::LEASE_MS, cursor: None, live: Value::Null, checked: now });
+                self.watches.insert(device_id.to_string(), Watch { session, until: now + live::LEASE_MS, cursor: None, live: Value::Null, checked: now, meta: String::new() });
                 if let Err(e) = self.send_chat(relay, host, device_id, now, true) {
                     self.watches.remove(device_id);
                     self.reply(relay, device_id, &env.id, t, Err(e), now);
@@ -881,17 +965,42 @@ impl Engine {
                     let how = rules::check_delivery(b)?;
                     let atts = self.attachments_of(device_id, b)?;
                     let s = self.known_chat(host, session.as_deref())?;
-                    host.send(&s, &text, how, &atts, by)?;
-                    Ok::<_, String>((how, atts.len()))
+                    let note = host.send(&s, &text, how, &atts, by)?;
+                    Ok::<_, String>((how, atts.len(), note))
                 })();
                 let what = match &r {
-                    Ok((Delivery::Next, _)) => "sent a note for the next step".to_string(),
-                    Ok((Delivery::Interrupt, _)) => "interrupted and sent a message".to_string(),
-                    Ok((_, 0)) => "sent a message".to_string(),
-                    Ok((_, n)) => format!("sent a message with {n} image{}", if *n == 1 { "" } else { "s" }),
+                    Ok((Delivery::Next, _, _)) => "sent a note for the next step".to_string(),
+                    Ok((Delivery::Interrupt, _, _)) => "interrupted and sent a message".to_string(),
+                    Ok((_, 0, _)) => "sent a message".to_string(),
+                    Ok((_, n, _)) => format!("sent a message with {n} attachment{}", if *n == 1 { "" } else { "s" }),
                     Err(e) => format!("send refused: {e}"),
                 };
+                (session, what, r.map(|(_, _, note)| note.map(|n| json!({"note": n})).unwrap_or_else(|| json!({}))))
+            }
+            "note" => {
+                let r = rules::check_note(b).and_then(|n| {
+                    let s = self.known_chat(host, session.as_deref())?;
+                    host.note(&s, &n, by)?;
+                    Ok(n)
+                });
+                let what = match &r {
+                    Ok(n) if n.now => "delivered a queued note now".to_string(),
+                    Ok(_) => "removed a queued note".to_string(),
+                    Err(e) => format!("note refused: {e}"),
+                };
                 (session, what, r.map(|_| json!({})))
+            }
+            "set_model" => {
+                let r = self.known_chat(host, session.as_deref()).and_then(|s| {
+                    let m = rules::check_set_model(b, &host.chat_models(&s))?;
+                    host.set_model(&s, &m, by)?;
+                    Ok(m)
+                });
+                let what = match &r {
+                    Ok(m) => format!("switched the model to {m}"),
+                    Err(e) => format!("model switch refused: {e}"),
+                };
+                (session, what, r.map(|m| json!({"model": m})))
             }
             "stop" => {
                 let r = self.known_chat(host, session.as_deref()).and_then(|s| host.stop(&s, by));
@@ -949,6 +1058,11 @@ impl Engine {
         self.last_needs = needs;
         let active: Vec<String> = self.saved.devices.iter().filter(|d| now.saturating_sub(self.seen.get(&d.device_id).copied().unwrap_or(0).max(d.last_seen)) < ACTIVE_MS).map(|d| d.device_id.clone()).collect();
         self.tick_views(relay, host, &active, now);
+        for (d, t, b) in host.outbox() {
+            if self.saved.devices.iter().any(|x| x.device_id == d) {
+                let _ = self.send_to(relay, &d, &t, b, now);
+            }
+        }
         if out.is_empty() {
             return;
         }

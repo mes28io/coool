@@ -23,10 +23,11 @@ extension Remote {
 /// What an upload carries (minor 2): an image (as minor 1), a file (a PDF or UTF-8 text), or a recording to transcribe.
 public enum UploadKind: String, Sendable, Equatable { case image, file, audio }
 
-/// The type the phone sends a file as, by its bytes (as the Mac checks): a PDF, or UTF-8 text without NUL bytes.
+/// The type the phone sends a file as, by its bytes (as the Mac checks): a PDF, or UTF-8 text without control bytes
+/// (tabs, line ends and escapes allowed): a binary is refused even when its bytes happen to be valid UTF-8.
 public func fileType(_ d: Data) -> String? {
   if d.starts(with: Array("%PDF-".utf8)) { return "application/pdf" }
-  if d.isEmpty || d.contains(0) { return nil }
+  if d.isEmpty || d.contains(where: { $0 < 0x09 || (0x0E...0x1A).contains($0) || (0x1C...0x1F).contains($0) || $0 == 0x7F }) { return nil }
   return String(data: d, encoding: .utf8) == nil ? nil : "text/plain"
 }
 
