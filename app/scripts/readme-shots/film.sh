@@ -16,6 +16,7 @@
 # FILM_MAC=1 also films the Mac panel: the sandbox Mac in FILM_VM_DIR (default the app's own,
 # ~/Library/Application Support/sh.coool.app/vm) is booted through the app, used (TextEdit), and shut down after; it
 # is never installed, deleted or reconfigured (a self-test stubs installs). Only while no other coool runs that Mac.
+# FILM_ONLY: a comma list of shots to take (sessions, hero-light, changes, needs, chat-approval, browser, iphone, mac).
 # FILM_WORKERS (default 2): screencapture processes taking stills at once.
 # Don't edit this file while it runs: the shell reads it as it goes.
 #
@@ -66,7 +67,7 @@ env -i HOME="$H" USER="${USER:-demo}" LOGNAME="${LOGNAME:-demo}" TMPDIR="${TMPDI
   PATH="$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin" \
   COOOL_SELFTEST="$SCENARIO" COOOL_SELFTEST_DIR="$H/code" COOOL_SELFTEST_SHOTS="$ROOT/shots" COOOL_SELFTEST_LOG="$LOG" \
   COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 COOOL_FILM_WORKERS="${FILM_WORKERS:-2}" COOOL_FILM_SLOW="$SLOW" COOOL_FILM_DILATE="${FILM_DILATE:-animations}" \
-  COOOL_FILM_MAC="${FILM_MAC:-0}" COOOL_VM_DIR="$VMDIR" \
+  COOOL_FILM_MAC="${FILM_MAC:-0}" COOOL_VM_DIR="$VMDIR" COOOL_FILM_ONLY="${FILM_ONLY:-}" \
   "$ROOT/app/$NAME" > "$ROOT/logs/app.out" 2>&1 &
 APP=$!
 

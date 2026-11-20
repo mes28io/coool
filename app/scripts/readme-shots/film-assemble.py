@@ -45,7 +45,7 @@ def main():
         if len(p) >= 4 and p[1] == "FILM" and p[2] == "start":
             starts[p[3].split()[0]] = float(p[0])
         if len(p) >= 4 and p[1] == "FILM" and p[2] == "slow":
-            slow = float(p[3])
+            slow = float(p[3].split()[0])
         c = re.match(r"^(\S+) CUE (\S+)$", line)
         if c:
             cues.append((float(c.group(1)), c.group(2)))

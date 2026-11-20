@@ -23,6 +23,9 @@ export function vectors() {
   const sk = P.sessionKeys(shared, { macId, deviceId, macBoxPub: mac.boxPub, devBoxPub: dev.boxPub });
   const env = { v: 1, id: "8c1d6c2e-0b5c-4c43-9d7e-2f1a3b4c5d6e", t: "send", at: 1763640000000, b: { session: "claude:abc", text: "hi" } };
   const counter = 1763640000000123;
+  const uploadId = "0f0e0d0c0b0a09080706050403020100";
+  const uploadBytes = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(P.CHUNK, 7)]);
+  const uploadEnv = { v: 1, id: "1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", t: "upload", at: 1763640000000, b: P.uploadParts(uploadId, uploadBytes)[1] };
   return {
     mac,
     dev,
@@ -42,6 +45,10 @@ export function vectors() {
     counter,
     sealedD2m: P.seal(sk.d2m, "d2m", macId, deviceId, counter, env),
     requestSig: P.signRequest(mac.signPriv, "send", [macId, deviceId, "m2d", counter, P.sha256Hex("abc")], 1763640000000),
+    // Minor 1: an image as upload parts (the data by its SHA-256), and its last part sealed.
+    uploadParts: P.uploadParts(uploadId, uploadBytes).map(({ data, ...rest }) => ({ ...rest, dataSha256: P.sha256Hex(data) })),
+    uploadEnvelope: JSON.stringify(uploadEnv),
+    sealedUpload: P.seal(sk.d2m, "d2m", macId, deviceId, counter + 1, uploadEnv),
     pairUrl: P.pairUrl({ relay: "https://example.convex.cloud", macId, pairingId, secret: P.b64u(secret), macSignPub: mac.signPub, macBoxPub: mac.boxPub }),
   };
 }

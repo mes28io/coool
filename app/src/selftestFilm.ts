@@ -62,15 +62,19 @@ async function typeOut(t: string, sleep: (ms: number) => Promise<unknown>) {
 }
 
 /**
- * Plays the page `s` times slower than real time: its CSS and Web animations (spinners, fades, springs run as Web
- * Animations), and the clock JS animations read (`performance.now`, requestAnimationFrame's timestamps). Timers and
+ * Plays the page `s` times slower than real time: its CSS animations and transitions (spinners, fades, the
+ * backdrop), and with `all` also the clock JS animations read (`performance.now`, requestAnimationFrame's timestamps). Timers and
  * `Date.now` keep real time (the ages the app shows are real).
  */
 function dilate(s: number, what = "animations") {
   if (s <= 1) return;
   const rate = 1 / s;
   setInterval(() => {
-    for (const a of document.getAnimations()) if (a.playbackRate > 0 && a.playbackRate !== rate) a.playbackRate = rate;
+    // CSS animations and transitions only (spinners, the backdrop's drift, hovers, fades): the springs and exits the
+    // page runs as plain Web Animations (motion) keep real time, or an exit outlives its element's replacement and
+    // both show at once.
+    for (const a of document.getAnimations())
+      if ((a instanceof CSSAnimation || a instanceof CSSTransition) && a.playbackRate > 0 && a.playbackRate !== rate) a.playbackRate = rate;
   }, 5);
   if (what !== "all") return;
   const realNow = performance.now.bind(performance);
@@ -82,7 +86,7 @@ function dilate(s: number, what = "animations") {
 
 export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   const { invoke, sleep, waitFor, step, log, dir } = k;
-  const film = (action: string, a: Record<string, unknown> = {}) => invoke("selftest_film", { action, ...a }) as Promise<{ frames?: number; ms?: number; slow?: number; dilate?: string; mac?: boolean }>;
+  const film = (action: string, a: Record<string, unknown> = {}) => invoke("selftest_film", { action, ...a }) as Promise<{ frames?: number; ms?: number; slow?: number; dilate?: string; mac?: boolean; only?: string }>;
   const chats = () => useChats.getState().chats;
   const ids = () => new Set(Object.keys(chats()).map(Number));
   const sessions = () => useStore.getState().sessions;
@@ -123,7 +127,8 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   /** The window as a person would leave it, minus the provider logos. */
   async function look(theme: "dark" | "light") {
     setGlassPref(true);
-    setBackdrop("desktop");
+    // The film's look (the owner's choice): the light theme, glass on, and the window backdrop "Colours".
+    setBackdrop("colours");
     useStore.getState().setThemePref(theme);
     useStore.getState().setSheet(null);
     for (const t of useStore.getState().toasts ?? []) useStore.getState().dismissToast(t.id);
@@ -133,7 +138,9 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   function hideLogos() {
     const s = document.createElement("style");
     s.dataset.filmNoLogos = "";
-    s.textContent = `[role="img"][aria-label="Claude"], [role="img"][aria-label="Codex (OpenAI)"] { visibility: hidden !important; }`;
+    // Also: the backdrop's colours drift as they do for a window in front (this one is never focused, which rests them).
+    s.textContent = `[role="img"][aria-label="Claude"], [role="img"][aria-label="Codex (OpenAI)"] { visibility: hidden !important; }
+[data-backdrop-rest] .backdrop-layer { animation-play-state: running !important; }`;
     document.head.appendChild(s);
   }
 
@@ -209,36 +216,26 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
 
     async film() {
       let mac = false;
+      let only: string[] = [];
+      /** `FILM_ONLY`: take just these shots. */
+      const want = (shot: string) => !only.length || only.includes(shot);
       await step("film: the invented sessions are listed", async () => {
         await waitFor("the sessions", () => sessions().length >= 12, 60_000);
         const v = await film("visible");
         slow = v.slow ?? 1;
         mac = !!v.mac;
+        only = (v.only ?? "").split(",").map((x) => x.trim()).filter(Boolean);
         dilate(slow, v.dilate);
         hideLogos();
         await log(`INFO updates ${JSON.stringify(useUpdates.getState().status).slice(0, 400)}`);
-        await look("dark");
+        await look("light");
         await sleep(4000);
         return `${sessions().length} sessions, slow ${slow} (${v.dilate}), mac ${mac}`;
       });
 
-      // 1. The whole window, steady, with gentle life (steps ticking), dark then light.
-      for (const theme of ["dark", "light"] as const) {
-        await step(`film: the whole window, ${theme} (hero-${theme})`, async () => {
-          await missionTab("atlas-api");
-          await look(theme);
-          await sleep(2000);
-          await burst(`hero-${theme}`, async () => {
-            await fsleep(500);
-            await mark("start", { sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]"), trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
-            await fsleep(14_000);
-          });
-        });
-      }
-      await look("dark");
-
       // 2. The session list: working, then needs you, then a session started in a terminal, then a Codex one.
-      await step("film: states, and sessions started outside the app appear (sessions)", async () => {
+      if (want("sessions"))
+        await step("film: states, and sessions started outside the app appear (sessions)", async () => {
         await missionTab("atlas-api");
         await sleep(1500);
         await burst("sessions", async () => {
@@ -261,13 +258,30 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         return text($("[data-mc-sessions]")).slice(0, 240);
       });
 
+      // 1. The whole window, steady, with gentle life (steps ticking), every state in it, dark then light.
+      for (const theme of ["light"] as const) {
+        if (want(`hero-${theme}`))
+          await step(`film: the whole window, ${theme} (hero-${theme})`, async () => {
+          await missionTab("atlas-api");
+          await look(theme);
+          await sleep(2000);
+          await burst(`hero-${theme}`, async () => {
+            await fsleep(500);
+            await mark("start", { sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]"), trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
+            await fsleep(14_000);
+          });
+        });
+      }
+      await look("light");
+
       // 4. What changed: written, edited, committed, pushed, merged; then two sessions on one file.
-      await step("film: the changes fill in, then the overlap warning (changes)", async () => {
+      if (want("changes"))
+        await step("film: the changes fill in, then the overlap warning (changes)", async () => {
         await burst("changes", async () => {
           await fsleep(2500);
           await mark("before", { ledger: $("[data-mc-ledger]"), trail: $("[data-mc-trail]") });
           await cue("changes");
-          await fwait("the merge on the trail", () => /Merged ?request-ids/.test(text($("[data-mc-trail]"))), 60_000).catch(() => log("WARN changes: no merge on the trail"));
+          await fwait("the merge on the trail", () => /Merged ?limiter-docs/.test(text($("[data-mc-trail]"))), 60_000).catch(() => log("WARN changes: no merge on the trail"));
           await mark("merged", { ledger: $("[data-mc-ledger]"), trail: $("[data-mc-trail]") });
           await fsleep(4000);
           await cue("overlap");
@@ -283,20 +297,20 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
 
       // 3. A request that explains itself: arrives, opened, read, allowed.
       let invoices = -1;
-      await step("film: a request arrives on the Needs you page, is read and allowed (needs)", async () => {
+      if (want("needs"))
+        await step("film: a request arrives on the Needs you page, is read and allowed (needs)", async () => {
         const before = ids();
         await newChat({ provider: "codex", cwd: `${dir}/atlas-api`, model: "gpt-5.6", prompt: "Rebase the v3 errors branch on main and push it." });
         const codex = (await waitFor("the Codex chat", () => { const x = [...ids()].find((y) => !before.has(y)); return x === undefined ? null : { x }; }, 15_000)).x;
         await waitFor("the Codex chat's request", () => chats()[codex]?.pendingPermission, 60_000 * slow);
+        // The Claude chat starts now and asks a few seconds into the shot (the stand-in takes its time).
+        invoices = await start(`${dir}/invoices`, "Why do invoices from March show the wrong month?", "acceptEdits");
         useStore.getState().openNeeds(null);
         await waitFor("the Needs page", () => $("[data-needs-page]"), 10_000);
-        await sleep(1500);
+        await sleep(2500);
         await burst("needs", async () => {
-          await fsleep(3000);
+          await fsleep(1000);
           await mark("list", { list: $("[data-needs-list]") });
-          invoices = await start(`${dir}/invoices`, "Why do invoices from March show the wrong month?", "acceptEdits");
-          // newChat may open the chat: back to the page while the agent works towards its request.
-          useStore.getState().openNeeds(null);
           await fwait("the new request in the list", () => chats()[invoices]?.pendingPermission && $all("[data-needs-item]").some((i) => text(i).includes("rm -rf node_modules")), 60_000);
           const item = $all("[data-needs-item]").find((i) => text(i).includes("rm -rf node_modules"));
           await mark("arrived", { item, list: $("[data-needs-list]") });
@@ -320,7 +334,8 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       });
 
       // The same kind of request in its chat: streams, the card, Allow once, the turn goes on.
-      await step("film: a chat streams, asks, is allowed and finishes (chat-approval)", async () => {
+      if (want("chat-approval"))
+        await step("film: a chat streams, asks, is allowed and finishes (chat-approval)", async () => {
         const id = await start(`${dir}/invoices`, "Invoices from March still look wrong in the export. Check it.", "acceptEdits");
         useStore.getState().open({ kind: "chat", id });
         await burst("chat-approval", async () => {
@@ -336,6 +351,16 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       });
 
       // 5b. Its own browser, phone and Mac. While the agent works in the panel, the person types in the composer.
+      /** The person makes room for the panel: the sidebar folded away, the panel dragged wide. */
+      const roomy = (on: boolean) => {
+        const st = useStore.getState();
+        if (st.sidebarOpen === on) st.toggleSidebar();
+        if (on) {
+          st.setBrowserWidth(900);
+          st.setDeviceWidth(560);
+          st.setMacWidth(1000);
+        }
+      };
       const deviceChat = async (cwd: string) => {
         const before = ids();
         await newChat({ provider: "claude", cwd, model: "opus", permissionMode: "default" });
@@ -361,7 +386,9 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         }
       };
 
-      await step("film: an agent drives the Browser panel (browser)", async () => {
+      roomy(true);
+      if (want("browser"))
+        await step("film: an agent drives the Browser panel (browser)", async () => {
         if (!k.site) throw new Error("no COOOL_SELFTEST_SITE");
         const stop = autoAnswer();
         try {
@@ -383,7 +410,8 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         }
       });
 
-      await step("film: an agent drives the iPhone panel (iphone)", async () => {
+      if (want("iphone"))
+        await step("film: an agent drives the iPhone panel (iphone)", async () => {
         const list = await api().simDevices();
         if (!list.available) throw new Error(`no simulators: ${list.reason}`);
         const udid = await api().simEnsureDevice();
@@ -394,11 +422,15 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
           const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
           useStore.getState().setRightPanel(key, "device");
           await waitFor("the booted device in the panel", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 60_000);
-          // A freshly booted simulator draws its home screen icons a while after it boots.
-          await sleep(20_000);
+          // An invented place (Apple Park) for anything on the home screen that shows where the phone is.
+          await invoke("selftest_device_tool", { chat: id, name: "device", args: { action: "location", lat: 37.3349, lon: -122.009 } }).catch((e) => log(`WARN location: ${e}`));
+          // Settings already open when the shot starts (the home screen's Maps widget shows a real city), settled.
+          await sleep(10_000);
+          await invoke("selftest_device_tool", { chat: id, name: "app", args: { action: "launch", bundle_id: "com.apple.Preferences" } }).catch((e) => log(`WARN settings: ${e}`));
+          await sleep(15_000);
           await burst("iphone", async () => {
             await fsleep(800);
-            await typeOut("On the iPhone in the panel, open Settings and read the iOS version in General > About.", fsleep);
+            await typeOut("On the iPhone in the panel, read the iOS version in Settings > General > About.", fsleep);
             await fwait("the phone driven", () => $("[data-sim-driving]"), 40_000).catch(() => null);
             await mark("driving", { panel: $("[data-right-panel]") });
             await aside("Then check the share sheet on iOS 27");
@@ -415,6 +447,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       });
 
       if (mac)
+        if (want("mac"))
         await step("film: an agent drives the sandbox Mac panel (mac)", async () => {
           const st = await api().macStatus();
           if (!st.available || !st.installed) throw new Error(`no sandbox Mac here: ${st.available ? "not installed" : st.reason}`);
@@ -452,32 +485,8 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
           }
         });
 
-      // Sub-agents at work (lower priority).
-      await step("film: a lead with three subagents (agents)", async () => {
-        const id = await start(`${dir}/atlas-api`, "Audit every /v2 route for handlers that skip the auth layer. Use one agent per route group and fix what they find.");
-        useStore.getState().open({ kind: "chat", id });
-        await burst("agents", async () => {
-          await fwait("three subagents at work", () => (chats()[id]?.items ?? []).filter((i) => i.kind === "tool" && i.parent).length >= 8, 60_000);
-          await mark("agents", { timeline: $("[data-chat-timeline]") });
-          await fsleep(8000);
-        });
-        await api().chatStop(id);
-      });
+      roomy(false);
 
-      // Cutaway: the theme switch on Mission control.
-      await step("film: the light / dark switch (theme)", async () => {
-        await missionTab("atlas-api");
-        await sleep(2000);
-        await burst("theme", async () => {
-          await fsleep(2500);
-          await mark("to-light");
-          useStore.getState().setThemePref("light");
-          await fsleep(4000);
-          await mark("to-dark");
-          useStore.getState().setThemePref("dark");
-          await fsleep(4000);
-        });
-      });
     },
   };
 }

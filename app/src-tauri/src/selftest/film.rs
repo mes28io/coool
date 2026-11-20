@@ -47,7 +47,9 @@ pub fn selftest_film(app: AppHandle, core: State<'_, Arc<Core>>, action: String,
             t.log(&format!("FILM slow {slow} {dilate}"));
             // `COOOL_FILM_MAC=1` (film.sh FILM_MAC=1, with COOOL_VM_DIR at the one sandbox Mac): film the Mac panel too.
             let mac = std::env::var("COOOL_FILM_MAC").is_ok_and(|v| v == "1");
-            Ok(serde_json::json!({ "slow": slow, "dilate": dilate, "mac": mac }))
+            // `COOOL_FILM_ONLY` (film.sh FILM_ONLY): a comma list of the shots to take (the rest are skipped).
+            let only = std::env::var("COOOL_FILM_ONLY").unwrap_or_default();
+            Ok(serde_json::json!({ "slow": slow, "dilate": dilate, "mac": mac, "only": only }))
         }
         "start" => {
             if no_shots() {

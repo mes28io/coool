@@ -14,7 +14,7 @@ An iPhone app that watches and steers the coool running on your Mac, from anywhe
 - Send a message to a chat, stop a chat.
 - Start a new chat in a project folder the Mac already knows.
 
-Not in the first version: push notifications (decided against), accounts and sign-in, a terminal, file browsing, the device panels, changing settings, "always allow" answers, Bypass / full-access modes.
+Not in the first version: push notifications (decided against), accounts and sign-in, a terminal, file browsing, the device panels, changing settings, "always allow" answers, Bypass / full-access modes. Minor 1 (below) adds a live chat view, Mission control, usage, diffs and plans, images both ways, view-only device pictures, and starting with a model and an asking mode.
 
 ## Decisions
 
@@ -138,6 +138,69 @@ Every mutation is signed: Ed25519 over the UTF-8 of `coool-remote/1`, the functi
 - Keys: one Keychain item (generic password, service `sh.coool.remote`, account `pairing`, `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable: never in iCloud Keychain, never restored to another device) holding the identity and the pairing; the counters, which are not secret, in the app's defaults.
 - The link is open only while the app is in the foreground: a read session and the live query on `deviceInbox`, `hello` on connect (the Mac answers with `snapshot` and `projects`); everything taken is acknowledged. When the live query reports its session gone, the app opens a new one; if that is refused as `revoked` (or a `send` is), the app forgets the pairing and returns to the pairing screen saying the Mac removed it. Unpair on the phone forgets the Mac locally only (the relay has no device-side revoke); the Mac lists the phone until it is removed there.
 - What the phone can say is typed: `answer` takes allow once, deny, a question's option or picks (no "always", no mode); `start` takes a `Project` from the Mac's list, never a path. A chat's tail is asked for with `get_chat` when the chat opens, when its state changes, and every few seconds while it works.
+
+## Minor 1: richer watching and building
+
+The envelope stays `v: 1`. A minor adds message types and optional fields only. The phone says `minor: 1` in `hello`;
+the Mac answers `snapshot` with `minor: 1` and sends the new types only to a phone that said it.
+
+**Mixed versions.** Unknown types are ignored both ways, and every new field is optional:
+- A new phone with an older Mac: `watch` and the other new commands are ignored. The phone sees no `chat`, `overview`
+  or `options` and falls back to polling `get_chat` and to the old start (the Mac's default model and mode). A send
+  with `when` or `attachments` arrives as a plain send (the older Mac ignores both fields).
+- An older phone with a new Mac: it never says `minor`, so it gets no `options`, `overview`, `chat`, `image` or
+  `frame`. Its `start` has no `mode` or `model`, so the old rule applies (the default mode, or the asking mode if
+  that is Bypass or full access).
+
+Mac → phone (new): `options` (per CLI: the models Settings > General offers, the modes a phone may start in, the
+defaults), `overview` (Mission control: per project the live sessions, sub-agents and their steps, the Changes
+ledger, files two sessions edit within an hour, the last commits and branch; plan usage per provider), `chat` (a
+chat's live view: items upserted by key, `cursor`, `reset`, and `live`: state, the text streaming in, thinking, the
+step, sub-agents with their steps, the turn's tally, the device panels its agent uses), `image` (a chat's image in
+chunks), `frame` (a device panel's picture). `session` gains `step`, `agents`, `steps`, `turn_started`; `need` gains
+`what`, `risk` (the page's risk tag), `read` (the AI read, when the page has one), `diff` (an Edit / MultiEdit / Write
+request's change) and `plan` (an ExitPlanMode request's Markdown); `result` gains `model` and `upload`.
+
+Phone → Mac (new): `watch` / `unwatch` (a chat's live view, a 30 s lease renewed every 10 s while it is on screen),
+`watch_device` / `unwatch_device` (`browser`, `simulator` or `mac`; same lease), `get_image` (session, key),
+`upload` (one part of an image). `send` gains `when` (`send`, `next`: a note taken in at the next step, `interrupt`:
+cut the step in progress, as the Mac's composer) and `attachments` (upload ids); `start` gains `model`, `mode` and
+`attachments`; `answer` on a plan gains `keep_planning` with an optional `note` (the Mac's Keep planning; the note
+goes in as a steering note).
+
+Rules (crates/remote `rules.rs`, `live.rs`, `mac.rs`, all tested):
+- `start`: a `mode` must be one of the asking modes (Claude `default`, `acceptEdits`, `plan`; Codex `untrusted`,
+  `on-request`). Anything else, Bypass and full access included, is refused with "a chat started from the phone
+  can't use that mode" (not swapped for another). A `model` must be one of the ids the Mac offers for that CLI.
+- No message can change a running chat's mode: `send` carries no mode, and a mode field on it is ignored.
+- `upload`: no name or path field exists; the upload id is 128 bits of hex; parts must add up to the declared size
+  (at most 2 MB, 48 KiB per part), at most four open per device, two minutes to finish; the bytes must be PNG, JPEG,
+  GIF or WebP by their first bytes (checked on the first part and again on the whole), then again by the app, which
+  stores them with `attach::store_bytes` in coool's own attachment store, named by hash, as a pasted image. A finished
+  upload is usable once, by the device that sent it, for ten minutes. Recorded as "sent an image (N KB)".
+- `watch`, `watch_device`, `get_image` reach only chats coool runs. Images go only by a key that chat's own messages
+  hold, from the attachment store; diffs and plans come only from that chat's requests and steps; never from a path
+  the phone names. Frames are view only: there is no message that sends input to a device, and a new frame stream is
+  recorded ("watched the Browser panel (view only)").
+- Per device per minute on the Mac: image parts 90, images asked for 12, watch renewals 30. Uploads are commands:
+  older than 60 seconds, dropped.
+
+Sizes and rates (the relay takes a ciphertext of at most 131 072 base64url characters per message, about 98 KB):
+- A chunk carries 48 KiB of image bytes (65 536 base64url characters in the JSON); sealed, about 87 600 characters.
+- Phone → Mac images: scaled to at most 1600 px and JPEG 0.72 (typically 150-400 KB: 4-9 messages); at most 2 MB (42
+  messages). At most four per message. The relay's own limit is 120 messages a minute from a phone.
+- Mac → phone images: scaled to at most 1024 px JPEG, at most 600 KB (13 messages), only when a chat item showing it is
+  on screen, each asked for once.
+- Device frames: at most 420 px on the long side, JPEG 0.45 (typically 15-40 KB, at most 60 KB: one message), at most
+  one every 2.5 s, only while the device view is open and only when the picture changed. Worst case 24 messages and
+  about 1.4 MB of ciphertext a minute; a static page sends one. Plus 6 lease renewals a minute.
+- A watched chat: at most one `chat` message a second while something changes (items packed under 60 KB of JSON per
+  message), none when nothing does; 6 lease renewals a minute.
+- `overview`: looked at every 3 s, sent only when it changed, only to phones in use.
+- Every message is deleted at the relay as soon as the phone acknowledges it, so the stored total stays small; each
+  document is far under Convex's 1 MiB limit.
+
+No relay function or schema changed for minor 1.
 
 ## No push notifications
 

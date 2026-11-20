@@ -27,5 +27,23 @@
   "counter": 1763640000000123,
   "sealedD2m": "dyRjFF-9wMweROTChqHo1hQnek_CsfLqAowCvu6d2WZpnLykMfKMeUdwoZjM0NvlpNaf5VHg_W_KVukZeJrnmXG2I2Z1wzJngetmRfbLGYm8iM9KTAgCv27LB4nFukf1SzErfRZjBYMkRfMMPyuzKzVYs3k6pgEzt_TuSWM9j9WpCF_IpWRptUja",
   "requestSig": "YCyJilIZtHMbsU_EuLYCJeqcLZvhbtFzRe0-pGmoKMKnS619w1_etIuHxSrgTVtwBoy9odo5_LJzXCcCDNMdDA",
+  "uploadParts": [
+    {
+      "upload": "0f0e0d0c0b0a09080706050403020100",
+      "part": 0,
+      "parts": 2,
+      "size": 49160,
+      "dataSha256": "91199cc1ffed89efb1a0c7a6196a0bec7a3b24a69ba77439804a3f8e93ef189d"
+    },
+    {
+      "upload": "0f0e0d0c0b0a09080706050403020100",
+      "part": 1,
+      "parts": 2,
+      "size": 49160,
+      "dataSha256": "9c67988f1e2d9ddebb9a121dcae3121abb23189ddfbf5acce317b37aa7b9f153"
+    }
+  ],
+  "uploadEnvelope": "{\"v\":1,\"id\":\"1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f\",\"t\":\"upload\",\"at\":1763640000000,\"b\":{\"upload\":\"0f0e0d0c0b0a09080706050403020100\",\"part\":1,\"parts\":2,\"size\":49160,\"data\":\"BwcHBwcHBwc\"}}",
+  "sealedUpload": "URs_9tu4acgmMMB1DAFgGGfEu7MjgG1iX05Ww3r-uPv_I9MkB1bTv3lMxg-mWHfUF-mT89vvz1TjTmyWXd3rkqLh4m9jib0RCCVnRSvTvvkJ2xSGCAkN71gwBKgiUwl9fdC56ARMIzb_eWrc8YDnFR0sIxkex7BJZZmAp_7Il83pygLblBsiApOtQJwSeZCDDIAu_Fk32PPtPW1RG19_6zNMogq17PQ5okJbuueOUSe5J7VtRtZEAL0jueOHH52c3IqlymVCAc1F4g",
   "pairUrl": "coool://pair?v=1&r=https%3A%2F%2Fexample.convex.cloud&m=00112233445566778899aabbccddeeff&p=0123456789abcdef0123456789abcdef&s=CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk&ks=gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q&kx=pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk"
 }

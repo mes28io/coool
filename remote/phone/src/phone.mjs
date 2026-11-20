@@ -136,7 +136,32 @@ export class Phone {
 
   // The commands (docs/REMOTE.md "Messages").
   hello() {
-    return this.send("hello", { name: this.s.name });
+    return this.send("hello", { name: this.s.name, minor: P.MINOR });
+  }
+  /** Minor 1: a chat's live view while it is on screen (renew within 30 s). `reset`: send it all again. */
+  watch(sessionId, reset = false) {
+    return this.send("watch", { session: sessionId, ...(reset ? { reset: true } : {}) });
+  }
+  unwatch() {
+    return this.send("unwatch");
+  }
+  /** Minor 1: pictures of a device panel the chat's agent uses (`browser`, `simulator`, `mac`), view only. */
+  watchDevice(sessionId, device) {
+    return this.send("watch_device", { session: sessionId, device });
+  }
+  unwatchDevice() {
+    return this.send("unwatch_device");
+  }
+  /** Minor 1: an image of a chat, by the key its item names. */
+  getImage(sessionId, key) {
+    return this.send("get_image", { session: sessionId, key });
+  }
+  /** Minor 1: sends an image in parts; returns its upload id (name it in `attachments` of a send or start). */
+  async upload(bytes) {
+    const id = P.randomId();
+    let last;
+    for (const b of P.uploadParts(id, bytes)) last = await this.send("upload", b);
+    return { id, last };
   }
   getSnapshot() {
     return this.send("get_snapshot");
@@ -148,14 +173,16 @@ export class Phone {
   answer(needId, choice, extra = {}) {
     return this.send("answer", { need: needId, choice, ...extra });
   }
-  sendText(sessionId, text) {
-    return this.send("send", { session: sessionId, text });
+  /** `opts` (minor 1): `when` ("next" | "interrupt"), `attachments` (upload ids). */
+  sendText(sessionId, text, opts = {}) {
+    return this.send("send", { session: sessionId, text, ...opts });
   }
   stop(sessionId) {
     return this.send("stop", { session: sessionId });
   }
-  start(projectId, cli, text) {
-    return this.send("start", { project: projectId, cli, text });
+  /** `opts` (minor 1): `model`, `mode` (from the Mac's `options`), `attachments` (upload ids). */
+  start(projectId, cli, text, opts = {}) {
+    return this.send("start", { project: projectId, cli, text, ...opts });
   }
 
   async close() {

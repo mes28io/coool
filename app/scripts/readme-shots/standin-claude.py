@@ -179,6 +179,7 @@ def title(t):
 
 def invoices_turn(prompt, start):
     p = lambda f: str(CWD / f)
+    time.sleep(1.5)
     thinking("Invoices issued in March show February. The month formatting is the first suspect: Date#getMonth is zero-based.")
     time.sleep(0.4)
     tool("Grep", {"pattern": "getMonth\\(", "output_mode": "content", "-n": True}, "src/format.ts:2:  const month = d.getMonth();", pause=0.5)
@@ -327,13 +328,15 @@ def iphone_turn(prompt, start):
         scr = m.tool("app", {"action": "launch", "bundle_id": "com.apple.Preferences"})
         time.sleep(0.8)
         title("Read the iOS version on the simulator")
+        scr = m.tool("wait_for", {"idle": True, "timeout_ms": 4000})
         for label in ["General", "About"]:
-            target = element(scr, None, label)
+            target = element(scr, None, label, exact=True)
             if target is None:
                 scr = m.tool("wait_for", {"text": label, "timeout_ms": 5000})
-                target = element(scr, None, label)
+                target = element(scr, None, label, exact=True) or element(scr, None, label)
             scr = m.tool("tap", {"target": target})
             time.sleep(0.8)
+            scr = m.tool("wait_for", {"idle": True, "timeout_ms": 4000})
         import re
         v = re.search(r'"iOS Version"\s+value=([^\s(]+)', scr) or re.search(r"iOS Version\D+([\d.]+)", scr)
         text(f"iOS version: {v.group(1) if v else 'shown on the About screen'}")
