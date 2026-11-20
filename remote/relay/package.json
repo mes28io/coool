@@ -1,0 +1,14 @@
+{
+  "name": "coool-remote-relay",
+  "private": true,
+  "type": "module",
+  "description": "coool Remote relay (Convex): stores and forwards end-to-end encrypted messages between a Mac and its paired iPhones. See docs/REMOTE.md.",
+  "scripts": {
+    "deploy:dev": "convex dev --once"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "convex": "1.49.0"
+  }
+}

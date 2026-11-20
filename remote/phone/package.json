@@ -1,0 +1,13 @@
+{
+  "name": "coool-remote-phone",
+  "private": true,
+  "type": "module",
+  "description": "A command-line stand-in for the coool Remote iPhone app: the protocol's reference implementation and test tool. See docs/REMOTE.md.",
+  "bin": { "coool-phone": "cli.mjs" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "convex": "1.49.0"
+  }
+}
