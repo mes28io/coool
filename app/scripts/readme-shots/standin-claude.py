@@ -179,6 +179,7 @@ def title(t):
 
 def invoices_turn(prompt, start):
     p = lambda f: str(CWD / f)
+    time.sleep(1.5)
     thinking("Invoices issued in March show February. The month formatting is the first suspect: Date#getMonth is zero-based.")
     time.sleep(0.4)
     tool("Grep", {"pattern": "getMonth\\(", "output_mode": "content", "-n": True}, "src/format.ts:2:  const month = d.getMonth();", pause=0.5)

@@ -6,7 +6,7 @@ scenario (app/src/selftestFilm.ts), so each moment happens while a burst is reco
   terminal        a new Claude Code session starts "in a terminal" in atlas-api (its own process, the CLI's registry
                   entry, a transcript growing step by step) and shows up in coool with no setup
   terminal-codex  the same for a Codex session (a rollout growing step by step)
-  changes         atlas-api: the `terminal` session writes, edits, commits on its own branch, pushes and merges it
+  changes         atlas-api: the `terminal` session writes, edits, commits, pushes, and merges a docs branch
   overlap         a second atlas-api session edits src/config.rs, which another live session has uncommitted edits to
   needs           sessions that were working stop and wait for the person (registry `waiting`), one after another
   commit-atlas    atlas-api: a session commits its work for real (git) and pushes it to the local origin
@@ -214,12 +214,22 @@ def run(root: Path, cues: Path, ws):
             nap(1.6)
 
     def changes():
-        """atlas-api: the session started in a terminal (`terminal`) writes a test, edits the router, commits on a
-        branch of its own, pushes it and merges it into rate-limit (all real git, only its own files)."""
+        """atlas-api: the session started in a terminal (`terminal`) writes a test, edits the router, commits them
+        (only its own files), pushes, and merges a docs branch into rate-limit. All real git; HEAD stays on
+        rate-limit, so Mission control's trail keeps its branch."""
         e = by_title("Add request IDs to every log line")
         e["scripted"] = True
         cwd = Path(e["cwd"])
         t0 = time.time()
+        # The docs branch to merge, made now without leaving rate-limit (plumbing: a tree with one more file).
+        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=cwd, env=ws.git_env(home, time.time()), input="# Rate limits\n\nEvery API key has a budget per minute.\n", capture_output=True, text=True, check=True).stdout.strip()
+        base_tree = git(cwd, "rev-parse", "HEAD^{tree}")
+        idx = {**ws.git_env(home, time.time()), "GIT_INDEX_FILE": str(root / "film-docs.index")}
+        subprocess.run(["git", "read-tree", base_tree], cwd=cwd, env=idx, check=True, capture_output=True)
+        subprocess.run(["git", "update-index", "--add", "--cacheinfo", f"100644,{blob},docs/rate-limits.md"], cwd=cwd, env=idx, check=True, capture_output=True)
+        tree = subprocess.run(["git", "write-tree"], cwd=cwd, env=idx, check=True, capture_output=True, text=True).stdout.strip()
+        docs = subprocess.run(["git", "commit-tree", tree, "-p", "HEAD", "-m", "Document the rate limits"], cwd=cwd, env=ws.git_env(home, time.time() - 600), check=True, capture_output=True, text=True).stdout.strip()
+        git(cwd, "update-ref", "refs/heads/limiter-docs", docs)
         (cwd / "src" / "middleware" / "request_id.rs").write_text("pub fn layer() {}\n")
         (cwd / "tests").mkdir(exist_ok=True)
         (cwd / "tests" / "request_id.rs").write_text("#[test]\nfn every_response_has_an_id() {}\n")
@@ -229,78 +239,27 @@ def run(root: Path, cues: Path, ws):
         mod.write_text(mod.read_text() + "// every route gets the request id layer\n")
         until(t0, 3.0)
         claude_step(e, "Edit", {"file_path": "src/routes/mod.rs", "old_string": "pub mod search;", "new_string": "pub mod search;\n// request ids on every route"}, "The file src/routes/mod.rs has been updated.")
-        until(t0, 5.5)
+        until(t0, 6.0)
         msg_ = "Request ids on every log line and response"
-        claude_step(e, "Bash", {"command": f"git checkout -b request-ids && git add src/middleware/request_id.rs src/routes/mod.rs tests/request_id.rs && git commit -m '{msg_}'", "description": "Commit on a branch"})
-        git(cwd, "checkout", "-q", "-b", "request-ids")
-        git(cwd, "add", "src/middleware/request_id.rs", "src/routes/mod.rs", "tests/request_id.rs")
+        files = ["src/middleware/request_id.rs", "src/routes/mod.rs", "tests/request_id.rs"]
+        claude_step(e, "Bash", {"command": f"git add {' '.join(files)} && git commit -m '{msg_}'", "description": "Commit the request ids"})
+        git(cwd, "add", *files)
         git(cwd, "commit", "-q", "-m", msg_)
         h = git(cwd, "rev-parse", "--short", "HEAD")
         with LOCK:
-            append_claude(e, [result(open_ids(e)[-1], f"[request-ids {h}] {msg_}\n 3 files changed, 9 insertions(+)")])
-        until(t0, 8.0)
-        claude_step(e, "Bash", {"command": "git push -u origin request-ids", "description": "Push the branch"})
-        git(cwd, "push", "-q", "-u", "origin", "request-ids")
-        with LOCK:
-            append_claude(e, [result(open_ids(e)[-1], "To origin\n * [new branch]      request-ids -> request-ids")])
-        until(t0, 10.5)
-        claude_step(e, "Bash", {"command": "git checkout rate-limit && git merge --no-ff request-ids", "description": "Merge it into rate-limit"})
-        git(cwd, "checkout", "-q", "rate-limit")
-        git(cwd, "merge", "-q", "--no-ff", "request-ids", "-m", "Merge branch 'request-ids' into rate-limit")
-        with LOCK:
-            append_claude(e, [result(open_ids(e)[-1], "Merge made by the 'ort' strategy.\n 3 files changed, 9 insertions(+)")])
-        until(t0, 12.5)
-        claude_step(e, "Bash", {"command": "cargo test -p atlas-api", "description": "Run all tests"})
-        e["scripted"] = False
-
-    def commit_atlas():
-        e = by_title("Add rate limiting to /v2/search")
-        e["scripted"] = True
-        cwd = e["cwd"]
-        msg_ = "Return 429 when a key is over budget"
-        cmd = f"git add -A && git commit -m '{msg_}'"
-        claude_step(e, "Bash", {"command": cmd, "description": "Commit the limiter"})
-        nap(1.0)
-        git(cwd, "add", "-A")
-        git(cwd, "commit", "-q", "-m", msg_)
-        h = git(cwd, "rev-parse", "--short", "HEAD")
-        with LOCK:
-            append_claude(e, [result(open_ids(e)[-1], f"[rate-limit {h}] {msg_}\n 2 files changed, 6 insertions(+), 2 deletions(-)")])
-        nap(2.5)
+            append_claude(e, [result(open_ids(e)[-1], f"[rate-limit {h}] {msg_}\n 3 files changed, 9 insertions(+)")])
+        until(t0, 9.0)
         claude_step(e, "Bash", {"command": "git push origin rate-limit", "description": "Push the branch"})
-        nap(1.0)
         git(cwd, "push", "-q", "origin", "rate-limit")
         with LOCK:
             append_claude(e, [result(open_ids(e)[-1], f"To origin\n   {h}..{h}  rate-limit -> rate-limit")])
-        nap(1.5)
+        until(t0, 12.0)
+        claude_step(e, "Bash", {"command": "git merge --no-ff limiter-docs", "description": "Merge the limiter docs"})
+        git(cwd, "merge", "-q", "--no-ff", "limiter-docs", "-m", "Merge branch 'limiter-docs' into rate-limit")
+        with LOCK:
+            append_claude(e, [result(open_ids(e)[-1], "Merge made by the 'ort' strategy.\n docs/rate-limits.md | 3 +++")])
+        until(t0, 14.0)
         claude_step(e, "Bash", {"command": "cargo test -p atlas-api", "description": "Run all tests"})
-        e["scripted"] = False
-
-    def commit_pixel():
-        e = by_title("Port the shader pipeline to wgpu 25")
-        e["scripted"] = True
-        cwd = Path(e["cwd"])
-        (cwd / "shaders" / "blur.wgsl").write_text("@fragment\nfn blur(uv: vec2<f32>) -> vec4<f32> {\n    return vec4<f32>(0.0);\n}\n")
-        claude_step(e, "Write", {"file_path": "shaders/blur.wgsl", "content": "@fragment\nfn blur(...)"}, "File created successfully at: shaders/blur.wgsl")
-        nap(2.0)
-        msg_ = "Blur pass in WGSL with a pipeline cache"
-        claude_step(e, "Bash", {"command": f"git add -A && git commit -m '{msg_}'", "description": "Commit the port"})
-        nap(1.0)
-        git(cwd, "add", "-A")
-        git(cwd, "commit", "-q", "-m", msg_)
-        h = git(cwd, "rev-parse", "--short", "HEAD")
-        with LOCK:
-            append_claude(e, [result(open_ids(e)[-1], f"[wgpu-port {h}] {msg_}\n 3 files changed, 14 insertions(+)")])
-        nap(2.5)
-        claude_step(e, "Bash", {"command": "git checkout main && git merge --no-ff wgpu-port", "description": "Merge the port into main"})
-        nap(1.0)
-        git(cwd, "checkout", "-q", "main")
-        git(cwd, "merge", "-q", "--no-ff", "wgpu-port", "-m", "Merge branch 'wgpu-port'")
-        e["branch"] = "main"
-        with LOCK:
-            append_claude(e, [result(open_ids(e)[-1], "Merge made by the 'ort' strategy.\n shaders/blur.wgsl | 4 ++++")])
-        nap(1.5)
-        claude_step(e, "Bash", {"command": "cargo run --example bloom -- --frames 60", "description": "Render the bloom example"})
         e["scripted"] = False
 
     moments = {"changes": changes, "terminal": terminal, "terminal-codex": terminal_codex, "overlap": overlap, "needs": needs, "commit-atlas": commit_atlas, "commit-pixel": commit_pixel}
