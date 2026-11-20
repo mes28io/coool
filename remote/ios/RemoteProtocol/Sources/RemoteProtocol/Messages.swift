@@ -120,8 +120,13 @@ public struct SessionInfo: Codable, Equatable, Sendable, Identifiable {
   public var lastActivity: Double
   /// A chat coool runs: one a `send` or `stop` can reach.
   public var chat: Bool
+  /// Minor 1: the step in progress, sub-agents running, steps this turn, when the turn started.
+  public var step: String?
+  public var agents: Int?
+  public var steps: Int?
+  public var turnStarted: Double?
 
-  public init(id: String, title: String, project: String, cli: Cli, state: String, model: String = "", lastActivity: Double = 0, chat: Bool) {
+  public init(id: String, title: String, project: String, cli: Cli, state: String, model: String = "", lastActivity: Double = 0, chat: Bool, step: String? = nil, agents: Int? = nil, steps: Int? = nil, turnStarted: Double? = nil) {
     self.id = id
     self.title = title
     self.project = project
@@ -130,6 +135,10 @@ public struct SessionInfo: Codable, Equatable, Sendable, Identifiable {
     self.model = model
     self.lastActivity = lastActivity
     self.chat = chat
+    self.step = step
+    self.agents = agents
+    self.steps = steps
+    self.turnStarted = turnStarted
   }
 }
 
@@ -157,8 +166,17 @@ public struct Need: Codable, Equatable, Sendable, Identifiable {
   public var questions: [Question]
   public var explanation: String?
   public var risk: String?
+  /// Minor 1: the Mac page's first line, an edit's change, a plan's Markdown, the AI read.
+  public var what: String?
+  public var diff: Diff?
+  public var plan: String?
+  public var read: AiRead?
 
-  public init(id: String, session: String, kind: String, tool: String, summary: String, command: String? = nil, questions: [Question] = [], explanation: String? = nil, risk: String? = nil) {
+  public init(id: String, session: String, kind: String, tool: String, summary: String, command: String? = nil, questions: [Question] = [], explanation: String? = nil, risk: String? = nil, what: String? = nil, diff: Diff? = nil, plan: String? = nil, read: AiRead? = nil) {
+    self.what = what
+    self.diff = diff
+    self.plan = plan
+    self.read = read
     self.id = id
     self.session = session
     self.kind = kind
@@ -181,6 +199,10 @@ public struct Need: Codable, Equatable, Sendable, Identifiable {
     questions = try c.decodeIfPresent([Question].self, forKey: .questions) ?? []
     explanation = try c.decodeIfPresent(String.self, forKey: .explanation)
     risk = try c.decodeIfPresent(String.self, forKey: .risk)
+    what = try c.decodeIfPresent(String.self, forKey: .what)
+    diff = try? c.decodeIfPresent(Diff.self, forKey: .diff)
+    plan = try c.decodeIfPresent(String.self, forKey: .plan)
+    read = try? c.decodeIfPresent(AiRead.self, forKey: .read)
   }
 }
 
@@ -214,7 +236,12 @@ public struct CommandResult: Codable, Equatable, Sendable {
   public var error: String?
   public var session: String?
   public var mode: String?
-  public init(of: String, t: String, ok: Bool, error: String? = nil, session: String? = nil, mode: String? = nil) {
+  /// Minor 1: the model a `start` used; the upload an `upload`'s last part finished.
+  public var model: String?
+  public var upload: String?
+  public init(of: String, t: String, ok: Bool, error: String? = nil, session: String? = nil, mode: String? = nil, model: String? = nil, upload: String? = nil) {
+    self.model = model
+    self.upload = upload
     self.of = of
     self.t = t
     self.ok = ok
@@ -234,6 +261,12 @@ public enum Inbound: Equatable, Sendable {
   case chatTail(session: String, items: [ChatItem])
   case result(CommandResult)
   case projects([Project])
+  /// Minor 1.
+  case chat(ChatUpdate)
+  case overview(Overview)
+  case options(StartOptions)
+  case image(ImageChunk)
+  case frame(Frame)
   case unknown(String)
   /// A known type whose body this version can't read: ignored as well, but worth a log line.
   case malformed(String)
@@ -260,6 +293,11 @@ public enum Inbound: Equatable, Sendable {
         return .chatTail(session: t.session, items: t.items)
       case "result": return .result(try e.b.decode(CommandResult.self))
       case "projects": return .projects(try e.b.decode(Projects.self).projects)
+      case "chat": return .chat(try e.b.decode(ChatUpdate.self))
+      case "overview": return .overview(try e.b.decode(Overview.self))
+      case "options": return .options(try e.b.decode(StartOptions.self))
+      case "image": return .image(try e.b.decode(ImageChunk.self))
+      case "frame": return .frame(try e.b.decode(Frame.self))
       default: return .unknown(e.t)
       }
     } catch {
@@ -278,6 +316,8 @@ public enum Choice: Equatable, Sendable {
   case option(String)
   /// Per question, the picked labels (or typed text where the question takes it).
   case answers([[String]])
+  /// Minor 1, a plan only: don't approve; keep planning, with an optional note.
+  case keepPlanning(note: String?)
 }
 
 public enum Command: Equatable, Sendable {
@@ -285,10 +325,21 @@ public enum Command: Equatable, Sendable {
   case getSnapshot
   case getChat(session: String, n: Int = 30)
   case answer(need: String, Choice)
-  case send(session: String, text: String)
+  /// `when` and `attachments` (upload ids) are minor 1; left out of the body at their defaults.
+  case send(session: String, text: String, when: Delivery = .send, attachments: [String] = [])
   case stop(session: String)
-  /// Only a project from the Mac's own list (`projects`): the phone never names a path.
-  case start(Project, Cli, text: String)
+  /// Only a project from the Mac's own list (`projects`): the phone never names a path. `model` and `mode` (minor 1)
+  /// come from the Mac's `options`; the Mac refuses anything else.
+  case start(Project, Cli, text: String, model: String? = nil, mode: String? = nil, attachments: [String] = [])
+  /// Minor 1: a chat's live view while it is on screen (renew within 30 s); `reset` asks for all of it again.
+  case watch(session: String, reset: Bool = false)
+  case unwatch
+  /// Minor 1: pictures of a device panel the chat's agent uses, view only. There is no input to send.
+  case watchDevice(session: String, device: String)
+  case unwatchDevice
+  case getImage(session: String, key: String)
+  /// One part of an image (see `uploadParts`).
+  case upload(JSONValue)
 
   public var type: String {
     switch self {
@@ -299,12 +350,18 @@ public enum Command: Equatable, Sendable {
     case .send: "send"
     case .stop: "stop"
     case .start: "start"
+    case .watch: "watch"
+    case .unwatch: "unwatch"
+    case .watchDevice: "watch_device"
+    case .unwatchDevice: "unwatch_device"
+    case .getImage: "get_image"
+    case .upload: "upload"
     }
   }
 
   public var body: JSONValue {
     switch self {
-    case .hello(let name): ["name": .string(name)]
+    case .hello(let name): ["name": .string(name), "minor": .number(Double(Remote.minor))]
     case .getSnapshot: [:]
     case .getChat(let s, let n): ["session": .string(s), "n": .number(Double(n))]
     case .answer(let need, let c):
@@ -313,11 +370,30 @@ public enum Command: Equatable, Sendable {
       case .deny: ["need": .string(need), "choice": "deny"]
       case .option(let o): ["need": .string(need), "choice": "option", "option": .string(o)]
       case .answers(let a): ["need": .string(need), "choice": "answers", "answers": .array(a.map { .array($0.map(JSONValue.string)) })]
+      case .keepPlanning(let note):
+        if let n = note, !n.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          ["need": .string(need), "choice": "keep_planning", "note": .string(n)]
+        } else {
+          ["need": .string(need), "choice": "keep_planning"]
+        }
       }
-    case .send(let s, let text): ["session": .string(s), "text": .string(text)]
+    case .send(let s, let text, let when, let atts):
+      Self.object(["session": .string(s), "text": .string(text)], when == .send ? nil : ("when", .string(when.rawValue)), atts.isEmpty ? nil : ("attachments", .array(atts.map(JSONValue.string))))
     case .stop(let s): ["session": .string(s)]
-    case .start(let p, let cli, let text): ["project": .string(p.id), "cli": .string(cli.rawValue), "text": .string(text)]
+    case .start(let p, let cli, let text, let model, let mode, let atts):
+      Self.object(["project": .string(p.id), "cli": .string(cli.rawValue), "text": .string(text)], model.map { ("model", .string($0)) }, mode.map { ("mode", .string($0)) }, atts.isEmpty ? nil : ("attachments", .array(atts.map(JSONValue.string))))
+    case .watch(let s, let reset): reset ? ["session": .string(s), "reset": true] : ["session": .string(s)]
+    case .unwatch, .unwatchDevice: [:]
+    case .watchDevice(let s, let d): ["session": .string(s), "device": .string(d)]
+    case .getImage(let s, let k): ["session": .string(s), "key": .string(k)]
+    case .upload(let b): b
     }
+  }
+
+  private static func object(_ base: [String: JSONValue], _ extra: (String, JSONValue)?...) -> JSONValue {
+    var o = base
+    for case let (k, v)? in extra { o[k] = v }
+    return .object(o)
   }
 
   public func envelope(at: Int64 = nowMs()) -> Envelope { Envelope(t: type, at: at, b: body) }

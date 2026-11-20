@@ -17,11 +17,22 @@ BIN=${COOOL_BIN:-${CARGO_TARGET_DIR:-target}/debug/coool}
 DERIVED=${DERIVED:-$HERE/../.build/dd}
 : "${SIM:?set SIM to the udid of your test simulator}"
 rm -rf "$OUT"
-mkdir -p "$OUT/remote-e2e-proj" "$OUT/bin" "$OUT/shots" "$OUT/phone-shots"
+mkdir -p "$OUT/remote-e2e-proj" "$OUT/bin" "$OUT/shots" "$OUT/phone-shots" "$OUT/site" "$OUT/attach"
 OUT=$(cd "$OUT" && pwd -P)
 PROJ="$OUT/remote-e2e-proj"
 cp "$BIN" "$OUT/bin/coool-remote-ios-e2e"
 xcrun simctl boot "$SIM" 2>/dev/null || true
+# An invented local page for the chat's Browser panel (minor 1: the phone watches it as pictures); a clock that ticks,
+# so successive pictures differ. SITE_PORT: any free port of yours (default 5391).
+SITE_PORT=${SITE_PORT:-5391}
+cat > "$OUT/site/remote.html" <<'HTML'
+<!doctype html><title>Remote frame test</title><body style="font:32px -apple-system;margin:40px;background:#f7f6f3">
+<h1>Remote frame test</h1><p>An invented page. <b id="t">0</b> s</p><div id="bar" style="height:20px;background:#0a84ff;width:10px"></div>
+<script>let n=0;setInterval(()=>{n++;t.textContent=n;bar.style.width=(10+(n*25)%400)+"px"},1000)</script>
+HTML
+python3 -m http.server "$SITE_PORT" --bind 127.0.0.1 --directory "$OUT/site" > "$OUT/site.log" 2>&1 &
+SITE=$!
+COOOL_ATTACH_DIR="$OUT/attach" COOOL_SELFTEST_SITE="http://127.0.0.1:$SITE_PORT" \
 COOOL_REMOTE_RELAY="${COOOL_REMOTE_RELAY:-https://abundant-ostrich-973.eu-west-1.convex.cloud}" COOOL_SELFTEST=remote COOOL_SELFTEST_DIR="$PROJ" COOOL_SELFTEST_LOG="$OUT/selftest.log" COOOL_SELFTEST_SHOTS="$OUT/shots" \
   COOOL_SELFTEST_BACKGROUND=1 "$OUT/bin/coool-remote-ios-e2e" > "$OUT/app.out" 2>&1 &
 APP=$!
@@ -46,6 +57,7 @@ j=0
 while [ $j -lt 120 ] && kill -0 $PHONE 2>/dev/null; do sleep 1; j=$((j + 1)); done
 kill $PHONE 2>/dev/null || true
 wait $PHONE 2>/dev/null || true
+kill $SITE 2>/dev/null || true
 echo "--- app"
 cat "$OUT/selftest.log"
 echo "--- phone"

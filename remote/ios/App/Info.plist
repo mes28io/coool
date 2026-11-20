@@ -34,7 +34,7 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSCameraUsageDescription</key>
-	<string>coool Remote uses the camera only to scan the pairing code your Mac shows.</string>
+	<string>coool Remote uses the camera to scan the pairing code your Mac shows, and to take a photo you send to a chat.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

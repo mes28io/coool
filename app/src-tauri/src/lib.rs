@@ -2019,6 +2019,7 @@ pub fn run() {
             remote::remote_pair_cancel,
             remote::remote_remove_device,
             remote::remote_set_defaults,
+            remote::remote_set_need_notes,
             remote::remote_selftest_read,
             remote::remote_selftest_write,
         ])

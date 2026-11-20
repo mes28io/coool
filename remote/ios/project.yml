@@ -37,7 +37,7 @@ targets:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-        NSCameraUsageDescription: coool Remote uses the camera only to scan the pairing code your Mac shows.
+        NSCameraUsageDescription: coool Remote uses the camera to scan the pairing code your Mac shows, and to take a photo you send to a chat.
         ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
           - CFBundleURLName: sh.coool.remote.pair

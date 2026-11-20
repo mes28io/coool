@@ -1898,3 +1898,32 @@ email.labels = [document.body.childNodes[2]];
         assert_eq!(marks(), 0);
     }
 }
+
+/// coool Remote (docs/REMOTE.md "Minor 1"): whether the chat's Browser panel shows a page now.
+pub fn remote_has_page(devices: &Devices, chat: usize) -> bool {
+    Browser::new(devices, chat).current().is_some()
+}
+
+/// coool Remote: a small picture of the chat's Browser panel as it is (the agent's cursor included), for the phone.
+/// View only: nothing is sent to the page.
+pub fn remote_frame(devices: &Devices, chat: usize, max: f64) -> Result<Option<Vec<u8>>, String> {
+    let b = Browser::new(devices, chat);
+    let Some(page) = b.current() else { return Ok(None) };
+    #[cfg(target_os = "macos")]
+    {
+        let w = b.app()?.get_webview(&page.label).ok_or("the page closed")?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        w.with_webview(move |pw| {
+            crate::browser::native::snapshot_jpeg(pw.inner(), max, 0.45, move |r| {
+                let _ = tx.send(r);
+            })
+        })
+        .map_err(|e| e.to_string())?;
+        rx.recv_timeout(Duration::from_secs(4)).map_err(|_| "no picture of the page".to_string())?.map(Some)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (page, max);
+        Ok(None)
+    }
+}
