@@ -1,0 +1,548 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1A544A9C267BAB1BF448FFD3 /* NeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4545CA28D6F10D143424A97C /* NeedView.swift */; };
+		357869C0DD1E36C04426C082 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 262C01CE32887B029EC8C2E5 /* Assets.xcassets */; };
+		3595ED7088A223DA2A30A8E6 /* Vault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89AF8AAE849B281A3A26742D /* Vault.swift */; };
+		400D6D2137211CEF2E7755E9 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE5CC68413B6A858C619BB8 /* Theme.swift */; };
+		4A299A98E21669A3D5F98072 /* RelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84ED76EDCED12A6CF224E009 /* RelayClient.swift */; };
+		4AA22AE88CA3FD21E0A90231 /* RemoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BE85E8726B027F7D4B47394 /* RemoteStore.swift */; };
+		5E0C7B4246F92FEC62262512 /* ConvexMobile in Frameworks */ = {isa = PBXBuildFile; productRef = F454D9F1B75C06E24D16CBDD /* ConvexMobile */; };
+		7CD0636B95DE4A299E067BA6 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EAC987FF2C907D82075A638 /* ChatView.swift */; };
+		7DECBA1ECFB8A355E3C702A5 /* NewChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15523836B91BEFF840A5511 /* NewChatView.swift */; };
+		7E89E5C06C162E98CEC9B3BC /* RemoteProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 18599B0636122927C64A58E0 /* RemoteProtocol */; };
+		87607EB52A3D51FE35D8B1D3 /* Support.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99809F67D604D49EC565B9D2 /* Support.swift */; };
+		A05DC9C5CEEE8F673E052F83 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9FE3E20237DF3A754DCA478 /* SettingsView.swift */; };
+		A7F65ED923FD619A8007752E /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D935561586B47BD0439EC0 /* PairingView.swift */; };
+		B033FA2F5A4D7FA866533E70 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77829BD2160DA5F0146FBD92 /* SessionsView.swift */; };
+		B41040B7D4525F3A2452C33E /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F755E533D2C0BD22726220A /* ScreenshotTests.swift */; };
+		BAF521DB6C00E5F62619FC2B /* EndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4948DE94D96C69B4605E35C3 /* EndToEndTests.swift */; };
+		BC03455D97B7E5080797150D /* CooolRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5297C596167079E74D28D47 /* CooolRemoteApp.swift */; };
+		FE86641557D345E87D294321 /* Demo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A06CCC83EC31D519D8962532 /* Demo.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		12DD8F517DF17E1D2B480B8C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C7B54C01C341E686228FADDA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DFD08D0D7768CB255A140CA7;
+			remoteInfo = CooolRemote;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		00D935561586B47BD0439EC0 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		0A62A03E24167FFD46D12BF2 /* CooolRemoteUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CooolRemoteUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1422249E4C9F3C00BCAF2CF4 /* RemoteProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RemoteProtocol; path = RemoteProtocol; sourceTree = SOURCE_ROOT; };
+		1EAC987FF2C907D82075A638 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		262C01CE32887B029EC8C2E5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2F755E533D2C0BD22726220A /* ScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotTests.swift; sourceTree = "<group>"; };
+		4545CA28D6F10D143424A97C /* NeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeedView.swift; sourceTree = "<group>"; };
+		4948DE94D96C69B4605E35C3 /* EndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndToEndTests.swift; sourceTree = "<group>"; };
+		6BE85E8726B027F7D4B47394 /* RemoteStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteStore.swift; sourceTree = "<group>"; };
+		77829BD2160DA5F0146FBD92 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
+		84ED76EDCED12A6CF224E009 /* RelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayClient.swift; sourceTree = "<group>"; };
+		89AF8AAE849B281A3A26742D /* Vault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Vault.swift; sourceTree = "<group>"; };
+		8A17960FC96F4F3E3AA448A1 /* CooolRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CooolRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		99809F67D604D49EC565B9D2 /* Support.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Support.swift; sourceTree = "<group>"; };
+		A06CCC83EC31D519D8962532 /* Demo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Demo.swift; sourceTree = "<group>"; };
+		A5297C596167079E74D28D47 /* CooolRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CooolRemoteApp.swift; sourceTree = "<group>"; };
+		B15523836B91BEFF840A5511 /* NewChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewChatView.swift; sourceTree = "<group>"; };
+		C9FE3E20237DF3A754DCA478 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		ECE5CC68413B6A858C619BB8 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		F0DA23F7F3CA79EC4F3DDA60 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		50978924EBCF889C60AB8F51 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7E89E5C06C162E98CEC9B3BC /* RemoteProtocol in Frameworks */,
+				5E0C7B4246F92FEC62262512 /* ConvexMobile in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1CB5F60799C22DB9ABC3B9E8 /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				84ED76EDCED12A6CF224E009 /* RelayClient.swift */,
+				6BE85E8726B027F7D4B47394 /* RemoteStore.swift */,
+				89AF8AAE849B281A3A26742D /* Vault.swift */,
+			);
+			path = Model;
+			sourceTree = "<group>";
+		};
+		7104392EEC6CDF7E735DDE08 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				4948DE94D96C69B4605E35C3 /* EndToEndTests.swift */,
+				2F755E533D2C0BD22726220A /* ScreenshotTests.swift */,
+				99809F67D604D49EC565B9D2 /* Support.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		99FE6C139DAEEAB12AB4527D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				8A17960FC96F4F3E3AA448A1 /* CooolRemote.app */,
+				0A62A03E24167FFD46D12BF2 /* CooolRemoteUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1A689B5B40C7C3A73C4EA35 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				262C01CE32887B029EC8C2E5 /* Assets.xcassets */,
+				A5297C596167079E74D28D47 /* CooolRemoteApp.swift */,
+				A06CCC83EC31D519D8962532 /* Demo.swift */,
+				F0DA23F7F3CA79EC4F3DDA60 /* Info.plist */,
+				1CB5F60799C22DB9ABC3B9E8 /* Model */,
+				B95EA972467D7EE49C754523 /* UI */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A93C5A4D0ED375EF8C76CAE2 = {
+			isa = PBXGroup;
+			children = (
+				A1A689B5B40C7C3A73C4EA35 /* App */,
+				F8C69D73533CFAC69191EEDA /* Packages */,
+				7104392EEC6CDF7E735DDE08 /* UITests */,
+				99FE6C139DAEEAB12AB4527D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B95EA972467D7EE49C754523 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				1EAC987FF2C907D82075A638 /* ChatView.swift */,
+				4545CA28D6F10D143424A97C /* NeedView.swift */,
+				B15523836B91BEFF840A5511 /* NewChatView.swift */,
+				00D935561586B47BD0439EC0 /* PairingView.swift */,
+				77829BD2160DA5F0146FBD92 /* SessionsView.swift */,
+				C9FE3E20237DF3A754DCA478 /* SettingsView.swift */,
+				ECE5CC68413B6A858C619BB8 /* Theme.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		F8C69D73533CFAC69191EEDA /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				1422249E4C9F3C00BCAF2CF4 /* RemoteProtocol */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2B766F43477BF7768AB15D09 /* CooolRemoteUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 971179C7A5B5847A98334D84 /* Build configuration list for PBXNativeTarget "CooolRemoteUITests" */;
+			buildPhases = (
+				AB58D58A57EC4986B88A803E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F56BC17320F870DA539CB5F3 /* PBXTargetDependency */,
+			);
+			name = CooolRemoteUITests;
+			packageProductDependencies = (
+			);
+			productName = CooolRemoteUITests;
+			productReference = 0A62A03E24167FFD46D12BF2 /* CooolRemoteUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		DFD08D0D7768CB255A140CA7 /* CooolRemote */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DC4620AD7CC223E917FFFFCB /* Build configuration list for PBXNativeTarget "CooolRemote" */;
+			buildPhases = (
+				F51D00D7EACCCA8B49123662 /* Sources */,
+				64CA3FBEEA18441C5DDBDBF8 /* Resources */,
+				50978924EBCF889C60AB8F51 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CooolRemote;
+			packageProductDependencies = (
+				18599B0636122927C64A58E0 /* RemoteProtocol */,
+				F454D9F1B75C06E24D16CBDD /* ConvexMobile */,
+			);
+			productName = CooolRemote;
+			productReference = 8A17960FC96F4F3E3AA448A1 /* CooolRemote.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C7B54C01C341E686228FADDA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					2B766F43477BF7768AB15D09 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = DFD08D0D7768CB255A140CA7;
+					};
+					DFD08D0D7768CB255A140CA7 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = ECB07097DAC6A56AB2F856BC /* Build configuration list for PBXProject "CooolRemote" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = A93C5A4D0ED375EF8C76CAE2;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				48F3F186947E193DBBB1F7EB /* XCRemoteSwiftPackageReference "convex-swift" */,
+				FA1B605A363B5B557E25BAC5 /* XCLocalSwiftPackageReference "RemoteProtocol" */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				DFD08D0D7768CB255A140CA7 /* CooolRemote */,
+				2B766F43477BF7768AB15D09 /* CooolRemoteUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		64CA3FBEEA18441C5DDBDBF8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				357869C0DD1E36C04426C082 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AB58D58A57EC4986B88A803E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BAF521DB6C00E5F62619FC2B /* EndToEndTests.swift in Sources */,
+				B41040B7D4525F3A2452C33E /* ScreenshotTests.swift in Sources */,
+				87607EB52A3D51FE35D8B1D3 /* Support.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F51D00D7EACCCA8B49123662 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CD0636B95DE4A299E067BA6 /* ChatView.swift in Sources */,
+				BC03455D97B7E5080797150D /* CooolRemoteApp.swift in Sources */,
+				FE86641557D345E87D294321 /* Demo.swift in Sources */,
+				1A544A9C267BAB1BF448FFD3 /* NeedView.swift in Sources */,
+				7DECBA1ECFB8A355E3C702A5 /* NewChatView.swift in Sources */,
+				A7F65ED923FD619A8007752E /* PairingView.swift in Sources */,
+				4A299A98E21669A3D5F98072 /* RelayClient.swift in Sources */,
+				4AA22AE88CA3FD21E0A90231 /* RemoteStore.swift in Sources */,
+				B033FA2F5A4D7FA866533E70 /* SessionsView.swift in Sources */,
+				A05DC9C5CEEE8F673E052F83 /* SettingsView.swift in Sources */,
+				400D6D2137211CEF2E7755E9 /* Theme.swift in Sources */,
+				3595ED7088A223DA2A30A8E6 /* Vault.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F56BC17320F870DA539CB5F3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DFD08D0D7768CB255A140CA7 /* CooolRemote */;
+			targetProxy = 12DD8F517DF17E1D2B480B8C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		18757651813300F401920543 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = sh.coool.remote;
+				PRODUCT_NAME = CooolRemote;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		5718D519216056AB55048358 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8028561A92359A414D7994D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = sh.coool.remote.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = CooolRemote;
+			};
+			name = Release;
+		};
+		A7E58A5263123BFDDC4F893E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = sh.coool.remote.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = CooolRemote;
+			};
+			name = Debug;
+		};
+		B9D9F8E156692B10B5329D34 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		D811FD2A8775C42DFD925BDF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = sh.coool.remote;
+				PRODUCT_NAME = CooolRemote;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		971179C7A5B5847A98334D84 /* Build configuration list for PBXNativeTarget "CooolRemoteUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A7E58A5263123BFDDC4F893E /* Debug */,
+				8028561A92359A414D7994D5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DC4620AD7CC223E917FFFFCB /* Build configuration list for PBXNativeTarget "CooolRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D811FD2A8775C42DFD925BDF /* Debug */,
+				18757651813300F401920543 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		ECB07097DAC6A56AB2F856BC /* Build configuration list for PBXProject "CooolRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5718D519216056AB55048358 /* Debug */,
+				B9D9F8E156692B10B5329D34 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		FA1B605A363B5B557E25BAC5 /* XCLocalSwiftPackageReference "RemoteProtocol" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = RemoteProtocol;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		48F3F186947E193DBBB1F7EB /* XCRemoteSwiftPackageReference "convex-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/get-convex/convex-swift";
+			requirement = {
+				kind = exactVersion;
+				version = 0.8.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		18599B0636122927C64A58E0 /* RemoteProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RemoteProtocol;
+		};
+		F454D9F1B75C06E24D16CBDD /* ConvexMobile */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 48F3F186947E193DBBB1F7EB /* XCRemoteSwiftPackageReference "convex-swift" */;
+			productName = ConvexMobile;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = C7B54C01C341E686228FADDA /* Project object */;
+}
