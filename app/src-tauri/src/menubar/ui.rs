@@ -281,6 +281,7 @@ pub fn create(hidden: bool, test: bool) {
     let target = Target::new(mtm);
     menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
     item.setMenu(Some(&menu));
+    eprintln!("coool menubar: item created{}", if hidden { " (hidden)" } else { "" });
     UI.with(|u| *u.borrow_mut() = Some(Ui { item, menu, _target: target, rows: Vec::new(), acts: Vec::new(), bar: None }));
 }
 
@@ -289,6 +290,7 @@ pub fn remove() {
     if let Some(u) = UI.with(|u| u.borrow_mut().take()) {
         u.menu.cancelTracking();
         NSStatusBar::systemStatusBar().removeStatusItem(&u.item);
+        eprintln!("coool menubar: item removed");
     }
 }
 

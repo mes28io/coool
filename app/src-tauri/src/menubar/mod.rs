@@ -315,7 +315,16 @@ fn sampler() {
                 }
             });
         }
-        with(|s| s.busy_ns += busy.as_nanos() as u64);
+        let log = with(|s| {
+            s.busy_ns += busy.as_nanos() as u64;
+            (s.hidden && !s.test && due && s.samples % 30 == 0).then(|| (s.samples, s.busy_ns))
+        })
+        .flatten();
+        // A hidden launch (`COOOL_MENUBAR_HIDDEN=1`, the release smoke test) reports the sampler's cost now and then,
+        // and what the bar would show.
+        if let Some((n, ns)) = log {
+            eprintln!("coool menubar: {n} samples, {:.1} ms in the sampler so far; bar {:?}", ns as f64 / 1e6, with(|s| model::bar(&s.reading, s.prefs.mode, false).segs.iter().map(|x| x.text.clone()).collect::<String>()).unwrap_or_default());
+        }
         seen_gen = seq;
         was_open = open;
         // Sleep until the next reading is due, or something changed (settings, sessions, the menu).
