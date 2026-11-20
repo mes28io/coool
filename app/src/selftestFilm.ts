@@ -61,13 +61,35 @@ async function typeOut(t: string, sleep: (ms: number) => Promise<unknown>) {
   el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 }
 
+/**
+ * Plays the page `s` times slower than real time: its CSS and Web animations (spinners, fades, springs run as Web
+ * Animations), and the clock JS animations read (`performance.now`, requestAnimationFrame's timestamps). Timers and
+ * `Date.now` keep real time (the ages the app shows are real).
+ */
+function dilate(s: number, what = "animations") {
+  if (s <= 1) return;
+  const rate = 1 / s;
+  setInterval(() => {
+    for (const a of document.getAnimations()) if (a.playbackRate > 0 && a.playbackRate !== rate) a.playbackRate = rate;
+  }, 5);
+  if (what !== "all") return;
+  const realNow = performance.now.bind(performance);
+  const base = realNow();
+  performance.now = () => base + (realNow() - base) / s;
+  const raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (cb) => raf((ts) => cb(base + (ts - base) / s));
+}
+
 export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   const { invoke, sleep, waitFor, step, log, dir } = k;
-  const film = (action: string, a: Record<string, unknown> = {}) => invoke("selftest_film", { action, ...a }) as Promise<{ frames?: number; ms?: number }>;
+  const film = (action: string, a: Record<string, unknown> = {}) => invoke("selftest_film", { action, ...a }) as Promise<{ frames?: number; ms?: number; slow?: number; dilate?: string; mac?: boolean }>;
   const chats = () => useChats.getState().chats;
   const ids = () => new Set(Object.keys(chats()).map(Number));
-  const sessionOfChat = (id: number) => useStore.getState().sessions.find((s) => s.chat === id);
   const sessions = () => useStore.getState().sessions;
+  /** `film` runs its scene `slow` times slower than real time (`COOOL_FILM_SLOW`); waits in scene time. */
+  let slow = 1;
+  const fsleep = (ms: number) => sleep(ms * slow);
+  const fwait = <T,>(what: string, f: () => T | null | undefined | false, ms = 60_000) => waitFor(what, f, ms * slow);
 
   let current = "";
   /** A moment in the running burst, with the rectangles of `els` (name -> element). */
@@ -78,7 +100,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
   }
   async function burst(name: string, f: () => Promise<void>) {
     current = name;
-    await film("start", { name, workers: 4, format: "png" });
+    await film("start", { name, format: "png" });
     try {
       await f();
     } finally {
@@ -141,7 +163,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       if (dev && !seen.has(dev.dataset.approval ?? "")) {
         seen.add(dev.dataset.approval ?? "");
         void mark("device-ask", { card: dev });
-        setTimeout(() => (($('[data-remember="chat"]', dev) as HTMLElement | null) ?? button("Allow once", dev))?.click(), 1400);
+        setTimeout(() => (($('[data-remember="chat"]', dev) as HTMLElement | null) ?? button("Allow once", dev))?.click(), 1400 * slow);
       }
     }, 100);
     return () => clearInterval(t);
@@ -154,7 +176,7 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         await film("visible");
         await sleep(3000);
       });
-      for (const [workers, format] of [[1, "png"], [3, "png"], [6, "png"], [1, "jpg"], [3, "jpg"], [6, "jpg"], [3, "bmp"], [6, "bmp"]] as const) {
+      for (const [workers, format] of [[2, "png"], [3, "png"], [4, "png"], [3, "jpg"], [3, "bmp"]] as const) {
         await step(`film: burst ${workers}x ${format}`, async () => {
           await film("start", { name: `m-${workers}-${format}`, workers, format });
           await sleep(5000);
@@ -164,175 +186,213 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
       }
     },
 
+    // A check of the slowed-down page: a chat's last reply and its turn's end must still show.
+    async "film-probe"() {
+      await step("film-probe: a chat's reply shows with the page slowed down", async () => {
+        await waitFor("the sessions", () => sessions().length >= 12, 60_000);
+        const v = await film("visible");
+        slow = v.slow ?? 1;
+        dilate(slow, v.dilate);
+        const id = await start(`${dir}/invoices`, "Invoices from March still look wrong in the export. Check it.", "acceptEdits");
+        useStore.getState().open({ kind: "chat", id });
+        await waitFor("the card", () => $("[data-allow-once]"), 60_000);
+        $("[data-allow-once]")?.click();
+        await sleep(15_000);
+        const items = chats()[id]?.items ?? [];
+        const store = items.filter((i) => i.kind === "text").map((i) => ((i as { text?: string }).text ?? "").slice(0, 30));
+        const dom = text($("[data-chat-timeline]"));
+        const anims = document.getAnimations().map((a) => `${a.playState}@${Math.round(Number(a.currentTime ?? -1))}/${a.playbackRate}:${(a.effect as KeyframeEffect | null)?.target?.className?.toString().slice(0, 40) ?? "?"}`).slice(0, 30);
+        await log(`INFO probe store=${JSON.stringify(store)} domHasReply=${/tests pass/.test(dom)} running=${chats()[id]?.running} anims=${JSON.stringify(anims)}`);
+        if (!/tests pass/.test(dom)) throw new Error("the reply is not on screen");
+      });
+    },
+
     async film() {
+      let mac = false;
       await step("film: the invented sessions are listed", async () => {
         await waitFor("the sessions", () => sessions().length >= 12, 60_000);
-        await film("visible");
+        const v = await film("visible");
+        slow = v.slow ?? 1;
+        mac = !!v.mac;
+        dilate(slow, v.dilate);
         hideLogos();
-        await log(`INFO updates ${JSON.stringify(useUpdates.getState().status).slice(0, 600)}`);
+        await log(`INFO updates ${JSON.stringify(useUpdates.getState().status).slice(0, 400)}`);
         await look("dark");
         await sleep(4000);
-        return `${sessions().length} sessions`;
+        return `${sessions().length} sessions, slow ${slow} (${v.dilate}), mac ${mac}`;
       });
 
-      // 1. Both CLIs in one window; a session started in a terminal shows up live, then a Codex one.
-      await step("film: terminal sessions appear live in Mission control (mc-terminal)", async () => {
+      // 2. The session list: working, then needs you, then a session started in a terminal, then a Codex one.
+      await step("film: states, and sessions started outside the app appear (sessions)", async () => {
         await missionTab("atlas-api");
-        await sleep(2500);
-        await burst("mc-terminal", async () => {
-          await sleep(2500);
-          await mark("before", { sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]") });
+        await sleep(1500);
+        await burst("sessions", async () => {
+          await fsleep(4000);
+          await mark("working", { sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]") });
+          await cue("needs");
+          await fwait("an atlas-api session waiting", () => /1 waiting|2 waiting/.test(text($("[data-mc-sessions]"))) && /Make limiter[^]*?(Waiting|needs|permission)/i.test(text($("[data-mc-sessions]"))), 20_000).catch(() => null);
+          await mark("needs-you", { sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]"), row: $all("[data-mc-session]").find((r) => text(r).includes("Make limiter")) });
+          await fsleep(5000);
           await cue("terminal");
-          await waitFor("the terminal session's row", () => mcHas("Add request IDs"), 20_000);
-          const row = $all("[data-mc-session]").find((r) => text(r).includes("Add request IDs"));
-          await mark("claude-row", { row, sessions: $("[data-mc-sessions]") });
-          await sleep(4000);
+          await fwait("the terminal session's row", () => mcHas("Add request IDs"), 20_000);
+          await mark("terminal-row", { row: $all("[data-mc-session]").find((r) => text(r).includes("Add request IDs")), sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]") });
+          await fsleep(5000);
           await cue("terminal-codex");
-          await waitFor("the Codex session's row", () => mcHas("Document the v3 error"), 20_000);
-          const crow = $all("[data-mc-session]").find((r) => text(r).includes("Document the v3 error"));
-          await mark("codex-row", { row: crow, sessions: $("[data-mc-sessions]") });
-          await sleep(5000);
-          await mark("end", { sessions: $("[data-mc-sessions]") });
+          await fwait("the Codex session's row", () => mcHas("Document the v3 error"), 20_000);
+          await mark("codex-row", { row: $all("[data-mc-session]").find((r) => text(r).includes("Document the v3 error")), sessions: $("[data-mc-sessions]") });
+          await fsleep(5000);
+          await mark("end", { sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]") });
         });
-        return text($("[data-mc-sessions]")).slice(0, 200);
+        return text($("[data-mc-sessions]")).slice(0, 240);
       });
 
-      // 2. Two agents, one file: the overlap marks and the "Both editing" row appear.
-      await step("film: the overlap warning appears (overlap)", async () => {
-        await burst("overlap", async () => {
-          await sleep(2500);
-          await mark("before", { ledger: $("[data-mc-ledger]") });
-          await cue("overlap");
-          await waitFor("the overlap row", () => $("[data-mc-overlap]"), 20_000);
-          await mark("overlap-row", { overlap: $("[data-mc-overlap]"), ledger: $("[data-mc-ledger]"), marks: $("[data-overlap-mark]") });
-          await sleep(1500);
-          const marks = $all("[data-overlap-mark]");
-          await mark("sidebar-marks", Object.fromEntries(marks.map((m, i) => [`mark${i}`, m.closest("[data-session-row]") ?? m])));
-          await sleep(3500);
-        });
-        return text($("[data-mc-overlap]"));
-      });
-
-      // 4 (before the needs, which move sessions on). What they did: commits, a push, a merge, in two projects.
-      await step("film: changes and the commit trail update in two projects (changes)", async () => {
-        await burst("changes", async () => {
+      // 1. The whole window, steady, with gentle life (steps ticking), every state in it, dark then light.
+      for (const theme of ["dark", "light"] as const) {
+        await step(`film: the whole window, ${theme} (hero-${theme})`, async () => {
+          await missionTab("atlas-api");
+          await look(theme);
           await sleep(2000);
-          await mark("before", { trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
-          await cue("commit-atlas");
-          await waitFor("the atlas commit on the trail", () => /Return 429 when a key is over budget/.test(text($("[data-mc-trail]"))), 30_000);
-          await mark("atlas-commit", { trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
-          await waitFor("the push in the ledger", () => /Pushed|push/i.test(text($("[data-mc-ledger]"))), 20_000).catch(() => null);
-          await mark("atlas-push", { trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
-          await sleep(3000);
-          const tab = $all("[data-mc-tab]").find((t) => t.dataset.mcSwitchTo === "pixelforge");
-          tab?.click();
-          await mark("tab-pixelforge", { tab });
-          await sleep(2500);
-          await cue("commit-pixel");
-          await waitFor("the pixelforge merge on the trail", () => /Merged ?wgpu-port/.test(text($("[data-mc-trail]"))) && !$("[data-mc-committing]"), 40_000);
-          await mark("pixel-merge", { trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
-          await sleep(4000);
+          await burst(`hero-${theme}`, async () => {
+            await fsleep(500);
+            await mark("start", { sessions: $("[data-mc-sessions]"), sidebar: $("[data-sidebar-view]"), trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
+            await fsleep(14_000);
+          });
         });
-        return text($("[data-mc-trail]")).slice(0, 200);
+      }
+      await look("dark");
+
+      // 4. What changed: written, edited, committed, pushed, merged; then two sessions on one file.
+      await step("film: the changes fill in, then the overlap warning (changes)", async () => {
+        await burst("changes", async () => {
+          await fsleep(2500);
+          await mark("before", { ledger: $("[data-mc-ledger]"), trail: $("[data-mc-trail]") });
+          await cue("changes");
+          await fwait("the merge on the trail", () => /Merged ?limiter-docs/.test(text($("[data-mc-trail]"))), 60_000).catch(() => log("WARN changes: no merge on the trail"));
+          await mark("merged", { ledger: $("[data-mc-ledger]"), trail: $("[data-mc-trail]") });
+          await fsleep(4000);
+          await cue("overlap");
+          await fwait("the overlap row", () => $("[data-mc-overlap]"), 20_000);
+          await mark("overlap", { overlap: $("[data-mc-overlap]"), ledger: $("[data-mc-ledger]") });
+          await fsleep(1500);
+          await mark("overlap-marks", Object.fromEntries($all("[data-overlap-mark]").map((m, i) => [`mark${i}`, m.closest("[data-session-row]") ?? m])));
+          await fsleep(7000);
+          await mark("end", { ledger: $("[data-mc-ledger]"), trail: $("[data-mc-trail]") });
+        });
+        return `${text($("[data-mc-overlap]"))} | ${text($("[data-mc-ledger]")).slice(0, 200)}`;
       });
 
-      // 3. Requests that explain themselves, in one place.
+      // 3. A request that explains itself: arrives, opened, read, allowed.
       let invoices = -1;
-      await step("film: the Needs you page fills, one request is read and allowed (needs)", async () => {
-        invoices = await start(`${dir}/invoices`, "Why do invoices from March show the wrong month?", "acceptEdits");
-        // A Codex chat too (the stand-in `codex app-server`): it asks to force-push a rebased branch.
+      await step("film: a request arrives on the Needs you page, is read and allowed (needs)", async () => {
         const before = ids();
         await newChat({ provider: "codex", cwd: `${dir}/atlas-api`, model: "gpt-5.6", prompt: "Rebase the v3 errors branch on main and push it." });
-        const codex = (await waitFor("the Codex chat", () => { const i = [...ids()].find((x) => !before.has(x)); return i === undefined ? null : { i }; }, 15_000)).i;
+        const codex = (await waitFor("the Codex chat", () => { const x = [...ids()].find((y) => !before.has(y)); return x === undefined ? null : { x }; }, 15_000)).x;
+        await waitFor("the Codex chat's request", () => chats()[codex]?.pendingPermission, 60_000 * slow);
+        // The Claude chat starts now and asks a few seconds into the shot (the stand-in takes its time).
+        invoices = await start(`${dir}/invoices`, "Why do invoices from March show the wrong month?", "acceptEdits");
         useStore.getState().openNeeds(null);
         await waitFor("the Needs page", () => $("[data-needs-page]"), 10_000);
+        await sleep(2500);
         await burst("needs", async () => {
-          await sleep(1200);
-          await mark("start", { list: $("[data-needs-list]") });
-          await waitFor("the chats' requests", () => chats()[invoices]?.pendingPermission && $all("[data-needs-item]").length >= 1, 30_000);
-          await mark("first-item", { list: $("[data-needs-list]") });
-          await sleep(1500);
-          await cue("needs");
-          await waitFor("four requests", () => $all("[data-needs-item]").length >= 4, 20_000).catch(() => log(`WARN needs: ${$all("[data-needs-item]").length} items; codex chat ${JSON.stringify(chats()[codex]?.pendingPermission ?? null).slice(0, 120)}`));
-          await mark("all-items", { list: $("[data-needs-list]") });
-          await sleep(1800);
-          const s = sessionOfChat(invoices);
-          const item = $all("[data-needs-item]").find((i) => text(i).includes("rm -rf node_modules") || text(i).includes("Why do invoices"));
-          if (item) item.click();
-          else if (s) useStore.getState().openNeeds(sessionKey(s));
-          await waitFor("the detail of the rm -rf request", () => /rm -rf/.test(text($("[data-needs-detail]"))), 10_000);
-          await sleep(500);
+          await fsleep(1000);
+          await mark("list", { list: $("[data-needs-list]") });
+          await fwait("the new request in the list", () => chats()[invoices]?.pendingPermission && $all("[data-needs-item]").some((i) => text(i).includes("rm -rf node_modules")), 60_000);
+          const item = $all("[data-needs-item]").find((i) => text(i).includes("rm -rf node_modules"));
+          await mark("arrived", { item, list: $("[data-needs-list]") });
+          await fsleep(3000);
+          await mark("open-click", { item });
+          item?.click();
+          await fwait("the detail of the rm -rf request", () => /rm -rf node_modules/.test(text($("[data-needs-detail]"))), 10_000);
+          await fsleep(600);
           const detail = $("[data-needs-detail]");
-          await mark("detail", { detail, why: $("[data-needs-why]", detail ?? document), command: $("[data-needs-command]", detail ?? document), allow: $("[data-allow-once]", detail ?? document), risky: $all("span", detail ?? document).find((x) => text(x) === "Risky") ?? null });
-          await sleep(4000);
+          await mark("detail", { detail, command: $("[data-needs-command]", detail ?? document), why: $("[data-needs-why]", detail ?? document), risky: $all("span", detail ?? document).find((x) => text(x) === "Risky") ?? null, allow: $("[data-allow-once]", detail ?? document) });
+          await fsleep(8000);
           const allow = $("[data-allow-once]", detail ?? document);
           await mark("allow-click", { allow });
           allow?.click();
-          await waitFor("the request gone", () => !$all("[data-needs-item]").some((i) => text(i).includes("rm -rf node_modules")), 10_000);
+          await fwait("the request gone", () => !$all("[data-needs-item]").some((i) => text(i).includes("rm -rf node_modules")), 10_000);
           await mark("answered", { list: $("[data-needs-list]") });
-          await sleep(3500);
+          await fsleep(4000);
         });
         useStore.getState().closeNeeds();
         return `${$all("[data-needs-item]").length} left`;
       });
 
-      // A chat streaming steps, its permission card arriving and allowed (a second invoices question).
+      // The same kind of request in its chat: streams, the card, Allow once, the turn goes on.
       await step("film: a chat streams, asks, is allowed and finishes (chat-approval)", async () => {
         const id = await start(`${dir}/invoices`, "Invoices from March still look wrong in the export. Check it.", "acceptEdits");
         useStore.getState().open({ kind: "chat", id });
         await burst("chat-approval", async () => {
-          await waitFor("the card", () => $("[data-chat-timeline]") && $("[data-allow-once]"), 40_000);
+          await fwait("the card", () => $("[data-chat-timeline]") && $("[data-allow-once]"), 40_000);
           await mark("card", { card: $("[data-approval]"), allow: $("[data-allow-once]"), timeline: $("[data-chat-timeline]") });
-          await sleep(3500);
+          await fsleep(6000);
           await mark("allow-click", { allow: $("[data-allow-once]") });
           $("[data-allow-once]")?.click();
-          await waitFor("the turn's end", () => $all("[data-turn-end]").length > 0 || !chats()[id]?.running, 20_000).catch(() => null);
-          await sleep(3000);
+          await fwait("the reply after the tests", () => (chats()[id]?.items ?? []).some((i) => i.kind === "text" && /tests pass/.test((i as { text?: string }).text ?? "")), 20_000).catch(() => null);
+          await fsleep(4000);
           await mark("end", { timeline: $("[data-chat-timeline]") });
         });
       });
 
-      // Sub-agents at work.
-      await step("film: a lead with three subagents (agents)", async () => {
-        const id = await start(`${dir}/atlas-api`, "Audit every /v2 route for handlers that skip the auth layer. Use one agent per route group and fix what they find.");
-        useStore.getState().open({ kind: "chat", id });
-        await burst("agents", async () => {
-          await waitFor("three subagents at work", () => (chats()[id]?.items ?? []).filter((i) => i.kind === "tool" && i.parent).length >= 8, 60_000);
-          await mark("agents", { timeline: $("[data-chat-timeline]") });
-          await sleep(3000);
-        });
-        await api().chatStop(id);
-      });
+      // 5b. Its own browser, phone and Mac. While the agent works in the panel, the person types in the composer.
+      /** The person makes room for the panel: the sidebar folded away, the panel dragged wide. */
+      const roomy = (on: boolean) => {
+        const st = useStore.getState();
+        if (st.sidebarOpen === on) st.toggleSidebar();
+        if (on) {
+          st.setBrowserWidth(900);
+          st.setDeviceWidth(560);
+          st.setMacWidth(1000);
+        }
+      };
+      const deviceChat = async (cwd: string) => {
+        const before = ids();
+        await newChat({ provider: "claude", cwd, model: "opus", permissionMode: "default" });
+        const id = (await waitFor("the new chat", () => { const x = [...ids()].find((y) => !before.has(y)); return x === undefined ? null : { x }; }, 15_000)).x;
+        await waitFor("ready", () => chats()[id]?.ready, 60_000);
+        await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+        await sleep(1000);
+        return id;
+      };
+      const turnDone = (id: number, re: RegExp) => () => (chats()[id]?.items ?? []).some((i) => i.kind === "text" && re.test((i as { text?: string }).text ?? ""));
+      const aside = async (t: string) => {
+        // The person keeps working meanwhile: a note typed (not sent) in the composer.
+        await fsleep(2500);
+        await mark("typing-aside", { composer: $("[data-main] textarea") });
+        const ta = $all("[data-main] textarea").filter((x) => !x.closest("form") && !x.closest(".xterm"));
+        const el = ta[ta.length - 1] as HTMLTextAreaElement | undefined;
+        if (!el) return;
+        const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+        for (let i = 1; i <= t.length; i++) {
+          set.call(el, t.slice(0, i));
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          await fsleep(55);
+        }
+      };
 
-      // 5. Its own browser: the stand-in agent drives the Browser panel on a local invented page.
+      roomy(true);
       await step("film: an agent drives the Browser panel (browser)", async () => {
         if (!k.site) throw new Error("no COOOL_SELFTEST_SITE");
         const stop = autoAnswer();
         try {
-          const before = ids();
-          await newChat({ provider: "claude", cwd: `${dir}/atlas-api`, model: "opus", permissionMode: "default" });
-          const id = (await waitFor("the new chat", () => ([...ids()].find((i) => !before.has(i)) ?? -1) >= 0 && { id: [...ids()].find((i) => !before.has(i))! }, 15_000)).id;
-          await waitFor("ready", () => chats()[id]?.ready, 60_000);
-          await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
-          await sleep(1500);
+          const id = await deviceChat(`${dir}/atlas-api`);
           await burst("browser", async () => {
-            await sleep(800);
+            await fsleep(800);
             await mark("typing", { composer: $("[data-main] textarea") });
-            await typeOut(`In the Browser panel, open ${k.site} and create an API key named ci-runner with a 60 / min budget.`, sleep);
-            await waitFor("the panel driven", () => $("[data-browser-driving]"), 30_000).catch(() => log("WARN browser: no driving mark"));
+            await typeOut(`In the Browser panel, open ${k.site} and create an API key named ci-runner with a 60 / min budget.`, fsleep);
+            await fwait("the panel driven", () => $("[data-browser-driving]"), 30_000).catch(() => log("WARN browser: no driving mark"));
             await mark("driving", { panel: $("[data-right-panel]") });
-            await waitFor("the turn's end", () => !chats()[id]?.running || /ci-runner/.test(text($("[data-chat-timeline]")).split("Done:")[1] ?? ""), 90_000);
-            await sleep(3500);
+            await aside("Next: add the key to the CI secrets");
+            await fwait("the reply", turnDone(id, /ci-runner/), 90_000);
+            await fsleep(4000);
             await mark("end", { panel: $("[data-right-panel]"), timeline: $("[data-chat-timeline]") });
           });
-          void chatPanelKey;
-          void activePanelKey;
+          useStore.getState().setRightPanel(chatPanelKey(id), "closed");
         } finally {
           stop();
         }
       });
 
-      // 5b. Its own phone: the test's own simulator ("coool selftest iPhone", deleted afterwards) in the iPhone panel.
       await step("film: an agent drives the iPhone panel (iphone)", async () => {
         const list = await api().simDevices();
         if (!list.available) throw new Error(`no simulators: ${list.reason}`);
@@ -340,24 +400,22 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         await api().simBoot(udid);
         const stop = autoAnswer();
         try {
-          const before = ids();
-          await newChat({ provider: "claude", cwd: `${dir}/notes-ios`, model: "opus", permissionMode: "default" });
-          const id = (await waitFor("the new chat", () => ([...ids()].find((i) => !before.has(i)) ?? -1) >= 0 && { id: [...ids()].find((i) => !before.has(i))! }, 15_000)).id;
-          await waitFor("ready", () => chats()[id]?.ready, 60_000);
-          await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
-          await sleep(1000);
+          const id = await deviceChat(`${dir}/notes-ios`);
           const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
           useStore.getState().setRightPanel(key, "device");
           await waitFor("the booted device in the panel", () => $(`[data-sim-screen="${udid}"]`) && $('[data-device-panel="Booted"]'), 60_000);
+          // An invented place (Apple Park) for anything on the home screen that shows where the phone is.
+          await invoke("selftest_device_tool", { chat: id, name: "device", args: { action: "location", lat: 37.3349, lon: -122.009 } }).catch((e) => log(`WARN location: ${e}`));
           // A freshly booted simulator draws its home screen icons a while after it boots.
-          await sleep(20_000);
+          await sleep(25_000);
           await burst("iphone", async () => {
-            await sleep(800);
-            await typeOut("On the iPhone in the panel, open Settings and read the iOS version in General > About.", sleep);
-            await waitFor("the phone driven", () => $("[data-sim-driving]"), 40_000).catch(() => null);
+            await fsleep(800);
+            await typeOut("On the iPhone in the panel, open Settings and read the iOS version in General > About.", fsleep);
+            await fwait("the phone driven", () => $("[data-sim-driving]"), 40_000).catch(() => null);
             await mark("driving", { panel: $("[data-right-panel]") });
-            await waitFor("the turn's end", () => !chats()[id]?.running || (chats()[id]?.items ?? []).some((i) => i.kind === "text" && /iOS version:|failed/.test((i as { text?: string }).text ?? "")), 90_000);
-            await sleep(3000);
+            await aside("Then check the share sheet on iOS 27");
+            await fwait("the reply", turnDone(id, /iOS version:|failed/), 90_000);
+            await fsleep(3500);
             await mark("end", { panel: $("[data-right-panel]") });
           });
           useStore.getState().setRightPanel(chatPanelKey(id), "closed");
@@ -368,27 +426,71 @@ export function filmScenarios(k: FilmKit): Record<string, () => Promise<void>> {
         }
       });
 
-      // Cutaways: the theme switch on Mission control, and Mission control in light.
+      if (mac)
+        await step("film: an agent drives the sandbox Mac panel (mac)", async () => {
+          const st = await api().macStatus();
+          if (!st.available || !st.installed) throw new Error(`no sandbox Mac here: ${st.available ? "not installed" : st.reason}`);
+          const macRun = (sh: string) => invoke("selftest_mac", { request: { cmd: "run", sh, timeout: 20 } }).catch((e) => log(`WARN mac run: ${e}`));
+          const stop = autoAnswer();
+          try {
+            await api().macBoot();
+            const id = await deviceChat(`${dir}/atlas-api`);
+            const key = await waitFor("the pane's panel key", activePanelKey, 10_000);
+            useStore.getState().setRightPanel(key, "mac");
+            await waitFor("the Mac panel showing the running Mac", () => $("[data-mac-screen]") && $('[data-mac-panel="running"]'), 180_000);
+            await sleep(8000);
+            await burst("mac", async () => {
+              await fsleep(800);
+              await typeOut("On the Mac in the panel, write the release notes for atlas-api 0.5 in TextEdit.", fsleep);
+              await fwait("the Mac driven", () => $("[data-sim-driving]"), 60_000).catch(() => null);
+              await mark("driving", { panel: $("[data-right-panel]") });
+              await aside("Meanwhile: bump the version in Cargo.toml");
+              await fwait("the reply", turnDone(id, /release notes are in|failed/), 180_000);
+              await fsleep(3500);
+              await mark("end", { panel: $("[data-right-panel]") });
+            });
+            useStore.getState().setRightPanel(chatPanelKey(id), "closed");
+          } finally {
+            stop();
+            // Leave the Mac as it was: TextEdit closed without saving (its document was never saved), then shut down.
+            await macRun("killall TextEdit 2>/dev/null; echo done");
+            await api().macShutdown().catch((e) => log(`WARN mac shutdown: ${e}`));
+            for (let i = 0; i < 60; i++) {
+              const s = await api().macStatus();
+              if (s.state === "stopped") break;
+              await sleep(1000);
+            }
+            await log(`INFO mac after: ${JSON.stringify(await api().macStatus()).slice(0, 200)}`);
+          }
+        });
+
+      roomy(false);
+
+      // Sub-agents at work (lower priority).
+      await step("film: a lead with three subagents (agents)", async () => {
+        const id = await start(`${dir}/atlas-api`, "Audit every /v2 route for handlers that skip the auth layer. Use one agent per route group and fix what they find.");
+        useStore.getState().open({ kind: "chat", id });
+        await burst("agents", async () => {
+          await fwait("three subagents at work", () => (chats()[id]?.items ?? []).filter((i) => i.kind === "tool" && i.parent).length >= 8, 60_000);
+          await mark("agents", { timeline: $("[data-chat-timeline]") });
+          await fsleep(8000);
+        });
+        await api().chatStop(id);
+      });
+
+      // Cutaway: the theme switch on Mission control.
       await step("film: the light / dark switch (theme)", async () => {
         await missionTab("atlas-api");
         await sleep(2000);
         await burst("theme", async () => {
-          await sleep(1500);
+          await fsleep(2500);
           await mark("to-light");
           useStore.getState().setThemePref("light");
-          await sleep(3000);
+          await fsleep(4000);
           await mark("to-dark");
           useStore.getState().setThemePref("dark");
-          await sleep(3000);
+          await fsleep(4000);
         });
-      });
-      await step("film: Mission control in light, live (mc-light)", async () => {
-        await look("light");
-        await burst("mc-light", async () => {
-          await sleep(8000);
-          await mark("end", { sessions: $("[data-mc-sessions]"), trail: $("[data-mc-trail]"), ledger: $("[data-mc-ledger]") });
-        });
-        await look("dark");
       });
     },
   };

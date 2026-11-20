@@ -66,7 +66,7 @@ export interface Since {
 export interface Toast {
   id: number;
   text: string;
-  tone: "info" | "error";
+  tone: "info" | "error" | "done";
 }
 
 const MAX_PANES = 4;
@@ -854,7 +854,7 @@ export const useStore = create<State>((set, get) => ({
   toast(text, tone = "info") {
     const id = ++uid;
     set((s) => ({ toasts: [...s.toasts.slice(-2), { id, text, tone }] }));
-    setTimeout(() => get().dismissToast(id), tone === "error" ? 6000 : 3200);
+    setTimeout(() => get().dismissToast(id), tone === "error" ? 6000 : tone === "done" ? 5000 : 3200);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   toggleSidebar() {

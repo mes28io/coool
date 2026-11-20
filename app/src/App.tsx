@@ -8,14 +8,15 @@ import { chatQueue, rememberLive, useChats } from "./lib/chat";
 import { setHome } from "./lib/format";
 import { keysCaptured } from "./lib/macKeys";
 import { useMotion } from "./lib/motion";
-import { watchUpdates } from "./lib/update";
+import { coverOf, useUpdates, watchUpdates } from "./lib/update";
+import { UpdateScreen } from "./components/UpdateScreen";
 import { matchShortcut } from "./lib/shortcuts";
 import { syncWindow } from "./lib/boot";
 import { glassActive, useGlassHoles } from "./lib/glass";
 import { Backdrop } from "./components/Backdrop";
 import { setTerminalTheme } from "./lib/termlite";
 import { Palette } from "./components/Palette";
-import { IAlert, IClose, ISidebar } from "./components/icons";
+import { IAlert, ICheck, IClose, ISidebar } from "./components/icons";
 import { Sheets } from "./components/Sheets";
 import { Tooltips } from "./components/Tooltips";
 import { Onboarding } from "./components/onboarding/Onboarding";
@@ -77,6 +78,8 @@ function useShortcuts() {
     const onKey = (e: KeyboardEvent) => {
       // A device panel that has the keyboard (the Mac) takes every key, shortcuts included.
       if (keysCaptured(e)) return;
+      // The update screen covers the app: nothing under it answers.
+      if (coverOf(useUpdates.getState())) return;
       const sc = matchShortcut(e);
       if (!sc) return;
       e.preventDefault();
@@ -227,6 +230,8 @@ export default function App() {
   useBackendEvents();
   useMarkSeen();
   const reduceMotion = useMotion().reduce;
+  // The update screen (or the launch hold before it) covers the window: the app under it takes no input.
+  const updateCover = useUpdates(coverOf);
 
   useLayoutEffect(() => {
     // With the glass on, the native material changes appearance first, then the page's tint follows, so the
@@ -253,7 +258,7 @@ export default function App() {
       {/* coool's colour backdrop, under everything (Settings > Appearance > Window backdrop: Colours). */}
       <Backdrop />
       {/* The window chrome (title bar and icon rail): frosted glass when Settings > Appearance > Translucent window is on. */}
-      <div className="flex h-full w-full flex-col bg-chrome">
+      <div className="flex h-full w-full flex-col bg-chrome" inert={updateCover} aria-hidden={updateCover || undefined}>
         {/* Title bar: the macOS traffic lights sit in it (left), then the sidebar toggle; in full screen, where macOS
             takes the lights away, the toggle moves into their place. The whole bar drags the window. */}
         <div data-tauri-drag-region className={cx("flex h-[44px] shrink-0 items-center pr-2 transition-[padding] duration-200", fullscreen ? "pl-[22px]" : "pl-[84px]")} data-fullscreen={fullscreen || undefined}>
@@ -297,6 +302,7 @@ export default function App() {
       <VoiceHost />
       <Toasts />
       <AttachViewer />
+      <UpdateScreen />
     </MotionConfig>
   );
 }
@@ -322,6 +328,7 @@ function Toasts() {
             className="pointer-events-auto flex max-w-[420px] items-start gap-2 rounded-[10px] border border-line bg-raised py-2 pl-3 pr-1.5 text-base shadow-pop"
           >
             {t.tone === "error" && <IAlert size={14} className="mt-[2px] shrink-0 text-err" />}
+            {t.tone === "done" && <ICheck size={14} className="mt-[2px] shrink-0 text-done-text" />}
             <span className="selectable min-w-0 flex-1 break-words py-[1px]">{t.text}</span>
             <button className="flex size-[20px] shrink-0 items-center justify-center rounded-[5px] text-faint hover:bg-hover hover:text-fg" onClick={() => dismiss(t.id)}>
               <IClose size={11} />

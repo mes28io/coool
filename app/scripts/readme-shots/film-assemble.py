@@ -39,10 +39,13 @@ def main():
     shots, out = Path(a.shots), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     starts, marks, cues = {}, {}, []
+    slow = 1.0
     for line in Path(a.log).read_text().splitlines():
         p = line.split(" ", 3)
         if len(p) >= 4 and p[1] == "FILM" and p[2] == "start":
             starts[p[3].split()[0]] = float(p[0])
+        if len(p) >= 4 and p[1] == "FILM" and p[2] == "slow":
+            slow = float(p[3].split()[0])
         c = re.match(r"^(\S+) CUE (\S+)$", line)
         if c:
             cues.append((float(c.group(1)), c.group(2)))
@@ -54,7 +57,8 @@ def main():
         name = d.name[len("film-"):]
         if name.startswith("m-") or (a.only and name not in a.only.split(",")):
             continue
-        frames = sorted(((int(f.stem.split("-")[0]) / 1000, f) for f in d.glob("*.png")), key=lambda x: x[0])
+        # Scene time: the scene played `slow` times slower than real time while this recorded.
+        frames = sorted(((int(f.stem.split("-")[0]) / 1000 / slow, f) for f in d.glob("*.png")), key=lambda x: x[0])
         if len(frames) < 2:
             continue
         gaps = [b[0] - a_[0] for a_, b in zip(frames, frames[1:])]
@@ -67,11 +71,11 @@ def main():
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-vf", "fps=30", "-fps_mode", "cfr",
                         "-c:v", "libx264", "-preset", "slow", "-crf", "12", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(mp4)], check=True)
         t0 = starts.get(name)
-        info = {"file": mp4.name, "frames_captured": len(frames), "seconds": round(frames[-1][0], 2),
-                "real_fps": round((len(frames) - 1) / frames[-1][0], 1), "gap_ms": {"mean": round(statistics.mean(gaps) * 1000), "p95": round(sorted(gaps)[int(len(gaps) * 0.95)] * 1000), "max": round(max(gaps) * 1000)},
+        info = {"file": mp4.name, "frames_captured": len(frames), "seconds": round(frames[-1][0], 2), "slow": slow,
+                "stills_per_video_second": round((len(frames) - 1) / frames[-1][0], 1), "capture_per_real_second": round((len(frames) - 1) / frames[-1][0] / slow, 1), "gap_ms": {"mean": round(statistics.mean(gaps) * 1000), "p95": round(sorted(gaps)[int(len(gaps) * 0.95)] * 1000), "max": round(max(gaps) * 1000)},
                 "marks": []}
         for at, label, rects in marks.get(name, []):
-            t = at - t0 if t0 else 0
+            t = (at - t0) / slow if t0 else 0
             want = t + 0.4
             still = min(frames, key=lambda x: abs(x[0] - want))[1]
             png = out / f"{name}-{label}.png"
@@ -90,9 +94,9 @@ def main():
                 crop = out / f"{name}-{label}-{k}.png"
                 subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(png), "-vf", f"crop={x1 - x0}:{y1 - y0}:{x0}:{y0}:exact=1", str(crop)], check=False)
         if t0:
-            info["cues"] = [{"cue": n, "t": round(at - t0, 2)} for at, n in cues if 0 <= at - t0 <= frames[-1][0]]
+            info["cues"] = [{"cue": n, "t": round((at - t0) / slow, 2)} for at, n in cues if 0 <= (at - t0) / slow <= frames[-1][0]]
         (out / f"{name}.json").write_text(json.dumps(info, indent=1))
-        print(f"{mp4.name}: {info['seconds']} s, {len(frames)} stills, {info['real_fps']} fps real, gaps {info['gap_ms']}")
+        print(f"{mp4.name}: {info['seconds']} s, {len(frames)} stills, {info['stills_per_video_second']} distinct stills per video second ({info['capture_per_real_second']} captured per real second, scene {slow}x slower), gaps {info['gap_ms']}")
 
 
 def terminals(root: Path, out: Path):

@@ -965,3 +965,22 @@ html.page-hidden *::after {
 .reduce-motion .ctx-compacting {
   animation: none;
 }
+
+/* The update screen's bar while the length is unknown (UpdateScreen.tsx): a segment slides across, a compositor
+   translate; Reduce motion holds it still and dimmed across the whole bar. */
+.upd-indet {
+  animation: upd-indet 1.4s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+}
+@keyframes upd-indet {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.reduce-motion .upd-indet {
+  animation: none;
+  width: 100%;
+  opacity: 0.45;
+}

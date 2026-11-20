@@ -25,6 +25,10 @@ import uuid
 from pathlib import Path
 
 HOME = Path(os.environ["HOME"])
+# The film (film.sh) plays the scene slower than real time while it records: every pause here stretches with it.
+_SLOW = float((HOME / ".film-slow").read_text()) if (HOME / ".film-slow").exists() else 1.0
+_sleep = time.sleep
+time.sleep = lambda s: _sleep(s * _SLOW)
 CWD = Path(os.getcwd())
 ARGS = sys.argv[1:]
 MODELS = [
@@ -175,6 +179,7 @@ def title(t):
 
 def invoices_turn(prompt, start):
     p = lambda f: str(CWD / f)
+    time.sleep(1.5)
     thinking("Invoices issued in March show February. The month formatting is the first suspect: Date#getMonth is zero-based.")
     time.sleep(0.4)
     tool("Grep", {"pattern": "getMonth\\(", "output_mode": "content", "-n": True}, "src/format.ts:2:  const month = d.getMonth();", pause=0.5)
@@ -338,6 +343,28 @@ def iphone_turn(prompt, start):
     result(start)
 
 
+def mac_turn(prompt, start):
+    thinking("TextEdit is enough for plain release notes; I'll write them in the sandbox Mac and read them back.")
+    time.sleep(0.6)
+    text("Writing the notes in TextEdit on the Mac.")
+    m = Mcp()
+    try:
+        scr = m.tool("mac_app", {"action": "launch", "app": "TextEdit"})
+        title("Draft the atlas-api 0.5 release notes")
+        time.sleep(0.6)
+        if "textarea" not in scr and "text area" not in scr.lower():
+            scr = m.tool("mac_press", {"key": "n", "modifiers": ["command"]})
+            time.sleep(0.6)
+        for line in ["atlas-api 0.5", "", "- Rate limits per API key on /v2, budgets from config", "- 429 responses carry Retry-After", "- Every request has an id, in the logs and the X-Request-Id header"]:
+            m.tool("mac_type", {"text": line + "\n", "replace": False, "observe": False})
+            time.sleep(0.4)
+        m.tool("mac_observe", {})
+        text("The release notes are in a new TextEdit document on the Mac: three changes under **atlas-api 0.5**.")
+    finally:
+        m.close()
+    result(start)
+
+
 def generic_turn(prompt, start):
     text("Done.")
     result(start)
@@ -355,6 +382,8 @@ def run_turn(prompt):
             invoices_turn(prompt, start)
         elif "browser panel" in low:
             browser_turn(prompt, start)
+        elif "on the mac" in low:
+            mac_turn(prompt, start)
         elif "iphone" in low:
             iphone_turn(prompt, start)
         elif "agent" in low:

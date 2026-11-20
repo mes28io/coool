@@ -100,6 +100,11 @@ impl SelfTest {
         self.scenario.split(',').any(|s| s.trim().starts_with("onboarding"))
     }
 
+    /// An `update-launch*` scenario runs: only then may an update at launch restart (exit) the app.
+    pub fn wants_update_launch(&self) -> bool {
+        self.scenario.split(',').any(|s| s.trim().starts_with("update-launch"))
+    }
+
     /// The throwaway folder.
     pub fn dir(&self) -> &Path {
         &self.dir
