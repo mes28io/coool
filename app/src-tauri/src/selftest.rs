@@ -646,7 +646,15 @@ pub fn selftest_window(app: AppHandle, core: State<'_, Arc<Core>>, action: Strin
 #[tauri::command]
 pub fn selftest_resize(app: AppHandle, core: State<'_, Arc<Core>>, width: f64, height: f64) -> Result<(), String> {
     active(&core)?;
-    app.get_window("main").ok_or("no window")?.set_size(tauri::LogicalSize::new(width, height)).map_err(|e| e.to_string())
+    let w = app.get_window("main").ok_or("no window")?;
+    w.set_size(tauri::LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
+    // `COOOL_SELFTEST_BACKGROUND=1`: placed again, so macOS keeps its sliver of the resized window on a display. A
+    // window pushed wholly off screen counts as hidden to WebKit, and its animations stop finishing (the onboarding's
+    // step transitions then never complete).
+    if background() && !offscreen() {
+        let _ = w.set_position(BACKGROUND_POS);
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]

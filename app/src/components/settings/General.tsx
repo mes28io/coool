@@ -158,7 +158,7 @@ export function General() {
                   onClick={() => save({ building: on ? (prefs?.building ?? []).filter((x) => x !== b.id) : [...(prefs?.building ?? []), b.id] })}
                   className={cx(
                     "h-[28px] rounded-[8px] border px-2.5 text-small transition-colors duration-150 disabled:opacity-50",
-                    on ? "border-[color-mix(in_oklab,var(--fg)_30%,var(--border))] bg-accent-soft text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
+                    on ? "border-[color-mix(in_oklab,var(--text)_38%,var(--border))] bg-raised shadow-[0_1px_2px_rgb(0_0_0/0.10)] text-fg" : "border-line text-dim hover:bg-hover hover:text-fg",
                   )}
                 >
                   {b.label}

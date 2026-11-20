@@ -142,7 +142,11 @@ impl Burst {
 /// Which notification an event is, with a one-line detail ("Bash: rm -rf build"), or None.
 pub fn kind_of(ev: &ChatEventKind) -> Option<(Kind, String)> {
     match ev {
-        ChatEventKind::PermissionRequest { tool, summary, .. } => Some((Kind::NeedsYou, if summary.is_empty() { format!("Wants to use {tool}") } else { format!("{tool}: {summary}") })),
+        ChatEventKind::PermissionRequest { tool, summary, .. } => {
+            // The chat's summary already leads with the tool ("Bash · npm test", `tool_summary`): said once.
+            let s = summary.strip_prefix(&format!("{tool} · ")).unwrap_or(summary).trim();
+            Some((Kind::NeedsYou, if s.is_empty() || s == tool { format!("Wants to use {tool}") } else { format!("{tool}: {s}") }))
+        }
         ChatEventKind::Question { questions, .. } => {
             let q = serde_json::to_value(questions).ok().and_then(|v| v.get(0).and_then(|q| q.get("question")).and_then(|q| q.as_str()).map(str::to_string));
             Some((Kind::NeedsYou, q.unwrap_or_else(|| "Has a question for you".into())))
@@ -805,6 +809,11 @@ mod tests {
     #[test]
     fn which_events_notify() {
         assert_eq!(kind_of(&perm()), Some((Kind::NeedsYou, "Bash: rm -rf build".into())));
+        // As the chats send it (`tool_summary`: the tool first): the tool named once.
+        let real = ChatEventKind::PermissionRequest { request_id: "r".into(), tool: "Bash".into(), summary: "Bash · touch a.txt".into(), input: serde_json::Value::Null, remember: vec![] };
+        assert_eq!(kind_of(&real), Some((Kind::NeedsYou, "Bash: touch a.txt".into())));
+        let bare = ChatEventKind::PermissionRequest { request_id: "r".into(), tool: "WebSearch".into(), summary: "WebSearch".into(), input: serde_json::Value::Null, remember: vec![] };
+        assert_eq!(kind_of(&bare), Some((Kind::NeedsYou, "Wants to use WebSearch".into())));
         assert_eq!(kind_of(&ChatEventKind::TurnEnd { duration_ms: 75_000, ok: true }), Some((Kind::Finished, "Finished after 1m 15s".into())));
         assert_eq!(kind_of(&ChatEventKind::TurnEnd { duration_ms: 1, ok: false }).map(|k| k.0), Some(Kind::Failed));
         assert_eq!(kind_of(&ChatEventKind::Exited { code: Some(1) }).map(|k| k.0), Some(Kind::Failed));

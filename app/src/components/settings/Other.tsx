@@ -36,7 +36,7 @@ export function Insights() {
       setSt((s) => (s ? { ...s, ...next } : s));
       return true;
     } catch (e) {
-      setErr(isNotAvailable(e) ? "Insights aren't available in this build of coool yet." : e instanceof Error ? e.message : String(e));
+      setErr(isNotAvailable(e) ? "Assist isn't available in this build of coool yet." : e instanceof Error ? e.message : String(e));
       return false;
     }
   };
@@ -68,7 +68,7 @@ export function Insights() {
         {!avail ? (
           <div className="flex items-center gap-2 text-small text-dim">
             <IAlert size={14} className="shrink-0 text-busy-text" />
-            Insights aren't available in this build of coool yet.
+            Assist isn't available in this build of coool yet.
           </div>
         ) : st?.has_key && !replacing ? (
           <div className="flex flex-wrap items-center gap-2">
@@ -162,7 +162,7 @@ export function About() {
       <Row
         attr="onboarding"
         label="Onboarding"
-        desc="The first-run steps: a project folder, notifications, open at login."
+        desc="The first-run steps: the look, a project folder, what you build, how your agents work, notifications and voice."
         k="onboarding welcome setup first run intro"
         control={
           <Button variant="outline" className="h-[30px] px-2.5 text-small" onClick={openOnboarding} data-onboarding-again>

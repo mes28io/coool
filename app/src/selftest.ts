@@ -31,6 +31,7 @@
 
 import { glassState } from "./lib/glass";
 import { openOnboarding } from "./lib/onboarding";
+import { STEPS } from "./components/onboarding/steps";
 import { chatDefaultsNow, defaultCliNow, ignoreChatDefaults, setTextSize, textSizeNow } from "./lib/prefs";
 import { newChat } from "./lib/actions";
 import { api, isTauri } from "./lib/backend";
@@ -3210,7 +3211,8 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
   // hold, its turn ending releasing it, a battery drop, a simulated kill (the connection drops without a RELEASE), heat,
   // and Remove helper. One Haiku chat, two short turns. Then a second Haiku chat in Ask mode for "A chat that asks"
   // (docs/LID.md): the line above its message box, its prompt with the lid closed starting the grace (shortened to
-  // 8 s), the grace running out into a `waiting` stop naming it, the Needs you note, the mode menu, Dismiss.
+  // 8 s), the grace running out into a `waiting` stop naming it, the Needs you note, the mode menu, Dismiss. Its Bash
+  // commands are `touch …`: Claude Code runs read-only ones like `echo` in Ask mode without asking, so no prompt came.
   async "lid-awake"(ctx) {
     const st = () => api().lidStatus();
     const helperLog = async () => String(await invoke("lid_helper_log").catch((e) => `err ${e}`));
@@ -3300,7 +3302,7 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
     const banner = () => (ask >= 0 ? (document.querySelector(`[data-lid-ask="${ask}"]`) as HTMLElement | null) : null);
     await step("lid: a working chat in Ask mode shows the line above its message box", async () => {
       ask = await startIn(ctx.cfg.dir, "default");
-      await send(ask, "Use the Bash tool to run exactly: echo lid-ask-check . Then reply with: ok");
+      await send(ask, "Use the Bash tool to run exactly: touch lid-ask-check.txt . Then reply with: ok");
       await waitFor("the chat working", () => chat(ask)?.state !== "idle" && chat(ask)?.turnStart, 60_000);
       const b = await waitFor("the line above the message box", banner, 10_000);
       await shot("lid-ask-banner");
@@ -3325,6 +3327,7 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
       const stop = s.stops[0];
       const title = displayTitle(sessionOf(ask)!);
       if (!stop.detail.includes(`“${title}” was waiting for your answer`)) throw new Fail(`stop: ${JSON.stringify(stop)} (title "${title}")`);
+      if (!stop.detail.endsWith("(Bash: touch lid-ask-check.txt)")) throw new Fail(`the ask in the stop: ${stop.detail}`);
       if (stop.session !== needsKeyOf(ask) || stop.request !== req) throw new Fail(`stop target: ${JSON.stringify(stop)} vs ${needsKeyOf(ask)} / ${req}`);
       stopAt = stop.at;
       await openGeneral();
@@ -3369,7 +3372,7 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
     await step("lid: Dismiss for this chat sticks", async () => {
       await api().chatSetPermissionMode(ask, "default");
       await waitFor("back in Ask", () => chat(ask)?.permissionMode === "default", 10_000);
-      await send(ask, "Use the Bash tool to run exactly: echo lid-ask-two . Then reply with: two");
+      await send(ask, "Use the Bash tool to run exactly: touch lid-ask-two.txt . Then reply with: two");
       const b = await waitFor("the line again", banner, 30_000);
       (b.querySelector("[data-lid-ask-dismiss]") as HTMLElement).click();
       await waitFor("the line gone", () => !banner(), 3_000);
@@ -3384,7 +3387,7 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
       return "gone, and still gone through its next prompt";
     });
     await step("lid: a simulated kill (connection dropped, no RELEASE): the helper lets go by itself", async () => {
-      await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 60 127.0.0.1 > /dev/null . Then reply with: done again");
+      await send(id, "Run exactly this Bash command in the foreground and nothing else: ping -c 100 127.0.0.1 > /dev/null . Then reply with: done again");
       await waitFor("the chat working", () => chat(id)?.state !== "idle" && chat(id)?.turnStart, 60_000);
       await holdWait("the hold", (s) => s.via === "helper");
       const before = (await helperLog()).split("coool went away").length;
@@ -3398,8 +3401,13 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
       return `helper: "${log.trim().split("\n").slice(-2).join(" | ")}"; coool: ${JSON.stringify(s.stops[0])}`;
     });
     await step("lid: heat lets go and stays off for this working stretch", async () => {
+      // Held again first (coool retries 30 s after the helper let go, the chat still working), so heat has a hold to end.
+      await holdWait("holding again after the let-go", (s) => s.via === "helper", 50_000);
+      const lets = (await helperLog()).split("normal sleep restored (coool let go)").length;
       await sim({ thermal: "serious" });
       const s = await holdWait("not holding: hot", (s) => s.blocked === "hot" && s.via === null, 20_000);
+      if (s.stops[0]?.code !== "hot") throw new Fail(`stops: ${JSON.stringify(s.stops.slice(0, 2))}`);
+      if ((await helperLog()).split("normal sleep restored (coool let go)").length === lets) throw new Fail("the helper never restored sleep for the heat");
       await openGeneral();
       await shot("lid-hot");
       await sim({ thermal: "nominal" });
@@ -3409,7 +3417,7 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
       return `blocked ${s.blocked}; after cooling: blocked ${s2.blocked}; row "${row().slice(0, 120)}"`;
     });
     await step("lid: Remove helper removes it (no prompt); switching off", async () => {
-      await nextTurn(id, 1, 90_000).catch(() => {});
+      await nextTurn(id, 1, 150_000).catch(() => {});
       await openGeneral();
       const b = settingRow("lid-awake")?.querySelector("[data-lid-remove]") as HTMLElement | null;
       if (!b) throw new Fail("no Remove helper button");
@@ -4070,12 +4078,15 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       if (st === "denied" && !$("[data-onb-open-settings]")) throw new Fail("no Open System Settings when denied");
       return `${st}: ${text}`;
     });
-    await step("onboarding: Esc to the finish step, Back works, Skip setup dismisses it and saves the flag", async () => {
+    await step("onboarding: Esc through Talk to your agents to the finish step, Back works, Skip setup dismisses it and saves the flag", async () => {
+      winKey("Escape");
+      await waitFor("the voice step", () => onb() === "voice", 3_000);
+      if ($("[data-onb-dots]")?.dataset.onbDots !== "6/7") throw new Fail(`voice step indicator ${$("[data-onb-dots]")?.dataset.onbDots}`);
       winKey("Escape");
       await waitFor("the finish step", () => onb() === "done", 3_000);
       await shot("onb-4-done");
       $("[data-onb-back]")!.click();
-      await waitFor("back on notifications", () => onb() === "notifications", 3_000);
+      await waitFor("back on the voice step", () => onb() === "voice", 3_000);
       $("[data-onb-dismiss]")!.click();
       await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
       await sleep(300);
@@ -4088,11 +4099,7 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       await shot("onb-5-about");
       again.click();
       await waitFor("Make it yours", () => onb() === "look", 3_000);
-      winKey("Escape");
-      winKey("Escape");
-      winKey("Escape");
-      winKey("Escape");
-      winKey("Escape");
+      for (let k = 0; k < 6; k++) winKey("Escape"); // the six steps before the finish (Esc skips each)
       await waitFor("the finish step", () => onb() === "done", 3_000);
       winKey("Escape");
       await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
@@ -4119,6 +4126,8 @@ const onboarding: Record<string, (ctx: Ctx) => Promise<void>> = {
       await waitFor("agents", () => onb() === "agents", 3_000);
       $("[data-onb-skip]")!.click();
       await waitFor("notifications", () => onb() === "notifications", 3_000);
+      $("[data-onb-skip]")!.click();
+      await waitFor("voice", () => onb() === "voice", 3_000);
       $("[data-onb-skip]")!.click();
       await waitFor("done", () => onb() === "done", 3_000);
       const label = textOf($("[data-onb-next]"));
@@ -4185,10 +4194,10 @@ async function poll<T>(what: string, f: () => Promise<T | null>, ms = 3_000): Pr
 const onboardingPrefs: Record<string, (ctx: Ctx) => Promise<void>> = {
   async "onboarding-prefs"() {
 
-    await step("onboarding-prefs: opens by itself on a first launch, on Make it yours (1 of 6); each choice applies at once", async () => {
+    await step("onboarding-prefs: opens by itself on a first launch, on Make it yours (1 of 7); each choice applies at once", async () => {
       await waitFor("the onboarding", () => onb() === "look", 10_000);
       const dots = $("[data-onb-dots]")?.dataset.onbDots;
-      if (dots !== "1/6") throw new Fail(`step indicator says ${dots}`);
+      if (dots !== "1/7") throw new Fail(`step indicator says ${dots}`);
       await shot("onbp-0-look");
       const pick = async (row: string, label: string) => {
         const b = $all(`[data-onb-look=${row}] button`).find((e) => textOf(e).startsWith(label)) as HTMLButtonElement | undefined;
@@ -4329,12 +4338,15 @@ const onboardingPrefs: Record<string, (ctx: Ctx) => Promise<void>> = {
       await shot("onbp-3-notify");
       return `${st}: ${text}; when=${$("[data-onb-when]")?.dataset.onbWhen} needs_you=${n.needs_you} finished=${n.finished}; sounds ${s.sound_needs} / ${s.sound_finished} (custom on), preview: "${textOf($("[data-onb-sounds]"))}"`;
     });
-    await step("onboarding-prefs: Continue to the finish step, Back works, Skip setup keeps the choices and saves the flag", async () => {
+    await step("onboarding-prefs: Continue through Talk to your agents to the finish step, Back works, Skip setup keeps the choices and saves the flag", async () => {
+      ($("#onb-title") as HTMLElement | null)?.focus();
+      winKey("Enter");
+      await waitFor("the voice step", () => onb() === "voice", 3_000);
       ($("#onb-title") as HTMLElement | null)?.focus();
       winKey("Enter");
       await waitFor("the finish step", () => onb() === "done", 3_000);
       $("[data-onb-back]")!.click();
-      await waitFor("back on notifications", () => onb() === "notifications", 3_000);
+      await waitFor("back on the voice step", () => onb() === "voice", 3_000);
       $("[data-onb-dismiss]")!.click();
       await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
       await sleep(300);
@@ -4364,6 +4376,8 @@ const onboardingPrefs: Record<string, (ctx: Ctx) => Promise<void>> = {
       await waitFor("the notifications step", () => onb() === "notifications", 3_000);
       await waitFor("the choice", () => $("[data-onb-when]")?.dataset.onbWhen || null, 3_000);
       if ($("[data-onb-when]")?.dataset.onbWhen !== "finished") throw new Fail(`interrupt shows ${$("[data-onb-when]")?.dataset.onbWhen}`);
+      winKey("Escape");
+      await waitFor("the voice step", () => onb() === "voice", 3_000);
       winKey("Escape");
       await waitFor("the finish step", () => onb() === "done", 3_000);
       if (document.documentElement.dataset.theme !== "dark" || textSizeNow() !== "large") throw new Fail("Esc through the steps changed the look");
@@ -4466,6 +4480,695 @@ const onboardingPrefs: Record<string, (ctx: Ctx) => Promise<void>> = {
   },
 };
 Object.assign(scenarios, onboardingPrefs);
+
+// ---------- the whole onboarding in one walk (`onboarding-walk`, then `onboarding-walk-restart`) ----------
+//
+// `onboarding-walk` (no model; a fresh test folder, `COOOL_VM_DIR` pointing at an empty folder): every screen of
+// steps.tsx in order, a choice made on each, and on each: the indicator's count and place, focus on the title, Skip
+// putting that step back as it found it, Back returning with the choices kept, Enter continuing. Make it yours (Light,
+// Colours, Large); Project folder (Choose…, the picker answered by the test); What are you building (Websites only:
+// nothing set up; then Mobile: the test's own simulator created, never booted, then deleted; the sandbox Mac is
+// stubbed and never ticked); How should your agents work (Claude Code, Sonnet, Plan first, keep awake on; the login
+// switch's honest state, not pressed); Notifications (the permission's honest state, not pressed; Only when an agent
+// needs me; Knock and Chirp, the preview call asserted, muted); Talk to your agents (Download refused by the self-test
+// backend, never a real download; Skip); Finish: the New session sheet in the folder, starting Claude Code / Sonnet /
+// plan (`start_chat` recorded and refused). No step may undo another's choices.
+// `onboarding-walk-restart` (a second launch on the same folder): it stays closed, every choice survived and shows in
+// Settings, a new session starts with them, Settings > About re-opens it with the current values, Skip on the voice
+// step keeps voice on for someone who had set it up, Skip setup from the middle keeps everything, and the seven screens
+// in light and dark at 1440×900 and 900×560 (screenshots `onbw-<n>-<step>-<theme>-<width>`), with nothing overflowing.
+
+const WALK_SIM = "coool selftest iPhone";
+/** On step `id`: its body shown, the indicator saying its place, focus on its title (read out, and Enter continues). */
+async function onbAt(id: string): Promise<string> {
+  const k = STEPS.findIndex((s) => s.id === id);
+  await waitFor(`the ${id} step`, () => onb() === id && $(`[data-onb-step="${id}"]`), 4_000).catch(() => {
+    const st = [...document.querySelectorAll<HTMLElement>("[data-onb-step]")].map((e) => `${e.dataset.onbStep} opacity ${getComputedStyle(e).opacity} visible ${visible(e)}`);
+    throw new Fail(`the ${id} step didn't show: on ${onb()}; bodies ${st.join(", ") || "none"}; hidden ${document.hidden}`);
+  });
+  const want = `${k + 1}/${STEPS.length}`;
+  const dots = $("[data-onb-dots]");
+  if (dots?.dataset.onbDots !== want || dots.children.length !== STEPS.length) throw new Fail(`indicator on ${id}: ${dots?.dataset.onbDots} with ${dots?.children.length} bars, want ${want}`);
+  if (dots.getAttribute("aria-label") !== `Step ${k + 1} of ${STEPS.length}`) throw new Fail(`indicator label "${dots.getAttribute("aria-label")}"`);
+  await waitFor(`focus on the ${id} title`, () => document.activeElement?.id === "onb-title" && textOf(document.activeElement) === STEPS[k].title, 2_000).catch(() => {
+    throw new Fail(`focus on ${id} is on ${document.activeElement?.tagName}#${document.activeElement?.id} "${textOf(document.activeElement).slice(0, 40)}"`);
+  });
+  await sleep(300); // the slide in
+  return want;
+}
+/** Enter where focus is (the step's title): the window's capture listener takes it. */
+const onbEnter = () => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+const onbClick = (sel: string) => {
+  const b = $(sel);
+  if (!b) throw new Fail(`no ${sel}`);
+  b.click();
+};
+/** What spills out of the onboarding at this window size: anything wider than its column, a sideways scroll. */
+function onbOverflow(): { bad: string[]; fold: string } {
+  const root = $("[data-onboarding]")!;
+  const scroller = root.querySelector(".scroll") as HTMLElement;
+  const box = scroller.getBoundingClientRect();
+  const bad: string[] = [];
+  if (scroller.scrollWidth > scroller.clientWidth + 1) bad.push(`scrolls sideways (${scroller.scrollWidth} > ${scroller.clientWidth})`);
+  if (document.documentElement.scrollWidth > window.innerWidth + 1) bad.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${window.innerWidth})`);
+  const name = (el: Element) => `${el.tagName.toLowerCase()}${[...el.attributes].filter((a) => a.name.startsWith("data-")).map((a) => `[${a.name}]`).join("")} "${textOf(el).slice(0, 30)}"`;
+  for (const el of root.querySelectorAll<HTMLElement>("[data-onb-step] *, [data-onb-next], [data-onb-back], [data-onb-skip], [data-onb-dismiss], [data-onb-dots]")) {
+    if (!visible(el)) continue;
+    // Inside a box that clips on purpose (the sample window, a truncated line), the box holds it.
+    let clipped = false;
+    for (let p = el.parentElement; p && p !== scroller; p = p.parentElement) if (getComputedStyle(p).overflowX !== "visible") clipped = true;
+    if (clipped) continue;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    if (r.right > box.right + 1 || r.left < box.left - 1) bad.push(`${name(el)} at ${Math.round(r.left)}–${Math.round(r.right)} outside ${Math.round(box.left)}–${Math.round(box.right)}`);
+    const cs = getComputedStyle(el);
+    // Text wider than its box (only text: a Segmented's sliding highlight is absolutely placed and may be mid-flight).
+    const textOnly = [...el.childNodes].every((n) => n.nodeType === Node.TEXT_NODE);
+    if (textOnly && cs.display !== "inline" && cs.overflowX === "visible" && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) bad.push(`${name(el)} spills (${el.scrollWidth} > ${el.clientWidth})`);
+  }
+  const next = $("[data-onb-next]")!.getBoundingClientRect();
+  const fold = next.bottom > box.bottom + 1 ? `Continue below the fold (${Math.round(next.bottom)} > ${Math.round(box.bottom)}; the column scrolls)` : "all on screen";
+  return { bad: [...new Set(bad)].slice(0, 8), fold };
+}
+const lookNow = () => ["theme", "window", "text"].map((k) => $(`[data-onb-look=${k}]`)?.dataset.value ?? "?").join(",");
+const pickIn = async (row: string, label: string) => {
+  const b = $all(`[data-onb-look=${row}] button`).find((e) => textOf(e) === label) as HTMLButtonElement | undefined;
+  if (!b || b.disabled) throw new Fail(`no ${label} to pick in ${row}`);
+  b.click();
+  await sleep(250);
+};
+/** Picks `opt` in the Select labelled `label`. */
+const chooseOpt = async (label: string, opt: string | RegExp) => {
+  const btn = $(`button[aria-label="${label}"]`);
+  if (!btn) throw new Fail(`no "${label}"`);
+  btn.click();
+  await sleep(250);
+  const o = $all("[role=option]").find((e) => (typeof opt === "string" ? textOf(e).startsWith(opt) : opt.test(textOf(e))));
+  if (!o) throw new Fail(`no "${opt}" in ${label}`);
+  o.click();
+  await sleep(250);
+};
+const walkPrefs = async () => {
+  const p = await api().prefsGet();
+  const { getVoicePrefs } = await import("./lib/voice/prefs");
+  const v = getVoicePrefs();
+  return {
+    theme: useStore.getState().themePref,
+    backdrop: glassState().backdrop,
+    glass: glassState().pref,
+    text: textSizeNow(),
+    building: [...(p.building ?? [])].sort(),
+    cli: defaultCliNow(),
+    claude: chatDefaultsNow().claude,
+    codex: chatDefaultsNow().codex,
+    awake: p.prevent_sleep,
+    notify: { needs_you: p.notify.needs_you, finished: p.notify.finished, sound: p.notify.sound, custom: p.notify.custom_sounds, needs: p.notify.sound_needs, done: p.notify.sound_finished },
+    voice: { enabled: v.enabled, model: v.model },
+  };
+};
+/** Every choice the walk makes, as `walkPrefs` reads it back. */
+const WALKED = (both: boolean, claude: boolean) => ({
+  theme: "light",
+  backdrop: "colours",
+  text: "large",
+  building: ["mobile"],
+  cli: both ? "claude" : null,
+  claude: claude ? { model: "sonnet", mode: "plan" } : null,
+  awake: true,
+  notify: { needs_you: true, finished: false, sound: true, custom: true, needs: "coool:knock", done: "coool:chirp" },
+  voice: { enabled: false, model: null },
+});
+function walkDiff(got: Awaited<ReturnType<typeof walkPrefs>>, want: ReturnType<typeof WALKED>): string[] {
+  const out: string[] = [];
+  const eq = (k: string, a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b) && out.push(`${k} ${JSON.stringify(a)} (want ${JSON.stringify(b)})`);
+  eq("theme", got.theme, want.theme);
+  eq("backdrop", got.backdrop, want.backdrop);
+  eq("text", got.text, want.text);
+  eq("building", got.building, want.building);
+  if (want.cli) eq("cli", got.cli, want.cli);
+  if (want.claude) eq("claude", { model: got.claude.model, mode: got.claude.mode }, want.claude);
+  eq("awake", got.awake, want.awake);
+  eq("notify", got.notify, want.notify);
+  eq("voice", got.voice, want.voice);
+  return out;
+}
+
+const onboardingWalk: Record<string, (ctx: Ctx) => Promise<void>> = {
+  async "onboarding-walk"(ctx) {
+    const env = () => useStore.getState().env;
+    let before: Awaited<ReturnType<typeof walkPrefs>> | null = null;
+    await step("walk 1/7 Make it yours: indicator, focus, Skip puts the look back, then Light / Colours / Large apply at once", async () => {
+      await waitFor("the onboarding", () => onb() === "look", 15_000);
+      await waitFor("the app prefs", () => $("[data-onb-look=window]"), 5_000);
+      const at = await onbAt("look");
+      before = await walkPrefs();
+      const was = lookNow();
+      // Tried on, then Skip: as it was.
+      await pickIn("theme", "Dark");
+      await pickIn("window", "Solid");
+      await pickIn("text", "Small");
+      if (document.documentElement.dataset.theme !== "dark" || textSizeNow() !== "small") throw new Fail("the try-on didn't apply");
+      onbClick("[data-onb-skip]");
+      await onbAt("folder");
+      const after = await walkPrefs();
+      if (after.theme !== before.theme || after.text !== before.text || after.backdrop !== before.backdrop || after.glass !== before.glass) throw new Fail(`Skip left ${JSON.stringify(after)} (was ${JSON.stringify(before)})`);
+      // Back, and the choices for real.
+      onbClick("[data-onb-back]");
+      await onbAt("look");
+      if (lookNow() !== was) throw new Fail(`back on the look step it shows ${lookNow()}, was ${was}`);
+      await pickIn("theme", "Light");
+      await pickIn("window", "Colours");
+      await pickIn("text", "Large");
+      const root = document.documentElement;
+      const scale = getComputedStyle(root).getPropertyValue("--text-scale").trim();
+      if (root.dataset.theme !== "light" || scale !== "1.07") throw new Fail(`theme ${root.dataset.theme}, scale ${scale}`);
+      if (root.dataset.backdrop !== "colours" && !/Reduce transparency/.test(textOf($("[data-onb-look=window] [data-onb-look-note]")))) throw new Fail(`Colours: backdrop ${root.dataset.backdrop}`);
+      if ($("[data-onb-sample]")?.dataset.onbSample !== "colours") throw new Fail(`the sample shows ${$("[data-onb-sample]")?.dataset.onbSample}`);
+      await shot("onbw-walk-1-look");
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      await onbAt("folder");
+      return `${at}; started ${was}; Skip put back ${JSON.stringify({ theme: after.theme, text: after.text, backdrop: after.backdrop })}; chose light,colours,large (Back keeps it: checked on the next step)`;
+    });
+    await step("walk 2/7 Project folder: Back kept the look; Choose… (the picker answered by the test), Skip clears it, chosen again, Enter", async () => {
+      onbClick("[data-onb-back]");
+      await onbAt("look");
+      if (lookNow() !== "light,colours,large") throw new Fail(`Back shows ${lookNow()}`);
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      const at = await onbAt("folder");
+      const b = api() as unknown as { pickFolder: () => Promise<string | null> };
+      const real = b.pickFolder;
+      let asked = 0;
+      b.pickFolder = async () => (asked++, ctx.cfg.dir);
+      try {
+        onbClick("[data-onb-choose]");
+        await waitFor("the folder", () => $("[data-onb-folder]")?.dataset.onbFolder === ctx.cfg.dir, 3_000);
+        onbClick("[data-onb-skip]");
+        await onbAt("build");
+        onbClick("[data-onb-back]");
+        await onbAt("folder");
+        if ($("[data-onb-folder]")?.dataset.onbFolder) throw new Fail(`Skip kept ${$("[data-onb-folder]")?.dataset.onbFolder}`);
+        onbClick("[data-onb-choose]");
+        await waitFor("the folder again", () => $("[data-onb-folder]")?.dataset.onbFolder === ctx.cfg.dir, 3_000);
+      } finally {
+        b.pickFolder = real;
+      }
+      await waitFor("the CLI lines", () => $all("[data-onb-cli]").every((e) => e.dataset.found !== ""), 10_000);
+      const clis = $all("[data-onb-cli]").map((e) => `${e.dataset.onbCli}=${e.dataset.found}`).join(" ");
+      await shot("onbw-walk-2-folder");
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      await onbAt("build");
+      return `${at}; picker asked ${asked}×; ${clis}`;
+    });
+    const devState = (d: string) => $(`[data-onb-device='${d}']`)?.dataset.state ?? "";
+    const ownSim = async () => (await api().simDevices()).devices.filter((d) => d.name === WALK_SIM);
+    const installs = () => invoke("selftest_mac_install_requests") as Promise<number>;
+    await step("walk 3/7 What are you building: Back kept the folder; Websites only installs nothing; Skip keeps the saved answer", async () => {
+      onbClick("[data-onb-back]");
+      await onbAt("folder");
+      if ($("[data-onb-folder]")?.dataset.onbFolder !== ctx.cfg.dir) throw new Fail(`Back shows folder ${$("[data-onb-folder]")?.dataset.onbFolder}`);
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      const at = await onbAt("build");
+      await waitFor("the device rows", () => ["iphone", "mac"].every((d) => devState(d) && devState(d) !== "loading") || null, 20_000);
+      if ($all("[data-onb-kind]").some((b) => b.getAttribute("aria-pressed") === "true")) throw new Fail("a kind is preselected");
+      if ((await ownSim()).length) throw new Fail(`${WALK_SIM} exists before the walk (left by an earlier run?)`);
+      const inst0 = await installs();
+      onbClick("[data-onb-kind='web']");
+      await sleep(250);
+      // The selected card: the app's neutral selected look, never green (green means an agent is done).
+      const card = $("[data-onb-kind='web']")!;
+      const icon = card.querySelector("span span") as HTMLElement | null;
+      if (/accent/.test(`${card.className} ${icon?.className ?? ""} ${card.querySelector("[aria-hidden]")?.className ?? ""}`)) throw new Fail(`the selected card is green: ${card.className}`);
+      if ($("[data-onb-summary]")?.dataset.onbSummary) throw new Fail(`would set up ${$("[data-onb-summary]")?.dataset.onbSummary}`);
+      await shot("onbw-walk-3-build-web");
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      await onbAt("agents");
+      await sleep(1500);
+      if ((await ownSim()).length) throw new Fail("a simulator was created for Websites");
+      if ((await installs()) !== inst0) throw new Fail("a Mac install was requested");
+      const b1 = (await api().prefsGet()).building;
+      if (JSON.stringify(b1) !== '["web"]') throw new Fail(`saved ${JSON.stringify(b1)}`);
+      // Back: the card still picked. Mobile instead, then Skip: nothing saved, nothing set up.
+      onbClick("[data-onb-back]");
+      await onbAt("build");
+      if ($("[data-onb-kind='web']")?.getAttribute("aria-pressed") !== "true") throw new Fail("Back lost the Websites pick");
+      onbClick("[data-onb-kind='web']");
+      onbClick("[data-onb-kind='mobile']");
+      await sleep(250);
+      onbClick("[data-onb-skip]");
+      await onbAt("agents");
+      await sleep(1000);
+      const b2 = (await api().prefsGet()).building;
+      if (JSON.stringify(b2) !== '["web"]') throw new Fail(`Skip saved ${JSON.stringify(b2)}`);
+      if ((await ownSim()).length) throw new Fail("Skip set the iPhone up");
+      return `${at}; Websites: building=${JSON.stringify(b1)}, no simulator, Mac installs ${inst0} -> ${await installs()}; Skip kept ${JSON.stringify(b2)}; summary said "${textOf($("[data-onb-summary]")) || "-"}"`;
+    });
+    await step("walk 3/7 What are you building, second pass: Mobile creates the test's own simulator (never booted; the person's untouched), then it is deleted", async () => {
+      onbClick("[data-onb-back]");
+      await onbAt("build");
+      await waitFor("the device rows", () => ["iphone", "mac"].every((d) => devState(d) && devState(d) !== "loading") || null, 20_000);
+      const others = (await api().simDevices()).devices.filter((d) => d.name !== WALK_SIM).map((d) => `${d.name}:${d.state}`);
+      // The picks as last shown (Mobile, from the skipped pass); make it Mobile alone either way.
+      for (const k of ["web", "mobile", "desktop", "other"]) {
+        const on = $(`[data-onb-kind='${k}']`)?.getAttribute("aria-pressed") === "true";
+        if (on !== (k === "mobile")) onbClick(`[data-onb-kind='${k}']`);
+      }
+      await sleep(250);
+      const can = devState("iphone") === "choose";
+      const going = $("[data-onb-summary]")?.dataset.onbSummary ?? "";
+      if (going !== (can ? "iphone" : "")) throw new Fail(`would set up "${going}" (iPhone row ${devState("iphone")})`);
+      if ($("[data-onb-tick=mac]")?.getAttribute("aria-checked") === "true") throw new Fail("the sandbox Mac is ticked");
+      await shot("onbw-walk-3-build-mobile");
+      const inst0 = await installs();
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      await onbAt("agents");
+      let made = "the iPhone row couldn't (no Xcode runtime): nothing created";
+      if (can) {
+        const end = Date.now() + 60_000;
+        while (!(await ownSim()).length) {
+          if (Date.now() > end) throw new Fail(`${WALK_SIM} wasn't created in 60 s`);
+          await sleep(300);
+        }
+        const s = (await ownSim())[0];
+        if (s.state === "Booted" || s.state === "Booting") throw new Fail("set-up booted the simulator");
+        made = `created ${WALK_SIM} (${s.state})`;
+      }
+      await sleep(500);
+      if ((await installs()) !== inst0) throw new Fail("a Mac install was requested");
+      const b = (await api().prefsGet()).building;
+      if (JSON.stringify(b) !== '["mobile"]') throw new Fail(`saved ${JSON.stringify(b)}`);
+      const gone = can ? ((await invoke("selftest_sim_delete")) as string[]) : [];
+      if ((await ownSim()).length) throw new Fail("the test simulator is still there");
+      const othersAfter = (await api().simDevices()).devices.filter((d) => d.name !== WALK_SIM).map((d) => `${d.name}:${d.state}`);
+      if (JSON.stringify(othersAfter) !== JSON.stringify(others)) throw new Fail(`other simulators changed: ${JSON.stringify(others)} -> ${JSON.stringify(othersAfter)}`);
+      return `${made}, deleted ${gone.length}; building=${JSON.stringify(b)}; ${others.length} other simulators unchanged`;
+    });
+    await step("walk 4/7 How should your agents work: Skip puts the defaults and keep awake back; Claude Code / Sonnet / Plan first / keep awake; login honest, not pressed", async () => {
+      const at = await onbAt("agents");
+      await waitFor("the agents step's body", () => $("[data-onb-cli-choice], [data-onb-cli-found]"), 5_000);
+      const e = env();
+      const both = !!e?.claude && !!e?.codex;
+      const p0 = await walkPrefs();
+      // Tried on: Codex, its mode, keep awake on; then Skip.
+      if (both) ($all("[data-onb-cli-choice] button").find((b) => textOf(b).includes("Codex")) as HTMLElement).click();
+      if (e?.codex) await chooseOpt("Codex permissions for new chats", "Work on its own");
+      if (e?.claude) await chooseOpt("Claude Code model for new chats", "Opus");
+      const aw = await waitFor("the keep-awake switch", () => $("[data-onb-awake] [role=switch]:not([disabled])") as HTMLButtonElement | null, 5_000);
+      if (aw.getAttribute("aria-checked") !== "true") aw.click();
+      await sleep(400);
+      onbClick("[data-onb-skip]");
+      await onbAt("notifications");
+      await sleep(600);
+      const p1 = await walkPrefs();
+      const same = (a: typeof p0, b: typeof p0) => JSON.stringify([a.cli, a.claude, a.codex, a.awake]) === JSON.stringify([b.cli, b.claude, b.codex, b.awake]);
+      if (!same(p0, p1)) throw new Fail(`Skip left ${JSON.stringify([p1.cli, p1.claude, p1.codex, p1.awake])}, was ${JSON.stringify([p0.cli, p0.claude, p0.codex, p0.awake])}`);
+      if ((await api().powerStatus()).enabled !== p0.awake) throw new Fail("the power keeper wasn't put back");
+      onbClick("[data-onb-back]");
+      await onbAt("agents");
+      // For real.
+      if (both) {
+        ($all("[data-onb-cli-choice] button").find((b) => textOf(b).includes("Claude Code")) as HTMLElement).click();
+        await sleep(200);
+        if (defaultCliNow() !== "claude") throw new Fail(`start CLI ${defaultCliNow()}`);
+      }
+      if (e?.claude) {
+        await chooseOpt("Claude Code model for new chats", "Sonnet");
+        await chooseOpt("Claude Code permissions for new chats", "Plan first");
+        const d = chatDefaultsNow().claude;
+        if (d.model !== "sonnet" || d.mode !== "plan") throw new Fail(`claude defaults ${JSON.stringify(d)}`);
+      }
+      const aw2 = await waitFor("the keep-awake switch", () => $("[data-onb-awake] [role=switch]:not([disabled])") as HTMLButtonElement | null, 5_000);
+      if (aw2.getAttribute("aria-checked") !== "true") aw2.click();
+      await poll("the keeper enabled", async () => ((await api().powerStatus()).enabled ? true : null));
+      const st = await waitFor("the login status", () => $("[data-onb-login]")?.dataset.onbLogin || null, 5_000);
+      const lsw = $("[data-onb-login] [role=switch]") as HTMLButtonElement | null;
+      if ((st === "not_found" || st === "unavailable") && !lsw?.disabled) throw new Fail(`login switch enabled for ${st}`);
+      const loginLine = textOf($("[data-onb-login]"));
+      await shot("onbw-walk-4-agents");
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      await onbAt("notifications");
+      return `${at}; Skip put back ${JSON.stringify([p1.cli, p1.claude, p1.codex, p1.awake])}; chose ${JSON.stringify({ cli: defaultCliNow(), claude: chatDefaultsNow().claude })}, awake on; login ${st}, switch ${lsw?.disabled ? "disabled" : "enabled"}: "${loginLine.slice(0, 160)}"`;
+    });
+    await step("walk 5/7 Notifications: Back kept the agents' choices; permission honest (not pressed); Skip puts back; Only when an agent needs me, Knock / Chirp, preview called", async () => {
+      onbClick("[data-onb-back]");
+      await onbAt("agents");
+      const cur = $("[data-onb-defaults=claude]");
+      if (env()?.claude && (cur?.dataset.model !== "sonnet" || cur?.dataset.mode !== "plan")) throw new Fail(`Back shows ${cur?.dataset.model} ${cur?.dataset.mode}`);
+      if ($("[data-onb-awake]")?.dataset.onbAwake !== "true") throw new Fail("Back shows keep awake off");
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      const at = await onbAt("notifications");
+      const perm = await waitFor("the permission", () => $("[data-onb-notify]")?.dataset.onbNotify || null, 5_000);
+      if (perm === "unavailable" && $("[data-onb-allow]")) throw new Fail("an Allow button for an unavailable permission");
+      const permLine = textOf($("[data-onb-notify]"));
+      await waitFor("the choices", () => $("[data-onb-when-option=finished]:not([disabled])"), 5_000);
+      const n0 = (await walkPrefs()).notify;
+      // Tried on, then Skip.
+      onbClick("[data-onb-when-option=finished]");
+      await sleep(300);
+      await chooseOpt("Needs you sound", "Tap");
+      await poll("the try-on saved", async () => ((await api().prefsGet()).notify.sound_needs === "coool:tap" ? true : null));
+      onbClick("[data-onb-skip]");
+      await onbAt("voice");
+      const n1 = await poll("the notifications put back", async () => {
+        const n = (await walkPrefs()).notify;
+        return JSON.stringify(n) === JSON.stringify(n0) ? n : null;
+      }).catch(async () => {
+        throw new Fail(`Skip left ${JSON.stringify((await walkPrefs()).notify)}, was ${JSON.stringify(n0)}`);
+      });
+      // Skipping this step left the agents' choices alone.
+      const pa = await walkPrefs();
+      if (!pa.awake || (env()?.claude && pa.claude.model !== "sonnet")) throw new Fail(`the notifications Skip changed the agents' choices: ${JSON.stringify(pa)}`);
+      onbClick("[data-onb-back]");
+      await onbAt("notifications");
+      await waitFor("the choices", () => $("[data-onb-when-option=needs]:not([disabled])"), 5_000);
+      onbClick("[data-onb-when-option=finished]");
+      await sleep(200);
+      onbClick("[data-onb-when-option=needs]");
+      await chooseOpt("Needs you sound", "Knock");
+      await chooseOpt("Finished sound", "Chirp");
+      const n = await poll("the sounds saved", async () => {
+        const p = (await api().prefsGet()).notify;
+        return p.sound_needs === "coool:knock" && p.sound_finished === "coool:chirp" && p.needs_you && !p.finished ? p : null;
+      });
+      // The preview: the call is made with the picked sound (a self-test mutes it, and says so).
+      const b = api() as unknown as { notifySoundPreview: (id: string) => Promise<unknown> };
+      const real = b.notifySoundPreview;
+      const asked: string[] = [];
+      b.notifySoundPreview = (id) => (asked.push(id), real.call(api(), id));
+      try {
+        onbClick("[data-sound-preview=onb-sound-needs]");
+        await waitFor("the preview's message", () => /Muted during a self-test/.test(textOf($("[data-onb-sounds]"))), 3_000);
+      } finally {
+        b.notifySoundPreview = real;
+      }
+      if (JSON.stringify(asked) !== '["coool:knock"]') throw new Fail(`preview asked ${JSON.stringify(asked)}`);
+      const pb = await walkPrefs();
+      if (!pb.awake || (env()?.claude && pb.claude.mode !== "plan")) throw new Fail(`the notification choices changed the agents' choices: ${JSON.stringify(pb)}`);
+      await shot("onbw-walk-5-notify");
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      await onbAt("voice");
+      return `${at}; permission ${perm}: "${permLine.slice(0, 140)}"; Skip put back ${JSON.stringify(n1)}; chose needs_you=${n.needs_you} finished=${n.finished} ${n.sound_needs}/${n.sound_finished}; preview ${asked.join(",")} (muted)`;
+    });
+    await step("walk 6/7 Talk to your agents: Back kept the notification choices; Download is refused by the self-test (no real download); Skip leaves voice as it was (off)", async () => {
+      onbClick("[data-onb-back]");
+      await onbAt("notifications");
+      await waitFor("the choice", () => $("[data-onb-when]")?.dataset.onbWhen || null, 3_000);
+      if ($("[data-onb-when]")?.dataset.onbWhen !== "needs") throw new Fail(`Back shows ${$("[data-onb-when]")?.dataset.onbWhen}`);
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      const at = await onbAt("voice");
+      await waitFor("the models", () => $("[data-voice-download]"), 10_000);
+      const { getVoicePrefs } = await import("./lib/voice/prefs");
+      const v0 = getVoicePrefs();
+      const c0 = (await invoke("voice_selftest_counters")) as { downloads: number };
+      const dl = $all("[data-voice-download]").find((b) => /recommended/.test(textOf(b.closest("[data-voice-model]")))) ?? $("[data-voice-download]")!;
+      const id = dl.dataset.voiceDownload;
+      dl.click();
+      await waitFor("the refusal", () => /Downloads are off during a self-test/.test(textOf($("[data-voice-models]"))), 5_000);
+      const c1 = (await invoke("voice_selftest_counters")) as { downloads: number };
+      if (c1.downloads !== c0.downloads + 1) throw new Fail(`download requests ${c0.downloads} -> ${c1.downloads}`);
+      if ($(`[data-voice-model="${id}"]`)?.dataset.voiceModelState !== "none") throw new Fail(`model row ${$(`[data-voice-model="${id}"]`)?.dataset.voiceModelState}`);
+      await shot("onbw-walk-6-voice");
+      onbClick("[data-onb-skip]");
+      await onbAt("done");
+      const v1 = getVoicePrefs();
+      if (v1.enabled !== v0.enabled || v1.model !== v0.model) throw new Fail(`Skip changed voice ${JSON.stringify({ enabled: v0.enabled, model: v0.model })} -> ${JSON.stringify({ enabled: v1.enabled, model: v1.model })}`);
+      return `${at}; Download ${id}: refused (requests ${c0.downloads} -> ${c1.downloads}); Skip: enabled ${v1.enabled}, model ${v1.model}`;
+    });
+    await step("walk 7/7 Finish: Back to voice and Enter again; the folder shown; Start a session opens the New session sheet on Claude Code / Sonnet / Plan (start_chat recorded, nothing launched)", async () => {
+      onbClick("[data-onb-back]");
+      await onbAt("voice");
+      ($("#onb-title") as HTMLElement).focus();
+      onbEnter();
+      const at = await onbAt("done");
+      if ($("[data-onb-skip]")) throw new Fail("the finish step offers Skip");
+      const label = textOf($("[data-onb-next]"));
+      if (!label.startsWith("Start a session")) throw new Fail(`finish button "${label}"`);
+      if (!$("[data-onb-done-folder]")) throw new Fail("the folder isn't shown");
+      await shot("onbw-walk-7-done");
+      const all = await walkPrefs();
+      const e = env();
+      const diff = walkDiff(all, WALKED(!!e?.claude && !!e?.codex, !!e?.claude));
+      if (diff.length) throw new Fail(`before finishing: ${diff.join("; ")}`);
+      ignoreChatDefaults(false);
+      const b = api() as unknown as { startChat: (o: unknown) => Promise<number> };
+      const real = b.startChat;
+      let sent: Record<string, unknown> | null = null;
+      b.startChat = async (o) => {
+        sent = o as Record<string, unknown>;
+        throw new Error("self-test: start_chat recorded, not launched");
+      };
+      try {
+        ($("#onb-title") as HTMLElement).focus();
+        onbEnter();
+        await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+        const sh = useStore.getState().sheet as { kind: string; cwd?: string } | null;
+        if (sh?.kind !== "new" || sh.cwd !== ctx.cfg.dir) throw new Fail(`sheet ${JSON.stringify(sh)}`);
+        const btn = await waitFor("the sheet", () => $all("form button[type=submit]")[0] as HTMLButtonElement | undefined, 3_000);
+        await sleep(300);
+        const starts = $("[data-new-starts]")?.dataset.newStarts ?? "";
+        await shot("onbw-walk-8-new-session");
+        btn.click();
+        const got = (await waitFor("start_chat", () => sent, 3_000)) as Record<string, unknown>;
+        if (e?.claude && (got.provider !== "claude" || got.model !== "sonnet" || got.permission_mode !== "plan")) throw new Fail(`start_chat ${JSON.stringify(got)}`);
+        if (!(await api().onboardingSeen())) throw new Fail("the flag wasn't saved");
+        return `${at}; "${label}"; sheet starts "${starts}"; start_chat ${JSON.stringify({ provider: got.provider, model: got.model, permission_mode: got.permission_mode, cwd: got.cwd })}`;
+      } finally {
+        b.startChat = real;
+        ignoreChatDefaults(true);
+        useStore.getState().setSheet(null);
+      }
+    });
+  },
+
+  async "onboarding-walk-restart"(ctx) {
+    const env = () => useStore.getState().env;
+    const want = () => WALKED(!!env()?.claude && !!env()?.codex, !!env()?.claude);
+    await step("walk-restart: a second launch keeps it closed; every choice survived", async () => {
+      await sleep(4000);
+      if ($("[data-onboarding]")) throw new Fail("it opened again");
+      await waitFor("the environment", () => env(), 10_000);
+      const p = await walkPrefs();
+      const diff = walkDiff(p, want());
+      if (diff.length) throw new Fail(diff.join("; "));
+      const root = document.documentElement;
+      if (root.dataset.theme !== "light" || getComputedStyle(root).getPropertyValue("--text-scale").trim() !== "1.07") throw new Fail(`theme ${root.dataset.theme} scale ${getComputedStyle(root).getPropertyValue("--text-scale")}`);
+      if (!(await api().powerStatus()).enabled) throw new Fail("the power keeper is off");
+      return JSON.stringify(p);
+    });
+    await step("walk-restart: Settings shows every choice (Appearance, General, Notifications, Voice)", async () => {
+      const open = async (sec: Parameters<ReturnType<typeof useStore.getState>["openSettings"]>[0], attr: string) => {
+        useStore.getState().openSettings(sec);
+        await waitFor(`Settings > ${sec}`, () => settingRow(attr), 5_000);
+        await sleep(500);
+      };
+      const segOn = (attr: string) => {
+        const r = settingRow(attr);
+        // The Segmented's selected button is the one whose label isn't dimmed.
+        return ([...(r?.querySelectorAll("button") ?? [])] as HTMLElement[]).find((b) => b.className.includes("text-fg") && !b.className.includes("hover:text-fg"))?.textContent?.trim() ?? "?";
+      };
+      const out: string[] = [];
+      await open("appearance", "theme");
+      const look = `theme ${segOn("theme")}, backdrop ${segOn("window-backdrop")}, text ${segOn("text-size")}`;
+      if (look !== "theme Light, backdrop Colours, text Large") throw new Fail(`Appearance: ${look}`);
+      out.push(look);
+      await shot("onbw-r-settings-appearance");
+      await open("general", "default-model-claude");
+      const sel = (attr: string) => textOf(settingRow(attr)?.querySelector("button[aria-haspopup]") ?? null);
+      const e = env();
+      if (e?.claude && e?.codex && sel("default-cli") !== "Claude Code") throw new Fail(`default CLI row: ${sel("default-cli")}`);
+      if (e?.claude && !/Sonnet/.test(sel("default-model-claude"))) throw new Fail(`model row: ${sel("default-model-claude")}`);
+      if (e?.claude && !/Plan/i.test(sel("default-mode-claude"))) throw new Fail(`mode row: ${sel("default-mode-claude")}`);
+      if (switchIn(settingRow("prevent-sleep"))?.getAttribute("aria-checked") !== "true") throw new Fail("keep awake shows off");
+      const chips = $all("[data-building]").filter((x) => x.getAttribute("aria-pressed") === "true").map((x) => x.dataset.building);
+      if (JSON.stringify(chips) !== '["mobile"]') throw new Fail(`building chips ${JSON.stringify(chips)}`);
+      out.push(`model "${sel("default-model-claude")}", mode "${sel("default-mode-claude")}", keep awake on, building ${chips.join(",")}`);
+      $("[data-building]")!.scrollIntoView({ block: "center" });
+      await shot("onbw-r-settings-general");
+      await open("notifications", "notify-needs");
+      const on = (a: string) => switchIn(settingRow(a))?.getAttribute("aria-checked");
+      if (on("notify-needs") !== "true" || on("notify-finished") !== "false") throw new Fail(`needs ${on("notify-needs")} finished ${on("notify-finished")}`);
+      const sn = sel("notify-sound-needs");
+      const sf = sel("notify-sound-finished");
+      if (!/Knock/.test(sn) || !/Chirp/.test(sf)) throw new Fail(`sounds "${sn}" / "${sf}"`);
+      out.push(`needs on, finished off, sounds ${sn} / ${sf}`);
+      await shot("onbw-r-settings-notifications");
+      await open("voice", "voice-on");
+      const von = switchIn(settingRow("voice-on"))?.getAttribute("aria-checked");
+      if (von === "true") throw new Fail("voice shows on");
+      out.push(`voice ${von === "true" ? "on" : "off"}`);
+      useStore.getState().closeSettings();
+      return out.join("; ");
+    });
+    await step("walk-restart: a new session from the New session sheet starts with Claude Code / Sonnet / Plan (start_chat recorded, nothing launched)", async () => {
+      ignoreChatDefaults(false);
+      const b = api() as unknown as { startChat: (o: unknown) => Promise<number> };
+      const real = b.startChat;
+      let sent: Record<string, unknown> | null = null;
+      b.startChat = async (o) => {
+        sent = o as Record<string, unknown>;
+        throw new Error("self-test: start_chat recorded, not launched");
+      };
+      try {
+        useStore.getState().setSheet({ kind: "new", cwd: ctx.cfg.dir });
+        const btn = await waitFor("the sheet", () => $all("form button[type=submit]")[0] as HTMLButtonElement | undefined, 3_000);
+        await sleep(300);
+        btn.click();
+        const got = (await waitFor("start_chat", () => sent, 3_000)) as Record<string, unknown>;
+        if (env()?.claude && (got.provider !== "claude" || got.model !== "sonnet" || got.permission_mode !== "plan")) throw new Fail(`start_chat ${JSON.stringify(got)}`);
+        return `start_chat ${JSON.stringify({ provider: got.provider, model: got.model, permission_mode: got.permission_mode })}`;
+      } finally {
+        b.startChat = real;
+        ignoreChatDefaults(true);
+        useStore.getState().setSheet(null);
+      }
+    });
+    await step("walk-restart: Settings > About re-opens it on step 1 with the current values on every screen (walked with Continue; nothing changes)", async () => {
+      const p0 = await walkPrefs();
+      useStore.getState().openSettings("about");
+      const again = await waitFor("Show onboarding again", () => $("[data-onboarding-again]"), 5_000);
+      const desc = textOf(settingRow("onboarding"));
+      if (/open at login/i.test(desc)) throw new Fail(`About still lists a separate login screen: "${desc}"`);
+      again.click();
+      await onbAt("look");
+      const seen: string[] = [];
+      if (lookNow() !== "light,colours,large") throw new Fail(`look shows ${lookNow()}`);
+      seen.push(`look ${lookNow()}`);
+      onbClick("[data-onb-next]");
+      await onbAt("folder");
+      seen.push(`folder "${$("[data-onb-folder]")?.dataset.onbFolder ?? ""}"`);
+      onbClick("[data-onb-next]");
+      await onbAt("build");
+      await sleep(300);
+      const picks = $all("[data-onb-kind]").filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.dataset.onbKind);
+      if (JSON.stringify(picks) !== '["mobile"]') throw new Fail(`build shows ${JSON.stringify(picks)}`);
+      if ($("[data-onb-summary]")?.dataset.onbSummary) throw new Fail(`a re-opened flow would set up ${$("[data-onb-summary]")?.dataset.onbSummary}`);
+      seen.push(`build ${picks.join(",")}, nothing ticked`);
+      onbClick("[data-onb-next]");
+      await onbAt("agents");
+      await sleep(200);
+      const cur = $("[data-onb-defaults=claude]");
+      if (env()?.claude && (cur?.dataset.model !== "sonnet" || cur?.dataset.mode !== "plan")) throw new Fail(`agents shows ${cur?.dataset.model} ${cur?.dataset.mode}`);
+      if ($("[data-onb-awake]")?.dataset.onbAwake !== "true") throw new Fail("keep awake shows off");
+      const cliShown = $("[data-onb-cli-choice]")?.dataset.onbCliChoice ?? "";
+      if (env()?.claude && env()?.codex && cliShown !== "claude") throw new Fail(`CLI shows ${cliShown}`);
+      seen.push(`agents ${cliShown} ${cur?.dataset.model}/${cur?.dataset.mode}, awake on`);
+      onbClick("[data-onb-next]");
+      await onbAt("notifications");
+      await waitFor("the choice", () => $("[data-onb-when]")?.dataset.onbWhen || null, 3_000);
+      if ($("[data-onb-when]")?.dataset.onbWhen !== "needs" || $("[data-onb-sounds]")?.dataset.onbSounds !== "custom") throw new Fail(`notifications shows ${$("[data-onb-when]")?.dataset.onbWhen} / ${$("[data-onb-sounds]")?.dataset.onbSounds}`);
+      const sounds = `${textOf($("button[aria-label='Needs you sound']"))} / ${textOf($("button[aria-label='Finished sound']"))}`;
+      if (!/Knock/.test(sounds) || !/Chirp/.test(sounds)) throw new Fail(`sounds show ${sounds}`);
+      seen.push(`notifications needs, ${sounds}`);
+      onbClick("[data-onb-next]");
+      await onbAt("voice");
+      onbClick("[data-onb-next]");
+      await onbAt("done");
+      if (!textOf($("[data-onb-next]")).startsWith("Go to Home")) throw new Fail(`finish says ${textOf($("[data-onb-next]"))} with no folder picked`);
+      onbClick("[data-onb-dismiss]");
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      useStore.getState().closeSettings();
+      const diff = walkDiff(await walkPrefs(), want());
+      if (diff.length) throw new Fail(`walking it again with Continue changed: ${diff.join("; ")}`);
+      if (JSON.stringify(p0) !== JSON.stringify(await walkPrefs())) throw new Fail("prefs changed");
+      return `About: "${desc.slice(0, 110)}"; ${seen.join("; ")}`;
+    });
+    await step("walk-restart: someone who had voice on: Skip on Talk to your agents leaves it on", async () => {
+      const { getVoicePrefs, setVoicePrefs } = await import("./lib/voice/prefs");
+      const keep = getVoicePrefs();
+      const fake = `${ctx.cfg.dir}/.coool-voice/ggml-selftest.bin`;
+      setVoicePrefs({ enabled: true, model: fake, modelId: null });
+      try {
+        openOnboarding();
+        await onbAt("look");
+        for (const id of ["folder", "build", "agents", "notifications", "voice"]) {
+          onbClick("[data-onb-next]");
+          await onbAt(id);
+        }
+        onbClick("[data-onb-skip]");
+        await onbAt("done");
+        const v = getVoicePrefs();
+        if (!v.enabled || v.model !== fake) throw new Fail(`Skip turned voice ${v.enabled ? "on" : "off"}, model ${v.model}`);
+        onbClick("[data-onb-dismiss]");
+        await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+        return `still on, model ${homeShortPath(v.model)}`;
+      } finally {
+        setVoicePrefs({ enabled: keep.enabled, model: keep.model, modelId: keep.modelId });
+      }
+    });
+    await step("walk-restart: Skip setup from the middle (How should your agents work) closes it and keeps everything; no sheet", async () => {
+      const p0 = await walkPrefs();
+      openOnboarding();
+      await onbAt("look");
+      for (const id of ["folder", "build", "agents"]) {
+        onbClick("[data-onb-next]");
+        await onbAt(id);
+      }
+      onbClick("[data-onb-dismiss]");
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      await sleep(500);
+      if (useStore.getState().sheet) throw new Fail(`a ${useStore.getState().sheet?.kind} sheet opened`);
+      if (!(await api().onboardingSeen())) throw new Fail("the flag is gone");
+      const p1 = await walkPrefs();
+      if (JSON.stringify(p0) !== JSON.stringify(p1)) throw new Fail(`changed: ${JSON.stringify(p0)} -> ${JSON.stringify(p1)}`);
+      return "closed, seen, nothing changed";
+    });
+    await step("walk-restart: the seven screens in light and dark at 1440×900 and 900×560: nothing overflows (screenshots)", async () => {
+      const p0 = await walkPrefs();
+      const notes: string[] = [];
+      const bad: string[] = [];
+      openOnboarding();
+      try {
+        for (let k = 0; k < STEPS.length; k++) {
+          const id = STEPS[k].id;
+          await onbAt(id);
+          if (id === "build") await waitFor("the device rows", () => ["iphone", "mac"].every((d) => ($(`[data-onb-device='${d}']`)?.dataset.state ?? "loading") !== "loading") || null, 20_000);
+          if (id === "voice") await waitFor("the models", () => $("[data-voice-download], [data-voice-model]"), 10_000);
+          for (const [w, h] of [[1440, 900], [900, 560]]) {
+            await invoke("selftest_resize", { width: w, height: h });
+            await sleep(500);
+            const raf = await new Promise<boolean>((r) => {
+              const t = setTimeout(() => r(false), 1000);
+              requestAnimationFrame(() => (clearTimeout(t), r(true)));
+            });
+            if (!raf) await log(`INFO ${id} ${w}×${h}: no animation frame in 1 s (hidden ${document.hidden}, ${window.innerWidth}×${window.innerHeight})`);
+            for (const theme of ["light", "dark"] as const) {
+              useStore.getState().setThemePref(theme);
+              await sleep(700);
+              const o = onbOverflow();
+              if (o.bad.length) bad.push(`${id} ${theme} ${w}×${h}: ${o.bad.join(" | ")}`);
+              if (theme === "light") notes.push(`${k + 1} ${id} ${w}×${h}: ${o.fold}`);
+              await shot(`onbw-${k + 1}-${id}-${theme}-${w}`, undefined, 300);
+            }
+          }
+          await invoke("selftest_resize", { width: 1440, height: 900 });
+          useStore.getState().setThemePref("light");
+          await sleep(300);
+          if (k < STEPS.length - 1) onbClick("[data-onb-next]");
+        }
+      } finally {
+        useStore.getState().setThemePref("light");
+        await invoke("selftest_resize", { width: 1440, height: 900 });
+        if ($("[data-onboarding]")) $("[data-onb-dismiss]")?.click();
+      }
+      await waitFor("it to close", () => !$("[data-onboarding]"), 3_000);
+      const p1 = await walkPrefs();
+      if (JSON.stringify(p0) !== JSON.stringify(p1)) throw new Fail(`the shots changed prefs: ${JSON.stringify(p0)} -> ${JSON.stringify(p1)}`);
+      if (bad.length) throw new Fail(bad.join(" || "));
+      return notes.join("; ");
+    });
+  },
+};
+Object.assign(scenarios, onboardingWalk);
+const homeShortPath = (p: string | null) => (p ?? "").replace(/^\/Users\/[^/]+/, "~");
 
 // ---------- the sandbox Mac: a clean boot, the pilot driven directly, click-then-type ----------
 

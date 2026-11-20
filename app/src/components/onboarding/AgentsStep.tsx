@@ -137,12 +137,15 @@ function CliDefaults({ provider, first }: { provider: Provider; first: boolean }
         <Select label={`${NAME[provider]} model for new chats`} value={d.model ?? DEFAULT} options={models} width={260} onChange={(v) => setChatDefault(provider, { model: v === DEFAULT ? null : v })} />
       </div>
       <div className="flex items-center gap-3 py-1.5 pl-[42px] pr-3.5">
-        <span className="min-w-0 flex-1 truncate font-mono text-mono-small text-faint" title="The CLI’s own name for it">
-          {d.mode ? (provider === "claude" ? `--permission-mode ${d.mode}` : `approval: ${d.mode}`) : ""}
-        </span>
-        <span className="shrink-0 text-small text-faint">Permissions</span>
+        <span className="min-w-0 flex-1 text-small text-faint">Permissions</span>
         <Select label={`${NAME[provider]} permissions for new chats`} value={d.mode ?? DEFAULT} options={modes} width={320} onChange={(v) => setChatDefault(provider, { mode: v === DEFAULT ? null : v })} />
       </div>
+      {/* The CLI's own name for the mode, on a line of its own: beside the long mode names it had no room. */}
+      {d.mode && (
+        <div className="-mt-1 truncate pb-1 pl-[42px] pr-3.5 text-right font-mono text-mono-small text-faint" title="The CLI’s own name for it" data-onb-mode-cli>
+          {provider === "claude" ? `--permission-mode ${d.mode}` : `approval: ${d.mode}`}
+        </div>
+      )}
     </div>
   );
 }

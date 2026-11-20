@@ -45,6 +45,8 @@ pub struct Voice {
     pub spell_calls: AtomicU64,
     pub polish_calls: AtomicU64,
     pub runs: AtomicU64,
+    /// Self-test: model downloads asked for (a self-test never downloads one; see `voice_model_download`).
+    pub download_calls: AtomicU64,
 }
 
 impl Voice {
@@ -60,6 +62,7 @@ impl Voice {
             spell_calls: AtomicU64::new(0),
             polish_calls: AtomicU64::new(0),
             runs: AtomicU64::new(0),
+            download_calls: AtomicU64::new(0),
         }
     }
 
@@ -318,6 +321,11 @@ pub fn voice_models(v: State<'_, Arc<Voice>>) -> Res<Models> {
 #[tauri::command(async)]
 pub fn voice_model_download(app: AppHandle, v: State<'_, Arc<Voice>>, id: String) -> Res<()> {
     let s = models::spec(&id).ok_or("unknown model")?;
+    // A self-test never downloads a model (hundreds of MB from the network): the press is counted and refused.
+    if v.is_selftest() {
+        v.download_calls.fetch_add(1, Ordering::Relaxed);
+        return Err("Downloads are off during a self-test.".into());
+    }
     let dir = v.models_dir()?;
     let mut dl = v.downloads.lock().unwrap();
     if dl.get(&id).is_some_and(|d| matches!(*d.last.lock().unwrap(), models::Progress::Downloading { .. } | models::Progress::Verifying { .. })) {
@@ -478,6 +486,7 @@ pub struct Counters {
     spell: u64,
     polish: u64,
     runs: u64,
+    downloads: u64,
 }
 
 #[tauri::command(async)]
@@ -485,7 +494,7 @@ pub fn voice_selftest_counters(v: State<'_, Arc<Voice>>) -> Res<Counters> {
     if !v.is_selftest() {
         return Err("self-test mode is off".into());
     }
-    Ok(Counters { spell: v.spell_calls.load(Ordering::Relaxed), polish: v.polish_calls.load(Ordering::Relaxed), runs: v.runs.load(Ordering::Relaxed) })
+    Ok(Counters { spell: v.spell_calls.load(Ordering::Relaxed), polish: v.polish_calls.load(Ordering::Relaxed), runs: v.runs.load(Ordering::Relaxed), downloads: v.download_calls.load(Ordering::Relaxed) })
 }
 
 #[derive(Serialize)]
