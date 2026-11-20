@@ -12,7 +12,10 @@
 # FILM_SLOW (default 3): the scene plays that many times slower than real time while it records (the page's
 # animations and clock, the stand-in CLIs, the live workspace), and the assembler plays it back that much faster, so
 # a capture of ~8-25 stills a second (it depends on how busy the Mac is) still makes smooth 30 fps video.
-# FILM_DILATE: `all` (default: the page's animations and its clock) or `animations` (CSS / Web Animations only).
+# FILM_DILATE: `animations` (default: CSS / Web Animations) or `all` (also the page's clock; a chat's last reply then fails to show).
+# FILM_MAC=1 also films the Mac panel: the sandbox Mac in FILM_VM_DIR (default the app's own,
+# ~/Library/Application Support/sh.coool.app/vm) is booted through the app, used (TextEdit), and shut down after; it
+# is never installed, deleted or reconfigured (a self-test stubs installs). Only while no other coool runs that Mac.
 # FILM_WORKERS (default 2): screencapture processes taking stills at once.
 # Don't edit this file while it runs: the shell reads it as it goes.
 #
@@ -25,6 +28,7 @@ OUT=${FILM_OUT:-$REPO/launch-video/footage}
 PORT=${FILM_PORT:-8763}
 SCENARIO=${1:-film}
 SLOW=${FILM_SLOW:-3}
+FILM_VM_DIR=${FILM_VM_DIR:-$HOME/Library/Application Support/sh.coool.app/vm}
 NAME=coool-film
 
 BIN=${COOOL_BIN:-${CARGO_TARGET_DIR:-$REPO/target}/debug/coool}
@@ -49,6 +53,11 @@ rm -rf "$HOME/Library/WebKit/$NAME" "$HOME/Library/Caches/$NAME"
 python3 -I -m http.server "$PORT" --bind 127.0.0.1 --directory "$HERE/site" > "$ROOT/logs/site.log" 2>&1 &
 SITE=$!
 LOG="$ROOT/logs/selftest.log"
+# The sandbox Mac only when asked, and only while nothing else runs it (its helper holds the VM folder's lock too).
+VMDIR="$ROOT/no-vm"
+if [ "${FILM_MAC:-0}" = 1 ]; then
+  if pgrep -x coool-vm > /dev/null; then echo "the sandbox Mac is in use (a coool-vm helper runs); not filming it"; else VMDIR=$FILM_VM_DIR; fi
+fi
 python3 -I "$HERE/workspace.py" live --film --cues "$LOG" --root "$ROOT" > "$ROOT/logs/live.pid" 2> "$ROOT/logs/live.err" &
 LIVE=$!
 sleep 1
@@ -56,7 +65,8 @@ sleep 1
 env -i HOME="$H" USER="${USER:-demo}" LOGNAME="${LOGNAME:-demo}" TMPDIR="${TMPDIR:-/tmp/}" LANG=en_US.UTF-8 SHELL=/bin/zsh \
   PATH="$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin" \
   COOOL_SELFTEST="$SCENARIO" COOOL_SELFTEST_DIR="$H/code" COOOL_SELFTEST_SHOTS="$ROOT/shots" COOOL_SELFTEST_LOG="$LOG" \
-  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 COOOL_FILM_WORKERS="${FILM_WORKERS:-2}" COOOL_FILM_SLOW="$SLOW" COOOL_FILM_DILATE="${FILM_DILATE:-all}" \
+  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 COOOL_FILM_WORKERS="${FILM_WORKERS:-2}" COOOL_FILM_SLOW="$SLOW" COOOL_FILM_DILATE="${FILM_DILATE:-animations}" \
+  COOOL_FILM_MAC="${FILM_MAC:-0}" COOOL_VM_DIR="$VMDIR" \
   "$ROOT/app/$NAME" > "$ROOT/logs/app.out" 2>&1 &
 APP=$!
 

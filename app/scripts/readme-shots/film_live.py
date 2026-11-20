@@ -6,6 +6,7 @@ scenario (app/src/selftestFilm.ts), so each moment happens while a burst is reco
   terminal        a new Claude Code session starts "in a terminal" in atlas-api (its own process, the CLI's registry
                   entry, a transcript growing step by step) and shows up in coool with no setup
   terminal-codex  the same for a Codex session (a rollout growing step by step)
+  changes         atlas-api: the `terminal` session writes, edits, commits on its own branch, pushes and merges it
   overlap         a second atlas-api session edits src/config.rs, which another live session has uncommitted edits to
   needs           sessions that were working stop and wait for the person (registry `waiting`), one after another
   commit-atlas    atlas-api: a session commits its work for real (git) and pushes it to the local origin
@@ -25,6 +26,8 @@ import uuid
 from pathlib import Path
 
 LOCK = threading.RLock()
+# Sessions that also wait for the person once `needs` comes (besides the README's waiting ones).
+FILM_WAITS = {"Make limiter budgets follow config reloads": "permission to run `cargo run -- --watch-config`"}
 
 
 def run(root: Path, cues: Path, ws):
@@ -196,14 +199,59 @@ def run(root: Path, cues: Path, ws):
 
     def overlap():
         e = by_title("Make limiter budgets follow config reloads")
+        # (It may be waiting for the person since `needs`: answered in its terminal, it goes on and edits the file.)
+        e["hold"] = False
+        registry(e, "busy")
         claude_step(e, "Edit", {"file_path": "src/config.rs", "old_string": "pub fn load() -> Config {", "new_string": "pub fn load() -> Config {\n    // watched: see reload()"}, "The file src/config.rs has been updated.")
         nap(1.2)
         claude_step(e, "thinking", "A watch channel from the loader keeps the limiter lock-free on the hot path.")
 
     def needs():
-        for e in [x for x in entries if x.get("waiting")]:
+        order = ["Make limiter budgets follow config reloads"]
+        for e in sorted([x for x in entries if x.get("waiting")], key=lambda x: x["title"] not in order):
+            e["hold"] = True
             registry(e, "waiting", e["waiting"])
             nap(1.6)
+
+    def changes():
+        """atlas-api: the session started in a terminal (`terminal`) writes a test, edits the router, commits on a
+        branch of its own, pushes it and merges it into rate-limit (all real git, only its own files)."""
+        e = by_title("Add request IDs to every log line")
+        e["scripted"] = True
+        cwd = Path(e["cwd"])
+        t0 = time.time()
+        (cwd / "src" / "middleware" / "request_id.rs").write_text("pub fn layer() {}\n")
+        (cwd / "tests").mkdir(exist_ok=True)
+        (cwd / "tests" / "request_id.rs").write_text("#[test]\nfn every_response_has_an_id() {}\n")
+        until(t0, 0.5)
+        claude_step(e, "Write", {"file_path": "tests/request_id.rs", "content": "#[test]\nfn every_response_has_an_id() {}\n"}, "File created successfully at: tests/request_id.rs")
+        mod = cwd / "src" / "routes" / "mod.rs"
+        mod.write_text(mod.read_text() + "// every route gets the request id layer\n")
+        until(t0, 3.0)
+        claude_step(e, "Edit", {"file_path": "src/routes/mod.rs", "old_string": "pub mod search;", "new_string": "pub mod search;\n// request ids on every route"}, "The file src/routes/mod.rs has been updated.")
+        until(t0, 5.5)
+        msg_ = "Request ids on every log line and response"
+        claude_step(e, "Bash", {"command": f"git checkout -b request-ids && git add src/middleware/request_id.rs src/routes/mod.rs tests/request_id.rs && git commit -m '{msg_}'", "description": "Commit on a branch"})
+        git(cwd, "checkout", "-q", "-b", "request-ids")
+        git(cwd, "add", "src/middleware/request_id.rs", "src/routes/mod.rs", "tests/request_id.rs")
+        git(cwd, "commit", "-q", "-m", msg_)
+        h = git(cwd, "rev-parse", "--short", "HEAD")
+        with LOCK:
+            append_claude(e, [result(open_ids(e)[-1], f"[request-ids {h}] {msg_}\n 3 files changed, 9 insertions(+)")])
+        until(t0, 8.0)
+        claude_step(e, "Bash", {"command": "git push -u origin request-ids", "description": "Push the branch"})
+        git(cwd, "push", "-q", "-u", "origin", "request-ids")
+        with LOCK:
+            append_claude(e, [result(open_ids(e)[-1], "To origin\n * [new branch]      request-ids -> request-ids")])
+        until(t0, 10.5)
+        claude_step(e, "Bash", {"command": "git checkout rate-limit && git merge --no-ff request-ids", "description": "Merge it into rate-limit"})
+        git(cwd, "checkout", "-q", "rate-limit")
+        git(cwd, "merge", "-q", "--no-ff", "request-ids", "-m", "Merge branch 'request-ids' into rate-limit")
+        with LOCK:
+            append_claude(e, [result(open_ids(e)[-1], "Merge made by the 'ort' strategy.\n 3 files changed, 9 insertions(+)")])
+        until(t0, 12.5)
+        claude_step(e, "Bash", {"command": "cargo test -p atlas-api", "description": "Run all tests"})
+        e["scripted"] = False
 
     def commit_atlas():
         e = by_title("Add rate limiting to /v2/search")
@@ -255,7 +303,7 @@ def run(root: Path, cues: Path, ws):
         claude_step(e, "Bash", {"command": "cargo run --example bloom -- --frames 60", "description": "Render the bloom example"})
         e["scripted"] = False
 
-    moments = {"terminal": terminal, "terminal-codex": terminal_codex, "overlap": overlap, "needs": needs, "commit-atlas": commit_atlas, "commit-pixel": commit_pixel}
+    moments = {"changes": changes, "terminal": terminal, "terminal-codex": terminal_codex, "overlap": overlap, "needs": needs, "commit-atlas": commit_atlas, "commit-pixel": commit_pixel}
 
     # ---------------------------------------------------------------- the run
 
@@ -270,6 +318,9 @@ def run(root: Path, cues: Path, ws):
                 e["waiting"] = st.split(":", 1)[1]
                 e["state"] = "busy"
                 e["hold"] = True
+            if e["title"] in FILM_WAITS:
+                # Working (thinking) until `needs`, then waiting for the person in atlas-api too.
+                e["waiting"] = FILM_WAITS[e["title"]]
             registry(e, "busy" if e["state"] in ("busy", "think") else "idle")
         offset = cues.stat().st_size if cues.exists() else 0
         tick = 0
