@@ -28,6 +28,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+pub mod cli;
+pub mod gate;
+
 pub const ASSET: &str = "coool-macos-arm64.tar.gz";
 const BUNDLE_ID: &str = "sh.coool.app";
 const API_LATEST: &str = "https://api.github.com/repos/mes28io/coool/releases/latest";
@@ -154,13 +157,15 @@ impl PartialOrd for Version {
 pub struct Source {
     pub api: String,
     pub downloads: String,
+    /// The npm registry (the CLIs' newest versions, cli.rs).
+    pub registry: String,
     /// Plain http is allowed (a loopback test server only).
     loopback: bool,
 }
 
 impl Source {
     pub fn github() -> Source {
-        Source { api: API_LATEST.into(), downloads: DOWNLOADS.into(), loopback: false }
+        Source { api: API_LATEST.into(), downloads: DOWNLOADS.into(), registry: "https://registry.npmjs.org/".into(), loopback: false }
     }
 
     /// A test server on this Mac: exactly `http://127.0.0.1:<port>`, serving the same paths as GitHub.
@@ -168,7 +173,7 @@ impl Source {
     pub fn loopback(base: &str) -> Option<Source> {
         let port = base.strip_prefix("http://127.0.0.1:")?;
         num(port).filter(|p| (1..=65535).contains(p))?;
-        Some(Source { api: format!("{base}/repos/mes28io/coool/releases/latest"), downloads: format!("{base}/mes28io/coool/releases/download/"), loopback: true })
+        Some(Source { api: format!("{base}/repos/mes28io/coool/releases/latest"), downloads: format!("{base}/mes28io/coool/releases/download/"), registry: format!("{base}/npm/"), loopback: true })
     }
 
     /// GitHub, or in a debug build a loopback server named by `COOOL_UPDATE_BASE`.
@@ -186,9 +191,14 @@ impl Source {
     }
 
     fn agent(&self) -> ureq::Agent {
+        self.agent_with(None)
+    }
+
+    /// `limit`: the longest a whole request may take (the launch checks); `None` for downloads.
+    fn agent_with(&self, limit: Option<Duration>) -> ureq::Agent {
         ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(20)))
-            .timeout_global(None)
+            .timeout_connect(Some(limit.unwrap_or(Duration::from_secs(20))))
+            .timeout_global(limit)
             .timeout_recv_response(Some(Duration::from_secs(30)))
             .https_only(!self.loopback)
             .http_status_as_error(false)
@@ -272,8 +282,8 @@ fn read_limited(resp: &mut ureq::http::Response<ureq::Body>, max: u64) -> Result
 }
 
 /// Asks the release API for the latest release; `None` when there is nothing newer.
-pub fn check(src: &Source, current: &Version) -> Result<Option<Release>, String> {
-    let agent = src.agent();
+pub fn check(src: &Source, current: &Version, limit: Option<Duration>) -> Result<Option<Release>, String> {
+    let agent = src.agent_with(limit);
     let mut resp = get(&agent, &src.api, "application/vnd.github+json")?;
     let body = read_limited(&mut resp, MAX_JSON)?;
     pick(&body, current, src)
@@ -453,26 +463,46 @@ pub fn swap(new: &Path, dest: &Path) -> std::io::Result<()> {
     std::fs::rename(&aside, new)
 }
 
-/// Downloads, verifies and swaps in `rel` over the bundle at `app`. On any error the installed bundle is untouched.
-pub fn install(src: &Source, rel: &Release, app: &Path, progress: &mut dyn FnMut(Progress)) -> Result<(), String> {
+/// `<folder>/.coool-update`: the verified next version (`coool.app`) and the work folders of downloads.
+pub fn update_dir(app: &Path) -> Option<PathBuf> {
+    app.parent().map(|d| d.join(".coool-update"))
+}
+
+/// The verified next version waiting beside the installed bundle, if any.
+pub fn staged_path(app: &Path) -> Option<PathBuf> {
+    update_dir(app).map(|d| d.join("coool.app")).filter(|p| p.join("Contents/Info.plist").is_file())
+}
+
+/// Downloads, checks and unpacks `rel`, and keeps the verified bundle beside the installed one
+/// (`.coool-update/coool.app`). The installed bundle, and so the running app, is never touched: the swap happens
+/// at restart, at quit or at the next launch (`apply_staged`). Any error leaves no new staged bundle behind.
+pub fn stage(src: &Source, rel: &Release, app: &Path, progress: &mut dyn FnMut(Progress)) -> Result<PathBuf, String> {
     if !src.allows(&rel.tarball, &rel.tag, ASSET) || !src.allows(&rel.checksum, &rel.tag, &format!("{ASSET}.sha256")) {
         return Err("That download isn't from coool's releases.".into());
     }
-    let dir = app.parent().ok_or("coool's folder can't be found.")?;
-    let staging = Staging(dir.join(format!(".coool-update-{}", std::process::id())));
-    let _ = std::fs::remove_dir_all(&staging.0);
-    std::fs::create_dir(&staging.0).map_err(|e| format!("Can't write to {}: {e}", dir.display()))?;
+    let root = update_dir(app).ok_or("coool's folder can't be found.")?;
+    std::fs::create_dir_all(&root).map_err(|e| format!("Can't write to {}: {e}", root.display()))?;
+    // Work folders left by an interrupted download (any process) go first.
+    if let Ok(rd) = std::fs::read_dir(&root) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with("work-") {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let work = Staging(root.join(format!("work-{}", std::process::id())));
+    std::fs::create_dir(&work.0).map_err(|e| format!("Can't write to {}: {e}", root.display()))?;
     let agent = src.agent();
 
     let mut resp = get(&agent, &rel.checksum, "text/plain")?;
     let want = parse_sum(&String::from_utf8_lossy(&read_limited(&mut resp, MAX_SUM)?)).ok_or("The release's checksum file is malformed.")?;
-    let tarball = staging.0.join(ASSET);
+    let tarball = work.0.join(ASSET);
     let got = download(&agent, &rel.tarball, &tarball, progress)?;
     progress(Progress { phase: Phase::Verify, done: 0, total: None });
     if got != want {
         return Err("The download didn't match its published checksum.".into());
     }
-    let x = staging.0.join("x");
+    let x = work.0.join("x");
     std::fs::create_dir(&x).map_err(|e| e.to_string())?;
     let ok = std::process::Command::new("/usr/bin/tar").arg("-xzf").arg(&tarball).arg("-C").arg(&x).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
     if !ok {
@@ -482,9 +512,30 @@ pub fn install(src: &Source, rel: &Release, app: &Path, progress: &mut dyn FnMut
     verify_bundle(&new, &rel.version)?;
     let _ = std::process::Command::new("/usr/bin/xattr").args(["-dr", "com.apple.quarantine"]).arg(&new).stderr(std::process::Stdio::null()).status();
     progress(Progress { phase: Phase::Install, done: 0, total: None });
-    swap(&new, app).map_err(|e| format!("Can't replace {}: {e}", app.display()))?;
-    // `new` now holds the old bundle; the staging folder goes, and it with it.
-    Ok(())
+    // Replaces an older staged version in one step (a staged bundle is either whole or absent).
+    let dest = root.join("coool.app");
+    swap(&new, &dest).map_err(|e| format!("Can't write to {}: {e}", root.display()))?;
+    Ok(dest)
+}
+
+/// Swaps the staged bundle in, if there is one newer than `running` that still verifies; it is removed otherwise.
+/// Returns the version now installed. Called before anything runs (launch), on Restart, and as the app quits.
+pub fn apply_staged(app: &Path, running: &Version) -> Result<Option<String>, String> {
+    let Some(staged) = staged_path(app) else { return Ok(None) };
+    let root = update_dir(app).ok_or("coool's folder can't be found.")?;
+    let v = bundle_version(&staged).and_then(|v| Version::parse(&v));
+    let Some(v) = v.filter(|v| v > running) else {
+        let _ = std::fs::remove_dir_all(&root);
+        return Ok(None);
+    };
+    if let Err(e) = verify_bundle(&staged, &v.to_string()) {
+        let _ = std::fs::remove_dir_all(&root);
+        return Err(e);
+    }
+    swap(&staged, app).map_err(|e| format!("Can't replace {}: {e}", app.display()))?;
+    // `staged` now holds the old bundle.
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(Some(v.to_string()))
 }
 
 /// After this process exits, open the bundle again (a detached shell, so it outlives us).
@@ -506,25 +557,134 @@ fn relaunch(app: &Path) -> std::io::Result<()> {
 
 // ---------- the app's side ----------
 
-#[derive(Default)]
-pub struct Updater {
-    latest: Mutex<Option<Release>>,
-    checked_at: Mutex<Option<u64>>,
-    busy: AtomicBool,
+/// How long the launch checks may take together.
+const CHECK_BUDGET: Duration = Duration::from_secs(5);
+/// The longest chats wait at launch for the updater, whatever it is doing.
+const GATE_MAX: Duration = Duration::from_secs(15);
+/// The longest a CLI update may run (its process group is killed after).
+const CLI_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// A chat of a CLI being updated waits at most this long for it.
+const CLI_HOLD_MAX: Duration = Duration::from_secs(5 * 60 + 10);
+const RECHECK: Duration = Duration::from_secs(6 * 3600);
+/// After a quiet failure (offline, a broken download), the next try.
+const RETRY: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemState {
+    /// Not checked (yet), or the check failed quietly.
+    Unknown,
+    Checking,
+    Current,
+    /// Newer exists. coool: automatic updates are off (the action downloads it). A CLI: the action updates it.
+    Available,
+    Downloading,
+    Installing,
+    /// coool: installed beside the running app; restart to apply.
+    Staged,
+    /// A CLI update held back: its processes are running.
+    Waiting,
+    /// Needs a command the person runs (`command`).
+    Manual,
+    Failed,
+    /// The CLI isn't installed.
+    Missing,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
+pub struct Item {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub current: Option<String>,
+    pub latest: Option<String>,
+    pub state: ItemState,
+    /// A plain line: why it waits, what failed.
+    pub detail: Option<String>,
+    /// A command to run in Terminal (manual updates, repairs).
+    pub command: Option<String>,
+    /// How the CLI is installed ("npm", "standalone installer"...).
+    pub method: Option<String>,
+    pub progress: Option<Progress>,
+}
+
+impl Item {
+    fn new(id: &'static str, name: &'static str) -> Item {
+        Item { id, name, current: None, latest: None, state: ItemState::Unknown, detail: None, command: None, method: None, progress: None }
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub struct Status {
-    /// The running version.
-    current: String,
-    /// The newer release last found (none: up to date, or not checked yet).
-    available: Option<Release>,
-    /// Epoch ms of the last check that got an answer.
+    /// coool, Claude Code, Codex.
+    items: Vec<Item>,
+    /// Keep coool up to date (Settings > General).
+    auto_app: bool,
+    /// Keep Claude Code and Codex up to date.
+    auto_cli: bool,
+    /// Chats may start (the launch step finished or timed out).
+    gate_open: bool,
+    /// Epoch ms of the last check.
     checked_at: Option<u64>,
-    /// Checks at launch and a few times a day (Settings > General).
-    auto_check: bool,
-    /// Why this copy can't install updates itself (a dev build, not in a bundle, a read-only folder), if so.
+    /// Why this copy of coool can't update itself, if so.
     blocked: Option<String>,
+}
+
+pub struct Updater {
+    items: Mutex<[Item; 3]>,
+    latest: Mutex<Option<Release>>,
+    checked_at: Mutex<Option<u64>>,
+    /// A coool download is under way.
+    busy: AtomicBool,
+    /// Per CLI: an update is under way.
+    cli_busy: [AtomicBool; 2],
+    pub gate: gate::Gate,
+    /// Debug builds: look for the CLIs only in this folder (`COOOL_UPDATE_CLI_DIR`, the tests' stand-ins).
+    cli_dir: Option<PathBuf>,
+    /// May update the CLIs at all (never in `tauri dev`, nor in a self-test unless it brings stand-ins).
+    cli_writes: bool,
+    /// May check coool itself (a self-test only with a loopback server).
+    app_checks: bool,
+}
+
+impl Updater {
+    pub fn new(selftest: bool) -> Updater {
+        #[cfg(debug_assertions)]
+        let cli_dir = std::env::var_os("COOOL_UPDATE_CLI_DIR").map(PathBuf::from).filter(|p| p.is_dir());
+        #[cfg(not(debug_assertions))]
+        let cli_dir: Option<PathBuf> = None;
+        #[cfg(debug_assertions)]
+        let loop_src = std::env::var("COOOL_UPDATE_BASE").ok().and_then(|b| Source::loopback(&b)).is_some();
+        #[cfg(not(debug_assertions))]
+        let loop_src = false;
+        Updater {
+            items: Mutex::new([Item::new("coool", "coool"), Item::new("claude", "Claude Code"), Item::new("codex", "Codex")]),
+            latest: Mutex::new(None),
+            checked_at: Mutex::new(None),
+            busy: AtomicBool::new(false),
+            cli_busy: [AtomicBool::new(false), AtomicBool::new(false)],
+            gate: gate::Gate::new(GATE_MAX),
+            cli_writes: if selftest || tauri::is_dev() { cli_dir.is_some() } else { true },
+            app_checks: !selftest || loop_src,
+            cli_dir,
+        }
+    }
+
+    fn set(&self, app: &AppHandle, i: usize, f: impl FnOnce(&mut Item)) {
+        f(&mut self.items.lock().unwrap()[i]);
+        let _ = app.emit("update-state", self.status(app));
+    }
+
+    fn state(&self, i: usize) -> ItemState {
+        self.items.lock().unwrap()[i].state
+    }
+
+    fn status(&self, app: &AppHandle) -> Status {
+        let core = app.state::<Arc<Core>>();
+        let s = crate::settings::load(core.selftest.as_ref());
+        let mut items = self.items.lock().unwrap().to_vec();
+        items[0].current = Some(app.package_info().version.to_string());
+        Status { items, auto_app: s.update_checks, auto_cli: s.update_clis, gate_open: self.gate.is_open(), checked_at: *self.checked_at.lock().unwrap(), blocked: blocked() }
+    }
 }
 
 fn running_version(app: &AppHandle) -> Version {
@@ -542,71 +702,430 @@ fn blocked() -> Option<String> {
     }
 }
 
-fn status(app: &AppHandle, core: &Core) -> Status {
-    let up = app.state::<Updater>();
-    Status {
-        current: app.package_info().version.to_string(),
-        available: up.latest.lock().unwrap().clone(),
-        checked_at: *up.checked_at.lock().unwrap(),
-        auto_check: crate::settings::load(core.selftest.as_ref()).update_checks,
-        blocked: blocked(),
+/// The bundle this process may update, when it may.
+fn own_bundle() -> Option<PathBuf> {
+    if tauri::is_dev() {
+        return None;
+    }
+    installable(&std::env::current_exe().ok()?).ok()
+}
+
+fn up(app: &AppHandle) -> Arc<Updater> {
+    app.state::<Arc<Updater>>().inner().clone()
+}
+
+/// Before a chat or terminal session starts: wait (bounded) for the launch step, and for an update of its CLI.
+pub fn hold(app: &AppHandle, provider: coool_core::model::Provider) {
+    let i = match provider {
+        coool_core::model::Provider::Claude => 0,
+        coool_core::model::Provider::Codex => 1,
+    };
+    up(app).gate.wait(Some(i), CLI_HOLD_MAX);
+}
+
+/// Checks coool; `Err` (quietly) when offline.
+fn check_app(u: &Updater, app: &AppHandle, limit: Option<Duration>) -> Result<Option<Release>, String> {
+    if !u.app_checks {
+        return Err("not checked".into());
+    }
+    let found = check(&Source::current(), &running_version(app), limit)?;
+    *u.latest.lock().unwrap() = found.clone();
+    Ok(found)
+}
+
+/// Where a CLI stands: installed version and method, the newest version.
+struct CliCheck {
+    probe: Option<cli::Probe>,
+    latest: Result<Version, String>,
+}
+
+fn check_cli(u: &Updater, c: cli::Cli, limit: Duration) -> CliCheck {
+    let probe = cli::probe(c, u.cli_dir.as_deref());
+    let latest = if probe.is_some() { cli::latest(&Source::current(), c, limit) } else { Err("not installed".into()) };
+    CliCheck { probe, latest }
+}
+
+fn show_cli(u: &Updater, app: &AppHandle, c: cli::Cli, r: &CliCheck) {
+    let i = 1 + c.index();
+    u.set(app, i, |it| {
+        it.progress = None;
+        it.detail = None;
+        it.command = None;
+        let Some(p) = &r.probe else {
+            *it = Item { state: ItemState::Missing, ..Item::new(it.id, it.name) };
+            return;
+        };
+        it.method = Some(p.method.label().into());
+        it.current = p.version.as_ref().map(|v| v.to_string());
+        it.latest = r.latest.as_ref().ok().map(|v| v.to_string());
+        it.state = match (&p.version, &r.latest) {
+            (None, _) => {
+                it.detail = Some(p.error.clone().unwrap_or_else(|| format!("{} doesn't start.", c.name())));
+                it.command = Some(cli::repair(c, &p.method));
+                ItemState::Failed
+            }
+            (Some(_), Err(_)) => ItemState::Unknown,
+            (Some(have), Ok(new)) if new > have => {
+                let plan = cli::plan(c, &p.method, &p.bin, &new.to_string(), crate::env::which("npm").as_deref());
+                if plan.argv.is_none() || !u.cli_writes {
+                    it.detail = plan.manual.clone().or_else(|| Some("This build of coool doesn't update the CLIs.".into()));
+                    it.command = Some(plan.shown);
+                    ItemState::Manual
+                } else {
+                    ItemState::Available
+                }
+            }
+            (Some(_), Ok(_)) => ItemState::Current,
+        };
+    });
+}
+
+fn running_of(u: &Updater, c: cli::Cli) -> Option<usize> {
+    match &u.cli_dir {
+        // With stand-ins (tests), only their own processes count.
+        Some(d) => {
+            let out = std::process::Command::new("/bin/ps").args(["-axo", "pid=,args="]).output().ok()?;
+            let ps = String::from_utf8_lossy(&out.stdout).into_owned();
+            let d = d.to_string_lossy().into_owned();
+            let mine: String = ps.lines().filter(|l| l.contains(&d)).map(|l| format!("{l}\n")).collect();
+            Some(cli::count_running(&mine, c, std::process::id()))
+        }
+        None => cli::running(c),
+    }
+}
+
+/// Updates a CLI when no process of it runs; else marks it waiting. Blocking (run it on a thread of its own).
+fn update_cli(u: &Updater, app: &AppHandle, c: cli::Cli) {
+    let i = 1 + c.index();
+    if !u.cli_writes {
+        return;
+    }
+    let Some(p) = cli::probe(c, u.cli_dir.as_deref()) else { return };
+    let Some(latest) = u.items.lock().unwrap()[i].latest.clone() else { return };
+    let plan = cli::plan(c, &p.method, &p.bin, &latest, crate::env::which("npm").as_deref());
+    if plan.argv.is_none() || u.cli_busy[c.index()].swap(true, AtOrd::SeqCst) {
+        return;
+    }
+    // Chats of this CLI wait from here on (gate), so none starts between the count and the update.
+    u.gate.set_busy(c.index(), true);
+    let done = |state: ItemState, detail: Option<String>, command: Option<String>| {
+        u.gate.set_busy(c.index(), false);
+        u.cli_busy[c.index()].store(false, AtOrd::SeqCst);
+        u.set(app, i, |it| {
+            it.state = state;
+            it.detail = detail;
+            it.command = command;
+        });
+    };
+    let n = running_of(u, c);
+    if n != Some(0) {
+        let why = match n {
+            Some(1) => format!("1 {} session is running. It updates once none are.", c.name()),
+            Some(n) => format!("{n} {} sessions are running. It updates once none are.", c.name()),
+            None => "coool couldn't tell whether it's in use, so it waits.".into(),
+        };
+        return done(ItemState::Waiting, Some(why), Some(plan.shown));
+    }
+    u.set(app, i, |it| {
+        it.state = ItemState::Installing;
+        it.detail = None;
+    });
+    let ran = cli::run(&plan, CLI_TIMEOUT);
+    let works = cli::probe(c, u.cli_dir.as_deref()).and_then(|a| a.version);
+    match (ran, works) {
+        (Ok(()), Some(v)) => {
+            u.set(app, i, |it| it.current = Some(v.to_string()));
+            if Version::parse(&latest).is_some_and(|l| v < l) {
+                done(ItemState::Failed, Some(format!("The update ran, but {} still reports {v}.", c.name())), Some(plan.shown))
+            } else {
+                done(ItemState::Current, None, None)
+            }
+        }
+        (r, None) => done(
+            ItemState::Failed,
+            Some(format!("{} doesn't start after the update{}. Run this in Terminal to repair it:", c.name(), r.err().map(|e| format!(" ({e})")).unwrap_or_default())),
+            Some(cli::repair(c, &p.method)),
+        ),
+        (Err(e), Some(_)) => done(ItemState::Failed, Some(format!("{e} {} still works as it was.", c.name())), Some(plan.shown)),
+    }
+}
+
+/// Downloads and stages coool's newer version. A failure is quiet: back to "available", retried later.
+fn stage_app(u: &Updater, app: &AppHandle) -> bool {
+    let Some(bundle) = own_bundle() else { return false };
+    let Some(rel) = u.latest.lock().unwrap().clone() else { return false };
+    if staged_path(&bundle).and_then(|s| bundle_version(&s)).as_deref() == Some(rel.version.as_str()) {
+        u.set(app, 0, |it| it.state = ItemState::Staged);
+        return true;
+    }
+    if u.busy.swap(true, AtOrd::SeqCst) {
+        return false;
+    }
+    u.set(app, 0, |it| {
+        it.state = ItemState::Downloading;
+        it.latest = Some(rel.version.clone());
+        it.detail = None;
+    });
+    let r = stage(&Source::current(), &rel, &bundle, &mut |p| {
+        let st = if p.phase == Phase::Download { ItemState::Downloading } else { ItemState::Installing };
+        u.set(app, 0, |it| {
+            it.state = st;
+            it.progress = Some(p);
+        })
+    });
+    u.busy.store(false, AtOrd::SeqCst);
+    let ok = r.is_ok();
+    u.set(app, 0, |it| {
+        it.progress = None;
+        it.state = if ok { ItemState::Staged } else { ItemState::Available };
+        it.detail = r.err();
+    });
+    ok
+}
+
+type Answer = (usize, Option<CliCheck>, Option<Result<Option<Release>, String>>);
+
+/// All three at once, each request bounded by `limit`. Returns coool's newer release, if any.
+fn check_all(u: &Arc<Updater>, app: &AppHandle, limit: Duration) -> Option<Release> {
+    for i in 0..3 {
+        u.set(app, i, |it| {
+            if matches!(it.state, ItemState::Unknown | ItemState::Current) {
+                it.state = ItemState::Checking;
+            }
+        });
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Answer>();
+    {
+        let (u, app, tx) = (u.clone(), app.clone(), tx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send((0, None, Some(check_app(&u, &app, Some(limit)))));
+        });
+    }
+    for c in cli::Cli::ALL {
+        let (u, tx) = (u.clone(), tx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send((1 + c.index(), Some(check_cli(&u, c, limit)), None));
+        });
+    }
+    drop(tx);
+    // `--version` has its own limit (prefs::clis::TIMEOUT); the whole check never takes longer than this.
+    let deadline = std::time::Instant::now() + limit + Duration::from_secs(1);
+    let mut found = None;
+    let mut seen = [false; 3];
+    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+        let Ok((i, cli_r, app_r)) = rx.recv_timeout(left) else { break };
+        seen[i] = true;
+        if let Some(r) = cli_r {
+            show_cli(u, app, cli::Cli::ALL[i - 1], &r);
+        }
+        if let Some(r) = app_r {
+            let staged = own_bundle().and_then(|b| staged_path(&b)).and_then(|s| bundle_version(&s));
+            u.set(app, 0, |it| {
+                if matches!(it.state, ItemState::Downloading | ItemState::Installing) {
+                    return;
+                }
+                it.state = match &r {
+                    Ok(Some(rel)) => {
+                        it.latest = Some(rel.version.clone());
+                        found = Some(rel.clone());
+                        if staged.as_deref() == Some(rel.version.as_str()) { ItemState::Staged } else { ItemState::Available }
+                    }
+                    _ if staged.is_some() => ItemState::Staged,
+                    Ok(None) => ItemState::Current,
+                    Err(_) => ItemState::Unknown,
+                };
+            });
+        }
+    }
+    // What didn't answer in time is unknown (quietly).
+    for (i, s) in seen.iter().enumerate() {
+        if !s {
+            u.set(app, i, |it| {
+                if it.state == ItemState::Checking {
+                    it.state = ItemState::Unknown;
+                }
+            });
+        }
+    }
+    *u.checked_at.lock().unwrap() = Some(crate::perf::now_ms());
+    found
+}
+
+/// Starts the updates of the CLIs that have one (or were held), each on a thread.
+fn spawn_cli_updates(u: &Arc<Updater>, app: &AppHandle) -> Vec<std::thread::JoinHandle<()>> {
+    cli::Cli::ALL
+        .into_iter()
+        .filter(|c| matches!(u.state(1 + c.index()), ItemState::Available | ItemState::Waiting))
+        .map(|c| {
+            let (u, app) = (u.clone(), app.clone());
+            std::thread::spawn(move || update_cli(&u, &app, c))
+        })
+        .collect()
+}
+
+/// The launch step (a thread started in setup): apply a staged coool, check all three, update what may be
+/// updated, then let chats start. Chats wait for it at most `GATE_MAX`, and the gate opens however it ends.
+pub fn spawn_launch(app: AppHandle) {
+    std::thread::spawn(move || {
+        let u = up(&app);
+        let core = app.state::<Arc<Core>>().inner().clone();
+        {
+            struct Open<'a>(&'a gate::Gate);
+            impl Drop for Open<'_> {
+                fn drop(&mut self) {
+                    self.0.open();
+                }
+            }
+            let _open = Open(&u.gate);
+            if launch_step(&u, &app, &core) {
+                return;
+            }
+        }
+        let _ = app.emit("update-state", u.status(&app));
+        // Then: a check every few hours, and held CLI updates retried every minute.
+        let mut next = std::time::Instant::now() + if u.state(0) == ItemState::Available { RETRY } else { RECHECK };
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+            let s = crate::settings::load(core.selftest.as_ref());
+            if std::time::Instant::now() >= next {
+                let rel = if s.update_checks || s.update_clis { check_all(&u, &app, Duration::from_secs(20)) } else { None };
+                let ok = rel.is_none() || !s.update_checks || stage_app(&u, &app);
+                next = std::time::Instant::now() + if ok { RECHECK } else { RETRY };
+            }
+            if s.update_clis {
+                spawn_cli_updates(&u, &app);
+            }
+        }
+    });
+}
+
+/// The bounded part of the launch. `true`: coool is restarting into a new version.
+fn launch_step(u: &Arc<Updater>, app: &AppHandle, core: &Arc<Core>) -> bool {
+    let s = crate::settings::load(core.selftest.as_ref());
+    let selftest = core.selftest.is_some();
+    let restart = |b: &Path| {
+        if selftest || relaunch(b).is_err() {
+            return false;
+        }
+        core.allow_exit.store(true, AtOrd::SeqCst);
+        app.exit(0);
+        true
+    };
+    // 1. A version staged last time and not applied (a crash, a force quit).
+    if let Some(b) = own_bundle()
+        && let Ok(Some(_)) = apply_staged(&b, &running_version(app))
+        && restart(&b)
+    {
+        return true;
+    }
+    // 2. The checks.
+    let rel = if s.update_checks || s.update_clis { check_all(u, app, CHECK_BUDGET) } else { None };
+    // 3. coool: download and install now, and restart into it if that's done while chats still wait. A download
+    //    that runs long carries on in the background and ends as "restart to apply".
+    if rel.is_some() && s.update_checks && own_bundle().is_some() {
+        let (u2, app2) = (u.clone(), app.clone());
+        let h = std::thread::spawn(move || stage_app(&u2, &app2));
+        while !h.is_finished() && !u.gate.is_open() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if h.is_finished()
+            && !u.gate.is_open()
+            && h.join().unwrap_or(false)
+            && core.running() == 0
+            && let Some(b) = own_bundle()
+            && let Ok(Some(_)) = apply_staged(&b, &running_version(app))
+            && restart(&b)
+        {
+            return true;
+        }
+    }
+    // 4. The CLIs (they may take longer than the gate: then only their own chats keep waiting).
+    if s.update_clis {
+        let hs = spawn_cli_updates(u, app);
+        while hs.iter().any(|h| !h.is_finished()) && !u.gate.is_open() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    false
+}
+
+/// As the app quits: a staged version goes in, so it is what opens next time.
+pub fn on_exit(app: &AppHandle) {
+    if let Some(b) = own_bundle() {
+        let _ = apply_staged(&b, &running_version(app));
     }
 }
 
 #[tauri::command(async)]
-pub fn update_status(app: AppHandle, core: State<'_, Arc<Core>>) -> Status {
-    status(&app, &core)
+pub fn update_status(app: AppHandle) -> Status {
+    up(&app).status(&app)
 }
 
-/// Asks GitHub now (the frontend calls this at launch, a few times a day while automatic checks are on, and from
-/// Settings' "Check now").
+/// "Check now" (Settings, the panel): checks all three, then installs what the switches allow, in the background.
 #[tauri::command(async)]
-pub fn update_check(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<Status, String> {
-    let found = check(&Source::current(), &running_version(&app))?;
-    let up = app.state::<Updater>();
-    *up.latest.lock().unwrap() = found;
-    *up.checked_at.lock().unwrap() = Some(crate::perf::now_ms());
-    Ok(status(&app, &core))
+pub fn update_check(app: AppHandle, core: State<'_, Arc<Core>>) -> Status {
+    let u = up(&app);
+    let rel = check_all(&u, &app, Duration::from_secs(10));
+    let s = crate::settings::load(core.selftest.as_ref());
+    if rel.is_some() && s.update_checks {
+        let (u, app) = (u.clone(), app.clone());
+        std::thread::spawn(move || stage_app(&u, &app));
+    }
+    if s.update_clis {
+        spawn_cli_updates(&u, &app);
+    }
+    u.status(&app)
 }
 
+/// Settings' switches: `app` keeps coool up to date, `cli` Claude Code and Codex.
 #[tauri::command(async)]
-pub fn update_set_auto(core: State<'_, Arc<Core>>, enabled: bool) -> Result<(), String> {
+pub fn update_set_auto(core: State<'_, Arc<Core>>, app: Option<bool>, cli: Option<bool>) -> Result<(), String> {
     let mut s = crate::settings::load(core.selftest.as_ref());
-    s.update_checks = enabled;
+    if let Some(a) = app {
+        s.update_checks = a;
+    }
+    if let Some(c) = cli {
+        s.update_clis = c;
+    }
     crate::settings::save(core.selftest.as_ref(), &s).map_err(|e| e.to_string())
 }
 
-/// Installs the release the last check found (never a URL from the page), reporting `update-progress`, then quits
-/// (stopping what coool runs, as Quit does) and opens the new version. Returns only on failure.
+/// Downloads and stages coool's newer version now (with automatic updates off). Never a URL from the page: the
+/// release the last check found.
 #[tauri::command(async)]
-pub fn update_install(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<(), String> {
+pub fn update_install(app: AppHandle) -> Result<(), String> {
     if let Some(why) = blocked() {
         return Err(why);
     }
-    let rel = app.state::<Updater>().latest.lock().unwrap().clone().ok_or("There's no update to install. Check again.")?;
-    let up = app.state::<Updater>();
-    if up.busy.swap(true, AtOrd::SeqCst) {
-        return Err("An update is already being installed.".into());
+    let u = up(&app);
+    if u.latest.lock().unwrap().is_none() {
+        return Err("There's no update to install. Check again.".into());
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let bundle = installable(&exe);
-    let res = bundle.and_then(|b| {
-        let h = app.clone();
-        install(&Source::current(), &rel, &b, &mut |p| {
-            let _ = h.emit("update-progress", p);
-        })
-        .map(|_| b)
-    });
-    let bundle = match res {
-        Ok(b) => b,
-        Err(e) => {
-            up.busy.store(false, AtOrd::SeqCst);
-            return Err(e);
-        }
-    };
-    // A self-test never relaunches through LaunchServices (that would start a normal coool with the person's data).
+    if stage_app(&u, &app) { Ok(()) } else { Err(u.items.lock().unwrap()[0].detail.clone().unwrap_or_else(|| "The update couldn't be installed.".into())) }
+}
+
+/// Updates one CLI now ("claude" or "codex"), unless its sessions are running (then it waits).
+#[tauri::command(async)]
+pub fn update_cli_now(app: AppHandle, provider: String) -> Result<(), String> {
+    let c = cli::Cli::ALL.into_iter().find(|c| c.id() == provider).ok_or("unknown CLI")?;
+    let u = up(&app);
+    if !u.cli_writes {
+        return Err("This build of coool doesn't update the CLIs.".into());
+    }
+    update_cli(&u, &app, c);
+    Ok(())
+}
+
+/// Restart into the staged version: stop what coool runs (as Quit does), swap it in, open it again.
+#[tauri::command(async)]
+pub fn update_restart(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<(), String> {
+    let bundle = own_bundle().ok_or_else(|| blocked().unwrap_or_else(|| "coool can't update itself here.".into()))?;
+    if staged_path(&bundle).is_none() {
+        return Err("No update is waiting. Check again.".into());
+    }
+    apply_staged(&bundle, &running_version(&app))?;
     if core.selftest.is_none() {
-        relaunch(&bundle).map_err(|e| format!("coool was updated, but couldn't restart itself ({e}). Open it again."))?;
+        relaunch(&bundle).map_err(|e| format!("coool was updated, but couldn't restart itself ({e}). Quit and open it again."))?;
     }
     core.allow_exit.store(true, AtOrd::SeqCst);
     core.hub.lock().unwrap().kill_all();
@@ -614,33 +1133,39 @@ pub fn update_install(app: AppHandle, core: State<'_, Arc<Core>>) -> Result<(), 
     Ok(())
 }
 
-/// `coool --coool-update-selftest [version]` (debug builds only): the check and install above, run on this
-/// executable's own bundle without the UI and without relaunching, against `COOOL_UPDATE_BASE`.
+/// `coool --coool-update-selftest <stage|apply|version>` (debug builds only): the steps above on this executable's
+/// own bundle, without the UI and without relaunching, against `COOOL_UPDATE_BASE`.
 #[cfg(debug_assertions)]
 pub fn selftest_cli(args: &[String]) -> i32 {
     let current = env!("CARGO_PKG_VERSION");
-    if args.first().map(String::as_str) == Some("version") {
+    let cmd = args.first().map(String::as_str).unwrap_or("stage");
+    if cmd == "version" {
         println!("{current}");
         return 0;
     }
     let src = Source::current();
-    println!("current={current} api={}", src.api);
-    let exe = match std::env::current_exe() {
-        Ok(e) => e,
-        Err(e) => {
-            println!("error=no exe: {e}");
-            return 1;
-        }
-    };
-    let app = match installable(&exe) {
+    let app = match std::env::current_exe().map_err(|e| e.to_string()).and_then(|e| installable(&e)) {
         Ok(a) => a,
         Err(e) => {
             println!("blocked={e}");
             return 1;
         }
     };
-    println!("bundle={}", app.display());
-    let rel = match check(&src, &Version::parse(current).unwrap()) {
+    println!("current={current} bundle={}", app.display());
+    let cur = Version::parse(current).expect("own version");
+    if cmd == "apply" {
+        return match apply_staged(&app, &cur) {
+            Ok(v) => {
+                println!("applied={v:?} installed={}", bundle_version(&app).unwrap_or_default());
+                0
+            }
+            Err(e) => {
+                println!("error={e}");
+                1
+            }
+        };
+    }
+    let rel = match check(&src, &cur, Some(CHECK_BUDGET)) {
         Ok(Some(r)) => r,
         Ok(None) => {
             println!("latest=none");
@@ -653,15 +1178,14 @@ pub fn selftest_cli(args: &[String]) -> i32 {
     };
     println!("latest={} tarball={}", rel.version, rel.tarball);
     let mut last = None;
-    let r = install(&src, &rel, &app, &mut |p| {
+    match stage(&src, &rel, &app, &mut |p| {
         if last != Some(p.phase) || p.total == Some(p.done) {
             println!("progress={:?} {}/{:?}", p.phase, p.done, p.total);
             last = Some(p.phase);
         }
-    });
-    match r {
-        Ok(()) => {
-            println!("installed={}", bundle_version(&app).unwrap_or_default());
+    }) {
+        Ok(s) => {
+            println!("staged={} version={}", s.display(), bundle_version(&s).unwrap_or_default());
             0
         }
         Err(e) => {
@@ -865,15 +1389,16 @@ mod tests {
         let src = Source::loopback(&base).unwrap();
         let rel = Release { version: "9.0.0".into(), tag: "v9.0.0".into(), tarball: format!("{base}{}", dl(ASSET)), checksum: format!("{base}{}", dl(&format!("{ASSET}.sha256"))) };
         let mut phases = vec![];
-        let err = install(&src, &rel, &app, &mut |p| phases.push(p.phase)).unwrap_err();
+        let err = stage(&src, &rel, &app, &mut |p| phases.push(p.phase)).unwrap_err();
         assert!(err.contains("checksum"), "{err}");
         assert!(phases.contains(&Phase::Download) && !phases.contains(&Phase::Install));
         assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/coool")).unwrap(), "old");
-        // The staging folder is gone too.
-        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
+        // Nothing was staged, and the work folder is gone.
+        assert!(staged_path(&app).is_none());
+        assert_eq!(std::fs::read_dir(d.join(".coool-update")).unwrap().count(), 0);
         // A URL outside the source's releases is refused before anything is fetched.
         let off = Release { tarball: "https://evil.example/coool-macos-arm64.tar.gz".into(), ..rel };
-        assert!(install(&src, &off, &app, &mut |_| {}).is_err());
+        assert!(stage(&src, &off, &app, &mut |_| {}).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -897,14 +1422,14 @@ mod tests {
             }
         });
         let src = Source::loopback(&base).unwrap();
-        let r = check(&src, &v("0.1.0")).unwrap().unwrap();
+        let r = check(&src, &v("0.1.0"), None).unwrap().unwrap();
         assert_eq!(r.version, "9.1.0");
     }
 
     #[test]
     fn versions_agree_across_the_tree() {
-        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let pkg: serde_json::Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let pkg: serde_json::Value = serde_json::from_str(include_str!("../../../package.json")).unwrap();
         assert_eq!(conf["version"], env!("CARGO_PKG_VERSION"), "tauri.conf.json");
         assert_eq!(pkg["version"], env!("CARGO_PKG_VERSION"), "app/package.json");
         assert!(Version::parse(env!("CARGO_PKG_VERSION")).is_some());
