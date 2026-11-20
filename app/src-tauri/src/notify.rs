@@ -397,6 +397,19 @@ pub fn clicked(info: Option<&str>, action: &str) {
     }
 }
 
+/// The menu bar item's Open coool, New session, or a session to open (menubar/): like a click on a notification.
+pub fn open_from_menubar(route: Option<Route>) {
+    if let Some(r) = route {
+        log(&format!("menubar {} session={:?} chat={:?}", r.kind, r.session, r.chat));
+        *PENDING.lock().unwrap() = Some(r);
+    }
+    if let Some(app) = APP.get() {
+        bring_forward(app);
+        use tauri::Emitter;
+        let _ = app.emit("notify-open", ());
+    }
+}
+
 /// The app is up (`setup`): clicks from now on reach it; one that launched coool brings the window forward.
 pub fn attach(app: &tauri::AppHandle, quiet: bool) {
     QUIET.store(quiet, std::sync::atomic::Ordering::Relaxed);

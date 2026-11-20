@@ -107,6 +107,11 @@ impl SelfTest {
         self.scenario.split(',').any(|s| s.trim().starts_with("update-launch"))
     }
 
+    /// A `menubar*` scenario runs: only then does a self-test create the menu bar item (hidden even then).
+    pub fn wants_menubar(&self) -> bool {
+        self.scenario.split(',').any(|s| s.trim().starts_with("menubar"))
+    }
+
     /// The throwaway folder.
     pub fn dir(&self) -> &Path {
         &self.dir
@@ -611,6 +616,14 @@ pub fn selftest_shot(app: AppHandle, core: State<'_, Arc<Core>>, name: String, w
     }
     t.log(&format!("SHOT {}", path.display()));
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// The menu bar item, as the `menubar` scenario checks it (menubar/mod.rs `selftest`): its state, the menu as built,
+/// a click on one of its rows, its readings next to `top`, `vm_stat` and `df`.
+#[tauri::command(async)]
+pub fn selftest_menubar(core: State<'_, Arc<Core>>, action: String, arg: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    active(&core)?;
+    crate::menubar::selftest(&action, arg.unwrap_or(serde_json::Value::Null))
 }
 
 /// The window's CGWindowID (`-[NSWindow windowNumber]`).

@@ -18,6 +18,7 @@ mod env;
 mod glass;
 mod lid;
 mod login;
+mod menubar;
 mod motion;
 mod notify;
 mod perf;
@@ -443,6 +444,11 @@ impl Core {
         self.usage.tick();
         let usage = UsageOut { claude: self.usage.get(Provider::Claude), codex: self.usage.get(Provider::Codex) };
         let show_automation = self.show_automation.load(Ordering::Relaxed);
+        // The menu bar item's own counts (menubar/), from the same rows.
+        {
+            let rows: Vec<_> = chats.iter().map(|c| (c.id, c.state, c.running, c.pid, c.provider)).collect();
+            menubar::on_sessions(&sessions, &rows, [usage.claude.as_ref(), usage.codex.as_ref()], show_automation);
+        }
         // Working agents coool runs: chats mid-turn, and its terminal sessions the transcript shows busy.
         let working = chats.iter().filter(|c| c.state == ChatState::Working).count()
             + sessions.iter().filter(|(_, s, _)| s.managed.is_some() && s.chat.is_none() && s.status == coool_core::model::Status::Busy).count();
@@ -1090,12 +1096,15 @@ struct AppPrefs {
     /// doesn't know it never switches it off, which would also remove its helper).
     #[serde(default)]
     lid: Option<lid::Prefs>,
+    /// The menu bar item (Settings > General > Menu bar). Absent in a `prefs_set`: left as it is.
+    #[serde(default)]
+    menubar: Option<menubar::model::Prefs>,
 }
 
 #[tauri::command(async)]
 fn prefs_get(core: State<'_, Arc<Core>>) -> AppPrefs {
     let s = settings::load(core.selftest.as_ref());
-    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with, building: s.building, lid: Some(s.lid) }
+    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with, building: s.building, lid: Some(s.lid), menubar: Some(s.menubar) }
 }
 
 /// Saves and applies them at once (the power assertion is taken or released right here, and so is the lid hold).
@@ -1114,6 +1123,12 @@ fn prefs_set(core: State<'_, Arc<Core>>, prefs: AppPrefs) -> Res<()> {
             core.power.lock().unwrap().set_lid(assert, covered);
         }
         s.lid = l;
+    }
+    if let Some(m) = prefs.menubar {
+        if m != s.menubar {
+            menubar::apply(m.clone());
+        }
+        s.menubar = m;
     }
     s.confirm_quit = prefs.confirm_quit;
     s.prevent_sleep = prefs.prevent_sleep;
@@ -1493,6 +1508,9 @@ mod settings {
         /// show in the updater, with a button.
         #[serde(default)]
         pub update_clis: bool,
+        /// Settings > General > Menu bar: the item, and what it shows beside its glyph.
+        #[serde(default)]
+        pub menubar: crate::menubar::model::Prefs,
     }
 
     fn system() -> String {
@@ -1505,7 +1523,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new(), update_checks: true, update_clis: false }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new(), update_checks: true, update_clis: false, menubar: Default::default() }
         }
     }
 
@@ -1678,6 +1696,15 @@ fn request_quit(app: &AppHandle) {
         core.allow_exit.store(true, Ordering::SeqCst);
         app.exit(0);
     }
+}
+
+/// The menu bar item's Quit coool: as ⌘Q, with the window brought forward first when it is going to ask.
+fn quit_from_menubar(app: &AppHandle) {
+    let core = app.state::<Arc<Core>>();
+    if core.running() > 0 && !core.allow_exit.load(Ordering::SeqCst) && core.confirm_quit.load(Ordering::Relaxed) {
+        notify::open_from_menubar(None);
+    }
+    request_quit(app);
 }
 
 fn expand_tilde(p: &str) -> String {
@@ -1939,6 +1966,7 @@ pub fn run() {
             selftest::film::selftest_film,
             selftest::selftest_window,
             selftest::selftest_perf_stats,
+            selftest::selftest_menubar,
             selftest::selftest_request_quit,
             trace::trace_sessions,
             motion::motion_hints,
@@ -2062,6 +2090,8 @@ pub fn run() {
             // Updates of coool and the CLIs, before any chat starts (update/mod.rs).
             update::spawn_launch(handle.clone());
             motion::spawn_watch(handle.clone());
+            // The menu bar item (menubar/): a self-test makes one only for its menubar scenarios, and never draws it.
+            menubar::init(&handle, settings::load(c.selftest.as_ref()).menubar, c.selftest.is_some(), c.selftest.as_ref().is_none_or(|t| t.wants_menubar()));
             spawn_pump(handle, c);
             perf::boot_mark("setup-done");
             Ok(())
@@ -2113,6 +2143,7 @@ pub fn run() {
             }
         }
         RunEvent::Exit => {
+            menubar::shutdown();
             core.hub.lock().unwrap().kill_all();
             // An update installed while coool ran goes in now, so it is what opens next time.
             update::on_exit(handle);

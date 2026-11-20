@@ -1,0 +1,810 @@
+{
+  "idle": {
+    "bars": {
+      "nothing": {
+        "segs": [],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      },
+      "cpu": {
+        "segs": [
+          {
+            "text": "  7%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      },
+      "cpu_memory": {
+        "segs": [
+          {
+            "text": "CPU",
+            "kind": "label"
+          },
+          {
+            "text": "  7%",
+            "kind": "value"
+          },
+          {
+            "text": "MEM",
+            "kind": "label"
+          },
+          {
+            "text": " 47%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      },
+      "needs": {
+        "segs": [],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      }
+    },
+    "rows": [
+      {
+        "kind": "header",
+        "text": "This Mac"
+      },
+      {
+        "kind": "stat",
+        "id": "cpu",
+        "label": "CPU",
+        "value": "7%",
+        "detail": "▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂  last 60 s\n▂▁▂▁▁▁▁▁▂▂▂▁  12 cores now\nLoad average 1.8 · 2.1 · 2.4",
+        "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
+      },
+      {
+        "kind": "stat",
+        "id": "mem",
+        "label": "Memory",
+        "value": "11.2 GB of 24 GB used",
+        "detail": "Pressure normal · cached files 3 GB",
+        "tip": "Used: app memory + wired + compressed, as Activity Monitor's Memory Used. Cached files are kept only until something needs the room. Pressure is macOS's own reading: while it is normal, used memory near the total is fine."
+      },
+      {
+        "kind": "stat",
+        "id": "disk",
+        "label": "Disk",
+        "value": "51.2 GB free",
+        "detail": "of 494 GB on the startup volume",
+        "tip": "Available space on the startup volume, as df counts it. Finder may show more: it also counts purgeable space as free."
+      },
+      {
+        "kind": "stat",
+        "id": "net",
+        "label": "Network",
+        "value": "↓ 12 KB/s  ↑ 3 KB/s",
+        "detail": null,
+        "tip": "Wi-Fi, Ethernet and cellular, over the last few seconds. VPN tunnels are not counted twice."
+      },
+      {
+        "kind": "stat",
+        "id": "heat",
+        "label": "Heat",
+        "value": "Normal",
+        "detail": null,
+        "tip": "macOS isn't limiting anything for heat."
+      },
+      {
+        "kind": "stat",
+        "id": "power",
+        "label": "Battery",
+        "value": "80% · on power",
+        "detail": null,
+        "tip": "The internal battery, and whether the Mac runs on it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "Busiest processes"
+      },
+      {
+        "kind": "proc",
+        "id": "p:9",
+        "name": "WindowServer",
+        "what": null,
+        "cpu": "4.2%",
+        "open": null
+      },
+      {
+        "kind": "proc",
+        "id": "p:10",
+        "name": "coool",
+        "what": null,
+        "cpu": "1.1%",
+        "open": null
+      },
+      {
+        "kind": "proc",
+        "id": "p:11",
+        "name": "Safari",
+        "what": null,
+        "cpu": "0.8%",
+        "open": null
+      },
+      {
+        "kind": "note",
+        "text": "% of one core over the last 2 s · your processes only"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "coool"
+      },
+      {
+        "kind": "stat",
+        "id": "agents",
+        "label": "Sessions",
+        "value": "0 working · 0 need you · 2 done",
+        "detail": null,
+        "tip": "Working: mid-turn. Needs you: a permission, a question or a plan waits. Done: finished its turn, the CLI still open."
+      },
+      {
+        "kind": "stat",
+        "id": "use:claude",
+        "label": "Claude Code",
+        "value": "5-hour 82% left · Weekly 64% left",
+        "detail": null,
+        "tip": "Plan usage left, as the usage ring in the app shows it."
+      },
+      {
+        "kind": "stat",
+        "id": "use:codex",
+        "label": "Codex",
+        "value": "5-hour 97% left · Weekly 88% left",
+        "detail": null,
+        "tip": "Plan usage left, as the usage ring in the app shows it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "open",
+        "title": "Open coool"
+      },
+      {
+        "kind": "action",
+        "id": "new",
+        "title": "New session…"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "quit",
+        "title": "Quit coool"
+      }
+    ]
+  },
+  "busy": {
+    "bars": {
+      "nothing": {
+        "segs": [],
+        "tooltip": "coool · CPU 86% · memory 89% used",
+        "needs": 0
+      },
+      "cpu": {
+        "segs": [
+          {
+            "text": " 86%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 86% · memory 89% used",
+        "needs": 0
+      },
+      "cpu_memory": {
+        "segs": [
+          {
+            "text": "CPU",
+            "kind": "label"
+          },
+          {
+            "text": " 86%",
+            "kind": "value"
+          },
+          {
+            "text": "MEM",
+            "kind": "label"
+          },
+          {
+            "text": " 89%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 86% · memory 89% used",
+        "needs": 0
+      },
+      "needs": {
+        "segs": [],
+        "tooltip": "coool · CPU 86% · memory 89% used",
+        "needs": 0
+      }
+    },
+    "rows": [
+      {
+        "kind": "header",
+        "text": "This Mac"
+      },
+      {
+        "kind": "stat",
+        "id": "cpu",
+        "label": "CPU",
+        "value": "86%",
+        "detail": "▆▇▇▇▆▆▅▅▅▆▇▇▇▆▆▅▅▅▆▇▇▇▆▆▅▅▅▆▇▇  last 60 s\n████▇▇██▆▆▆▅  12 cores now\nLoad average 19.4 · 14.2 · 9.8",
+        "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
+      },
+      {
+        "kind": "stat",
+        "id": "mem",
+        "label": "Memory",
+        "value": "21.4 GB of 24 GB used",
+        "detail": "Pressure high · swap 5.1 GB used · cached files 3 GB",
+        "tip": "Used: app memory + wired + compressed, as Activity Monitor's Memory Used. Cached files are kept only until something needs the room. Pressure is macOS's own reading: while it is normal, used memory near the total is fine."
+      },
+      {
+        "kind": "stat",
+        "id": "disk",
+        "label": "Disk",
+        "value": "51.2 GB free",
+        "detail": "of 494 GB on the startup volume",
+        "tip": "Available space on the startup volume, as df counts it. Finder may show more: it also counts purgeable space as free."
+      },
+      {
+        "kind": "stat",
+        "id": "net",
+        "label": "Network",
+        "value": "↓ 1.2 MB/s  ↑ 86 KB/s",
+        "detail": null,
+        "tip": "Wi-Fi, Ethernet and cellular, over the last few seconds. VPN tunnels are not counted twice."
+      },
+      {
+        "kind": "stat",
+        "id": "heat",
+        "label": "Heat",
+        "value": "Hot",
+        "detail": null,
+        "tip": "macOS is slowing the CPU to cool down: agents run slower."
+      },
+      {
+        "kind": "stat",
+        "id": "power",
+        "label": "Battery",
+        "value": "41% · on battery",
+        "detail": null,
+        "tip": "The internal battery, and whether the Mac runs on it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "Busiest processes"
+      },
+      {
+        "kind": "proc",
+        "id": "p:9",
+        "name": "rustc",
+        "what": "run by Claude Code · Port the renderer to wgpu 26",
+        "cpu": "412%",
+        "open": {
+          "key": "claude:Port the renderer to wgpu 26",
+          "chat": null
+        }
+      },
+      {
+        "kind": "proc",
+        "id": "p:10",
+        "name": "cargo",
+        "what": "run by Codex · Add a rate limiter to the API",
+        "cpu": "96%",
+        "open": {
+          "key": "claude:Add a rate limiter to the API",
+          "chat": null
+        }
+      },
+      {
+        "kind": "proc",
+        "id": "p:11",
+        "name": "claude",
+        "what": "Claude Code · Port the renderer to wgpu 26",
+        "cpu": "14%",
+        "open": {
+          "key": "claude:Port the renderer to wgpu 26",
+          "chat": null
+        }
+      },
+      {
+        "kind": "proc",
+        "id": "p:12",
+        "name": "codex",
+        "what": "Codex · Add a rate limiter to the API",
+        "cpu": "6.1%",
+        "open": {
+          "key": "claude:Add a rate limiter to the API",
+          "chat": null
+        }
+      },
+      {
+        "kind": "proc",
+        "id": "p:13",
+        "name": "claude",
+        "what": "Claude Code, not a session coool lists",
+        "cpu": "3.4%",
+        "open": null
+      },
+      {
+        "kind": "note",
+        "text": "Agents and the tools they run: 528%\n% of one core over the last 2 s · your processes only"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "coool"
+      },
+      {
+        "kind": "stat",
+        "id": "agents",
+        "label": "Sessions",
+        "value": "4 working · 0 need you · 1 done",
+        "detail": null,
+        "tip": "Working: mid-turn. Needs you: a permission, a question or a plan waits. Done: finished its turn, the CLI still open."
+      },
+      {
+        "kind": "stat",
+        "id": "use:claude",
+        "label": "Claude Code",
+        "value": "5-hour 82% left · Weekly 64% left",
+        "detail": null,
+        "tip": "Plan usage left, as the usage ring in the app shows it."
+      },
+      {
+        "kind": "stat",
+        "id": "use:codex",
+        "label": "Codex",
+        "value": "5-hour 97% left · Weekly 88% left",
+        "detail": null,
+        "tip": "Plan usage left, as the usage ring in the app shows it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "open",
+        "title": "Open coool"
+      },
+      {
+        "kind": "action",
+        "id": "new",
+        "title": "New session…"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "quit",
+        "title": "Quit coool"
+      }
+    ]
+  },
+  "needs": {
+    "bars": {
+      "nothing": {
+        "segs": [
+          {
+            "text": "●",
+            "kind": "needs"
+          }
+        ],
+        "tooltip": "coool · CPU 34% · memory 70% used · 2 sessions need you",
+        "needs": 2
+      },
+      "cpu": {
+        "segs": [
+          {
+            "text": "●",
+            "kind": "needs"
+          },
+          {
+            "text": " 34%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 34% · memory 70% used · 2 sessions need you",
+        "needs": 2
+      },
+      "cpu_memory": {
+        "segs": [
+          {
+            "text": "●",
+            "kind": "needs"
+          },
+          {
+            "text": "CPU",
+            "kind": "label"
+          },
+          {
+            "text": " 34%",
+            "kind": "value"
+          },
+          {
+            "text": "MEM",
+            "kind": "label"
+          },
+          {
+            "text": " 70%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 34% · memory 70% used · 2 sessions need you",
+        "needs": 2
+      },
+      "needs": {
+        "segs": [
+          {
+            "text": "●",
+            "kind": "needs"
+          },
+          {
+            "text": "2",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 34% · memory 70% used · 2 sessions need you",
+        "needs": 2
+      }
+    },
+    "rows": [
+      {
+        "kind": "header",
+        "text": "This Mac"
+      },
+      {
+        "kind": "stat",
+        "id": "cpu",
+        "label": "CPU",
+        "value": "34%",
+        "detail": "▃▄▄▄▄▃▂▂▂▃▄▄▄▄▃▂▂▂▃▄▄▄▃▃▂▂▂▃▄▄  last 60 s\n▅▄▄▃▂▃▃▃▄▃▃▂  12 cores now\nLoad average 5.2 · 6.0 · 6.3",
+        "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
+      },
+      {
+        "kind": "stat",
+        "id": "mem",
+        "label": "Memory",
+        "value": "16.8 GB of 24 GB used",
+        "detail": "Pressure normal · swap 1.2 GB used · cached files 3 GB",
+        "tip": "Used: app memory + wired + compressed, as Activity Monitor's Memory Used. Cached files are kept only until something needs the room. Pressure is macOS's own reading: while it is normal, used memory near the total is fine."
+      },
+      {
+        "kind": "stat",
+        "id": "disk",
+        "label": "Disk",
+        "value": "51.2 GB free",
+        "detail": "of 494 GB on the startup volume",
+        "tip": "Available space on the startup volume, as df counts it. Finder may show more: it also counts purgeable space as free."
+      },
+      {
+        "kind": "stat",
+        "id": "net",
+        "label": "Network",
+        "value": "↓ 12 KB/s  ↑ 3 KB/s",
+        "detail": null,
+        "tip": "Wi-Fi, Ethernet and cellular, over the last few seconds. VPN tunnels are not counted twice."
+      },
+      {
+        "kind": "stat",
+        "id": "heat",
+        "label": "Heat",
+        "value": "Normal",
+        "detail": null,
+        "tip": "macOS isn't limiting anything for heat."
+      },
+      {
+        "kind": "stat",
+        "id": "power",
+        "label": "Battery",
+        "value": "80% · on power",
+        "detail": null,
+        "tip": "The internal battery, and whether the Mac runs on it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "Busiest processes"
+      },
+      {
+        "kind": "proc",
+        "id": "p:9",
+        "name": "node",
+        "what": "run by Claude Code · Add a rate limiter to the API",
+        "cpu": "48%",
+        "open": {
+          "key": "claude:Add a rate limiter to the API",
+          "chat": null
+        }
+      },
+      {
+        "kind": "proc",
+        "id": "p:10",
+        "name": "claude",
+        "what": "Claude Code · Add a rate limiter to the API",
+        "cpu": "9.4%",
+        "open": {
+          "key": "claude:Add a rate limiter to the API",
+          "chat": null
+        }
+      },
+      {
+        "kind": "proc",
+        "id": "p:11",
+        "name": "WindowServer",
+        "what": null,
+        "cpu": "7.9%",
+        "open": null
+      },
+      {
+        "kind": "note",
+        "text": "Agents and the tools they run: 57%\n% of one core over the last 2 s · your processes only"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "coool"
+      },
+      {
+        "kind": "stat",
+        "id": "agents",
+        "label": "Sessions",
+        "value": "2 working · 2 need you · 3 done",
+        "detail": null,
+        "tip": "Working: mid-turn. Needs you: a permission, a question or a plan waits. Done: finished its turn, the CLI still open."
+      },
+      {
+        "kind": "need",
+        "id": "n:0",
+        "title": "Clear the shader cache — pixelforge",
+        "detail": "Waiting for you: permission to run `rm -rf target/shader-ca…",
+        "open": {
+          "key": "claude:a",
+          "chat": null
+        }
+      },
+      {
+        "kind": "need",
+        "id": "n:1",
+        "title": "Why do invoices from March show the wro… — invoices",
+        "detail": "Waiting for your answer",
+        "open": {
+          "key": "claude:b",
+          "chat": 2
+        }
+      },
+      {
+        "kind": "stat",
+        "id": "use:claude",
+        "label": "Claude Code",
+        "value": "5-hour 82% left · Weekly 64% left",
+        "detail": null,
+        "tip": "Plan usage left, as the usage ring in the app shows it."
+      },
+      {
+        "kind": "stat",
+        "id": "use:codex",
+        "label": "Codex",
+        "value": "5-hour 97% left · Weekly 88% left",
+        "detail": null,
+        "tip": "Plan usage left, as the usage ring in the app shows it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "open",
+        "title": "Open coool"
+      },
+      {
+        "kind": "action",
+        "id": "new",
+        "title": "New session…"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "quit",
+        "title": "Quit coool"
+      }
+    ]
+  },
+  "none": {
+    "bars": {
+      "nothing": {
+        "segs": [],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      },
+      "cpu": {
+        "segs": [
+          {
+            "text": "  7%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      },
+      "cpu_memory": {
+        "segs": [
+          {
+            "text": "CPU",
+            "kind": "label"
+          },
+          {
+            "text": "  7%",
+            "kind": "value"
+          },
+          {
+            "text": "MEM",
+            "kind": "label"
+          },
+          {
+            "text": " 47%",
+            "kind": "value"
+          }
+        ],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      },
+      "needs": {
+        "segs": [],
+        "tooltip": "coool · CPU 7% · memory 47% used",
+        "needs": 0
+      }
+    },
+    "rows": [
+      {
+        "kind": "header",
+        "text": "This Mac"
+      },
+      {
+        "kind": "stat",
+        "id": "cpu",
+        "label": "CPU",
+        "value": "7%",
+        "detail": "▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂▂▁▁▁▁▁▁▂▂  last 60 s\n▂▁▂▁▁▁▁▁▂▂▂▁  12 cores now\nLoad average 1.8 · 2.1 · 2.4",
+        "tip": "All cores together, user + system time, as Activity Monitor's CPU Load. The bars: the last minute, then each core now. Load average: processes running or waiting to run, over 1, 5 and 15 minutes."
+      },
+      {
+        "kind": "stat",
+        "id": "mem",
+        "label": "Memory",
+        "value": "11.2 GB of 24 GB used",
+        "detail": "Pressure normal · cached files 3 GB",
+        "tip": "Used: app memory + wired + compressed, as Activity Monitor's Memory Used. Cached files are kept only until something needs the room. Pressure is macOS's own reading: while it is normal, used memory near the total is fine."
+      },
+      {
+        "kind": "stat",
+        "id": "disk",
+        "label": "Disk",
+        "value": "51.2 GB free",
+        "detail": "of 494 GB on the startup volume",
+        "tip": "Available space on the startup volume, as df counts it. Finder may show more: it also counts purgeable space as free."
+      },
+      {
+        "kind": "stat",
+        "id": "net",
+        "label": "Network",
+        "value": "↓ 12 KB/s  ↑ 3 KB/s",
+        "detail": null,
+        "tip": "Wi-Fi, Ethernet and cellular, over the last few seconds. VPN tunnels are not counted twice."
+      },
+      {
+        "kind": "stat",
+        "id": "heat",
+        "label": "Heat",
+        "value": "Normal",
+        "detail": null,
+        "tip": "macOS isn't limiting anything for heat."
+      },
+      {
+        "kind": "stat",
+        "id": "power",
+        "label": "Battery",
+        "value": "80% · on power",
+        "detail": null,
+        "tip": "The internal battery, and whether the Mac runs on it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "Busiest processes"
+      },
+      {
+        "kind": "proc",
+        "id": "p:9",
+        "name": "WindowServer",
+        "what": null,
+        "cpu": "3.1%",
+        "open": null
+      },
+      {
+        "kind": "proc",
+        "id": "p:10",
+        "name": "coool",
+        "what": null,
+        "cpu": "0.6%",
+        "open": null
+      },
+      {
+        "kind": "note",
+        "text": "% of one core over the last 2 s · your processes only"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "header",
+        "text": "coool"
+      },
+      {
+        "kind": "stat",
+        "id": "agents",
+        "label": "Sessions",
+        "value": "No sessions running",
+        "detail": null,
+        "tip": "Working: mid-turn. Needs you: a permission, a question or a plan waits. Done: finished its turn, the CLI still open."
+      },
+      {
+        "kind": "stat",
+        "id": "use:claude",
+        "label": "Claude Code",
+        "value": "No usage data yet",
+        "detail": null,
+        "tip": "Plan usage left, as the usage ring in the app shows it."
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "open",
+        "title": "Open coool"
+      },
+      {
+        "kind": "action",
+        "id": "new",
+        "title": "New session…"
+      },
+      {
+        "kind": "sep"
+      },
+      {
+        "kind": "action",
+        "id": "quit",
+        "title": "Quit coool"
+      }
+    ]
+  }
+}
