@@ -28,10 +28,10 @@ import { RightPanel, type RightKind } from "./RightPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IMac, IPhone, IPlay, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IMac, IPhone, ITerminal } from "./icons";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
-import { Button, ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
+import { ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
 import { modelLabel } from "../lib/models";
 import { useShellFocus } from "../lib/shellFocus";
 import { countRender } from "../lib/perfCount";
@@ -340,7 +340,6 @@ export function SessionView({
   const cwd = session?.cwd ?? chat?.cwd ?? startingChat?.cwd ?? starting?.cwd ?? "";
   const chatLive = !!chat?.running;
   const title = session ? displayTitle(session) : (chat && chatTitle(chat)) || `New ${provider === "claude" ? "Claude Code" : "Codex"} chat`;
-  const canResume = !!session && !chatLive && !running && session.status === "ended" && !!session.id && !!session.cwd;
   const external = !!session && !hasTerm && !isChat;
   const model = chat?.model ?? session?.model ?? null;
   const context = chat && chat.context ? chat.context : (session?.tokens.context ?? 0);
@@ -379,12 +378,6 @@ export function SessionView({
           </div>
         </div>
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
-        {canResume && (
-          <Button variant="outline" onClick={() => resumeSession(session!, leaf)} title="Resume this session inside coool">
-            <IPlay size={14} />
-            Resume
-          </Button>
-        )}
         {panelKey && (
           <IconButton
             title={browserOpen ? "Hide the browser" : `Show the browser${browserBusy ? " (the agent is using it)" : pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`}
@@ -573,17 +566,52 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
 function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: string; compact: boolean }) {
   const ended = session.status === "ended";
   const model = session.model ? modelLabel(session.model) : null;
-  // The same box as the chat composer, shown unavailable: coool can read this session but not type into it.
+  const canType = ended && !!session.id && !!session.cwd;
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cli = session.provider === "codex" ? "Codex" : "Claude";
+  // An ended session is just a chat you can keep writing in: the first message reopens it and is sent.
+  const send = async () => {
+    const t = text.trim();
+    if (!t || busy || !canType) return;
+    setBusy(true);
+    try {
+      const id = await resumeSession(session, leaf);
+      if (id !== undefined) {
+        await api().chatSend(id, t);
+        setText("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Clicking the empty box (or pressing a key in it) with nothing typed yet is enough to bring the full composer back.
   return (
     <div className={cx("composer-dock shrink-0 pb-3", compact ? "px-3" : "px-6")}>
       <div
-        aria-disabled="true"
-        className="mx-auto max-w-[700px] cursor-not-allowed rounded-[20px] border border-line bg-raised/60 px-3.5 pb-2.5 pt-3.5 shadow-card"
-        title={ended ? "This session has ended" : "This session runs outside coool, so you can't type into it here"}
+        aria-disabled={canType ? undefined : "true"}
+        className={cx("mx-auto max-w-[700px] rounded-[20px] border border-line px-3.5 pb-2.5 pt-3.5 shadow-card", canType ? "bg-raised" : "cursor-not-allowed bg-raised/60")}
+        title={canType ? undefined : "This session runs outside coool, so you can't type into it here"}
+        data-ended-composer={canType ? "" : undefined}
       >
-        <div className="min-h-[26px] select-none px-0.5 text-prose text-faint">
-          {ended ? "This session has ended. Resume it to keep going." : "Running outside coool. When it ends you can resume it here."}
-        </div>
+        {canType ? (
+          <textarea
+            value={text}
+            disabled={busy}
+            rows={1}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            placeholder={busy ? "Reopening the chat…" : `Message ${cli}… (continues this chat)`}
+            className="block max-h-[200px] min-h-[26px] w-full resize-none bg-transparent px-0.5 text-prose text-fg outline-none placeholder:text-faint [field-sizing:content]"
+          />
+        ) : (
+          <div className="min-h-[26px] select-none px-0.5 text-prose text-faint">Running outside coool. When it ends you can continue it here.</div>
+        )}
         <div className="mt-2 flex h-[34px] items-center gap-2">
           {model && (
             <span className="inline-flex h-[28px] items-center gap-1.5 rounded-[8px] px-2 text-small font-medium text-faint">
@@ -592,22 +620,19 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
             </span>
           )}
           <span className="flex-1" />
-          {ended && session.id ? (
-            <>
-              <Button variant="ghost" onClick={() => resumeSession(session, leaf, { terminal: true })} title="Resume in the CLI's own terminal UI">
-                <ITerminal size={15} />
-                In terminal
-              </Button>
-              <Button variant="primary" onClick={() => resumeSession(session, leaf)}>
-                <IPlay size={14} />
-                Resume here
-              </Button>
-            </>
-          ) : (
-            <span className="flex size-[32px] items-center justify-center rounded-[12px] bg-[color-mix(in_oklab,var(--text)_8%,transparent)] text-faint" aria-hidden>
-              <IArrowUp size={17} strokeWidth={1.9} />
-            </span>
-          )}
+          <button
+            type="button"
+            disabled={!canType || busy || !text.trim()}
+            onClick={() => void send()}
+            title={canType ? "Send (Enter). The chat reopens and carries on." : undefined}
+            aria-label="Send"
+            className={cx(
+              "flex size-[32px] items-center justify-center rounded-[12px] transition-colors",
+              canType && text.trim() && !busy ? "bg-fg text-bg" : "bg-[color-mix(in_oklab,var(--text)_8%,transparent)] text-faint",
+            )}
+          >
+            <IArrowUp size={17} strokeWidth={1.9} />
+          </button>
         </div>
       </div>
     </div>

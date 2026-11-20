@@ -52,7 +52,7 @@ export async function newChat(a: { provider: Provider; cwd: string; prompt?: str
 }
 
 /** Resume an ended (or external, stopped) session as a chat; terminal as fallback or on request. */
-export async function resumeSession(s: Session, leaf?: string, opts?: { terminal?: boolean }) {
+export async function resumeSession(s: Session, leaf?: string, opts?: { terminal?: boolean }): Promise<number | undefined> {
   const st = useStore.getState();
   try {
     if (!opts?.terminal) {
@@ -66,7 +66,7 @@ export async function resumeSession(s: Session, leaf?: string, opts?: { terminal
         useChats.getState().setEarlier(id, s.activity);
         st.setMode({ kind: "session", key: sessionKey(s) }, "activity");
         place({ kind: "chat", id }, leaf);
-        return;
+        return id;
       } catch (e) {
         if (!isNotAvailable(e)) throw e;
         toast("Chat sessions aren't available in this build yet, so this resumed in the terminal.");
