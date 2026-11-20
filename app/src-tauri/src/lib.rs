@@ -1927,6 +1927,7 @@ pub fn run() {
             selftest::selftest_log,
             selftest::selftest_chat_launch,
             selftest::selftest_shot,
+            selftest::film::selftest_film,
             selftest::selftest_window,
             selftest::selftest_perf_stats,
             selftest::selftest_request_quit,
