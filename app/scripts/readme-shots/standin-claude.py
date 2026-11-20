@@ -186,7 +186,7 @@ def invoices_turn(prompt, start):
     f.write_text(f.read_text().replace(old, new))
     tool("Edit", {"file_path": p("src/format.ts"), "old_string": old, "new_string": new, "replace_all": False}, f"The file {p('src/format.ts')} has been updated.", pause=0.5)
     text("Found it: `formatPeriod` used `getMonth()` as is, so March (2) came out as `2026-02`. Fixed the off-by-one month; running the tests to confirm and clearing the stale build cache first.")
-    title("Why do invoices from March show the wrong month?")
+    title(prompt if prompt.endswith("?") else "Fix the March month in the invoice export")
     cmd = "rm -rf node_modules/.cache dist && npm test"
     tid = f"toolu_{uuid.uuid4().hex[:24]}"
     assistant([{"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": cmd, "description": "Clear the build cache and run the unit tests"}}], ctx=24_000)

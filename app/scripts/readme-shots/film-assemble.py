@@ -10,7 +10,9 @@ For each burst <shots>/film-<name>/ (stills named <ms since the burst began>-<wo
   <name>-<label>.png    the still nearest 0.4 s after each FILMMARK (the moment, settled)
   <name>-<label>-<element>.png   that still cropped to an element the mark named (the UI as an object), with 24 px
                         (CSS) of margin
-  <name>.json           the burst's real capture rate (frames, mean / p95 / max gap) and each mark's time in the video
+  terminal-*.json       what a terminal running the `terminal` / `terminal-codex` sessions would show (seconds after
+                        the cue, line), for a terminal drawn beside the app
+  <name>.json           the burst's cues (seconds into the video), its real capture rate (frames, mean / p95 / max gap) and each mark's time in the video
                         with its elements' rectangles in video pixels
 """
 
@@ -35,14 +37,18 @@ def main():
     a = ap.parse_args()
     shots, out = Path(a.shots), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    starts, marks = {}, {}
+    starts, marks, cues = {}, {}, []
     for line in Path(a.log).read_text().splitlines():
         p = line.split(" ", 3)
         if len(p) >= 4 and p[1] == "FILM" and p[2] == "start":
             starts[p[3].split()[0]] = float(p[0])
+        c = re.match(r"^(\S+) CUE (\S+)$", line)
+        if c:
+            cues.append((float(c.group(1)), c.group(2)))
         m = re.match(r"^(\S+) FILMMARK (\S+) (\S+) (.*)$", line)
         if m:
             marks.setdefault(m.group(2), []).append((float(m.group(1)), m.group(3), json.loads(m.group(4))))
+    terminals(shots.parent, out)
     for d in sorted(shots.glob("film-*")):
         name = d.name[len("film-"):]
         if name.startswith("m-") or (a.only and name not in a.only.split(",")):
@@ -79,8 +85,16 @@ def main():
                 x0, y0 = max(0, x - m), max(0, y - m)
                 crop = out / f"{name}-{label}-{k}.png"
                 subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(png), "-vf", f"crop={w + 2 * m}:{h + 2 * m}:{x0}:{y0}:exact=1", str(crop)], check=False)
+        if t0:
+            info["cues"] = [{"cue": n, "t": round(at - t0, 2)} for at, n in cues if 0 <= at - t0 <= frames[-1][0]]
         (out / f"{name}.json").write_text(json.dumps(info, indent=1))
         print(f"{mp4.name}: {info['seconds']} s, {len(frames)} stills, {info['real_fps']} fps real, gaps {info['gap_ms']}")
+
+
+def terminals(root: Path, out: Path):
+    """What a terminal would have shown for the `terminal` / `terminal-codex` cues (seconds after the cue, line)."""
+    for p in root.glob("terminal-*.json"):
+        shutil.copy(p, out / p.name)
 
 
 if __name__ == "__main__":
