@@ -24,6 +24,10 @@ if "app-server" not in ARGS:
     sys.exit(1)
 
 HOME = Path(os.environ["HOME"])
+# The film (film.sh) plays the scene slower than real time while it records: every pause here stretches with it.
+_SLOW = float((HOME / ".film-slow").read_text()) if (HOME / ".film-slow").exists() else 1.0
+_sleep = time.sleep
+time.sleep = lambda s: _sleep(s * _SLOW)
 CWD = os.getcwd()
 LOCK = threading.Lock()
 MODEL = "gpt-5.6"

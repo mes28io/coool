@@ -9,6 +9,12 @@
 # and never focused. Bursts of window-alone stills land in $FILM_ROOT/shots/film-<name>/; film-assemble.py turns
 # each into a 30 fps video and copies the stills into $FILM_OUT (default launch-video/footage).
 #
+# FILM_SLOW (default 3): the scene plays that many times slower than real time while it records (the page's
+# animations and clock, the stand-in CLIs, the live workspace), and the assembler plays it back that much faster, so
+# a capture of ~8-25 stills a second (it depends on how busy the Mac is) still makes smooth 30 fps video.
+# FILM_WORKERS (default 2): screencapture processes taking stills at once.
+# Don't edit this file while it runs: the shell reads it as it goes.
+#
 # Also serves app/scripts/readme-shots/site/ on 127.0.0.1:$FILM_PORT (default 8763) for the Browser panel shot.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd -P)
@@ -17,6 +23,7 @@ ROOT=${FILM_ROOT:-/private/tmp/coool-film-ws}
 OUT=${FILM_OUT:-$REPO/launch-video/footage}
 PORT=${FILM_PORT:-8763}
 SCENARIO=${1:-film}
+SLOW=${FILM_SLOW:-3}
 NAME=coool-film
 
 BIN=${COOOL_BIN:-${CARGO_TARGET_DIR:-$REPO/target}/debug/coool}
@@ -35,6 +42,7 @@ mkdir -p "$ROOT/app" "$ROOT/shots" "$ROOT/logs"
 cp "$BIN" "$ROOT/app/$NAME"
 H="$ROOT/home"
 case "$H" in /Users/*) echo "refusing a HOME under /Users"; exit 1 ;; esac
+echo "$SLOW" > "$H/.film-slow"
 rm -rf "$HOME/Library/WebKit/$NAME" "$HOME/Library/Caches/$NAME"
 
 python3 -I -m http.server "$PORT" --bind 127.0.0.1 --directory "$HERE/site" > "$ROOT/logs/site.log" 2>&1 &
@@ -47,7 +55,7 @@ sleep 1
 env -i HOME="$H" USER="${USER:-demo}" LOGNAME="${LOGNAME:-demo}" TMPDIR="${TMPDIR:-/tmp/}" LANG=en_US.UTF-8 SHELL=/bin/zsh \
   PATH="$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin" \
   COOOL_SELFTEST="$SCENARIO" COOOL_SELFTEST_DIR="$H/code" COOOL_SELFTEST_SHOTS="$ROOT/shots" COOOL_SELFTEST_LOG="$LOG" \
-  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 \
+  COOOL_SELFTEST_SITE="http://127.0.0.1:$PORT/" COOOL_SELFTEST_BACKGROUND=1 COOOL_GLASS_ACTIVE=1 COOOL_FILM_WORKERS="${FILM_WORKERS:-2}" COOOL_FILM_SLOW="$SLOW" \
   "$ROOT/app/$NAME" > "$ROOT/logs/app.out" 2>&1 &
 APP=$!
 
