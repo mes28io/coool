@@ -10,14 +10,14 @@ struct ChatView: View {
   @State private var error: String?
   @FocusState private var focused: Bool
 
-  private var session: SessionInfo? { store.sessions[sessionId] }
+  private var session: SessionInfo? { store.session(sessionId) }
   private var items: [ChatItem] { store.tails[sessionId] ?? [] }
   private var working: Bool { session?.state == "working" }
 
   var body: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 14) {
           header
           if let mode = store.startedMode[sessionId] {
             Label("Started from this iPhone. \(modeWords(mode))", systemImage: "iphone")
@@ -201,11 +201,12 @@ struct ItemView: View {
       Text(markdown(item.text ?? ""))
         .font(.body).foregroundStyle(Theme.text).textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("chat.assistant")
     case "tool":
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(item.tool ?? "Tool").font(.footnote.weight(.semibold)).foregroundStyle(Theme.dim)
           .padding(.horizontal, 7).padding(.vertical, 2).background(Theme.raised, in: Capsule())
-        Text(item.text ?? "").font(.footnote.monospaced()).foregroundStyle(Theme.faint).lineLimit(3)
+        Text(toolText).font(.footnote.monospaced()).foregroundStyle(Theme.faint).lineLimit(3)
       }
       .accessibilityElement(children: .combine)
     default:
@@ -214,6 +215,13 @@ struct ItemView: View {
         .frame(maxWidth: .infinity, alignment: .center).multilineTextAlignment(.center)
         .accessibilityIdentifier("chat.notice")
     }
+  }
+
+  /// The Mac's summary may start with the tool's name ("Bash · echo hi"): shown once, in the capsule.
+  private var toolText: String {
+    let t = item.text ?? ""
+    if let tool = item.tool, t.hasPrefix("\(tool) · ") { return String(t.dropFirst(tool.count + 3)) }
+    return t
   }
 
   private func markdown(_ s: String) -> AttributedString {

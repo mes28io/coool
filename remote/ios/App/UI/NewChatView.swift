@@ -91,7 +91,7 @@ struct NewChatView: View {
     switch r {
     case .success(let res) where res.ok:
       guard let s = res.session else { error = "Your Mac started the chat but didn't say which."; return }
-      store.startedMode[s] = res.mode ?? ""
+      store.started(s, project: project.name, cli: cli, mode: res.mode ?? "")
       UINotificationFeedbackGenerator().notificationOccurred(.success)
       started(s)
     case .success(let res): error = res.error.map { "Your Mac refused: \($0)" } ?? "Your Mac refused to start the chat."

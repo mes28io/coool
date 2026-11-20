@@ -1,8 +1,8 @@
 # coool Remote: design
 
-Status: step 1 built (the relay, the Mac side, a command-line stand-in phone); the iPhone app is next. This file is the contract between the three parts (relay, Mac app, iPhone app). Where building step 1 refined the first design, the change is marked **Changed in step 1**.
+Status: steps 1 and 2 built (the relay, the Mac side, a command-line stand-in phone, the iPhone app); TestFlight is next. This file is the contract between the three parts (relay, Mac app, iPhone app). Where building refined the first design, the change is marked **Changed in step 1** or **Changed in step 2**.
 
-Where things live: the relay is `remote/relay/` (Convex), the Mac side `crates/remote/` (protocol, rules, engine) and `app/src-tauri/src/remote.rs` (the app's side and Settings > Remote's commands), the stand-in phone `remote/phone/` (`src/protocol.mjs` is the reference the iPhone app follows; `crates/remote/tests/vectors.json` holds fixed-input results both implementations must reproduce), the end-to-end run `remote/e2e/run.sh`.
+Where things live: the relay is `remote/relay/` (Convex), the Mac side `crates/remote/` (protocol, rules, engine) and `app/src-tauri/src/remote.rs` (the app's side and Settings > Remote's commands), the stand-in phone `remote/phone/` (`src/protocol.mjs` is the reference the iPhone app follows; `crates/remote/tests/vectors.json` holds fixed-input results both implementations must reproduce), the end-to-end run `remote/e2e/run.sh`; the iPhone app `remote/ios/` (its protocol module `remote/ios/RemoteProtocol/` reproduces the same vectors; its end-to-end run `remote/ios/e2e/run.sh`).
 
 ## What it is
 
@@ -114,6 +114,16 @@ Every mutation is signed: Ed25519 over the UTF-8 of `coool-remote/1`, the functi
 
 `debug:dump` is an internal query (no client can call it; the Convex CLI's admin access can). The tests use it to check that the stored rows hold no plaintext.
 
+## The iPhone app (step 2)
+
+- `remote/ios/`: a SwiftUI app (iOS 17 or later, bundle id `sh.coool.remote`, no development team set), its Xcode project generated from `project.yml` with XcodeGen and checked in. Screens: pairing (camera QR scanner, a pasted `coool://pair?...` link, or the link opened from the Camera app through the `coool` URL scheme; then the 6-digit code), sessions grouped by project with live states and the Mac's online / last-seen state, a need's detail (allow once / deny, or the question's options), a chat (its tail, a composer, Stop), starting a chat (a project from the Mac's `projects` list, the CLI, the prompt), settings (this Mac, the in-app haptic and sound, unpair, about).
+- `remote/ios/RemoteProtocol/`: the protocol as a Swift package with no UI and no I/O, on CryptoKit (X25519, Ed25519, HKDF-SHA256, HMAC-SHA256, ChaCha20-Poly1305). Its tests read `crates/remote/tests/vectors.json` from the repository and check the refusals (replays and lower counters, tampered and misrouted messages, unknown types, a revoked device). `xcodebuild test -scheme RemoteProtocol` in that folder, or the app's scheme, runs them.
+- **Changed in step 2:** CryptoKit's Ed25519 signatures are randomized (hedged), so the Swift side can't reproduce `requestSig` byte for byte. Its test verifies the vector's signature over the bytes it builds (which proves the signed bytes are identical) and checks that its own signatures verify. Every other vector is reproduced exactly. The relay only ever verifies, so nothing else changes.
+- The relay client is Convex's official Swift client (`ConvexMobile`, get-convex/convex-swift, pinned to 0.8.2): signed mutations, the read-session token in the `deviceInbox` subscription, and `claimStatus` read through a short subscription (the client has no one-shot query). Numbers go to the relay as float64 (`Double`), as `v.number()` expects. The relay URL comes from the pairing link. No other SDK and no other network calls.
+- Keys: one Keychain item (generic password, service `sh.coool.remote`, account `pairing`, `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable: never in iCloud Keychain, never restored to another device) holding the identity and the pairing; the counters, which are not secret, in the app's defaults.
+- The link is open only while the app is in the foreground: a read session and the live query on `deviceInbox`, `hello` on connect (the Mac answers with `snapshot` and `projects`); everything taken is acknowledged. When the live query reports its session gone, the app opens a new one; if that is refused as `revoked` (or a `send` is), the app forgets the pairing and returns to the pairing screen saying the Mac removed it. Unpair on the phone forgets the Mac locally only (the relay has no device-side revoke); the Mac lists the phone until it is removed there.
+- What the phone can say is typed: `answer` takes allow once, deny, a question's option or picks (no "always", no mode); `start` takes a `Project` from the Mac's list, never a path. A chat's tail is asked for with `get_chat` when the chat opens, when its state changes, and every few seconds while it works.
+
 ## No push notifications
 
 The owner decided the iPhone app sends no push notifications. The relay holds no push token and never talks to Apple. The phone learns that an agent needs you only while the app is open (it shows needs live, with a badge and a sound in the app). The Mac's own notifications are unchanged.
@@ -121,5 +131,5 @@ The owner decided the iPhone app sends no push notifications. The relay holds no
 ## Build order
 
 1. Relay and the Mac side, tested with a command-line stand-in for the phone (pair, snapshot, answer, send, stop, start, revoke, replay refused). Built. Tests: `cd remote/phone && npm test` (the relay's threat model against the dev deployment, and the shared vectors), `cargo test -p coool-remote` (the Mac's half and the rules), `remote/e2e/run.sh` (the real app and the stand-in phone, three Haiku turns). Before the iPhone app ships: deploy the relay to the production deployment and point the app's default relay at it (`DEFAULT_RELAY` in app/src-tauri/src/remote.rs; it is the dev deployment's URL today).
-2. The iPhone app (SwiftUI): pairing scanner, session list, need detail with answer buttons, chat view with composer, settings.
+2. The iPhone app (SwiftUI): pairing scanner, session list, need detail with answer buttons, chat view with composer, settings. Built. Tests: `RemoteProtocol`'s unit tests (the vectors and the refusals), and `remote/ios/e2e/run.sh` (the real Mac app and this app in the Simulator, driven by XCUITest through the same self-test scenario as step 1).
 3. TestFlight.

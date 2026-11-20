@@ -15,7 +15,7 @@ HERE=$(cd "$(dirname "$0")" && pwd -P)
 OUT=${1:-/tmp/coool-ios-e2e}
 BIN=${COOOL_BIN:-${CARGO_TARGET_DIR:-target}/debug/coool}
 DERIVED=${DERIVED:-$HERE/../.build/dd}
-: "${SIM:?set SIM to your simulator's udid}"
+: "${SIM:?set SIM to the udid of your test simulator}"
 rm -rf "$OUT"
 mkdir -p "$OUT/remote-e2e-proj" "$OUT/bin" "$OUT/shots" "$OUT/phone-shots"
 OUT=$(cd "$OUT" && pwd -P)

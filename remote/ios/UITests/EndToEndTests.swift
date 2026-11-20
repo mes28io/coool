@@ -83,7 +83,10 @@ final class EndToEndTests: XCTestCase {
     XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'always'")).firstMatch.exists, "an always-allow button")
     shot(shots, "e2e-5-need")
     app.buttons["need.allow"].tap()
-    try step("Allow once accepted by the Mac", app.descendants(matching: .any)["need.done"].waitForExistence(timeout: 60))
+    // "Allowed once" shows briefly, then the app opens the chat the request came from.
+    let doneMark = app.descendants(matching: .any)["need.done"], chatState = app.descendants(matching: .any)["chat.state"]
+    try step("Allow once accepted by the Mac", wait("the answer's result", timeout: 60) { doneMark.exists || chatState.exists })
+    XCTAssertFalse(app.descendants(matching: .any)["need.error"].exists)
     put("remote-phone-answered.txt", "allowed Bash once from the app (the app has no always-allow)")
 
     // 4. Send, then stop mid-turn, from the chat view.
@@ -102,7 +105,7 @@ final class EndToEndTests: XCTestCase {
     try step("Stop accepted", wait("stop result", timeout: 60) { !stop.exists || (state.value as? String) != "working" })
     XCTAssertFalse(app.descendants(matching: .any)["chat.error"].exists)
     put("remote-phone-stopped.txt", "sent, then stopped \(session) from the app")
-    _ = wait("the stop line in the tail", timeout: 20) { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stopped from'")).count > 0 }
+    _ = wait("the stop line in the tail", timeout: 20) { app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Stopped from'")).count > 0 }
     shot(shots, "e2e-7-chat-stopped")
 
     // 5. Start a chat in this folder from the Mac's list.
@@ -122,7 +125,7 @@ final class EndToEndTests: XCTestCase {
     put("remote-phone-refusals.txt", "not sent: the app offers no always-allow, no path, no unknown project (refusals are covered by crates/remote tests and remote/phone e2e)")
     put("remote-phone-started.txt", String(decoding: try JSONSerialization.data(withJSONObject: ["session": sp[1], "mode": sp[2]]), as: UTF8.self))
     log("started \(sp[1]) in \(sp[2])")
-    _ = wait("the started chat's reply", timeout: 60) { app.staticTexts.matching(NSPredicate(format: "label ==[c] 'hi' OR label ==[c] 'hi.'")).count > 0 }
+    _ = wait("the started chat's reply", timeout: 90) { elements(app, "chat.assistant").count > 0 }
     shot(shots, "e2e-9-started")
 
     // 6. Removed on the Mac: back to pairing, with the reason.

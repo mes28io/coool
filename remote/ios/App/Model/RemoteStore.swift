@@ -35,6 +35,8 @@ final class RemoteStore {
   var tails: [String: [ChatItem]] = [:]
   /// The mode the Mac started a chat in, for chats this phone started.
   var startedMode: [String: String] = [:]
+  /// A chat started from here is `chat:<n>` at first, then listed under its CLI's id: the later id, by the first.
+  var alias: [String: String] = [:]
   var macLastSeen: Int64?
   /// Subscribed, and the relay has answered.
   var live = false
@@ -54,6 +56,7 @@ final class RemoteStore {
   @ObservationIgnored private var retryDelay: Double = 2
   @ObservationIgnored private var claimTask: Task<Void, Never>?
   @ObservationIgnored private var knownNeeds: Set<String> = []
+  @ObservationIgnored private var pendingStarts: [String: (project: String, cli: Cli, at: Date)] = [:]
 
   init() {
     if let m = Vault.load(), let l = try? Link(m, recvHighWater: Vault.recvHighWater, sendCounter: Vault.sendCounter) {
@@ -71,7 +74,18 @@ final class RemoteStore {
     return Int64(now.timeIntervalSince1970 * 1000) - s < 150_000
   }
 
-  func need(for session: String) -> Need? { needs.first { $0.session == session } }
+  func need(for session: String) -> Need? {
+    let other = alias[session]
+    return needs.first { $0.session == session || $0.session == other }
+  }
+
+  /// The session a chat view shows: the started chat under its later id, once the Mac lists it.
+  func session(_ id: String) -> SessionInfo? { alias[id].flatMap { sessions[$0] } ?? sessions[id] }
+
+  func started(_ session: String, project: String, cli: Cli, mode: String) {
+    startedMode[session] = mode
+    pendingStarts[session] = (project, cli, Date())
+  }
 
   func status(of s: SessionInfo) -> Status { Status(s, hasNeed: need(for: s.id) != nil) }
 
@@ -289,7 +303,13 @@ final class RemoteStore {
       unseen.formIntersection(ids)
       needs = ns
       arrived(ns)
-    case .session(let s): sessions[s.id] = s
+    case .session(let s):
+      if sessions[s.id] == nil, s.chat, !s.id.hasPrefix("chat:"),
+        let k = pendingStarts.first(where: { $0.value.project == s.project && $0.value.cli == s.cli && Date().timeIntervalSince($0.value.at) < 120 })?.key {
+        alias[k] = s.id
+        pendingStarts[k] = nil
+      }
+      sessions[s.id] = s
     case .sessionGone(let id): sessions[id] = nil
     case .need(let n):
       if let i = needs.firstIndex(where: { $0.id == n.id }) { needs[i] = n } else { needs.append(n) }

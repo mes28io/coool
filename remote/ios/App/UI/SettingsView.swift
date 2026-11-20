@@ -23,8 +23,8 @@ struct SettingsView: View {
         }
 
         Section {
-          Toggle("Haptic", isOn: $haptics).accessibilityIdentifier("settings.haptics")
-          Toggle("Sound", isOn: $sound).accessibilityIdentifier("settings.sound")
+          Toggle("Haptic", isOn: $haptics).tint(Theme.done).accessibilityIdentifier("settings.haptics")
+          Toggle("Sound", isOn: $sound).tint(Theme.done).accessibilityIdentifier("settings.sound")
         } header: { Text("When an agent needs you") } footer: {
           Text("Only while the app is open. coool Remote sends no push notifications.")
         }

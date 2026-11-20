@@ -115,12 +115,21 @@ extension Cli {
 struct PrimaryButtonStyle: ButtonStyle {
   var tint: Color = Theme.primary
   var ink: Color = Theme.onPrimary
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
+  func makeBody(configuration: Configuration) -> some View { Filled(configuration: configuration, tint: tint, ink: ink) }
+
+  private struct Filled: View {
+    let configuration: Configuration
+    let tint: Color
+    let ink: Color
+    @Environment(\.isEnabled) private var enabled
+    var body: some View {
+      configuration.label
       .font(.body.weight(.semibold))
       .frame(maxWidth: .infinity, minHeight: 50)
       .foregroundStyle(ink)
       .background(tint.opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .opacity(enabled ? 1 : 0.35)
+    }
   }
 }
 
