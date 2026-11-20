@@ -9,7 +9,10 @@
 //! - `start` (`name`, optional `workers`, else `COOOL_FILM_WORKERS`, else 3, and `format`, default `png`): the burst goes to
 //!   `<shots>/film-<name>/`; one burst at a time.
 //! - `stop`: waits for the workers' last stills and returns `{ name, frames, ms }`.
-//! - `visible`: tells WebKit not to treat the off-screen window as hidden (no throttled timers or animations).
+//! - `visible`: tells WebKit not to treat the off-screen window as hidden (no throttled timers or animations), and
+//!   returns `{ slow }`: `COOOL_FILM_SLOW`, how many times slower than real time the scene plays while it is filmed
+//!   (the page's animations, the stand-in CLIs and the live workspace all slow down; the assembler speeds it back up),
+//!   so a capture slower than 30 stills a second still makes smooth 30 fps video.
 
 use super::{active, keep_visible, no_shots, window_number};
 use crate::Core;
@@ -37,7 +40,10 @@ pub fn selftest_film(app: AppHandle, core: State<'_, Arc<Core>>, action: String,
             if let Some(v) = app.get_webview("main") {
                 v.with_webview(|pw| keep_visible(pw.inner())).map_err(|e| e.to_string())?;
             }
-            Ok(serde_json::json!({}))
+            // How many times slower than real time the scene plays while it is filmed (`COOOL_FILM_SLOW`, film.sh).
+            let slow = std::env::var("COOOL_FILM_SLOW").ok().and_then(|v| v.parse::<f64>().ok()).filter(|s| *s >= 1.0).unwrap_or(1.0);
+            t.log(&format!("FILM slow {slow}"));
+            Ok(serde_json::json!({ "slow": slow }))
         }
         "start" => {
             if no_shots() {

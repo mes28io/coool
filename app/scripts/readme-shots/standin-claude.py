@@ -25,6 +25,10 @@ import uuid
 from pathlib import Path
 
 HOME = Path(os.environ["HOME"])
+# The film (film.sh) plays the scene slower than real time while it records: every pause here stretches with it.
+_SLOW = float((HOME / ".film-slow").read_text()) if (HOME / ".film-slow").exists() else 1.0
+_sleep = time.sleep
+time.sleep = lambda s: _sleep(s * _SLOW)
 CWD = Path(os.getcwd())
 ARGS = sys.argv[1:]
 MODELS = [
