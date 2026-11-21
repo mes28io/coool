@@ -11,6 +11,7 @@
 
 mod claude;
 mod codex;
+pub mod host;
 
 use crate::model::{Provider, Tokens};
 use anyhow::{Context, Result, bail};
@@ -49,7 +50,7 @@ pub struct ChatOptions {
 
 /// An MCP server (stdio) handed to a chat's CLI at launch: Claude Code gets it through `--mcp-config=<private file>`, Codex through
 /// `-c mcp_servers.<name>.…` overrides. Nothing is written to the person's CLI config.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServer {
     pub name: String,
     pub command: String,
@@ -190,7 +191,7 @@ impl RememberOption {
 }
 
 /// One event of a chat, exactly as the app receives it: `{"seq", "ts", "type", ...}`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatEvent {
     pub seq: u64,
     /// Epoch milliseconds.
@@ -199,7 +200,7 @@ pub struct ChatEvent {
     pub kind: ChatEventKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatEventKind {
     Ready {
@@ -221,7 +222,7 @@ pub enum ChatEventKind {
         /// The note's id when `steer`.
         note_id: Option<String>,
         /// Images and files sent with it (see [`crate::attach`]); `text` is without their marker lines.
-        #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<crate::attach::Attachment>,
     },
     TextDelta {
@@ -252,7 +253,7 @@ pub enum ChatEventKind {
         ok: bool,
         output: String,
         /// The page an `Artifact` publish call made (see [`crate::artifact`]).
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<Box<crate::artifact::ArtifactInfo>>,
     },
     PermissionRequest {
@@ -338,7 +339,7 @@ pub enum ChatEventKind {
         state: SteerState,
         tool_id: Option<String>,
         /// The note's attachments (sent with it, images included).
-        #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<crate::attach::Attachment>,
     },
 }
@@ -394,7 +395,7 @@ impl ChatEventKind {
 }
 
 /// Snapshot of a chat for lists (`sessions` payload) and headers.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatInfo {
     pub id: usize,
     pub provider: Provider,
@@ -512,6 +513,35 @@ impl Shared {
         }
     }
 
+    /// A hosted chat's mirror (see [`host`]): an event exactly as the host numbered it. Older or repeated ones are
+    /// dropped, so a replay that overlaps what arrived live adds nothing twice.
+    fn push_mirror(&mut self, e: ChatEvent) {
+        if e.seq <= self.next_seq {
+            return;
+        }
+        match &e.kind {
+            ChatEventKind::State { state } => {
+                self.backend_state = *state;
+                self.state = *state;
+            }
+            ChatEventKind::OpenFailed { error, .. } => self.open_failed = !error.is_empty(),
+            ChatEventKind::Ready { session_id, model, permission_mode, .. } => {
+                if !session_id.is_empty() {
+                    self.session_id = Some(session_id.clone());
+                }
+                self.model = model.clone();
+                self.permission_mode = permission_mode.clone();
+            }
+            ChatEventKind::Exited { .. } => self.running = false,
+            _ => {}
+        }
+        self.next_seq = e.seq;
+        self.events.push_back(e);
+        if self.events.len() > MAX_EVENTS {
+            self.events.pop_front();
+        }
+    }
+
     fn push(&mut self, mut kind: ChatEventKind) {
         match &mut kind {
             ChatEventKind::State { state } => {
@@ -552,6 +582,51 @@ enum WriterMsg {
     Close,
 }
 
+/// The backend of a hosted chat's mirror: never driven (the host runs the real one; calls go there).
+struct MirrorBackend;
+
+impl Backend for MirrorBackend {
+    fn start(&mut self, _o: &mut Out) {}
+    fn on_line(&mut self, _line: &str, _o: &mut Out) {}
+    fn send(&mut self, _text: &str, _atts: &[crate::attach::Attachment], _o: &mut Out) -> Result<()> {
+        bail!("a hosted chat's calls go to its host")
+    }
+    fn interrupt(&mut self, _o: &mut Out) -> Result<()> {
+        bail!("a hosted chat's calls go to its host")
+    }
+    fn set_model(&mut self, _model: &str, _o: &mut Out) -> Result<()> {
+        bail!("a hosted chat's calls go to its host")
+    }
+    fn set_permission_mode(&mut self, _mode: &str, _o: &mut Out) -> Result<()> {
+        bail!("a hosted chat's calls go to its host")
+    }
+    fn respond_permission(&mut self, _request_id: &str, _allow: bool, _always: bool, _o: &mut Out) -> Result<()> {
+        bail!("a hosted chat's calls go to its host")
+    }
+    fn on_exit(&mut self, _o: &mut Out) {}
+}
+
+impl Shared {
+    /// The app's copy of a hosted chat, starting from what the host last said of it.
+    fn mirror(info: &ChatInfo) -> Self {
+        Shared {
+            backend: Box::new(MirrorBackend),
+            events: VecDeque::new(),
+            next_seq: 0,
+            state: info.state,
+            backend_state: info.state,
+            external: Vec::new(),
+            session_id: info.session_id.clone(),
+            model: info.model.clone(),
+            permission_mode: info.permission_mode.clone(),
+            running: info.running,
+            stderr_tail: VecDeque::new(),
+            trace: None,
+            open_failed: false,
+        }
+    }
+}
+
 fn lock(m: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -578,6 +653,8 @@ fn apply(sh: &mut Shared, writer: &Sender<WriterMsg>, o: Out) {
 pub struct ChatHandle {
     pub id: usize,
     shared: Arc<Mutex<Shared>>,
+    /// A hosted chat: its host and key there (coool's own requests and notes go through the host).
+    hosted: Option<(Arc<host::Client>, String)>,
 }
 
 impl ChatHandle {
@@ -601,6 +678,9 @@ impl ChatHandle {
     /// [`Chat::respond_permission`] / [`Chat::respond_permission_remember`] with the id this returns. The answer
     /// arrives on the receiver; the request is cancelled when the turn ends first. None when the chat has ended.
     pub fn ask(&self, tool: &str, summary: &str, input: Value, remember: Vec<RememberOption>) -> Option<(String, mpsc::Receiver<ExternalAnswer>)> {
+        if let Some((c, key)) = &self.hosted {
+            return c.ask(key, tool, summary, input, remember);
+        }
         let mut sh = lock(&self.shared);
         if !sh.running {
             return None;
@@ -615,11 +695,19 @@ impl ChatHandle {
 
     /// An info line from coool itself in the chat's timeline, e.g. "Allowed from Ada's iPhone" (coool Remote).
     pub fn note(&self, text: &str) {
+        if let Some((c, key)) = &self.hosted {
+            let _ = c.call(key, &host::Call::Note { text: text.into() });
+            return;
+        }
         lock(&self.shared).push(ChatEventKind::notice(NoticeLevel::Info, text));
     }
 
     /// Takes back a request from [`Self::ask`] nobody answered (it timed out), with a note in the chat.
     pub fn withdraw(&self, request_id: &str, note: &str) {
+        if let Some((c, key)) = &self.hosted {
+            let _ = c.call(key, &host::Call::Withdraw { request_id: request_id.into(), note: note.into() });
+            return;
+        }
         let mut sh = lock(&self.shared);
         if sh.take_external(request_id).is_some() {
             if !note.is_empty() {
@@ -631,7 +719,7 @@ impl ChatHandle {
 }
 
 /// The person's answer to a request from [`ChatHandle::ask`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExternalAnswer {
     Allow,
     /// Allow, and apply the request's remember option with this id.
@@ -677,6 +765,12 @@ fn context_text(opts: &ChatOptions, cli: crate::ladder::Cli, devices: bool) -> O
     Some(crate::agent_context::text(cli, &c, helpers))
 }
 
+/// Where a chat's CLI runs: a child of this process, or of the chat host (see [`host`]).
+enum Link {
+    Proc(Sender<WriterMsg>),
+    Host(Arc<host::Client>, String),
+}
+
 pub struct Chat {
     pub id: usize,
     pub provider: Provider,
@@ -684,7 +778,7 @@ pub struct Chat {
     pub pid: Option<u32>,
     pub started: SystemTime,
     shared: Arc<Mutex<Shared>>,
-    writer: Sender<WriterMsg>,
+    link: Link,
     kill_requested: Option<Instant>,
     /// The arguments the CLI was launched with (the self-test checks Ladder's flags against them).
     args: Vec<String>,
@@ -924,10 +1018,57 @@ impl Chat {
             sh.backend.start(&mut o);
             apply(&mut sh, &writer, o);
         }
-        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, writer, kill_requested: None, args: args.to_vec(), launch: crate::chatctx::Launch::default() })
+        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, link: Link::Proc(writer), kill_requested: None, args: args.to_vec(), launch: crate::chatctx::Launch::default() })
+    }
+
+    /// A chat whose CLI the chat host runs (see [`host`]): its events arrive in a mirror; calls go to the host.
+    pub(crate) fn hosted(id: usize, client: Arc<host::Client>, entry: &host::Entry) -> Self {
+        let shared = client.mirror(&entry.key, &entry.info);
+        let started = SystemTime::UNIX_EPOCH + Duration::from_millis(entry.started_ms);
+        Self {
+            id,
+            provider: entry.opts.provider,
+            cwd: entry.opts.cwd.clone(),
+            pid: entry.pid,
+            started,
+            shared,
+            link: Link::Host(client, entry.key.clone()),
+            kill_requested: None,
+            args: entry.args.clone(),
+            launch: entry.launch.clone(),
+        }
+    }
+
+    /// Whether the chat host runs this chat's CLI (it then outlives this process).
+    pub fn is_hosted(&self) -> bool {
+        matches!(self.link, Link::Host(..))
+    }
+
+    /// The host key of a hosted chat.
+    pub fn host_key(&self) -> Option<&str> {
+        match &self.link {
+            Link::Host(_, k) => Some(k),
+            Link::Proc(_) => None,
+        }
+    }
+
+    /// Keeps a small value with a hosted chat in its host (read back by `list` after a relaunch). No-op otherwise.
+    pub fn set_meta(&self, meta: Value) {
+        if let Link::Host(c, k) = &self.link {
+            let _ = c.set_meta(k, meta);
+        }
+    }
+
+    /// A hosted chat's call, run by the host: Some(its result); None for a chat of this process.
+    fn host_call(&self, call: host::Call) -> Option<Result<Value>> {
+        match &self.link {
+            Link::Host(c, k) => Some(c.call(k, &call)),
+            Link::Proc(_) => None,
+        }
     }
 
     fn with_backend(&mut self, call: Value, f: impl FnOnce(&mut dyn Backend, &mut Out) -> Result<()>) -> Result<()> {
+        let Link::Proc(writer) = &self.link else { bail!("a hosted chat's calls go to its host") };
         let mut sh = lock(&self.shared);
         if !sh.running {
             bail!("the chat has ended");
@@ -935,7 +1076,7 @@ impl Chat {
         sh.trace("api", call);
         let mut o = Out::default();
         let r = f(sh.backend.as_mut(), &mut o);
-        apply(&mut sh, &self.writer, o);
+        apply(&mut sh, writer, o);
         r
     }
 
@@ -951,6 +1092,9 @@ impl Chat {
         }
         if atts.len() > crate::attach::MAX_COUNT {
             bail!("at most {} attachments per message", crate::attach::MAX_COUNT);
+        }
+        if let Some(r) = self.host_call(host::Call::Send { text: text.into(), attachments: atts.to_vec() }) {
+            return r.map(|_| ());
         }
         let names: Vec<&str> = atts.iter().map(|a| a.name.as_str()).collect();
         self.with_backend(json!({"call": "send", "text": text, "attachments": names}), |b, o| b.send(text, atts, o))
@@ -975,6 +1119,9 @@ impl Chat {
         if atts.len() > crate::attach::MAX_COUNT {
             bail!("at most {} attachments per message", crate::attach::MAX_COUNT);
         }
+        if let Some(r) = self.host_call(host::Call::Steer { text: text.into(), now, attachments: atts.to_vec() }) {
+            return r.and_then(|v| v.as_str().map(str::to_string).context("the host gave no note id"));
+        }
         let id = uuid_v4();
         let names: Vec<&str> = atts.iter().map(|a| a.name.as_str()).collect();
         self.with_backend(json!({"call": "steer", "note_id": id, "text": text, "now": now, "attachments": names}), |b, o| b.steer(&id, text, now, atts, o))?;
@@ -984,19 +1131,31 @@ impl Chat {
     /// Withdraw a note that is still `queued`. Fails once the agent has it
     /// (and, for Codex, once it was handed to the CLI: see CHAT_SPEC).
     pub fn cancel_steer(&mut self, note_id: &str) -> Result<()> {
+        if let Some(r) = self.host_call(host::Call::CancelSteer { note_id: note_id.into() }) {
+            return r.map(|_| ());
+        }
         self.with_backend(json!({"call": "cancel_steer", "note_id": note_id}), |b, o| b.cancel_steer(note_id, o))
     }
 
     /// Stop the current turn; the chat stays usable.
     pub fn interrupt(&mut self) -> Result<()> {
+        if let Some(r) = self.host_call(host::Call::Interrupt) {
+            return r.map(|_| ());
+        }
         self.with_backend(json!({"call": "interrupt"}), |b, o| b.interrupt(o))
     }
 
     pub fn set_model(&mut self, model: &str) -> Result<()> {
+        if let Some(r) = self.host_call(host::Call::SetModel { model: model.into() }) {
+            return r.map(|_| ());
+        }
         self.with_backend(json!({"call": "set_model", "model": model}), |b, o| b.set_model(model, o))
     }
 
     pub fn set_permission_mode(&mut self, mode: &str) -> Result<()> {
+        if let Some(r) = self.host_call(host::Call::SetPermissionMode { mode: mode.into() }) {
+            return r.map(|_| ());
+        }
         self.with_backend(json!({"call": "set_permission_mode", "mode": mode}), |b, o| b.set_permission_mode(mode, o))
     }
 
@@ -1006,6 +1165,9 @@ impl Chat {
     /// [`Chat::respond_permission_remember`]). With no such option, `always`
     /// allows once.
     pub fn respond_permission(&mut self, request_id: &str, allow: bool, always: bool) -> Result<()> {
+        if let Some(r) = self.host_call(host::Call::RespondPermission { request_id: request_id.into(), allow, always }) {
+            return r.map(|_| ());
+        }
         let ext = answer_external(&self.shared, request_id, |opts| {
             Ok(match (allow, always, opts.first().filter(|o| !o.persistent())) {
                 (false, _, _) => ExternalAnswer::Deny,
@@ -1023,6 +1185,9 @@ impl Chat {
     /// Allow, and apply the [`RememberOption`] with id `remember` from the
     /// request's `permission_request.remember`.
     pub fn respond_permission_remember(&mut self, request_id: &str, remember: &str) -> Result<()> {
+        if let Some(r) = self.host_call(host::Call::RespondPermissionRemember { request_id: request_id.into(), remember: remember.into() }) {
+            return r.map(|_| ());
+        }
         let ext = answer_external(&self.shared, request_id, |opts| {
             if !opts.iter().any(|o| o.id == remember) {
                 bail!("no remember option {remember} for request {request_id}");
@@ -1039,6 +1204,9 @@ impl Chat {
     /// Answer a [`ChatEventKind::Question`]: for each question, in order, the
     /// picked option labels and/or typed text. Decline with `respond_permission(id, false, false)`.
     pub fn respond_question(&mut self, request_id: &str, answers: &[Vec<String>]) -> Result<()> {
+        if let Some(r) = self.host_call(host::Call::RespondQuestion { request_id: request_id.into(), answers: answers.to_vec() }) {
+            return r.map(|_| ());
+        }
         let call = json!({"call": "respond_question", "request_id": request_id, "answers": answers});
         self.with_backend(call, |b, o| b.respond_question(request_id, answers, o))
     }
@@ -1046,7 +1214,13 @@ impl Chat {
     /// End the process: close its input and ask it to terminate; the hub
     /// escalates to SIGKILL if it is still around after a grace period.
     pub fn stop(&mut self) {
-        let _ = self.writer.send(WriterMsg::Close);
+        if let Some(r) = self.host_call(host::Call::Stop) {
+            let _ = r;
+            return;
+        }
+        if let Link::Proc(w) = &self.link {
+            let _ = w.send(WriterMsg::Close);
+        }
         if !self.is_running() {
             return;
         }
@@ -1062,7 +1236,11 @@ impl Chat {
 
     /// A read handle on this chat's events that doesn't borrow the chat.
     pub fn handle(&self) -> ChatHandle {
-        ChatHandle { id: self.id, shared: self.shared.clone() }
+        let hosted = match &self.link {
+            Link::Host(c, k) => Some((c.clone(), k.clone())),
+            Link::Proc(_) => None,
+        };
+        ChatHandle { id: self.id, shared: self.shared.clone(), hosted }
     }
 
     pub fn info(&self) -> ChatInfo {
@@ -1097,8 +1275,8 @@ impl Chat {
     }
 
     fn signal(&self, sig: libc::c_int) {
-        // Only while the child is unreaped: afterwards its pid may be reused.
-        if !self.is_running() {
+        // Only while the child is unreaped: afterwards its pid may be reused. A hosted chat's CLI is the host's child.
+        if !self.is_running() || self.is_hosted() {
             return;
         }
         if let Some(p) = self.pid.and_then(crate::util::valid_pid) {
@@ -1121,10 +1299,12 @@ impl Chat {
 impl Drop for Chat {
     /// A dropped chat must not leave its CLI running unattended.
     fn drop(&mut self) {
+        // A hosted chat's CLI belongs to the host: dropping the app's view of it leaves it running.
+        let Link::Proc(writer) = &self.link else { return };
         if !self.is_running() {
             return;
         }
-        let _ = self.writer.send(WriterMsg::Close);
+        let _ = writer.send(WriterMsg::Close);
         self.signal(libc::SIGTERM);
         let shared = self.shared.clone();
         let pid = self.pid.and_then(crate::util::valid_pid);
