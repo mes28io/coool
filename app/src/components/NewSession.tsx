@@ -101,10 +101,11 @@ export function NewSession({ initialCwd, initialProvider, close }: { initialCwd?
   const hidden = useShowHidden();
   const opened = useOpenedPlaces();
   // A guarded place coool already started chats in: macOS let coool's CLIs in there, so listing it asks nothing.
-  const auto = useMemo(() => new Set(all.filter((s) => s.origin === "coool").map((s) => guardedPlace(s.cwd, home)).filter(Boolean) as string[]), [all, home]);
+  // A string, so a new sessions snapshot (every few seconds) doesn't list and summarise again.
+  const auto = useMemo(() => [...new Set(all.filter((s) => s.origin === "coool").map((s) => guardedPlace(s.cwd, home)).filter(Boolean))].sort().join("|"), [all, home]);
   const allowFor = useCallback((p: string) => {
     const g = guardedPlace(p, home);
-    return !g || opened.includes(g) || auto.has(g);
+    return !g || opened.includes(g) || auto.split("|").includes(g);
   }, [home, opened, auto]);
   const entries = useMemo(() => listing?.entries ?? [], [listing]);
   const favourites = useFavourites();
@@ -657,7 +658,6 @@ export function NewSession({ initialCwd, initialProvider, close }: { initialCwd?
                     onOpenPlace={(g) => {
                       noteOpened(g);
                       forgetFolder(loc);
-                      setTimeout(() => relist(loc), 0);
                     }}
                   />
                 </motion.div>
@@ -904,7 +904,7 @@ function Sidebar({ home, index, recents, loc, picked, onGo }: { home: string; in
               data={r.path}
               icon={<IFolder size={14} />}
               name={baseName(r.path)}
-              meta={ago(r.last).replace(" ago", "")}
+              meta={`${r.count} · ${ago(r.last).replace(" ago", "").replace("just now", "now")}`}
               on={picked === r.path}
               guarded={!!guardedPlace(r.path, home)}
               title={`${tilde(r.path, home)}\n${r.count} session${r.count === 1 ? "" : "s"} (${r.providers.map((p) => NAME[p]).join(", ")}), last ${ago(r.last)}`}

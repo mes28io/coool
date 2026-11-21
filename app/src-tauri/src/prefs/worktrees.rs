@@ -269,8 +269,9 @@ pub fn create(project: &Path, name: &str) -> Result<(String, String), String> {
         let _ = std::fs::write(&exclude, format!("{cur}{sep}# coool's chat worktrees\n.coool/\n"));
     }
     git(Some(project), &["worktree", "add", "-q", "-b", &branch, path.to_str().ok_or("path isn't UTF-8")?, "HEAD"])?;
+    // (`join("")` would add a trailing slash: the root itself when the folder is the repository's root.)
     let inside = path.join(&sub);
-    let out = if inside.is_dir() { inside } else { path };
+    let out = if !sub.as_os_str().is_empty() && inside.is_dir() { inside } else { path };
     Ok((out.display().to_string(), branch))
 }
 
@@ -301,7 +302,7 @@ mod tests {
         run(&repo, &["commit", "-qm", "init"]);
         let (p, b) = create(&repo, "Fix login").unwrap();
         assert_eq!(b, "coool/fix-login");
-        assert_eq!(Path::new(&p), repo.join(".coool/worktrees/fix-login"));
+        assert_eq!(p, repo.join(".coool/worktrees/fix-login").display().to_string(), "no trailing slash");
         assert!(Path::new(&p).join("sub/f.txt").is_file());
         // Taken: a number is added. From a folder inside: the same folder inside the new worktree.
         let (p2, b2) = create(&repo.join("sub"), "fix login").unwrap();
