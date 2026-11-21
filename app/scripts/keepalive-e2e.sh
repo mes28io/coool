@@ -144,7 +144,9 @@ if [ "$MODE" = update ]; then
   NOW=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/app/coool.app/Contents/Info.plist")
   [ "$NOW" = "$VB" ] && ok "ka-update: the bundle is now $NOW" || bad "ka-update: the bundle is $NOW, not $VB"
   if alive "$lcli" && alive "$hcli"; then ok "ka-update: lead CLI $lcli and helper CLI $hcli still running across the restart"; else bad "ka-update: lead '$lcli' or helper '$hcli' gone"; fi
-  # The relaunch the updater does with `open` (a self-test doesn't): the new bundle, by its executable.
+  # The relaunch the updater does with `open` (a self-test doesn't): the new bundle, by its executable. A pause first,
+  # so the agents work while no app is attached (the check that this work shows up needs some).
+  sleep 10
   launch ka-update-after "$ROOT/app/coool.app/Contents/MacOS/coool"
   waitline ' END$' 900 || true
   report
