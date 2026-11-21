@@ -16,7 +16,7 @@
 //! checks the window's top against the bottom of the menu bar of its screen and moves it up to the bar when AppKit
 //! left a gap (the person saw one of about 36 pt on macOS 27, the item on a 30 pt bar).
 
-use super::model::{Bar, Open, Row, SegKind};
+use super::model::{Bar, FIG, Open, Row, SegKind};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject, Sel};
@@ -207,16 +207,29 @@ pub fn bar_title(b: &Bar) -> Retained<NSMutableAttributedString> {
     let mark = attrs(&NSFont::systemFontOfSize_weight(size * 0.7, 0.0), &needs_color(), None, Some(1.0));
     let space = attrs(&NSFont::monospacedDigitSystemFontOfSize_weight(size, 0.0), &NSColor::labelColor(), None, None);
     push(&out, " ", &space);
+    // A figure keeps a fixed width with leading figure spaces ("  7%"), so the item never jitters. Those spaces are
+    // drawn in front of the figure's label instead of between label and figure: "CPU 7%" stays together and the
+    // spare room falls between the groups. Same characters in the same font, so the width is unchanged.
+    let pad_of = |t: &str| t.chars().take_while(|c| *c == FIG).count();
     for (i, s) in b.segs.iter().enumerate() {
+        let next_pad = match (s.kind, b.segs.get(i + 1)) {
+            (SegKind::Label, Some(n)) if n.kind == SegKind::Value => pad_of(&n.text),
+            _ => 0,
+        };
+        let after_label = i > 0 && b.segs[i - 1].kind == SegKind::Label && s.kind == SegKind::Value;
         if i > 0 {
-            push(&out, if s.kind == SegKind::Label { "  " } else { " " }, &space);
+            push(&out, if s.kind == SegKind::Label { "  " } else if after_label { "\u{2009}" } else { " " }, &space);
+        }
+        if next_pad > 0 {
+            push(&out, &FIG.to_string().repeat(next_pad), &space);
         }
         let a = match s.kind {
             SegKind::Value => &value,
             SegKind::Label => &label,
             SegKind::Needs => &mark,
         };
-        push(&out, &s.text, a);
+        let text = if after_label { s.text.trim_start_matches(FIG) } else { s.text.as_str() };
+        push(&out, text, a);
     }
     out
 }
@@ -429,7 +442,10 @@ pub fn set_bar(b: &Bar) {
     UI.with(|u| {
         let mut g = u.borrow_mut();
         let Some(u) = g.as_mut() else { return };
-        if u.bar.as_ref() == Some(b) {
+        // While the menu is open the bar holds still: AppKit puts an open status menu back where it first placed it
+        // whenever the item's title changes, which undid the move up to the bar a few seconds after opening. The
+        // reading catches up on the next sample after the menu closes.
+        if u.bar.as_ref() == Some(b) || u.window.is_some() {
             return;
         }
         if let Some(btn) = u.item.button(mtm) {

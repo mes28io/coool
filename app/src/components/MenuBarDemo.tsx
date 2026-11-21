@@ -60,11 +60,18 @@ function BarItem({ bar, look }: { bar: Bar; look: Look }) {
     <span className="inline-flex h-[24px] items-center rounded-[5px] px-[6px]" title={bar.tooltip} data-menubar-item>
       <Glyph ink={look.ink} />
       {bar.segs.length > 0 && <span style={{ width: 4 }} />}
-      {bar.segs.map((s, i) => (
+      {bar.segs.map((s, i) => {
+        // As ui.rs `bar_title`: a figure's padding is drawn before its label, so label and figure stay together.
+        const next = bar.segs[i + 1];
+        const pad = s.kind === "label" && next?.kind === "value" ? (next.text.match(/^\u2007*/)?.[0] ?? "") : "";
+        const afterLabel = i > 0 && bar.segs[i - 1].kind === "label" && s.kind === "value";
+        const text = afterLabel ? s.text.replace(/^\u2007+/, "") : s.text;
+        return (
+        <span key={i} style={{ display: "inline-flex", alignItems: "baseline" }}>
+        {pad && <span style={{ marginLeft: 7, fontSize: 13.5, fontVariantNumeric: "tabular-nums", whiteSpace: "pre" }}>{pad}</span>}
         <span
-          key={i}
           style={{
-            marginLeft: i > 0 ? (s.kind === "label" ? 7 : 3) : 0,
+            marginLeft: i > 0 ? (s.kind === "label" ? (pad ? 0 : 7) : afterLabel ? 2 : 3) : 0,
             color: s.kind === "needs" ? "var(--status-needs)" : s.kind === "label" ? look.dim : look.ink,
             fontSize: s.kind === "label" ? 8.5 : s.kind === "needs" ? 9.5 : 13.5,
             fontWeight: s.kind === "label" ? 600 : 400,
@@ -74,9 +81,11 @@ function BarItem({ bar, look }: { bar: Bar; look: Look }) {
             top: s.kind === "value" ? 0 : -1,
           }}
         >
-          {s.text}
+          {text}
         </span>
-      ))}
+        </span>
+        );
+      })}
     </span>
   );
 }
