@@ -4,6 +4,7 @@
 pub mod artifact;
 pub mod attach;
 pub mod cache;
+pub mod changes;
 pub mod chat;
 pub mod context;
 pub mod explain;
