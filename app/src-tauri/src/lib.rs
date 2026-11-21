@@ -1780,6 +1780,13 @@ fn request_quit(app: &AppHandle) {
     }
 }
 
+/// The menu bar item's Stop all chats: every chat and terminal session, hosted ones too.
+fn stop_all_from_menubar(app: &AppHandle) {
+    let core = app.state::<Arc<Core>>();
+    core.hub.lock().unwrap().kill_all();
+    core.kick();
+}
+
 /// The menu bar item's Quit coool: as ⌘Q, with the window brought forward first when it is going to ask.
 fn quit_from_menubar(app: &AppHandle) {
     let core = app.state::<Arc<Core>>();

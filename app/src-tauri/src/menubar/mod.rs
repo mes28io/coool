@@ -201,6 +201,7 @@ fn on_act(a: ui::Act) {
             "open" => crate::notify::open_from_menubar(None),
             "new" => crate::notify::open_from_menubar(Some(crate::notify::Route { kind: "new".into(), chat: None, session: None, request: None, action: "default".into() })),
             "quit" => crate::quit_from_menubar(app),
+            "stop_all" => crate::stop_all_from_menubar(app),
             _ => {}
         },
         ui::Act::Open(o) => crate::notify::open_from_menubar(Some(crate::notify::Route { kind: "needs".into(), chat: o.chat, session: o.key, request: None, action: "default".into() })),
