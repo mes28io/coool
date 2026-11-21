@@ -766,6 +766,16 @@ Newline-delimited JSON on the socket. The first line must be `{"op":"hello","tok
 
 Unaffected: PTYs stay in the app and stop when it quits, as before.
 
+### Where it lives, and how it is tested
+
+`crates/core/src/chat/host.rs` (the host, the app's client and mirrors), `Hub::set_host` / `Hub::adopt` / `Hub::kill_local`, `app/src-tauri/src/chathost.rs` (finding, starting and draining hosts, what a quit stops), the reconnecting proxy and stable sockets in `device/mcp.rs`, `ladder::State::adopt` and the helper records. A host started by the app reports the app's version (`coool --coool-chat-host <dir> <version>`).
+
+- Unit (`cargo test -p coool-core chat::host`): replay from the start and from a cursor, then live; a lost connection with the CLI still running and every line kept; a slow reader that catches up with no gap; two apps on one chat, coool's own request asked by one and answered by the other, withdrawn when its asker goes; refusal without the token or with another protocol; a dying host ends its chats as resumable; draining; idle exit; the files' modes.
+- The proxy (`app/scripts/keepalive/proxy_test.py <coool>`): away answers with no app, a call cut by the drop answered, the token sent again on reconnect, a refusal retried.
+- Real app (`app/scripts/keepalive-e2e.sh chats` and `… update`, scenarios in `app/src/selftestKeepalive.ts`): see that file's header. `app/scripts/keepalive-chat-selftests.sh` runs the existing chat self-tests with every chat in a test host (`KA_NOHOST=1`: the same run inside the app, to compare).
+
+Limits: the host keeps the last 50 000 events of a chat, as the app did; a chat that streams more than that while no app is attached loses its oldest deltas from the replay (its transcript on disk is whole). Tool calls that need the app (devices, Ladder) fail with the "try again" error while it is away; a Ladder `wait` cut by a restart has to be called again.
+
 ## Engineering constraints
 
 - The frontend must also run in a plain browser (`pnpm dev`) with a built-in mock data source when Tauri is absent: realistic sessions that change over time (statuses flipping, steps arriving, a fake terminal stream). This is how the UI gets developed and screenshot-tested without the shell, and it is the demo for coool.sh later.
