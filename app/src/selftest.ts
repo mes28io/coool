@@ -7772,6 +7772,80 @@ scenarios["readme-shots"] = (c: Ctx) => readmeScenarios({ dir: c.cfg.dir, log, s
 // workspace, then resized to landscape and back. No model calls. Not in `all`.
 scenarios.portrait = (c: Ctx) => portraitScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (n, s) => shot(n, undefined, s) }).portrait();
 
+// `md-table`: a made-up chat (no CLI, no model) whose reply has a two-column table with long cells and an
+// eight-column one, at a narrow and a wide window. No table cell spills past the message column: cells wrap, and a
+// table that can't fit even so scrolls sideways inside its own box. Shots: md-table-narrow, md-table-wide. Not in `all`.
+scenarios["md-table"] = async () => {
+  const ID = 90_101;
+  let seq = 0;
+  const ev = (e: Record<string, unknown>): ChatEvent => ({ seq: ++seq, ts: Date.now(), ...e }) as unknown as ChatEvent;
+  const long = "Works (the file still has the old header comment, so the loader keeps reading it until the next save rewrites it; nothing else changes and the tests pass)";
+  const wide = Array.from({ length: 8 }, (_, i) => `column ${i + 1}`);
+  const text = [
+    "## Results",
+    "",
+    "| Check | Outcome |",
+    "|---|---|",
+    `| Opening a saved scene from the recent list | ${long} |`,
+    "| Undo after moving the camera with a click-and-drag in the viewport | Fails on the second undo: the camera jumps back to where it was two steps ago, not one (src/viewport/CameraController.swift) |",
+    "| Export | ok |",
+    "",
+    "Every renderer setting:",
+    "",
+    `| ${wide.join(" | ")} |`,
+    `|${wide.map(() => "---").join("|")}|`,
+    `| ${wide.map((c) => `${c} has a value that is long enough to need room`).join(" | ")} |`,
+    "",
+    "The end.",
+  ].join("\n");
+  useChats.getState().replace(
+    ID,
+    { id: ID, provider: "claude", cwd: "/tmp/md-table", session_id: null, model: "claude-haiku-5-5", state: "idle", running: true } as never,
+    [
+      ev({ type: "ready", session_id: null, model: "claude-haiku-5-5", cwd: "/tmp/md-table", permission_mode: "default", slash_commands: [], models: [], agents: [], context_window: 200000 }),
+      ev({ type: "user_message", id: "u0", text: "Test the scene app and sum up what works." }),
+      ev({ type: "assistant_message", id: "a0", text, model: "claude-haiku-5-5", parent_tool_id: null }),
+      ev({ type: "turn_end", duration_ms: 4000, ok: true }),
+      ev({ type: "state", state: "idle" }),
+    ],
+    0,
+  );
+  useStore.getState().open({ kind: "chat", id: ID }, { newTab: true });
+  for (const [name, w, h] of [["narrow", 820, 760], ["wide", 1440, 900]] as const) {
+    await step(`md-table: at ${w}x${h} the tables stay inside the message column, cells wrap, the wide one scrolls in its box`, async () => {
+      await invoke("selftest_resize", { width: w, height: h });
+      await sleep(700);
+      const tables = await waitFor("both tables", () => {
+        const t = [...document.querySelectorAll<HTMLTableElement>(`[data-chat-timeline="${ID}"] .md table`)];
+        return t.length === 2 ? t : null;
+      }, 20_000);
+      tables[0].scrollIntoView({ block: "start" });
+      await shot(`md-table-${name}`);
+      const notes: string[] = [];
+      for (const [i, t] of tables.entries()) {
+        const box = t.parentElement!;
+        // The column: the message's text (.md) and, around it, the timeline's visible width.
+        const md = box.closest(".md")!.getBoundingClientRect();
+        const tl = document.querySelector<HTMLElement>(`[data-chat-timeline="${ID}"]`)!;
+        const edge = Math.min(md.right, tl.getBoundingClientRect().left + tl.clientWidth);
+        const b = box.getBoundingClientRect();
+        if (b.right > edge + 1) throw new Fail(`table ${i}: its box ends at ${Math.round(b.right)}, past the message column (${Math.round(edge)})`);
+        if (tl.scrollWidth > tl.clientWidth + 1) throw new Fail(`the timeline scrolls sideways (${tl.scrollWidth}>${tl.clientWidth})`);
+        const scrolls = box.scrollWidth > box.clientWidth + 1;
+        if (scrolls && !["auto", "scroll"].includes(getComputedStyle(box).overflowX)) throw new Fail(`table ${i}: wider than its box and the box doesn't scroll`);
+        // Every cell's text either shows in the box or is reachable by scrolling the box: none is clipped by a parent.
+        for (const c of t.querySelectorAll<HTMLElement>("td, th")) {
+          if (c.scrollWidth > c.clientWidth + 1) throw new Fail(`table ${i}: a cell's text overflows the cell: "${c.textContent?.slice(0, 40)}"`);
+        }
+        notes.push(`table ${i} ${Math.round(t.getBoundingClientRect().width)}px in a ${Math.round(b.width)}px box${scrolls ? " (scrolls)" : ""}`);
+      }
+      if (tables[0].parentElement!.scrollWidth > tables[0].parentElement!.clientWidth + 1) throw new Fail("the two-column table should wrap to fit, not scroll");
+      return notes.join("; ");
+    });
+  }
+  await invoke("selftest_resize", { width: 1440, height: 900 });
+};
+
 // `menubar` (selftestMenubar.ts): the menu bar item, created hidden, on the same invented workspace. No model calls.
 // Not in `all`.
 scenarios.menubar = (c: Ctx) => menubarScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step }).menubar();

@@ -13,6 +13,7 @@
 
 use super::helper::{self, Helper};
 use super::observe::{self, Tree};
+use super::vm_input::{self, Step};
 use super::{Activity, Devices};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -102,6 +103,8 @@ pub struct Vm {
     /// Per chat: the last Mac screen it was shown (ids for `mac_click` and friends).
     last: Mutex<HashMap<usize, (Tree, String)>>,
     next_stream: AtomicU64,
+    /// When the last input of coool's own (a click, a key) finished: a key right after one waits for what it set off.
+    last_input: Mutex<Option<Instant>>,
 }
 
 fn emit_state(app: &Option<tauri::AppHandle>, status: &Arc<Mutex<Value>>, patch: Value) {
@@ -489,8 +492,42 @@ impl Vm {
             .unwrap_or_default())
     }
 
+    /// Plays input steps ([`vm_input`]) on the VM's pointer and keyboard, in order, nothing else in between.
+    pub fn play(&self, d: &Devices, steps: &[Step]) -> Res<()> {
+        let r = self.call(d, vm_input::request(steps), vm_input::duration(steps) + Duration::from_secs(5)).map(|_| ());
+        *self.last_input.lock().unwrap() = Some(Instant::now());
+        r
+    }
+
+    /// Since coool's last click or key on the Mac.
+    fn since_input(&self) -> Option<Duration> {
+        self.last_input.lock().unwrap().map(|t| t.elapsed())
+    }
+
+    /// Where the guest's pointer is now (where a click's glide starts).
+    fn mouse(&self, d: &Devices) -> (f64, f64) {
+        let r = self.call(d, json!({ "cmd": "mouse" }), Duration::from_secs(5)).unwrap_or(Value::Null);
+        (r["x"].as_f64().unwrap_or(0.0), r["y"].as_f64().unwrap_or(0.0))
+    }
+
+    /// A click like a hand's: glide there, rest, down and up on the spot.
+    pub fn click_with(&self, d: &Devices, at: (f64, f64), button: u8, count: u32) -> Res<()> {
+        let from = self.mouse(d);
+        self.play(d, &vm_input::click(from, at, button, count))
+    }
+
     fn click(&self, d: &Devices, x: f64, y: f64) -> Res<()> {
-        self.call(d, json!({ "cmd": "click", "x": x, "y": y }), Duration::from_secs(5)).map(|_| ())
+        self.click_with(d, (x, y), vm_input::LEFT, 1)
+    }
+
+    fn drag(&self, d: &Devices, start: (f64, f64), end: (f64, f64), ms: f64) -> Res<()> {
+        let from = self.mouse(d);
+        self.play(d, &vm_input::drag(from, start, end, ms))
+    }
+
+    /// A key with modifiers (names: command, shift, option, control).
+    pub fn press_key(&self, d: &Devices, key: &str, modifiers: &[&str]) -> Res<()> {
+        self.play(d, &vm_input::press(key, modifiers)?)
     }
 
     /// The one privacy permission the agent needs. macOS lets only a person (real input) switch it on, so coool
@@ -520,7 +557,7 @@ impl Vm {
             // The password sheet (after the switch): type the guest's password.
             if find("password").is_some() && (find("Modify Settings").is_some() || find("Cancel").is_some() || find("trying to").is_some()) {
                 let _ = self.call(d, json!({ "cmd": "text", "text": secrets.password }), Duration::from_secs(10));
-                let _ = self.call(d, json!({ "cmd": "key", "name": "return" }), Duration::from_secs(5));
+                let _ = self.press_key(d, "return", &[]);
                 std::thread::sleep(Duration::from_millis(1500));
                 continue;
             }
@@ -528,7 +565,7 @@ impl Vm {
             // cover the switch: swipe them away to the right.
             if let Some(f) = words.iter().find(|(w, f)| f[0] > 640.0 && f[1] < 300.0 && (w.contains("Background Activity") || w.contains("can run in the"))).map(|(_, f)| *f) {
                 let (x, y) = (f[0] + 120.0, f[1] + 20.0);
-                let _ = self.call(d, json!({ "cmd": "drag", "x": x, "y": y, "x2": x + 500.0, "y2": y, "ms": 250 }), Duration::from_secs(5));
+                let _ = self.drag(d, (x, y), (x + 500.0, y), 250.0);
                 std::thread::sleep(Duration::from_millis(900));
                 continue;
             }
@@ -922,7 +959,7 @@ fn one_input(devices: &Devices, input: &Value) -> Res<()> {
         "scroll" => json!({ "cmd": "scroll", "x": input["x"], "y": input["y"], "dx": input["dx"], "dy": input["dy"] }),
         "keyDown" => json!({ "cmd": "keyDown", "code": input["code"] }),
         "keyUp" => json!({ "cmd": "keyUp", "code": input["code"] }),
-        "key" => json!({ "cmd": "key", "name": input["name"], "modifiers": input["modifiers"] }),
+        "key" => return vm.press_key(devices, input["name"].as_str().unwrap_or(""), &vm_input::modifier_list(&input["modifiers"])),
         "text" => return type_text(devices, input["text"].as_str().unwrap_or("")),
         k => return Err(format!("unknown input {k:?}")),
     };
@@ -939,7 +976,7 @@ pub fn type_text(d: &Devices, text: &str) -> Res<()> {
         d.vm.call(d, json!({ "cmd": "text", "text": text }), Duration::from_secs(10 + text.len() as u64 / 20))?;
     } else {
         d.vm.agent(d, json!({ "cmd": "setPasteboard", "text": text }), Duration::from_secs(5))?;
-        d.vm.call(d, json!({ "cmd": "key", "name": "v", "modifiers": ["command"] }), Duration::from_secs(5))?;
+        d.vm.press_key(d, "v", &["command"])?;
     }
     Ok(())
 }
@@ -1285,7 +1322,7 @@ impl MacTools<'_> {
 
     fn click(&self, (x, y): (f64, f64), count: u64, right: bool, label: Option<String>) -> Res<String> {
         self.activity("tap", Some((x, y)), label.clone());
-        self.helper(json!({ "cmd": "click", "x": x, "y": y, "count": count.clamp(1, 3), "button": if right { "right" } else { "left" } }), Duration::from_secs(5))?;
+        self.d.vm.click_with(self.d, (x, y), if right { vm_input::RIGHT } else { vm_input::LEFT }, count.clamp(1, 3) as u32)?;
         let what = label.map(|l| format!(" \"{l}\"")).unwrap_or_default();
         Ok(format!("{}clicked{what} at ({x:.0},{y:.0})", match (count, right) {
             (_, true) => "right-",
@@ -1306,24 +1343,47 @@ impl MacTools<'_> {
         let field = field.or_else(|| self.focused_field());
         let replace = replace.unwrap_or(into.is_some());
         if replace {
-            self.helper(json!({ "cmd": "key", "name": "a", "modifiers": ["command"] }), Duration::from_secs(5))?;
+            self.key("a", &["command"], true)?;
             if text_.is_empty() {
-                self.helper(json!({ "cmd": "key", "name": "delete" }), Duration::from_secs(5))?;
+                self.key("delete", &[], false)?;
             }
         }
         self.typing(field.as_ref().map(|f| f.0), field.and_then(|f| f.1), text_);
         type_text(self.d, text_)?;
         if submit {
-            self.helper(json!({ "cmd": "key", "name": "return" }), Duration::from_secs(5))?;
+            self.key("return", &[], false)?;
         }
         Ok(format!("{note}{}typed {:?}{}", if replace { "replaced its text, " } else { "" }, text_, if submit { " + return" } else { "" }))
     }
 
     fn press(&self, key: &str, modifiers: &Value) -> Res<String> {
         self.activity("press", None, Some(key.to_string()));
-        self.helper(json!({ "cmd": "key", "name": key, "modifiers": modifiers }), Duration::from_secs(5))?;
-        let mods: Vec<&str> = modifiers.as_array().map(|m| m.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
-        Ok(if mods.is_empty() { format!("pressed {key}") } else { format!("pressed {}+{key}", mods.join("+")) })
+        let mods = vm_input::modifier_list(modifiers);
+        let settled = self.key(key, &mods, true)?;
+        let note = if settled { "" } else { " (the focused window was still changing)" };
+        Ok(if mods.is_empty() { format!("pressed {key}{note}") } else { format!("pressed {}+{key}{note}", mods.join("+")) })
+    }
+
+    /// A key press; `settle`: first wait for the window it goes to (see [`Self::settle_focus`]). Returns whether the
+    /// focus had settled.
+    fn key(&self, key: &str, modifiers: &[&str], settle: bool) -> Res<bool> {
+        let steps = vm_input::press(key, modifiers)?;
+        let settled = !settle || self.settle_focus();
+        self.d.vm.play(self.d, &steps)?;
+        Ok(settled)
+    }
+
+    /// Before a key: right after another input (a batch's previous step, a call without observe) the screen first
+    /// finishes what that set off (a dialog closing, a window coming back from the Dock, an app activating); then
+    /// the frontmost app and its focused window must read the same twice in a row. So a shortcut lands on the window
+    /// that is key now, not one on its way in or out. At most ~1.2 s + 1.2 s; the key goes either way.
+    fn settle_focus(&self) -> bool {
+        if let Some(since) = self.d.vm.since_input().filter(|s| *s < Duration::from_millis(1500)) {
+            let left = (1500 - since.as_millis() as u64).clamp(300, 1200);
+            let _ = self.helper(json!({ "cmd": "idle", "quietMs": 120, "firstMs": 0, "timeoutMs": left }), Duration::from_millis(left) + Duration::from_secs(3));
+        }
+        let sample = || self.d.vm.agent(self.d, json!({ "cmd": "tree", "maxNodes": 2, "menus": false }), Duration::from_secs(3)).ok().and_then(|t| vm_input::focus_print(&t));
+        vm_input::wait_steady(sample, std::thread::sleep, Duration::from_millis(70), Duration::from_millis(1200)).0
     }
 
     fn scroll(&self, dir: &str, within: Option<&str>, amount: f64) -> Res<String> {
@@ -1341,6 +1401,9 @@ impl MacTools<'_> {
             _ => return Err("scroll direction is up, down, left or right".into()),
         };
         self.activity("scroll", Some((cx, cy)), Some(dir.to_string()));
+        // Glide to where the wheel turns (no jump), then scroll there.
+        let from = self.d.vm.mouse(self.d);
+        self.d.vm.play(self.d, &vm_input::glide(from, (cx, cy), 0))?;
         self.helper(json!({ "cmd": "scroll", "x": cx, "y": cy, "dx": dx, "dy": dy }), Duration::from_secs(10))?;
         Ok(format!("scrolled {dir}"))
     }

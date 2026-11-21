@@ -40,3 +40,17 @@ export function splitSettled(text: string): string[] {
   out.push(text.slice(start));
   return out;
 }
+
+type HastNode = { tagName?: string; children?: HastNode[] };
+
+/** A markdown table's column count (its widest row), from react-markdown's hast node: the table's minimum width
+ *  (Markdown.tsx) is a few rem a column, so cells wrap to fit the column and only a table of many columns scrolls. */
+export function tableColumns(node: unknown): number {
+  let most = 1;
+  const walk = (n: HastNode) => {
+    if (n.tagName === "tr") most = Math.max(most, (n.children ?? []).filter((c) => c.tagName === "td" || c.tagName === "th").length);
+    else for (const c of n.children ?? []) walk(c);
+  };
+  if (node && typeof node === "object") walk(node as HastNode);
+  return most;
+}

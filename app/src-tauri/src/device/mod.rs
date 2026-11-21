@@ -21,6 +21,7 @@ pub mod pilot;
 pub mod presence;
 pub mod simctl;
 pub mod vm;
+pub mod vm_input;
 pub mod web;
 
 use helper::{Helper, Screen};
