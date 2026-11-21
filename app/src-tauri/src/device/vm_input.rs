@@ -19,6 +19,7 @@
 //! shortcut reaches the guest whole. Waiting for the target window to be key first is [`wait_steady`].
 
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// One thing the helper does, in order.
@@ -205,6 +206,226 @@ pub fn focus_print(tree: &Value) -> Option<String> {
     Some(format!("{}|{}|{}|{}", app["label"].as_str().unwrap_or(""), win["role"].as_str().unwrap_or(""), win["label"].as_str().unwrap_or(""), win["frame"]))
 }
 
+/// The front app's key-window fingerprint for a key press: [`focus_print`], but None (not ready) while an app that
+/// is known to report its key window (`known[app] == true`, see [`learn`]) has windows and none of them is key yet,
+/// e.g. a window still coming back from being hidden. Apps that never said either way go by stability alone.
+pub fn key_print(tree: &Value, known: &HashMap<String, bool>) -> Option<String> {
+    let print = focus_print(tree)?;
+    if let Some(f) = front(tree)
+        && !f.windows.is_empty()
+        && !f.windows.iter().any(|w| w.key)
+        && known.get(&f.app) == Some(&true)
+    {
+        return None;
+    }
+    Some(print)
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Before a click: the window under the point must be key in the active app.
+//
+// AppKit spends the first mouse-down on a window that isn't key (in an app that isn't active, or a window still
+// coming up) on making it key; a view that doesn't accept first mouse (most custom views: a Metal/3D viewport, a
+// canvas) never sees that click. A person sees the window come forward and clicks again; an agent sees nothing
+// happen. So before a click coool checks, with what the guest agent already answers (`tree` for the front app and
+// its windows, `run` for one `osascript` that reads the window list), and brings the window forward first when it
+// has to. A click on the key window of the front app stays exactly one click with no waiting.
+
+/// A top-level window of the front app, as the agent's `tree` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Win {
+    pub frame: [f64; 4],
+    /// The window is key (its accessibility `AXFocused`).
+    pub key: bool,
+}
+
+/// The frontmost app (the accessibility system's focused app) and its windows, focused one first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Front {
+    /// Bundle id, or the name when it has none.
+    pub app: String,
+    pub name: String,
+    pub windows: Vec<Win>,
+}
+
+/// The app whose window is on top at a point (the guest's window list).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Owner {
+    pub pid: i64,
+    /// Bundle id, or the name when it has none.
+    pub app: String,
+    pub name: String,
+    /// Its bundle on disk ("" for a bare executable).
+    pub path: String,
+}
+
+/// The menu bar's height: clicks there go to the menu bar, never to a window.
+pub const MENU_BAR: f64 = 24.0;
+/// How often, and for how long, coool looks for the window to become key before clicking anyway.
+pub const KEY_POLL: Duration = Duration::from_millis(60);
+pub const KEY_WAIT: Duration = Duration::from_millis(1500);
+
+fn frame4(v: &Value) -> Option<[f64; 4]> {
+    let a = v.as_array().filter(|a| a.len() == 4)?;
+    let f = [a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?, a[3].as_f64()?];
+    (f[2] > 0.0 && f[3] > 0.0).then_some(f)
+}
+
+fn inside(f: &[f64; 4], (x, y): (f64, f64)) -> bool {
+    x >= f[0] && y >= f[1] && x < f[0] + f[2] && y < f[1] + f[3]
+}
+
+/// The front app from a guest-agent `tree` (`menus: false`): node 0 is the app, its windows are the depth-1 nodes.
+/// None when the agent told nothing usable (no app node).
+pub fn front(tree: &Value) -> Option<Front> {
+    let nodes = tree["nodes"].as_array()?;
+    let app = nodes.first().filter(|n| n["role"] == "application")?;
+    let name = app["label"].as_str().unwrap_or("").to_string();
+    let id = app["identifier"].as_str().filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(|| name.clone());
+    if id.is_empty() {
+        return None;
+    }
+    let windows = nodes[1..]
+        .iter()
+        .filter(|n| n["depth"].as_u64() == Some(1) && matches!(n["role"].as_str(), Some("window" | "sheet" | "dialog")))
+        .filter_map(|n| Some(Win { frame: frame4(&n["frame"])?, key: n["focused"] == true }))
+        .collect();
+    Some(Front { app: id, name, windows })
+}
+
+impl Front {
+    fn has_key(&self) -> bool {
+        self.windows.iter().any(|w| w.key)
+    }
+    fn is(&self, o: &Owner) -> bool {
+        self.app == o.app || (!self.name.is_empty() && self.name == o.name)
+    }
+}
+
+/// What the window-list script printed: the owner of the top normal window at the point. None for no window there
+/// (the desktop, the Dock, a menu) or output it can't read (an old guest without `osascript`).
+pub fn owner(v: &Value) -> Option<Owner> {
+    let pid = v["pid"].as_i64().filter(|p| *p > 0)?;
+    let name = v["name"].as_str().unwrap_or("").to_string();
+    let bundle = v["bundle"].as_str().unwrap_or("");
+    let app = if bundle.is_empty() { name.clone() } else { bundle.to_string() };
+    Some(Owner { pid, app, name, path: v["path"].as_str().unwrap_or("").to_string() })
+}
+
+/// JXA: the top on-screen layer-0 window at (argv[0], argv[1]) and its app, as JSON ("{}" for none). The window list
+/// gives owners and bounds without any permission (only titles need Screen Recording) and sends no Apple events.
+const OWNER_JS: &str = r#"ObjC.import("CoreGraphics"); ObjC.import("AppKit"); function run(a) { var x = +a[0], y = +a[1], l = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(17, 0))) || []; for (var i = 0; i < l.length; i++) { var w = l[i], b = w.kCGWindowBounds || {}; if (w.kCGWindowLayer !== 0 || w.kCGWindowAlpha === 0 || x < b.X || y < b.Y || x >= b.X + b.Width || y >= b.Y + b.Height) continue; var r = $.NSRunningApplication.runningApplicationWithProcessIdentifier(w.kCGWindowOwnerPID), s = function (v) { return !v || v.isNil() ? "" : v.js; }; return JSON.stringify({ pid: w.kCGWindowOwnerPID, name: w.kCGWindowOwnerName || "", bundle: r.isNil() ? "" : s(r.bundleIdentifier), path: r.isNil() || r.bundleURL.isNil() ? "" : s(r.bundleURL.path), frame: [b.X, b.Y, b.Width, b.Height] }); } return "{}"; }"#;
+
+/// JXA: activates the app with pid argv[0] (for a bare executable, which Launch Services can't open by path).
+const ACTIVATE_JS: &str = r#"ObjC.import("AppKit"); function run(a) { var r = $.NSRunningApplication.runningApplicationWithProcessIdentifier(+a[0]); return r.isNil() ? "0" : (r.activateWithOptions(3) ? "1" : "0"); }"#;
+
+/// The guest shell command (the agent's `run`) that prints the [`owner`] JSON for a point.
+pub fn owner_command((x, y): (f64, f64)) -> String {
+    format!("/usr/bin/osascript -l JavaScript -e '{OWNER_JS}' {:.0} {:.0}", x.round(), y.round())
+}
+
+/// The guest shell command that activates a process by pid.
+pub fn activate_command(pid: i64) -> String {
+    format!("/usr/bin/osascript -l JavaScript -e '{ACTIVATE_JS}' {pid}")
+}
+
+/// Remembers whether an app reports its key window: seen key once → true (kept). `false` is set only by
+/// [`before_click`] after a full wait in which the app was in front with windows and none ever read key.
+pub fn learn(known: &mut HashMap<String, bool>, f: &Front) {
+    if f.has_key() {
+        known.insert(f.app.clone(), true);
+    }
+}
+
+/// Whether a click at `p` needs a look at who owns the window there: not when the front app's top window under the
+/// point is key (the common case, one click as it is), nor on the menu bar.
+pub fn needs_look(f: &Front, p: (f64, f64)) -> bool {
+    if p.1 < MENU_BAR {
+        return false;
+    }
+    !f.windows.iter().find(|w| inside(&w.frame, p)).is_some_and(|w| w.key)
+}
+
+/// What the guest must do for [`before_click`]; [`vm`](super::vm) does it with the agent, tests with a script.
+pub trait Guest {
+    /// The front app now (agent `tree`, `menus: false`); None when the agent can't say (no permission, an old agent).
+    fn front(&mut self) -> Option<Front>;
+    /// The owner of the top window at `p`; None for none, or when the lookup isn't possible.
+    fn owner(&mut self, p: (f64, f64)) -> Option<Owner>;
+    /// Activates the app (raises its windows). Whether that was accepted.
+    fn activate(&mut self, o: &Owner) -> bool;
+    fn sleep(&mut self, d: Duration);
+}
+
+/// What was done before a click.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BeforeClick {
+    /// Nothing needed (the key window is under the point, the menu bar, the desktop or Dock), or nothing could be
+    /// told (an old guest agent, no Accessibility): today's plain click.
+    Plain,
+    /// The front app's window was still coming up; it waited until the window was key.
+    Waited,
+    /// Another app's window was under the point: brought that app (name) forward, and its window is key.
+    Activated(String),
+    /// The window (its app's name) never read key within [`KEY_WAIT`]: clicked anyway.
+    NotKey(String),
+}
+
+impl BeforeClick {
+    /// For the tool result.
+    pub fn note(&self) -> String {
+        match self {
+            BeforeClick::Plain | BeforeClick::Waited => String::new(),
+            BeforeClick::Activated(n) => format!(" (brought {n} forward first)"),
+            BeforeClick::NotKey(n) => format!(" ({n}'s window wasn't key yet, so this click may only have brought it forward: observe, and click again if nothing changed)"),
+        }
+    }
+}
+
+/// Gets the window under `p` ready for a click: if it belongs to an app that isn't frontmost, activates that app;
+/// if the front app has no key window yet (it is still coming up), waits; then waits (at most [`KEY_WAIT`]) until
+/// the app is in front with a key window. Never clicks itself; the click follows whatever this returns.
+pub fn before_click(g: &mut impl Guest, p: (f64, f64), known: &mut HashMap<String, bool>) -> BeforeClick {
+    let Some(f) = g.front() else { return BeforeClick::Plain };
+    learn(known, &f);
+    if !needs_look(&f, p) {
+        return BeforeClick::Plain;
+    }
+    let Some(o) = g.owner(p) else { return BeforeClick::Plain };
+    let same = f.is(&o);
+    if same {
+        // The app is active with some key window (a click on its other window or a panel): AppKit's own business.
+        // An app that never reports key windows: nothing to wait for.
+        if f.has_key() || known.get(&f.app) == Some(&false) {
+            return BeforeClick::Plain;
+        }
+    }
+    let name = if o.name.is_empty() { o.app.clone() } else { o.name.clone() };
+    // Refused or timed out (the agent may still be busy with it): don't wait on top, click as before.
+    if !same && !g.activate(&o) {
+        return BeforeClick::NotKey(name);
+    }
+    let polls = (KEY_WAIT.as_millis() / KEY_POLL.as_millis()) as u32;
+    let mut last = None;
+    for i in 0..=polls {
+        // The agent stopped answering: no point polling it.
+        let Some(now) = g.front() else { break };
+        learn(known, &now);
+        if now.is(&o) && now.has_key() {
+            return if same { BeforeClick::Waited } else { BeforeClick::Activated(name) };
+        }
+        last = Some(now);
+        if i < polls {
+            g.sleep(KEY_POLL);
+        }
+    }
+    // In front with windows the whole time, and none ever read key: this app doesn't say; don't wait for it again.
+    if let Some(l) = last.filter(|l| l.is(&o) && !l.windows.is_empty() && known.get(&l.app) != Some(&true)) {
+        known.insert(l.app, false);
+    }
+    BeforeClick::NotKey(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,5 +569,162 @@ mod tests {
         assert_eq!(focus_print(&t).unwrap(), "Viewer|window|Scene|[0,25,800,600]");
         assert_eq!(focus_print(&json!({ "nodes": [{ "label": "Finder" }] })).unwrap(), "Finder|||null");
         assert!(focus_print(&json!({})).is_none());
+    }
+
+    /// A scripted guest: the fronts it reads in turn (the last repeats), who owns the point, what it did.
+    struct Script {
+        fronts: Vec<Option<Front>>,
+        owner: Option<Owner>,
+        activates: bool,
+        log: Vec<String>,
+    }
+
+    impl Guest for Script {
+        fn front(&mut self) -> Option<Front> {
+            self.log.push("front".into());
+            if self.fronts.len() > 1 { self.fronts.remove(0) } else { self.fronts[0].clone() }
+        }
+        fn owner(&mut self, _: (f64, f64)) -> Option<Owner> {
+            self.log.push("owner".into());
+            self.owner.clone()
+        }
+        fn activate(&mut self, o: &Owner) -> bool {
+            self.log.push(format!("activate {}", o.app));
+            self.activates
+        }
+        fn sleep(&mut self, d: Duration) {
+            self.log.push(format!("sleep {}", d.as_millis()));
+        }
+    }
+
+    fn app(id: &str, wins: &[([f64; 4], bool)]) -> Option<Front> {
+        Some(Front { app: id.into(), name: id.rsplit('.').next().unwrap().into(), windows: wins.iter().map(|(f, k)| Win { frame: *f, key: *k }).collect() })
+    }
+    fn own(id: &str) -> Option<Owner> {
+        Some(Owner { pid: 42, app: id.into(), name: id.rsplit('.').next().unwrap().into(), path: format!("/Apps/{id}.app") })
+    }
+    const W: [f64; 4] = [100.0, 100.0, 800.0, 600.0];
+    const P: (f64, f64) = (400.0, 300.0);
+
+    fn script(fronts: Vec<Option<Front>>, owner: Option<Owner>) -> Script {
+        Script { fronts, owner, activates: true, log: Vec::new() }
+    }
+
+    #[test]
+    fn a_click_on_the_key_window_of_the_front_app_is_just_a_click() {
+        let mut g = script(vec![app("com.x.Davids", &[(W, true)])], own("com.x.Davids"));
+        let mut known = HashMap::new();
+        assert_eq!(before_click(&mut g, P, &mut known), BeforeClick::Plain);
+        assert_eq!(g.log, vec!["front"], "one cheap look, no window lookup, no activation, no wait");
+        assert_eq!(known.get("com.x.Davids"), Some(&true));
+        assert_eq!(BeforeClick::Plain.note(), "");
+        // The menu bar: never a window's click.
+        let mut g = script(vec![app("com.x.Davids", &[])], own("com.x.Davids"));
+        assert_eq!(before_click(&mut g, (300.0, 10.0), &mut known), BeforeClick::Plain);
+        assert_eq!(g.log, vec!["front"]);
+    }
+
+    #[test]
+    fn another_apps_window_under_the_point_is_brought_forward_and_waited_for_then_clicked() {
+        // Just launched from a shell: Terminal is still the active app, Davids' window is on screen but not key.
+        let mut g = script(
+            vec![app("com.apple.Terminal", &[([0.0, 30.0, 300.0, 200.0], true)]), app("com.apple.Terminal", &[]), app("com.x.Davids", &[(W, false)]), app("com.x.Davids", &[(W, true)])],
+            own("com.x.Davids"),
+        );
+        let mut known = HashMap::new();
+        let r = before_click(&mut g, P, &mut known);
+        assert_eq!(r, BeforeClick::Activated("Davids".into()));
+        assert_eq!(g.log, vec!["front", "owner", "activate com.x.Davids", "front", "sleep 60", "front", "sleep 60", "front"]);
+        assert!(r.note().contains("brought Davids forward"));
+    }
+
+    #[test]
+    fn the_front_apps_window_still_coming_up_is_waited_for() {
+        // Frontmost, but its window isn't key yet (it is still appearing): no activation, just the wait.
+        let mut g = script(vec![app("com.x.Davids", &[]), app("com.x.Davids", &[(W, false)]), app("com.x.Davids", &[(W, true)])], own("com.x.Davids"));
+        let mut known = HashMap::new();
+        assert_eq!(before_click(&mut g, P, &mut known), BeforeClick::Waited);
+        assert!(!g.log.iter().any(|l| l.starts_with("activate")));
+        assert_eq!(BeforeClick::Waited.note(), "");
+        // Some other window of the active app is key (a click on a panel or a second window): AppKit's own
+        // business, no wait.
+        let mut g = script(vec![app("com.x.Davids", &[([0.0, 30.0, 50.0, 50.0], true), (W, false)])], own("com.x.Davids"));
+        assert_eq!(before_click(&mut g, P, &mut known), BeforeClick::Plain);
+        assert_eq!(g.log, vec!["front", "owner"]);
+    }
+
+    #[test]
+    fn a_window_that_never_becomes_key_is_clicked_anyway_and_said_so() {
+        let mut g = script(vec![app("com.apple.Terminal", &[]), app("com.x.Davids", &[(W, false)])], own("com.x.Davids"));
+        let mut known = HashMap::new();
+        let r = before_click(&mut g, P, &mut known);
+        assert_eq!(r, BeforeClick::NotKey("Davids".into()));
+        assert!(r.note().contains("wasn't key yet") && r.note().contains("click again"), "{}", r.note());
+        let sleeps = g.log.iter().filter(|l| l.starts_with("sleep")).count() as u128;
+        assert_eq!(sleeps * KEY_POLL.as_millis(), KEY_WAIT.as_millis(), "waits at most the cap");
+        // It never said a window was key: next time, a plain click with no wait.
+        assert_eq!(known.get("com.x.Davids"), Some(&false));
+        let mut g = script(vec![app("com.x.Davids", &[(W, false)])], own("com.x.Davids"));
+        assert_eq!(before_click(&mut g, P, &mut known), BeforeClick::Plain);
+        assert!(!g.log.iter().any(|l| l.starts_with("sleep")));
+        // An activation refused (or timed out): no wait on top, the click goes, and says so.
+        let mut g = script(vec![app("com.apple.Terminal", &[])], own("com.x.Other"));
+        g.activates = false;
+        assert_eq!(before_click(&mut g, P, &mut HashMap::new()), BeforeClick::NotKey("Other".into()));
+        assert_eq!(g.log, vec!["front", "owner", "activate com.x.Other"]);
+        // The agent stops answering mid-wait: stop polling.
+        let mut g = script(vec![app("com.apple.Terminal", &[]), None], own("com.x.Davids"));
+        assert_eq!(before_click(&mut g, P, &mut HashMap::new()), BeforeClick::NotKey("Davids".into()));
+        assert_eq!(g.log, vec!["front", "owner", "activate com.x.Davids", "front"]);
+    }
+
+    #[test]
+    fn an_old_or_unpermitted_agent_or_no_window_there_gives_todays_plain_click() {
+        // No tree (an old agent, no Accessibility): today's click.
+        let mut g = script(vec![None], own("com.x.Davids"));
+        assert_eq!(before_click(&mut g, P, &mut HashMap::new()), BeforeClick::Plain);
+        assert_eq!(g.log, vec!["front"]);
+        // The window lookup isn't possible, or nothing is there (the desktop, the Dock): today's click.
+        let mut g = script(vec![app("com.apple.finder", &[])], None);
+        assert_eq!(before_click(&mut g, P, &mut HashMap::new()), BeforeClick::Plain);
+        assert_eq!(g.log, vec!["front", "owner"]);
+        // What the agent and the script print.
+        assert!(front(&json!({})).is_none());
+        assert!(front(&json!({ "nodes": [{ "role": "window" }] })).is_none());
+        assert!(owner(&json!({})).is_none());
+        let f = front(&json!({ "nodes": [
+            { "role": "application", "label": "Davids", "identifier": "com.x.Davids", "depth": 0 },
+            { "role": "window", "label": "Scene", "frame": [100, 100, 800, 600], "depth": 1, "focused": true },
+            { "role": "button", "frame": [110, 110, 20, 20], "depth": 2, "focused": true },
+            { "role": "window", "frame": [0, 0, 0, 0], "depth": 1 }
+        ] }))
+        .unwrap();
+        assert_eq!(f, Front { app: "com.x.Davids".into(), name: "Davids".into(), windows: vec![Win { frame: W, key: true }] });
+        let o = owner(&json!({ "pid": 7, "name": "davids", "bundle": "", "path": "", "frame": [0, 0, 1, 1] })).unwrap();
+        assert_eq!((o.app.as_str(), o.path.as_str()), ("davids", ""), "a bare executable goes by its name");
+    }
+
+    #[test]
+    fn a_key_waits_for_a_window_that_is_on_screen_but_not_key_yet_when_the_app_says_so() {
+        let t = |key: bool| json!({ "nodes": [{ "role": "application", "label": "Davids", "identifier": "com.x.Davids" }, { "role": "window", "label": "Scene", "frame": [100, 100, 800, 600], "depth": 1, "focused": key }] });
+        let mut known = HashMap::new();
+        // Never heard from: stability alone, as before.
+        assert!(key_print(&t(false), &known).is_some());
+        learn(&mut known, &front(&t(true)).unwrap());
+        assert!(key_print(&t(false), &known).is_none(), "un-hidden, not key yet: not ready");
+        assert_eq!(key_print(&t(true), &known), focus_print(&t(true)));
+        // No window at all (Finder on an empty desktop): nothing to wait for.
+        let none = json!({ "nodes": [{ "role": "application", "label": "Finder", "identifier": "com.apple.finder" }] });
+        known.insert("com.apple.finder".into(), true);
+        assert!(key_print(&none, &known).is_some());
+    }
+
+    #[test]
+    fn the_guest_commands_quote_safely() {
+        let c = owner_command((400.4, 299.6));
+        assert!(c.starts_with("/usr/bin/osascript -l JavaScript -e '") && c.ends_with("' 400 300"), "{c}");
+        assert_eq!(c.matches('\'').count(), 2, "the script itself has no single quote");
+        assert!(activate_command(42).ends_with("' 42"));
+        assert_eq!(activate_command(42).matches('\'').count(), 2);
     }
 }
