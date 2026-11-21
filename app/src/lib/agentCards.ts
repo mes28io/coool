@@ -16,6 +16,7 @@ import { agentEnd, agentWorking } from "./agentState";
 import type { Activity, Agent, Provider, Session } from "./types";
 import { sessionKey } from "./types";
 import { descendants } from "./ladderHelpers";
+import { agentForCall, cardFromLane, isBackgroundCall, mergeBackground, withLane } from "./helperCards";
 
 export type CardState = "running" | "needs" | "failed" | "done";
 
@@ -220,7 +221,7 @@ export function cardFromJob(c: Session, digest: ChatDigest): AgentCardData {
     { current: c.current, live: att.status === "busy", needs: att.needs, canFail: att.status === "ended" },
   );
   if (card.since === null) card.since = c.updated;
-  return card;
+  return c.lane ? withLane(card, c.lane, c.model || null) : card;
 }
 
 /** A subagent of a chat: a Task tool call and the items nested under it. */
@@ -290,6 +291,7 @@ export function buildCards(session: Session | null, chat: Chat | undefined, kids
       if (p) nested.set(p, [...(nested.get(p) ?? []), it]);
       if (it.kind === "tool") tools.set(it.id, it);
     }
+    const claimed = new Set<string>();
     for (const t of chatAgents) {
       // The nearest agent above it, and how many there are.
       let depth = 0;
@@ -303,7 +305,9 @@ export function buildCards(session: Session | null, chat: Chat | undefined, kids
         }
         p = x.parent;
       }
-      out.push({ ...cardFromChatTool(chat, t, nested.get(t.id) ?? []), depth, parentRef });
+      let card = cardFromChatTool(chat, t, nested.get(t.id) ?? []);
+      if (isBackgroundCall(t.input, t.output)) card = backgroundCard(card, chat, t, session, claimed);
+      out.push({ ...card, depth, parentRef });
     }
   } else if (session) {
     for (const a of session.agents) {
@@ -318,7 +322,24 @@ export function buildCards(session: Session | null, chat: Chat | undefined, kids
     }
   }
   for (const k of kids) out.push(cardFromJob(k, digest));
+  if (session) for (const l of session.lanes ?? []) if (!l.session) out.push(cardFromLane(session.cwd, l));
   return out;
+}
+
+const firstAt = (a: Agent) => (a.activity.length ? tsToMs(a.activity[0].ts) : null);
+
+/**
+ * A background `Agent` call: its result is only the launch acknowledgement. The helper's own transcript (the session's
+ * sub-agent with the id it returned) says how it stands, its steps, tokens and span; until that is read it is running
+ * from its launch while the chat lives.
+ */
+function backgroundCard(card: AgentCardData, chat: Chat, t: Extract<ChatItem, { kind: "tool" }>, session: Session | null, claimed: Set<string>): AgentCardData {
+  const a = session ? agentForCall({ input: t.input, output: t.output, ts: t.ts }, session.agents, claimed, firstAt) : null;
+  if (a && session) {
+    claimed.add(a.id);
+    return mergeBackground(card, cardFromAgent(session, a), t, chat.running);
+  }
+  return mergeBackground(card, null, t, chat.running);
 }
 
 /** Job cards for a session's children and their own children (Ladder helpers of helpers), as a tree. */

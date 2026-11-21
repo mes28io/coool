@@ -18,6 +18,7 @@ mod chatctx;
 mod chathost;
 mod device;
 mod env;
+mod folders;
 mod glass;
 mod ladder;
 mod lid;
@@ -2081,6 +2082,12 @@ pub fn run() {
             open_config_file,
             worktrees_list,
             worktree_remove,
+            folders::folders_index,
+            folders::folders_list,
+            folders::folders_complete,
+            folders::folders_summary,
+            folders::folders_create,
+            folders::worktree_create,
             storage_status,
             storage_clear,
             sim_erase,
@@ -2339,6 +2346,8 @@ mod tests {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            lane: None,
+            lanes: Vec::new(),
             title_facts: Default::default(),
             name: None,
         }

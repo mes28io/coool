@@ -1,0 +1,5 @@
+{"timestamp":"2026-11-20T11:10:01.000Z","type":"session_meta","payload":{"id":"01a1da0b-637d-7063-8d51-c27a6ae5f3e1","timestamp":"2026-11-20T11:10:01.000Z","cwd":"/w/wt/d","originator":"codex_exec","cli_version":"0.171.0","source":"exec","model_provider":"openai"}}
+{"timestamp":"2026-11-20T11:10:01.000Z","type":"turn_context","payload":{"cwd":"/w/wt/d","model":"gpt-6.2-sol","effort":"medium"}}
+{"timestamp":"2026-11-20T11:10:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+{"timestamp":"2026-11-20T11:10:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Do the brief."}]}}
+{"timestamp":"2026-11-20T11:11:00.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"Done."}}

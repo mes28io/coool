@@ -146,6 +146,8 @@ fn head_of(s: &Session) -> Session {
         background_tasks: s.background_tasks,
         waiting_for: s.waiting_for.clone(),
         shells: s.shells.clone(),
+        lane: s.lane.clone(),
+        lanes: s.lanes.clone(),
         title_facts: s.title_facts.clone(),
         name: s.name.clone(),
     }
@@ -348,6 +350,8 @@ pub(crate) mod tests {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            lane: None,
+            lanes: Vec::new(),
             title_facts: Default::default(),
             name: None,
         }

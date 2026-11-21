@@ -21,6 +21,7 @@ export interface ChangesReq {
   external: boolean;
 }
 import type { CtxCreate, CtxFile, CtxOverview, CtxSaveReply, CtxStamp, CtxTarget } from "./chatContext";
+import type { FoldersBackend } from "./folders";
 
 export interface PtyChunk {
   id: number;
@@ -52,7 +53,7 @@ export interface QuitCounts {
   keep: number;
 }
 
-export interface Backend extends SettingsBackend {
+export interface Backend extends SettingsBackend, FoldersBackend {
   kind: "tauri" | "mock";
   listSessions(): Promise<Snapshot>;
   spawnSession(a: { provider: Provider; cwd: string; args?: string[]; rows: number; cols: number }): Promise<number>;
@@ -657,6 +658,12 @@ async function tauriBackend(): Promise<Backend> {
     renameSession: (provider, id, name) => soft("rename_session", { provider, id, name }),
     shellsFocus: (ids) => soft<void>("shells_focus", { ids }).catch(() => {}),
     pickFolder: () => invoke("pick_folder"),
+    foldersIndex: (extra, refresh) => soft("folders_index", { extra, refresh }),
+    foldersList: (path, hidden, allow) => soft("folders_list", { path, hidden, allow }),
+    foldersComplete: (input, allow) => soft("folders_complete", { input, allow }),
+    foldersSummary: (path, provider, allow) => soft("folders_summary", { path, provider, allow }),
+    foldersCreate: (parent, name, git) => soft("folders_create", { parent, name, git }),
+    worktreeCreate: (project, name) => soft("worktree_create", { project, name }),
     environment: () => invoke("environment"),
     gitTrail: (path) => invoke("git_trail", { path }),
     contextMap: ({ provider, sessionId, agentId, cwd }) => soft("context_map", { provider, sessionId, agentId: agentId ?? null, cwd: cwd ?? null }),

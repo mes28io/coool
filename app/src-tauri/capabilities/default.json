@@ -33,6 +33,7 @@
     "allow-pilot-log-set-enabled", "allow-pilot-log-reveal", "allow-pilot-log-delete", "allow-usage-refresh",
     "allow-usage-reset-codex", "allow-pick-folder", "allow-environment", "allow-git-trail", "allow-context-map", "allow-chat-context", "allow-chat-context-read",
     "allow-chat-context-save", "allow-chat-context-create", "allow-chat-context-trash", "allow-chat-context-reveal",
+    "allow-folders-index", "allow-folders-list", "allow-folders-complete", "allow-folders-summary", "allow-folders-create", "allow-worktree-create",
     "allow-running-count", "allow-quit-counts", "allow-stop-all-chats", "allow-quit-app", "allow-prefs-get", "allow-prefs-set", "allow-power-status",
     "allow-lid-status", "allow-lid-install", "allow-lid-remove", "allow-lid-restore", "allow-lid-simulate",
     "allow-lid-helper-log", "allow-notify-permission", "allow-notify-request", "allow-notify-test",

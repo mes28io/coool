@@ -35,6 +35,14 @@ struct ParseState {
     /// Naming facts (see [`crate::titles`]); the thread name comes from the index.
     #[serde(default)]
     titles: crate::titles::Facts,
+    /// Helpers started from the shell (`claude -p`, `codex exec`; see [`crate::lanes`]).
+    #[serde(default)]
+    lanes: Vec<crate::lanes::Lane>,
+    /// The last turn's end (task_complete / turn_aborted), epoch ms and how; an `error` event in the turn.
+    #[serde(default)]
+    end: Option<(u64, AgentState)>,
+    #[serde(default)]
+    errored: bool,
 }
 
 /// When a rollout line is a real conversation event: a response item (message,
@@ -105,6 +113,8 @@ impl Parsed {
             parent: s.parent.clone(),
             agent_name: s.agent_name.clone(),
             title_facts: self.st.titles.clone(),
+            lanes: self.st.lanes.clone(),
+            end: self.st.end,
             ..View::default()
         }
     }
@@ -185,6 +195,26 @@ impl CodexSource {
     /// When the Codex session `id` started (from its session_meta), if known.
     pub fn session_started(&self, id: &str) -> Option<SystemTime> {
         self.entries.values().map(|e| e.slot.view()).find(|v| v.id == id)?.started
+    }
+
+    /// Every parsed rollout's view, by session id (for [`crate::lanes`]: one pass, not one per session).
+    pub(crate) fn views(&self) -> HashMap<String, Arc<View>> {
+        self.entries.values().map(|e| e.slot.view()).filter(|v| !v.id.is_empty()).map(|v| (v.id.clone(), v)).collect()
+    }
+
+    /// What [`crate::lanes::assign`] needs of a session that may be a helper (`codex exec`).
+    pub(crate) fn child(s: &Session, v: &View) -> crate::lanes::Child {
+        let ms = |t: SystemTime| t.duration_since(SystemTime::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64);
+        crate::lanes::Child {
+            provider: Some(Provider::Codex),
+            cwd: s.cwd.clone(),
+            model: s.model.clone(),
+            started: v.started.and_then(ms),
+            last: v.last_event.or(s.last_event),
+            busy: v.in_turn,
+            end: v.end,
+            gone: s.status == Status::Ended,
+        }
     }
 
     /// The rollout of session (or subagent thread) `id`.
@@ -429,6 +459,8 @@ impl CodexSource {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            lane: None,
+            lanes: Vec::new(),
             title_facts,
             name: None,
         }
@@ -493,13 +525,31 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
         }
         (Some("event_msg"), Some("task_started")) => {
             st.in_turn = true;
+            st.end = None;
+            st.errored = false;
             s.tokens.turn_output = 0;
             s.tokens.turn_start = v["timestamp"].as_str().and_then(parse_rfc3339_ms).or(s.tokens.turn_start);
             s.current = Some("thinking…".into());
         }
-        (Some("event_msg"), Some("task_complete")) | (Some("event_msg"), Some("turn_aborted")) => {
+        (Some("event_msg"), Some(k @ ("task_complete" | "turn_aborted"))) => {
             st.in_turn = false;
             s.current = None;
+            let at = v["timestamp"].as_str().and_then(parse_rfc3339_ms).unwrap_or(0);
+            let how = if k == "turn_aborted" {
+                AgentState::Stopped
+            } else if st.errored && p["last_agent_message"].is_null() {
+                AgentState::Failed
+            } else {
+                AgentState::Done
+            };
+            st.end = Some((at, how));
+        }
+        (Some("event_msg"), Some("error")) => {
+            st.errored = true;
+            if !st.in_turn {
+                let at = v["timestamp"].as_str().and_then(parse_rfc3339_ms).unwrap_or(0);
+                st.end = Some((at, AgentState::Failed));
+            }
         }
         // `info` is null on rate-limit-only updates; don't zero the totals.
         (Some("event_msg"), Some("token_count")) if p["info"]["total_token_usage"].is_object() => {
@@ -573,6 +623,20 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
                 .as_str()
                 .and_then(|a| serde_json::from_str(a).ok())
                 .unwrap_or_else(|| p["input"].clone());
+            let at = v["timestamp"].as_str().and_then(parse_rfc3339_ms).unwrap_or(0);
+            let call_id = p["call_id"].as_str().unwrap_or("");
+            let calls = if name == "exec" { code_mode_calls(&input) } else { vec![(name.to_string(), input.clone())] };
+            let mut lanes = Vec::new();
+            for (n, i) in &calls {
+                if let Some((cmd, dir)) = shell_command(n, i) {
+                    let cwd = dir.or_else(|| (!s.cwd.is_empty()).then(|| s.cwd.clone()));
+                    lanes.extend(crate::lanes::lanes_of(call_id, &cmd, cwd.as_deref(), false, at));
+                }
+            }
+            for (k, l) in lanes.iter_mut().enumerate() {
+                l.index = k as u32;
+            }
+            crate::lanes::push(&mut st.lanes, lanes);
             let (name, input) = code_mode_call(name, &input).unwrap_or((name.to_string(), input));
             let sum = codex_tool_summary(&name, &input);
             push_activity(&mut s.activity, Activity::line(ts, ActivityKind::Tool, sum.clone()));
@@ -586,6 +650,15 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
                 o => o.as_array().map(|a| a.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default(),
             };
             let failed = text.starts_with("Script failed") || ["rejected by user", "declined by user", "patch rejected"].iter().any(|k| text.contains(k));
+            if let Some(id) = p["call_id"].as_str()
+                && st.lanes.iter().any(|l| l.tool == id)
+            {
+                let at = v["timestamp"].as_str().and_then(parse_rfc3339_ms).unwrap_or(0);
+                // `exec_command` returns while a long command still runs ("Process running with session ID …").
+                let running = text.contains("Process running with session ID");
+                let exit_fail = exit_code(&text).is_some_and(|c| c != 0);
+                crate::lanes::call_result(&mut st.lanes, id, at, !(failed || exit_fail), false, running.then_some(id));
+            }
             if failed {
                 let why = text.split("Script error:").nth(1).unwrap_or(&text).trim().to_string();
                 let mut a = Activity::message(ts, ActivityKind::Error, &why, 200);
@@ -648,6 +721,51 @@ pub(crate) fn code_mode_call(name: &str, input: &Value) -> Option<(String, Value
     let args = args.trim();
     let value = if args.is_empty() { Value::Null } else { serde_json::from_str(&js_to_json(args)).unwrap_or_else(|_| Value::String(args.to_string())) };
     Some((tool.to_string(), value))
+}
+
+/// Every `tools.<name>(…)` call in a code-mode script, in order (see [`code_mode_call`]).
+pub(crate) fn code_mode_calls(input: &Value) -> Vec<(String, Value)> {
+    let Some(code) = input.as_str() else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = code[from..].find("tools.") {
+        let at = from + i;
+        if let Some(c) = code_mode_call("exec", &Value::String(code[at..].to_string())) {
+            out.push(c);
+        }
+        from = at + 6;
+        if out.len() >= 32 {
+            break;
+        }
+    }
+    out
+}
+
+/// A shell tool call's command and folder: `exec_command {cmd, workdir}`, `shell` / `local_shell {command: [..]}`.
+fn shell_command(name: &str, input: &Value) -> Option<(String, Option<String>)> {
+    let dir = input["workdir"].as_str().or(input["cwd"].as_str()).map(str::to_string);
+    match name {
+        "exec_command" | "unified_exec" => Some((input["cmd"].as_str().or(input["command"].as_str())?.to_string(), dir)),
+        "shell" | "local_shell" | "shell_command" => {
+            let c = &input["command"];
+            let cmd = c.as_str().map(str::to_string).or_else(|| c.as_array()?.last()?.as_str().map(str::to_string))?;
+            Some((cmd, dir))
+        }
+        _ => None,
+    }
+}
+
+/// "Process exited with code 1" / `"exit_code": 1` in a shell call's output.
+fn exit_code(text: &str) -> Option<i64> {
+    for key in ["Process exited with code ", "Exit code: ", "\"exit_code\":", "exit_code: "] {
+        if let Some(i) = text.find(key) {
+            let n: String = text[i + key.len()..].trim_start().chars().take_while(|c| c.is_ascii_digit() || *c == '-').collect();
+            if let Ok(n) = n.parse() {
+                return Some(n);
+            }
+        }
+    }
+    None
 }
 
 /// The text up to the `)` that closes an already opened `(`, skipping quoted strings; None when it never closes.

@@ -268,7 +268,7 @@ export const rolesWord = (rs: TierRole[]) => rs.map((r, i) => (i ? r : roleWord(
 
 /** The slice of a chat item the tally reads (lib/chat.ts `ChatItem`). */
 export type TallyItem =
-  | { kind: "tool"; id: string; name: string; input: unknown; ts: number; endTs: number | null; ok: boolean | null; parent: string | null; summary?: string }
+  | { kind: "tool"; id: string; name: string; input: unknown; ts: number; endTs: number | null; ok: boolean | null; parent: string | null; summary?: string; output?: string }
   | { kind: "text"; parent: string | null; model: string | null }
   | { kind: string; parent?: string | null };
 
@@ -298,8 +298,11 @@ export interface Tally {
   byModel: { model: string; role: TierRole | "image" | null; provider: Provider; count: number; tokens: number }[];
   /** Delegates whose model is not cheaper than the lead's (should not happen with Ladder on). */
   onLead: number;
-  /** The lead's own checks after the first delegate started. */
-  checks: { tests: number; images: number; testsPassed: number; testsFailed: number; diffs: number; reads: number };
+  /**
+   * The lead's own checks once a helper had returned (its result in hand): test runs, builds / typechecks / lints,
+   * diffs, files reread, helper outputs read, images viewed. `pending`: no helper has returned yet.
+   */
+  checks: { tests: number; images: number; testsPassed: number; testsFailed: number; diffs: number; reads: number; outputs: number; builds: number; pending: boolean };
   /** Test commands delegates ran themselves. */
   delegateTests: number;
 }
@@ -323,9 +326,15 @@ export function laneOf(cmd: string): { provider: Provider; model: string | null;
   return null;
 }
 const SHELL = /^(bash|shell|exec_command|local_shell|unified_exec)$/i;
+/** Builds, typechecks and linters: verification too. */
+export const BUILD_CMD = /(^|[\s;&|(])(tsc|vue-tsc|eslint|oxlint|biome (check|lint)|ruff|mypy|pyright|clippy|cargo (check|build|clippy)|go (vet|build)|swift build|xcodebuild( [\w-]+)* build|(npm|pnpm|yarn|bun)( -C \S+)?( run)? (build|lint|typecheck|check|tsc))\b/;
+/** Reading a file's content in the shell. */
+const PEEK_CMD = /(^|[\s;&|(])(cat|tail|head|less|jq|wc|grep|rg|sed -n)\s/;
+/** Tools that read a background task's or helper's output. */
+const OUTPUT_TOOL = /^(bashoutput|taskoutput|read_output|wait_agent)$/i;
 /** Test runners: what counts as "ran the tests". */
 export const TEST_CMD = /(^|[\s;&|(])(cargo (nextest|test)|go test|pytest|python -m pytest|vitest|jest|mocha|swift test|xcodebuild test|(npm|pnpm|yarn|bun)( run)? test|make (test|check)|node --test|deno test|rspec|phpunit|mix test|gradle(w)? test|mvn test)\b/;
-const DIFF_CMD = /(^|[\s;&|(])git (diff|show|status|log -p)\b/;
+const DIFF_CMD = /(^|[\s;&|(])git( -C \S+)? (diff|show|status|log -p)\b/;
 const READ = /^(read|view_file|read_file)$/i;
 
 const cmdOf = (input: unknown): string => {
@@ -333,6 +342,41 @@ const cmdOf = (input: unknown): string => {
   const c = i?.command ?? i?.cmd;
   return Array.isArray(c) ? c.join(" ") : typeof c === "string" ? c : "";
 };
+
+/** Paths a command names: "/tmp/s/log-a.txt". */
+const pathsIn = (cmd: string) => cmd.match(/(?:~|\.{0,2})?\/[\w.@%+~/${}-]*[\w}]/g) ?? [];
+/** A path a launch names, as a pattern: a shell variable in it (a loop's `$p`) matches one path segment. */
+const pathPattern = (p: string) => new RegExp(`^${p.split(/\$\{?\w+\}?/).map((x) => x.replace(/[.*+?^()|[\]\\{}$]/g, "\\$&")).join("[^/]+")}$`);
+/** A background Agent call: it returns at once with an acknowledgement (lib/helperCards.ts). */
+const backgroundCall = (t: { input: unknown; output?: string }) =>
+  (t.input as { run_in_background?: unknown } | null)?.run_in_background === true || /^\s*Async agent launched/i.test(t.output ?? "");
+
+/** What the chat's session adds to a turn's own items (all optional; without it the tally reads the items alone). */
+export interface TallyExtra {
+  /**
+   * The lead's shell helpers by the call that started them (`Session.lanes`, crates/core/src/lanes.rs): one per
+   * launch (a loop of two is two), with the model it ran on, how it stands, when it ended and its tokens.
+   */
+  lanes?: Record<string, { provider: Provider; model: string | null; image: boolean; state: string; ended: number | null; tokens?: number }[]>;
+  /** Background Agent calls by call id: when the helper returned (null while it runs), whether it succeeded, its model and tokens. */
+  returned?: Record<string, { end: number | null; ok: boolean | null; model?: string | null; tokens?: number }>;
+  /** Items after the turn, up to the next helper launch: the lead's checks after a background helper returned land there. */
+  after?: TallyItem[];
+}
+
+/** The items after `at` up to (not including) the next top-level call that starts a helper. */
+export function itemsAfter(items: TallyItem[], at: number): TallyItem[] {
+  const out: TallyItem[] = [];
+  for (let i = at + 1; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === "tool" && (it as { parent: string | null }).parent === null) {
+      const t = it as Extract<TallyItem, { kind: "tool" }>;
+      if (AGENT.test(t.name) || SPAWN.test(t.name) || (SHELL.test(t.name) && laneOf(cmdOf(t.input)))) break;
+    }
+    out.push(it);
+  }
+  return out;
+}
 
 /** The model a delegate was asked for (Agent tool / spawn_agent `model`). */
 const askedModel = (input: unknown): string | null => {
@@ -345,7 +389,7 @@ const askedModel = (input: unknown): string | null => {
  * really answered on when the CLI reported it, else the one asked for), their tokens (Claude Code's count per
  * delegate), and the lead's own test runs, diffs and reads after the first delegate began. Nothing is estimated.
  */
-export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentUse | undefined>, o: { provider: Provider; lead: string | null; tiers: LadderTier[] | null; cross?: LadderTier[] | null }): Tally {
+export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentUse | undefined>, o: { provider: Provider; lead: string | null; tiers: LadderTier[] | null; cross?: LadderTier[] | null }, extra: TallyExtra = {}): Tally {
   const tools = items.filter((i): i is Extract<TallyItem, { kind: "tool" }> => i.kind === "tool");
   const top = tools.filter((t) => t.parent === null);
   const calls = top.filter((t) => AGENT.test(t.name));
@@ -361,21 +405,40 @@ export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentU
     return lane ? [{ t, lane, via: "lane" }] : [];
   });
   const leadR = modelRank(o.provider, o.lead);
+  // When each helper returned (its result in hand), epoch ms; null while it runs.
+  const ends = new Map<string, number | null>();
   const native: Delegate[] = calls.map((t) => {
     const use = agents[t.id];
+    const bg = backgroundCall(t) ? extra.returned?.[t.id] : undefined;
     const reported = use ? Object.values(use.models).sort((a, b) => b.output + b.input - (a.output + a.input))[0]?.model : undefined;
     const spoke = (items.find((i) => i.kind === "text" && i.parent === t.id && (i as { model: string | null }).model) as { model: string | null } | undefined)?.model;
-    const model = reported || spoke || askedModel(t.input) || null;
+    // A helper's own transcript knows its model; usage events of agents running side by side can be credited to the wrong one.
+    const model = bg?.model || spoke || reported || askedModel(t.input) || null;
     const sum = use ? Object.values(use.models).reduce((n, u) => n + u.input + u.cached + u.output, 0) : 0;
     const kids = tools.filter((k) => k.parent === t.id && SHELL.test(k.name) && TEST_CMD.test(cmdOf(k.input)));
-    return { id: t.id, model, role: roleOf(o.tiers, model, o.provider), provider: o.provider, via: "agent", tokens: use?.total || sum, ok: t.endTs === null ? null : t.ok, tests: kids.length };
+    const background = backgroundCall(t);
+    ends.set(t.id, background ? (bg?.end ?? null) : t.endTs);
+    const ok = background ? (bg ? bg.ok : null) : t.endTs === null ? null : t.ok;
+    return { id: t.id, model, role: roleOf(o.tiers, model, o.provider), provider: o.provider, via: "agent", tokens: bg?.tokens || use?.total || sum, ok, tests: kids.length };
   });
-  const crossed: Delegate[] = lanes.map(({ t, lane, via }) => {
-    const own = lane.provider === o.provider;
-    const role = lane.image ? "image" : roleOf(own ? o.tiers : (o.cross ?? null), lane.model, lane.provider);
-    return { id: t.id, model: lane.model, role, provider: lane.provider, via, tokens: 0, ok: t.endTs === null ? null : t.ok, tests: 0 };
+  const roleFor = (lane: { provider: Provider; model: string | null; image: boolean }) =>
+    lane.image ? "image" : roleOf(lane.provider === o.provider ? o.tiers : (o.cross ?? null), lane.model, lane.provider);
+  const crossed: Delegate[] = lanes.flatMap(({ t, lane, via }): Delegate[] => {
+    // Each launch once: a loop or `a & b` starts several from one call (as the backend read them).
+    const known = via === "lane" ? extra.lanes?.[t.id] : undefined;
+    if (known?.length)
+      return known.map((k, i) => {
+        const id = `${t.id}#${i}`;
+        ends.set(id, k.state === "running" ? null : k.ended);
+        const l = { provider: k.provider, model: k.model ?? lane.model, image: k.image || lane.image };
+        return { id, model: l.model, role: roleFor(l), provider: l.provider, via, tokens: k.tokens ?? 0, ok: k.state === "running" ? null : k.state === "done", tests: 0 };
+      });
+    const background = (t.input as { run_in_background?: unknown } | null)?.run_in_background === true;
+    ends.set(t.id, background ? null : t.endTs);
+    return [{ id: t.id, model: lane.model, role: roleFor(lane), provider: lane.provider, via, tokens: 0, ok: t.endTs === null || background ? null : t.ok, tests: 0 }];
   });
-  const delegates = [...native, ...crossed].sort((a, b) => (tools.find((t) => t.id === a.id)?.ts ?? 0) - (tools.find((t) => t.id === b.id)?.ts ?? 0));
+  const callTs = (id: string) => tools.find((t) => t.id === id.split("#")[0])?.ts ?? 0;
+  const delegates = [...native, ...crossed].sort((a, b) => callTs(a.id) - callTs(b.id));
   const byModel: Tally["byModel"] = [];
   // One row per model; Claude's alias and full id of one family ("haiku", "claude-haiku-5-5") are the same row.
   const same = (a: string, b: string) => a === b || (o.provider === "claude" && a !== "unknown" && b !== "unknown" && modelFamily(a) === modelFamily(b));
@@ -389,11 +452,18 @@ export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentU
   }
   // On the lead's own model or above it (same CLI): counted, never hidden.
   const onLead = leadR === null ? 0 : delegates.filter((d) => d.provider === o.provider && d.model && (modelRank(o.provider, d.model) ?? -1) >= leadR).length;
-  const starts = [...calls, ...lanes.map((l) => l.t)];
-  const first = starts.length ? Math.min(...starts.map((c) => c.ts)) : Infinity;
+  // Checks count from when the first helper returned: before that there is nothing of theirs to check.
+  const returnedAt = [...ends.values()].filter((e): e is number => e !== null && e !== undefined);
+  const first = returnedAt.length ? Math.min(...returnedAt) : Infinity;
   const laneIds = new Set(lanes.map((l) => l.t.id));
-  const mine = tools.filter((t) => t.parent === null && t.ts >= first && !laneIds.has(t.id));
-  const tests = mine.filter((t) => SHELL.test(t.name) && TEST_CMD.test(cmdOf(t.input)));
+  const callIds = new Set(calls.map((c) => c.id));
+  const later = (extra.after ?? []).filter((i): i is Extract<TallyItem, { kind: "tool" }> => i.kind === "tool");
+  const mine = [...tools, ...later].filter((t) => t.parent === null && t.ts >= first && !laneIds.has(t.id) && !callIds.has(t.id));
+  const shell = (t: (typeof mine)[number]) => (SHELL.test(t.name) ? cmdOf(t.input) : "");
+  const tests = mine.filter((t) => TEST_CMD.test(shell(t)));
+  // Files the helpers write (`-o`, `> log`) and Claude Code's task output files: reading one is reading a helper's result.
+  const written = lanes.flatMap((l) => pathsIn(cmdOf(l.t.input))).filter((p) => p.length > 4).map(pathPattern);
+  const readsOutput = (cmd: string) => PEEK_CMD.test(cmd) && pathsIn(cmd).some((p) => p.endsWith(".output") || written.some((w) => w.test(p)));
   return {
     delegates,
     byModel,
@@ -403,8 +473,11 @@ export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentU
       images: mine.filter((t) => READ.test(t.name) && /\.(png|jpe?g|webp|gif)$/i.test(String((t.input as { file_path?: unknown; path?: unknown } | null)?.file_path ?? (t.input as { path?: unknown } | null)?.path ?? ""))).length,
       testsPassed: tests.filter((t) => t.ok === true).length,
       testsFailed: tests.filter((t) => t.ok === false).length,
-      diffs: mine.filter((t) => SHELL.test(t.name) && DIFF_CMD.test(cmdOf(t.input))).length,
+      diffs: mine.filter((t) => DIFF_CMD.test(shell(t))).length,
       reads: mine.filter((t) => READ.test(t.name)).length,
+      outputs: mine.filter((t) => OUTPUT_TOOL.test(t.name) || readsOutput(shell(t))).length,
+      builds: mine.filter((t) => !TEST_CMD.test(shell(t)) && BUILD_CMD.test(shell(t))).length,
+      pending: delegates.length > 0 && !returnedAt.length,
     },
     delegateTests: delegates.reduce((n, d) => n + d.tests, 0),
   };
@@ -430,15 +503,22 @@ export function tallyProviders(t: Tally, lead: Provider): string {
   return (["claude", "codex"] as Provider[]).filter((p) => n(p)).map((p) => `${n(p)} ${p === "claude" ? "Claude" : "Codex"}`).join(", ");
 }
 
-/** "tests run (1 passed), 2 diffs read" — what the lead checked; "nothing checked yet" when it did none of it. */
+/**
+ * "tests run 2× (1 passed, 1 failed), 1 diff read" — what the lead checked once a helper returned; "helpers still
+ * running" before any did; "nothing checked by the lead" when it did none of it.
+ */
 export function tallyChecks(t: Tally): string {
   const parts: string[] = [];
   const c = t.checks;
+  const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
   if (c.tests) parts.push(`tests run ${c.tests}× (${c.testsPassed} passed${c.testsFailed ? `, ${c.testsFailed} failed` : ""})`);
-  if (c.diffs) parts.push(`${c.diffs} diff${c.diffs === 1 ? "" : "s"} read`);
-  if (c.reads) parts.push(`${c.reads} file${c.reads === 1 ? "" : "s"} reread`);
-  if (c.images) parts.push(`${c.images} image${c.images === 1 ? "" : "s"} viewed`);
-  return parts.length ? parts.join(", ") : "nothing checked by the lead";
+  if (c.builds) parts.push(`build or typecheck run ${c.builds}×`);
+  if (c.diffs) parts.push(`${n(c.diffs, "diff")} read`);
+  if (c.outputs) parts.push(`${n(c.outputs, "helper output")} read`);
+  if (c.reads) parts.push(`${n(c.reads, "file")} reread`);
+  if (c.images) parts.push(`${n(c.images, "image")} viewed`);
+  if (parts.length) return parts.join(", ");
+  return c.pending ? "helpers still running" : "nothing checked by the lead";
 }
 
 // ---------- the budget picture (chip, Settings) ----------
