@@ -287,7 +287,7 @@ function fileView(d: Demo, f: DemoFile, scope: string): FileChange | null {
   const turnN = scope.startsWith("turn:") ? Number(scope.slice(5)) : null;
   if (turnN !== null && !touched.includes(turnN)) return null;
   const kept = d.kept.has(f.rel);
-  if (scope === "pending" && kept) return null;
+  if (scope === "pending" && (kept || d.undone[f.rel])) return null;
   const base = turnN !== null ? stateAt(f, turnN - 1) : f.base;
   const now = turnN !== null ? stateAt(f, turnN) : d.disk[f.rel];
   const agentAfter = stateAt(f, 99);

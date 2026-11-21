@@ -197,6 +197,8 @@ fn claude_review_flow() {
     let txt = t.read("a.txt");
     assert!(txt.contains("line two\n") && txt.contains("line 30\n") && !txt.contains("thirty"));
     assert_eq!(t.file(Scope::Chat, "a.txt").unwrap().hunks.len(), 1);
+    // coool's own undo is not "edited since".
+    assert!(!t.file(Scope::Chat, "a.txt").unwrap().diverged);
 
     // Keep b.txt: it leaves the pending view, stays in the chat view as kept.
     let o = t.keep(Scope::Chat, Some("b.txt"), None, false);
@@ -213,6 +215,7 @@ fn claude_review_flow() {
     let n = t.file(Scope::Chat, "new.txt").unwrap();
     assert_eq!(n.status, "undone");
     assert!(n.undone_at.is_some());
+    assert!(t.file(Scope::Pending, "new.txt").is_none(), "an undone file has nothing left to review");
 
     // Edit a.txt by hand in the agent's lines: undo is refused with a question.
     let txt = t.read("a.txt").replace("line two\n", "line two, and mine\n");

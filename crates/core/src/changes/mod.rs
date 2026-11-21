@@ -215,6 +215,9 @@ pub struct Undone {
     pub last_tool: String,
     #[serde(default)]
     pub told: bool,
+    /// What coool left in the file (None: removed): the new baseline for "edited since" until the agent edits it again.
+    #[serde(default)]
+    pub left: Option<Option<String>>,
 }
 
 /// A file's content: None when it doesn't exist.
@@ -441,7 +444,12 @@ impl Changes {
                             if let Some(n) = note {
                                 out.message = n;
                             }
-                            undone_paths.push((c.path.to_string_lossy().into_owned(), c.edits.last().map(|e| e.tool_id.clone()).unwrap_or_default()));
+                            let left = ops.iter().rev().find_map(|o| match o {
+                                FsOp::Write(p, t) if *p == c.path => Some(Some(t.clone())),
+                                FsOp::Trash(p) if *p == c.path => Some(None),
+                                _ => None,
+                            });
+                            undone_paths.push((c.path.to_string_lossy().into_owned(), c.edits.last().map(|e| e.tool_id.clone()).unwrap_or_default(), left));
                         }
                         Err(e) => out.refused.push((rel, format!("{e:#}"))),
                     }
@@ -456,8 +464,8 @@ impl Changes {
             }
         }
         if !undone_paths.is_empty() {
-            for (p, t) in undone_paths {
-                review.undone.insert(p, Undone { at: now_ms(), last_tool: t, told: false });
+            for (p, t, left) in undone_paths {
+                review.undone.insert(p, Undone { at: now_ms(), last_tool: t, told: false, left });
             }
             let _ = self.save_review(req.key, &review);
         }
@@ -622,7 +630,11 @@ fn view(c: &Chain, scope: Scope, ctx: &Ctx) -> Option<View> {
         Scope::Turn(_) => c.post[last].clone().unwrap_or_else(|| disk.st.clone()),
         _ => disk.st.clone(),
     };
-    let agent_after = c.post[c.edits.len() - 1].clone();
+    // What disk should be if nobody else touched it: the agent's last result, or what coool's own undo left since.
+    let agent_after = match ctx.review.undone.get(&key) {
+        Some(u) if u.left.is_some() && c.edits.last().is_some_and(|e| e.tool_id == u.last_tool) => u.left.clone(),
+        _ => c.post[c.edits.len() - 1].clone(),
+    };
     let rel = rel_of(ctx.root, &c.path);
     let mut f = FileChange {
         path: key.clone(),
@@ -717,7 +729,8 @@ fn view(c: &Chain, scope: Scope, ctx: &Ctx) -> Option<View> {
             }
         }
     };
-    if f.status == "unchanged" && f.undone_at.is_none() && scope == Scope::Pending {
+    // Nothing left to review: undone (back to before), or the agent's edits cancel out. All still lists them.
+    if matches!(f.status, "unchanged" | "undone") && scope == Scope::Pending {
         return None;
     }
     let (a, b) = (base.clone().unwrap_or_default(), new.clone().unwrap_or_default());

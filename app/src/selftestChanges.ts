@@ -97,14 +97,16 @@ export function changesScenarios(k: ChangesKit): Record<string, () => Promise<vo
       });
       await step("changes: undo the new file (to the Trash)", async () => {
         const r = await press($("[data-undo-file]", file("notes/new.txt")!), "undo notes/new.txt");
-        await waitFor("notes/new.txt undone", () => $('[data-file-status="undone"]', file("notes/new.txt") ?? document.createElement("div")), 15_000);
+        await waitFor("notes/new.txt out of the Unreviewed view (undone)", () => !file("notes/new.txt"), 15_000);
         return r;
       });
       await step("changes: a.txt edited by hand; its undo is refused with a question", async () => {
         await log("HAND-EDIT a.txt");
-        await waitFor("a.txt marked edited since", () => file("a.txt")?.dataset.fileDiverged, 60_000);
-        const r = await press($("[data-undo-file]", file("a.txt")!), "undo a.txt");
-        const ask = await waitFor("the question", () => $("[data-undo-ask]", file("a.txt")!), 10_000);
+        await waitFor("a.txt marked edited since, in the agent's lines", () => file("a.txt")?.dataset.fileDiverged && $("[data-hunk-since]", file("a.txt")!), 60_000);
+        // The question shows in the file's card (no note): nothing is written.
+        $("[data-undo-file]", file("a.txt")!)!.click();
+        const ask = await waitFor("the question", () => $("[data-undo-ask]", file("a.txt")!), 15_000);
+        const r = text($("[data-changes-note]")) ? "a note showed too" : "no note";
         if (!/after the agent did/.test(text(ask))) throw new Error(`asked: ${text(ask)}`);
         await shot("changes-refused", 900);
         // Keep my edits.
@@ -145,7 +147,7 @@ export function changesScenarios(k: ChangesKit): Record<string, () => Promise<vo
       });
       await step("changes-codex: undo c.txt (reconstructed from the patch), keep d.txt", async () => {
         const r = await press($("[data-undo-file]", file("c.txt")!), "undo c.txt");
-        await waitFor("c.txt undone", () => $('[data-file-status="undone"]', file("c.txt") ?? document.createElement("div")), 15_000);
+        await waitFor("c.txt out of the Unreviewed view (undone)", () => !file("c.txt"), 15_000);
         const k2 = await press($("[data-keep-file]", file("d.txt")!), "keep d.txt");
         return `${r} | ${k2}`;
       });
