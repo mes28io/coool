@@ -1099,6 +1099,19 @@ pub fn overview(provider: Provider, cwd: &Path, home: &Path, inputs: &Inputs) ->
             });
         }
     }
+    // What the panel may open and edit is the allow-list's call, not the lookup's: a file that links somewhere else
+    // is listed (the CLI loads it) but not opened.
+    let mut scope = guard::Scope::new(home, cwd);
+    scope.extra_read = extra_reads(&ov);
+    for it in ov.items.iter_mut() {
+        let Some(p) = it.path.as_deref().map(Path::new) else { continue };
+        if it.editable && guard::check(&scope, p, guard::Access::Write).is_err() {
+            it.editable = false;
+        }
+        if guard::check(&scope, p, guard::Access::Read).is_err() {
+            it.note = Some("coool doesn't open this file: it links outside the folders this chat's context comes from.".into());
+        }
+    }
     ov.total = ov.items.iter().map(|i| i.tokens).sum();
     ov
 }

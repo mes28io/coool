@@ -405,6 +405,11 @@ fn allow_list_refuses_traversal_and_symlinks_out() {
     put(&t.home.join(".claude/CLAUDE.md"), "@.credentials.json\n@settings.json\n");
     let ov = overview(Provider::Claude, &t.deep, &t.home, &Inputs::default());
     assert!(!ov.items.iter().any(|i| i.path.as_deref().is_some_and(|p| p.contains("credentials") || p.ends_with("settings.json"))));
+    // The symlinked CLAUDE.local.md is listed (the CLI loads it) but neither editable nor opened.
+    let local = ov.items.iter().find(|i| i.path.as_deref() == Some(&*link.display().to_string())).unwrap();
+    assert!(!local.editable && local.note.as_deref().is_some_and(|n| n.contains("doesn't open")));
+    let evil = ov.items.iter().find(|i| i.label == "evil").unwrap();
+    assert!(!evil.editable);
 }
 
 #[test]

@@ -433,7 +433,7 @@ export function SessionView({
         </div>
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
         {panelKey && cwd && (
-          <IconButton title={contextOpen ? "Hide this chat's context" : "This chat's context: folder, instructions, memory, skills, model"} active={contextOpen} onClick={onContext} data-context-button="">
+          <IconButton title={contextOpen ? "Hide this chat's context" : "This chat's context: folder, instructions, memory, skills, model"} active={contextOpen} onClick={onContext}>
             <IContext size={18} />
           </IconButton>
         )}
