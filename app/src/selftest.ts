@@ -72,6 +72,7 @@ import { newSessionScenarios } from "./selftestNewSession";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
 import { changesScenarios } from "./selftestChanges";
+import { typingScenarios } from "./selftestTyping";
 import { historyScenarios } from "./selftestHistory";
 import { keepaliveScenarios } from "./selftestKeepalive";
 import { coverOf, launchTrace, useUpdates } from "./lib/update";
@@ -7787,6 +7788,10 @@ for (const n of ["film", "film-measure", "film-probe"]) {
 for (const n of ["changes", "changes-codex"]) {
   scenarios[n] = (c: Ctx) => changesScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })[n]();
 }
+
+// `typing-steady` (selftestTyping.ts): the message list holds still while typing in the composer, with the stand-in CLIs
+// (app/scripts/typing-e2e.sh). No model calls. Not in `all`.
+scenarios["typing-steady"] = (c: Ctx) => typingScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })["typing-steady"]();
 
 // `history` (selftestHistory.ts): History over a few thousand invented sessions with the stand-in CLIs
 // (app/scripts/history-e2e.sh). No model calls. Not in `all`.

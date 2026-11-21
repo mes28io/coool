@@ -11,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { newChat, resumeSession } from "../lib/actions";
 import { addFiles, listenDrops, readyAttachments, useAttach } from "../lib/attach";
 import { api } from "../lib/backend";
+import { fitTextarea } from "../lib/fitTextarea";
 import { chatPanelKey } from "../lib/browserAgent";
 import { baseName, crumbs, freshName, guardedPlace, nameProblem, parentOf, recentProjects, searchFolders, sessionsIn, tilde, trimSlash, typeSelect, untilde, workingHere, type Candidate } from "../lib/folderRules";
 import {
@@ -227,10 +228,7 @@ export function NewSession({ initialCwd, initialProvider, close }: { initialCwd?
   useEffect(() => void listenDrops().catch(() => {}), []);
   useEffect(() => () => useAttach.getState().clear(SHEET_DRAFT), []);
   useLayoutEffect(() => {
-    const el = ta.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = Math.min(160, Math.max(48, el.scrollHeight)) + "px";
+    if (ta.current) fitTextarea(ta.current, 160, 48);
   }, [prompt]);
 
   const git = summary && !summary.gated ? summary.git : null;
