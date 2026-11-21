@@ -10,7 +10,9 @@ import type { Chat } from "./chat";
 import type { Provider, Session } from "./types";
 import { sessionKey } from "./types";
 import { useStore } from "../store";
-import type { ChangeSet, ChangesWire, FileChange, Outcome, Scope } from "./changesRules";
+import { mergeWire, type ChangeSet, type Outcome, type Scope } from "./changesRules";
+
+export { mergeWire };
 
 export interface ChangesTarget {
   provider: Provider;
@@ -66,28 +68,6 @@ const pageState = (() => {
 function usePageState(): { visible: boolean; focused: boolean } {
   const s = useSyncExternalStore(pageState.subscribe, pageState.get, () => "11");
   return { visible: s[0] === "1", focused: s[1] === "1" };
-}
-
-/**
- * A reply of `changes_load` on top of the set the page has: files sent as `same` are the page's own objects (so
- * their diffs aren't coloured or laid out again), and the turns are the page's when not sent. Null when the page
- * lacks something the reply leaves out (then it asks again in full).
- */
-export function mergeWire(prev: ChangeSet | null, w: ChangesWire): ChangeSet | null {
-  if (!w.set) return prev;
-  const s = w.set;
-  const old = new Map((prev?.files ?? []).map((f) => [f.path, f]));
-  const files: FileChange[] = [];
-  for (const f of s.files) {
-    if ("same" in f) {
-      const o = old.get(f.path);
-      if (!o) return null;
-      files.push(o);
-    } else files.push(f);
-  }
-  const turns = s.turns ?? prev?.turns;
-  if (!turns) return null;
-  return { ...s, files, turns };
 }
 
 /**

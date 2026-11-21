@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { commitDraft, gaps, nearestTurn, partners, reeditNote, splitRows, splitPath, textLines, totals, turnFiles, undoNote, unifiedText, type DiffLine } from "./changesRules.ts";
+import { commitDraft, gaps, mergeWire, nearestTurn, partners, reeditNote, splitRows, splitPath, textLines, totals, turnFiles, undoNote, unifiedText, type ChangeSet, type DiffLine, type FileChange } from "./changesRules.ts";
 
 const L = (k: DiffLine["k"], t: string, o?: number, n?: number): DiffLine => ({ k, t, o, n });
 
@@ -92,4 +92,27 @@ test("paths, totals, and the files a turn changed", () => {
     { name: "apply_patch", ok: true, input: "*** Begin Patch\n*** Add File: /w/c.ts\n+x\n*** End Patch" },
   ]);
   assert.deepEqual(files.sort(), ["/w/a.ts", "/w/b.ts", "/w/c.ts", "/w/new.ts"]);
+});
+
+test("a changes_load reply merges onto the page's set: unchanged files keep their objects, a missing one asks again", () => {
+  const f = (path: string, added: number) => ({ path, rel: path, added }) as unknown as FileChange;
+  const a = f("/r/a.ts", 1);
+  const b = f("/r/b.ts", 2);
+  const turns = [{ n: 1, ts: 1, prompt: "p", files: 2, added: 3, removed: 0 }];
+  const base = { rev: 5, root: "/r", scope: "pending", git: null, pending: 2, total: 2, external: false, busy: false, reedited: [] as [string, string][] };
+  const prev: ChangeSet = { ...base, turns, files: [a, b] };
+  // Nothing new: the page's own set.
+  assert.equal(mergeWire(prev, { rev: 5 }), prev);
+  // b changed: a is the same object, b the new one; the turns kept when not sent.
+  const b2 = f("/r/b.ts", 7);
+  const m = mergeWire(prev, { rev: 9, set: { ...base, rev: 9, files: [{ path: "/r/a.ts", same: true }, b2] } })!;
+  assert.equal(m.files[0], a);
+  assert.equal(m.files[1], b2);
+  assert.equal(m.turns, turns);
+  assert.equal(m.rev, 9);
+  // A file left out that the page doesn't have, or no turns at all: null (ask again in full).
+  assert.equal(mergeWire(prev, { rev: 10, set: { ...base, rev: 10, files: [{ path: "/r/c.ts", same: true }] } }), null);
+  assert.equal(mergeWire(null, { rev: 10, set: { ...base, rev: 10, files: [a] } }), null);
+  // A full reply on nothing.
+  assert.deepEqual(mergeWire(null, { rev: 11, set: { ...base, rev: 11, turns, files: [a] } })!.files, [a]);
 });

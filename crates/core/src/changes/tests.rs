@@ -580,3 +580,160 @@ fn unified_patches_apply_with_git() {
     assert!(u.contains("@@ -1,3 +1,3 @@"));
     assert!(u.contains("-2\n+TWO\n"));
 }
+
+// ------------------------------------------------------------------------------------------------ the incremental engine
+
+impl T {
+    fn wire(&mut self, since: u64, summary: bool) -> Wire {
+        let (key, dir, sources) = (self.key.clone(), self.dir.clone(), self.sources.clone());
+        self.eng.load_wire(&Request { key: &key, cwd: &dir, sources: &sources, scope: Scope::Pending, external: false }, since, summary)
+    }
+}
+
+/// The files of a reply: (name, sent in full).
+fn sent(w: &Wire) -> Vec<(String, bool)> {
+    w.set
+        .as_ref()
+        .map(|s| {
+            s.files
+                .iter()
+                .map(|f| match f {
+                    WireFile::Full(f) => (f.rel.clone(), true),
+                    WireFile::Same { path, .. } => (Path::new(path).file_name().unwrap().to_string_lossy().into_owned(), false),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The set as the app would draw it, without its revision: to compare a warm engine with a fresh one.
+fn shown(cs: &ChangeSet) -> String {
+    let mut v = serde_json::to_value(cs).unwrap();
+    v["rev"] = json!(0);
+    v.to_string()
+}
+
+#[test]
+fn incremental_unchanged_is_a_number_and_deltas_carry_only_what_changed() {
+    let mut t = T::new("inc-delta", Kind::Claude);
+    std::fs::write(t.p("a.txt"), lines(30)).unwrap();
+    std::fs::write(t.p("b.txt"), lines(30)).unwrap();
+    t.prompt("Edit both");
+    t.edit("a.txt", "line 3\n", "line three\n");
+    t.edit("b.txt", "line 4\n", "line four\n");
+    let w = t.wire(0, false);
+    assert_eq!(sent(&w), vec![("a.txt".into(), true), ("b.txt".into(), true)]);
+    assert!(w.set.as_ref().unwrap().turns.is_some());
+    // Nothing new: the same revision, no set.
+    let w2 = t.wire(w.rev, false);
+    assert_eq!(w2.rev, w.rev);
+    assert!(w2.set.is_none());
+    // What the agent said after its edits is part of both cards (the first text after each edit, in the turn): both
+    // again, no turns.
+    t.said("Done with both.");
+    let w3 = t.wire(w.rev, false);
+    assert_eq!(sent(&w3), vec![("a.txt".into(), true), ("b.txt".into(), true)]);
+    assert!(w3.set.as_ref().unwrap().turns.is_none());
+    // A transcript line about nothing here: nothing to send.
+    t.said("Anything else?");
+    assert!(t.wire(w3.rev, false).set.is_none(), "nothing new after the second text");
+    // Another edit of a.txt: a in full, b as its path; the turns again (their counts changed).
+    t.edit("a.txt", "line 20\n", "line twenty\n");
+    let w5 = t.wire(w3.rev, false);
+    assert_eq!(sent(&w5), vec![("a.txt".into(), true), ("b.txt".into(), false)]);
+    assert!(w5.set.as_ref().unwrap().turns.is_some());
+    // b.txt written again with the same content (its mtime moves): worked out again, the same, nothing sent.
+    std::fs::write(t.p("b.txt"), t.read("b.txt")).unwrap();
+    assert!(t.wire(w5.rev, false).set.is_none());
+}
+
+#[test]
+fn incremental_reads_only_the_tail_and_waits_for_a_whole_line() {
+    let mut t = T::new("inc-tail", Kind::Claude);
+    std::fs::write(t.p("a.txt"), lines(10)).unwrap();
+    t.prompt("Edit it");
+    t.edit("a.txt", "line 2\n", "line two\n");
+    let w = t.wire(0, false);
+    assert_eq!(w.set.as_ref().unwrap().files.len(), 1);
+    // The next edit's lines with the last one cut short: the call is seen (busy), not its result.
+    t.edit("a.txt", "line 5\n", "line five\n");
+    let full = std::fs::read(&t.transcript).unwrap();
+    std::fs::write(&t.transcript, &full[..full.len() - 40]).unwrap();
+    let w2 = t.wire(w.rev, false);
+    let s = w2.set.as_ref().unwrap();
+    assert!(s.busy);
+    match &s.files[0] {
+        WireFile::Full(f) => assert!(f.busy && f.edits == 1, "{f:?}"),
+        x => panic!("a.txt not sent: {x:?}"),
+    }
+    // The rest of the line: the edit lands.
+    std::fs::write(&t.transcript, &full).unwrap();
+    let w3 = t.wire(w2.rev, false);
+    match &w3.set.as_ref().unwrap().files[0] {
+        WireFile::Full(f) => assert!(!f.busy && f.edits == 2 && f.added == 2, "{f:?}"),
+        x => panic!("a.txt not sent: {x:?}"),
+    }
+}
+
+#[test]
+fn incremental_sees_a_hand_edit_a_keep_and_staging() {
+    let mut t = T::new("inc-inval", Kind::Claude);
+    t.git_init();
+    std::fs::write(t.p("a.txt"), lines(20)).unwrap();
+    std::fs::write(t.p("b.txt"), lines(20)).unwrap();
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "start"]);
+    t.prompt("Edit both");
+    t.edit("a.txt", "line 3\n", "line three\n");
+    t.edit("b.txt", "line 3\n", "line three\n");
+    let w = t.wire(0, false);
+    // A hand edit of b.txt (on disk only): b again, diverged; a as its path.
+    let mut s = t.read("b.txt");
+    s.push_str("by hand\n");
+    std::fs::write(t.p("b.txt"), s).unwrap();
+    let w2 = t.wire(w.rev, false);
+    assert_eq!(sent(&w2), vec![("a.txt".into(), false), ("b.txt".into(), true)]);
+    match &w2.set.as_ref().unwrap().files[1] {
+        WireFile::Full(f) => assert!(f.diverged),
+        _ => unreachable!(),
+    }
+    // Keep and stage a.txt: it leaves Unreviewed; All shows it staged.
+    assert!(t.keep(Scope::Pending, Some("a.txt"), None, true).ok);
+    let w3 = t.wire(w2.rev, false);
+    assert_eq!(sent(&w3), vec![("b.txt".into(), false)]);
+    assert_eq!(w3.set.as_ref().unwrap().pending, 1);
+    assert!(t.file(Scope::Chat, "a.txt").unwrap().staged);
+    // Unstaged in a terminal: the index changed, so git is asked again.
+    t.git(&["reset", "-q", "a.txt"]);
+    assert!(!t.file(Scope::Chat, "a.txt").unwrap().staged);
+}
+
+#[test]
+fn incremental_summary_and_a_warm_engine_match_a_fresh_one() {
+    let mut t = T::new("inc-same", Kind::Claude);
+    std::fs::write(t.p("a.txt"), lines(40)).unwrap();
+    std::fs::write(t.p("b.txt"), "alpha\nbeta\n").unwrap();
+    t.prompt("First");
+    t.edit("a.txt", "line 2\n", "line two\n");
+    let _ = t.wire(0, false);
+    let _ = t.load(Scope::Chat);
+    t.prompt("Second");
+    t.edit("a.txt", "line 30\n", "line thirty\n");
+    t.write("n.txt", "new\n");
+    let _ = t.wire(0, true);
+    t.edit("b.txt", "beta\n", "BETA\n");
+    assert!(t.undo(Scope::Pending, Some("n.txt"), None, false).ok);
+    // The summary: counts and turns, no files.
+    let w = t.wire(0, true);
+    let s = w.set.as_ref().unwrap();
+    assert!(s.files.is_empty());
+    assert_eq!((s.pending, s.total, s.turns.as_ref().unwrap().len()), (2, 3, 2));
+    // Every scope, warm, as a fresh engine (the same saved review) sees it.
+    let fresh = Changes::new(Some(t.dir.parent().unwrap().join("state")));
+    for scope in [Scope::Pending, Scope::Chat, Scope::Turn(1), Scope::Turn(2)] {
+        let warm = t.load(scope);
+        let (key, dir, sources) = (t.key.clone(), t.dir.clone(), t.sources.clone());
+        let cold = fresh.load(&Request { key: &key, cwd: &dir, sources: &sources, scope, external: false });
+        assert_eq!(shown(&warm), shown(&cold), "{scope:?}");
+    }
+}
