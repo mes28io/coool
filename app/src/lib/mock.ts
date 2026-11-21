@@ -1355,6 +1355,7 @@ export function mockBackend(): Backend {
   // `?ideas=demo`: agent lanes with half an hour of history, the running-now pill, hover cards, a question card with
   // number keys and Later, and a Risky permission request (lib/mockIdeas.ts).
   if (location.search.includes("ideas=demo")) void import("./mockIdeas").then((m) => m.runIdeasDemo((cwd) => newChat("claude", cwd, {}, 0), `${HOME}/code/harbor`));
+  if (location.search.includes("changes=")) void import("./mockChanges").then((m) => m.runChangesDemo(newChat("claude", `${HOME}/code/invoices`, {}, 0), `${HOME}/code/invoices`)); // see mockChanges.ts
   if (location.search.includes("checkpoints=demo")) void import("./mockCheckpoints").then((m) => m.runCheckpointsDemo(newChat("claude", coool, {}, 0))); // see mockCheckpoints.ts
   if (location.search.includes("plan=chat")) void import("./mockPlan").then((m) => m.runPlanChat(newChat("claude", coool, {}, 0))); // see mockPlan.ts
   if (location.search.includes("steer=demo")) void import("./mockPlan").then((m) => m.runSteerDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
@@ -1691,6 +1692,28 @@ export function mockBackend(): Backend {
       await delay(80 + Math.random() * 120);
       return git.trail(path);
     },
+    async changesLoad(t) {
+      await delay(40);
+      return (await import("./mockChanges")).changesLoadMock(t.cwd, t.scope);
+    },
+    async changesUndo(t, file, hunk, force) {
+      await delay(120);
+      return (await import("./mockChanges")).changesUndoMock(t.cwd, t.scope, file, hunk, force);
+    },
+    async changesKeep(t, file, hunk, stage, unkeep) {
+      await delay(80);
+      return (await import("./mockChanges")).changesKeepMock(t.cwd, t.scope, file, hunk, stage, unkeep);
+    },
+    async changesTold() {},
+    async changesCommit(cwd, message) {
+      await delay(300);
+      return (await import("./mockChanges")).changesCommitMock(cwd, message);
+    },
+    async changesPreview(cwd, tool, input) {
+      await delay(60);
+      return (await import("./mockChanges")).changesPreviewMock(cwd, tool, input);
+    },
+    async changesOpen() {},
     async contextMap({ sessionId, agentId }) {
       await delay(30);
       if (sessionId === CTX_DEMO_ID) return agentId ? ctxAgentMap() : ctxDemoMap();

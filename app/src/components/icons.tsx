@@ -238,6 +238,13 @@ export const ICommit = mk(
     <path d="M1.75 8h3.5M10.75 8h3.5" />
   </>,
 );
+/** Changes: a page with a line added and a line taken out (the Changes panel). */
+export const IDiff = mk(
+  <>
+    <path d="M4 1.75h5.5l3 3v8.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-10.5a1 1 0 0 1 1-1Z" />
+    <path d="M8 5.5v4M6 7.5h4M6 11.75h4" />
+  </>,
+);
 /** A pull request: a branch that comes back with an arrowhead into its base. */
 export const IPullRequest = mk(
   <>

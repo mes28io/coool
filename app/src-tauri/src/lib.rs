@@ -11,6 +11,7 @@
 
 mod attach;
 mod apps;
+mod changes;
 mod artifact;
 mod browser;
 mod device;
@@ -116,6 +117,8 @@ struct Core {
     browsers: browser::Browsers,
     /// Context maps of the transcripts whose Models panel is open (see `context_map`).
     contexts: Mutex<coool_core::context::ContextMaps>,
+    /// The Changes view: transcript readers and what the person kept (see [`changes`]).
+    changes: Mutex<coool_core::changes::Changes>,
 }
 
 /// The last payload the UI got, per session, so the next refresh sends only
@@ -1790,6 +1793,7 @@ pub fn run() {
         None => (Box::new(lid::helper::Socket::real(dirs::config_dir().map(|d| d.join("coool")).unwrap_or_else(std::env::temp_dir))), Box::new(lid::sensors::System)),
     };
     let lid = lid::Lid::new(lid_parts.0, lid_parts.1, lid_dir, prefs.lid.clone(), lid::now_ms());
+    let changes_dir = changes::state_dir(selftest.as_ref());
     let core = Arc::new(Core {
         hub: Mutex::new(hub),
         published: Mutex::new(Published::new()),
@@ -1818,6 +1822,7 @@ pub fn run() {
         previews: artifact::Previews::default(),
         browsers: browser::Browsers::default(),
         contexts: Mutex::default(),
+        changes: Mutex::new(coool_core::changes::Changes::new(changes_dir)),
     });
 
     perf::boot_mark("core");
@@ -1899,6 +1904,13 @@ pub fn run() {
             environment,
             git_trail,
             context_map,
+            changes::changes_load,
+            changes::changes_undo,
+            changes::changes_keep,
+            changes::changes_told,
+            changes::changes_commit,
+            changes::changes_preview,
+            changes::changes_open,
             running_count,
             quit_app,
             prefs_get,
