@@ -57,7 +57,7 @@ pub fn text(cli: Cli, c: &AgentContext, helpers: bool) -> String {
     if c.any_device() {
         s.push_str("\n\nYour own devices, in coool's window (never the person's screen):");
         if c.browser {
-            s.push_str("\n- Browser panel (`browser_*`): after changing a web page or app, open it there and check the change before saying it works. http(s) only: serve local files (background `python3 -m http.server`).");
+            s.push_str("\n- Browser panel (`browser_*`): a change to a web page or web app is done only once you have opened it there and seen the change. `browser_navigate` takes a URL or a project file's path (e.g. `index.html`); a dev server you start goes in the background.");
         }
         if c.iphone {
             s.push_str("\n- iPhone simulator (`observe`, `tap`, `app`): after changing an iOS app, build it for the simulator, install and launch it with `app`, check it.");
@@ -103,7 +103,7 @@ mod tests {
             assert!(!bare.contains(absent), "{absent} in {bare}");
         }
         let full = text(Cli::Claude, &all(), true);
-        for present in ["Browser panel", "check the change before saying it works", "python3 -m http.server", "iPhone simulator", "Sandboxed Mac", "never to the person's desktop", "pilot_run", "`success`", "Jobs panel", "git worktree", "from their phone", "outcome"] {
+        for present in ["Browser panel", "is done only once you have opened it there", "a project file's path", "iPhone simulator", "Sandboxed Mac", "never to the person's desktop", "pilot_run", "`success`", "Jobs panel", "git worktree", "from their phone", "outcome"] {
             assert!(full.contains(present), "{present} missing");
         }
         // Only the browser: no iPhone or Mac line, the pilot still (it drives the browser too).
@@ -117,7 +117,7 @@ mod tests {
     fn small() {
         let full = text(Cli::Claude, &all(), true);
         let bare = text(Cli::Claude, &AgentContext::default(), false);
-        assert!(approx_tokens(&full) < 280, "{} tokens", approx_tokens(&full));
+        assert!(approx_tokens(&full) < 300, "{} tokens", approx_tokens(&full));
         assert!(approx_tokens(&bare) < 80, "{} tokens", approx_tokens(&bare));
     }
 

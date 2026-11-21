@@ -40,7 +40,7 @@ pub struct Mcp {
     providers: Mutex<HashMap<usize, &'static str>>,
 }
 
-fn random_token() -> String {
+pub(super) fn random_token() -> String {
     let mut b = [0u8; 16];
     if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_err() {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();

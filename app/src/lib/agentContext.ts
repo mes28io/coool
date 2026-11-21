@@ -8,7 +8,7 @@ import { chatDefaultsIgnored } from "./prefs";
 export const CONTEXT_LABEL = "Tell agents about coool";
 /** Measured with Claude Code's context report (crates/core/examples/context_text.rs + a no-turn probe). */
 export const CONTEXT_LINE =
-  "Chats coool starts learn that they run in coool, and when to check their work in the Browser, the iPhone simulator or the sandboxed Mac, and to hand routine steps to the device pilot. About 270 tokens per chat (up to 360 with everything on).";
+  "Chats coool starts learn that they run in coool, and when to check their work in the Browser, the iPhone simulator or the sandboxed Mac, and to hand routine steps to the device pilot. About 290 tokens per chat (up to 390 with everything on).";
 
 const KEY = "coool.context";
 

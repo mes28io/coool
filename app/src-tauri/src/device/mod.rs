@@ -12,6 +12,7 @@
 //! The panel and the chat's agent share one device: what the agent does is what the person sees (`sim-activity`
 //! events draw it on the panel).
 
+pub mod files;
 pub mod gate;
 pub mod helper;
 pub mod mcp;
