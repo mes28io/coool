@@ -21,6 +21,7 @@ pub mod polish;
 pub mod project;
 pub mod pty;
 pub mod shells;
+mod subagents;
 pub mod tail;
 pub mod titles;
 pub mod usage;

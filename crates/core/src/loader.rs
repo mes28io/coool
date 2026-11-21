@@ -73,6 +73,10 @@ pub(crate) struct View {
     pub bash: Vec<crate::shells::BashCall>,
     /// What the transcript says about naming (see [`crate::titles`]).
     pub title_facts: crate::titles::Facts,
+    /// Claude: the lifecycle records of the subagents it started (see [`crate::subagents`]).
+    pub agent_marks: std::sync::Arc<std::collections::HashMap<String, crate::subagents::Marks>>,
+    /// Claude: it ends inside a tool call (one with no result yet).
+    pub in_tool: bool,
 }
 
 /// Bytes read from the end of a file for [`tail_event`].
