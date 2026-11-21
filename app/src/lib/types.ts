@@ -93,11 +93,18 @@ export interface ModelUse {
   via_agent?: boolean;
 }
 
+/** How a subagent stands (crates/core `AgentState`); everything but "running" is `finished`. "quiet": no end on record, but no sign of life for long while nothing waits on it. */
+export type AgentState = "running" | "done" | "stopped" | "failed" | "quiet";
+
 export interface Agent {
   id: string;
   kind: string;
   description: string;
   finished: boolean;
+  /** Absent from older payloads and mocks: then `finished` alone decides (done / running). */
+  state?: AgentState;
+  /** Newest real event of its own transcript, epoch ms. */
+  last_event?: number | null;
   current: string | null;
   tokens: Tokens;
   activity: Activity[];

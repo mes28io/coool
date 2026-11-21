@@ -196,12 +196,33 @@ pub fn sort_model_use(list: &mut [ModelUse]) {
     list.sort_by(|a, b| b.total().cmp(&a.total()).then(b.messages.cmp(&a.messages)).then(a.model.cmp(&b.model)));
 }
 
+/// How a subagent stands. Everything but `Running` is `finished`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentState {
+    #[default]
+    Running,
+    /// Ran to its end.
+    Done,
+    /// Stopped before its end (TaskStop, the person, its session ending).
+    Stopped,
+    /// Ended on an error (a usage limit, an API error).
+    Failed,
+    /// No end was recorded, but it has shown no sign of life for a long time while nothing waits on it
+    /// (see `claude::agent_state`): not called done, not counted as working.
+    Quiet,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Agent {
     pub id: String,
     pub kind: String,
     pub description: String,
+    /// `state != Running`.
     pub finished: bool,
+    pub state: AgentState,
+    /// Newest real event of its own transcript, epoch ms (for "no activity for 40 min").
+    pub last_event: Option<u64>,
     pub current: Option<String>,
     pub tokens: Tokens,
     /// Shared with the transcript's parsed view: cloning a session is cheap.

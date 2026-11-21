@@ -7,6 +7,7 @@ import { fmtElapsed, fmtTokens, homeShort, isThinking, shortDetail, splitTool, t
 import { MOODS, moodOfCurrent, toolMood, type Mood } from "../lib/activityMood";
 import { useFold } from "../lib/cardFold";
 import { isStopReason } from "../lib/stopped";
+import { agentEnd } from "../lib/agentState";
 import { AgentMark } from "./AgentMark";
 import { MoodGlyph } from "./MoodGlyph";
 import { Shimmer } from "./Shimmer";
@@ -835,7 +836,8 @@ export function useFocusLit(asked: boolean, card: { current: HTMLElement | null 
 }
 
 /** How a finished subagent ended, and its one-line result: "Done · 3 tool uses · 5s". */
-export type AgentEnd = "done" | "failed" | "stopped";
+/** "quiet": no end on record and no sign of life for long (lib/agentState.ts); `reason` says for how long. */
+export type AgentEnd = "done" | "failed" | "stopped" | "quiet";
 export function agentResultParts(uses: number, ms: number | null, tokens = 0): string[] {
   return [uses > 0 && `${uses} tool ${uses === 1 ? "use" : "uses"}`, tokens > 0 && `↓ ${fmtTokens(tokens)} tokens`, ms !== null && ms > 0 && fmtElapsed(ms)].filter(Boolean) as string[];
 }
@@ -851,11 +853,11 @@ export function FoldChevron({ open }: { open: boolean }) {
 
 /** The header of a finished subagent card, and all of it when folded: status, task, result line, chevron. */
 export function FinishedAgentHead({ end, title, parts, reason, open, onToggle }: { end: AgentEnd; title: string; parts: string[]; reason?: string | null; open: boolean; onToggle: () => void }) {
-  const label = end === "failed" ? "Failed" : end === "stopped" ? "Stopped" : "Done";
+  const label = end === "failed" ? "Failed" : end === "stopped" ? "Stopped" : end === "quiet" ? reason || "No activity" : "Done";
   return (
     <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-center gap-2 px-3 py-[7px] text-left transition-colors duration-150 hover:bg-hover" data-agent-result={end} title={reason || undefined}>
       <span className="flex size-[14px] shrink-0 items-center justify-center">
-        {end === "failed" ? <IAlert size={13} className="text-err-text" /> : end === "stopped" ? <span className="size-[7px] rounded-full bg-faint" /> : <ICheck size={13} className="text-faint" />}
+        {end === "failed" ? <IAlert size={13} className="text-err-text" /> : end === "stopped" || end === "quiet" ? <span className="size-[7px] rounded-full bg-faint" /> : <ICheck size={13} className="text-faint" />}
       </span>
       <span className="min-w-0 flex-1 truncate text-base font-medium text-fg">{title}</span>
       <span className={cx("shrink-0 text-small tnum", end === "failed" ? "text-err-text" : "text-faint")}>
@@ -894,8 +896,10 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   // How it ended: a closing error is a failure, or a stop when it says the person interrupted it.
   const last = all[all.length - 1];
   const failedEnd = !running && !!last && last.kind === "error" && !last.step;
-  const reason = failedEnd ? (last.full ?? last.text) : null;
-  const end: AgentEnd = failedEnd ? (isStopReason(reason) ? "stopped" : "failed") : "done";
+  const recorded = agent ? agentEnd(agent) : null;
+  const reason = recorded?.error ?? (failedEnd ? (last.full ?? last.text) : null);
+  // As its session recorded the end (stopped, failed, quiet), else from its own last entry.
+  const end: AgentEnd = recorded ? (recorded.quiet ? "quiet" : recorded.stopped ? "stopped" : "failed") : failedEnd ? (isStopReason(reason) ? "stopped" : "failed") : "done";
   const t0 = all.length ? tsToMs(all[0].ts) : null;
   const t1 = last ? tsToMs(last.ts) : null;
   const parts = agentResultParts(all.filter((x) => x.kind === "tool" || x.kind === "agent").length, t0 !== null && t1 !== null ? t1 - t0 : null, agent?.tokens.total || agent?.tokens.output || 0);
@@ -917,7 +921,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
   return (
     <div className="flex gap-2.5 py-1">
       <span className="relative z-[1] mt-[7px] flex size-[18px] shrink-0 items-center justify-center rounded-full bg-bg text-dim">
-        <AgentMark size={14} state={running ? "live" : end} />
+        <AgentMark size={14} state={running ? "live" : end === "quiet" ? "stopped" : end} />
       </span>
       <div
         ref={card}

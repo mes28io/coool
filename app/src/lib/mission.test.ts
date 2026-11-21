@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cellCounts, cellState, changesFromActivity, changesFromChat, committing, compactSpan, fanout, foldAgentRows, heredocs, hmsToMs, ledgerRows, lineCounts, mergeChanges, overlaps, projectPath, relPath, sideEffect, treeOf, wordDiff, worktreeOf, type Change, type ItemLike } from "./mission.ts";
+import { cellCounts, cellState, changesFromActivity, changesFromChat, committing, compactSpan, fanout, foldAgentRows, heredocs, hmsToMs, timelineTimes, ledgerRows, lineCounts, mergeChanges, overlaps, projectPath, relPath, sideEffect, treeOf, wordDiff, worktreeOf, type Change, type ItemLike } from "./mission.ts";
 import type { Activity } from "./types.ts";
 
 const NOW = new Date(2026, 10, 18, 15, 0, 0).getTime();
@@ -390,4 +390,50 @@ test("overlaps: same-copy clashes first, then newest", () => {
   const rows = [ed("claude:a", 900, "src/x.ts"), ed("codex:b", 800, "src/x.ts"), ed("claude:a", 100, "src/y.ts"), ed("claude:c", 50, "src/y.ts")];
   const out = overlaps(rows, { "claude:a": ses(true, "agent-1"), "codex:b": ses(true, "agent-2"), "claude:c": ses(true, "agent-1") }, none);
   assert.deepEqual(out.map((o) => [o.file, o.kind]), [["src/y.ts", "same"], ["src/x.ts", "merge"]]);
+});
+
+// ---------- old subagent work in the same-file warning ----------
+
+const hms = (t: number) => {
+  const d = new Date(t);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+};
+
+test("timelineTimes: a timeline from days ago keeps its days when its newest event is known", () => {
+  const DAY = 86_400_000;
+  // Six days ago, across a midnight: 23:50, then 00:10 the next day.
+  const t1 = new Date(2026, 10, 12, 23, 50, 0).getTime();
+  const t2 = t1 + 20 * 60_000;
+  const list = [{ ts: hms(t1) }, { ts: hms(t2) }];
+  assert.deepEqual(timelineTimes(list, t2, NOW), [t1, t2]);
+  // Without it every clock time lands in the last 24 hours: last week's edit read as today's.
+  const guess = timelineTimes(list, null, NOW);
+  assert.ok(guess.every((t) => t !== null && NOW - t < DAY));
+});
+
+test("overlaps: a long session's old subagent edits, landed or ended, are not a live same-copy clash", () => {
+  const root = "/Users/you/code/app";
+  const DAY = 86_400_000;
+  const old = NOW - 6 * DAY;
+  const agentOf = (c: Change) => (c.step.startsWith("g:") ? c.step.slice(2) : null);
+  const edit = (path: string, t: number): Activity => ({ ts: hms(t), kind: "tool", text: `Edit · ${path}` }) as Activity;
+  const rowsOf = (id: string, act: Activity[], last: number | null) => changesFromActivity("claude:s", act, root, "main", NOW, last).map((c) => ({ ...c, id: `${c.id}@${id}`, step: `g:${id}` }));
+  // Two agents of one live session edited the file in the main checkout six days ago, a third in its worktree today.
+  const a1 = [edit(`${root}/src/a.rs`, old)];
+  const a2 = [edit(`${root}/src/a.rs`, old + 60_000)];
+  const a3 = [edit(`${root}/.claude/worktrees/agent-a3/src/a.rs`, NOW - 3_600_000)];
+  // Their work was committed five days ago.
+  const trail = [{ time_ms: old + DAY, files: ["src/a.rs"] }];
+  const live = { "claude:s": { live: true, tree: "" } };
+  // Clock times only: the old edits read as today's, after that commit, so a same-copy clash.
+  const before = [...rowsOf("a1", a1, null), ...rowsOf("a2", a2, null), ...rowsOf("a3", a3, null)];
+  assert.equal(overlaps(before, live, { agentOf, trail })[0]?.kind, "same");
+  // With their real days the commit after them landed them; the worktree agent alone is no overlap.
+  const after = [...rowsOf("a1", a1, old), ...rowsOf("a2", a2, old + 60_000), ...rowsOf("a3", a3, NOW - 3_600_000)];
+  assert.deepEqual(overlaps(after, live, { agentOf, trail }), []);
+  // Pending edits of subagents that have all ended are history, not a live clash.
+  const pending = [...rowsOf("a1", a1, old), ...rowsOf("a2", a2, old + 60_000)];
+  assert.equal(overlaps(pending, live, { agentOf, trail: [] }).length, 1, "both still running");
+  assert.deepEqual(overlaps(pending, { "claude:s": { live: true, tree: "", agents: { a1: false, a2: false } } }, { agentOf, trail: [] }), []);
+  assert.equal(overlaps(pending, { "claude:s": { live: true, tree: "", agents: { a1: false, a2: true } } }, { agentOf, trail: [] }).length, 1, "one still runs");
 });

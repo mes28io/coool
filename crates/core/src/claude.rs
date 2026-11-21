@@ -49,6 +49,9 @@ struct ParseState {
     /// Naming facts (see [`crate::titles`]).
     #[serde(default)]
     titles: crate::titles::Facts,
+    /// Lifecycle records of the subagents this transcript started (see [`crate::subagents`]).
+    #[serde(default)]
+    agents: HashMap<String, crate::subagents::Marks>,
 }
 
 /// When a transcript line is a real conversation event: a user entry, an
@@ -99,6 +102,9 @@ impl Parsed {
             bash: self.p.bash.clone(),
             last_event: self.p.last_event,
             title_facts: self.p.titles.clone(),
+            in_turn: self.p.turn_open,
+            agent_marks: Arc::new(self.p.agents.clone()),
+            in_tool: !self.p.open_tools.is_empty(),
             ..View::default()
         }
     }
@@ -112,6 +118,10 @@ struct AgentEntry {
     description: String,
     finished: bool,
     meta_model: Option<String>,
+    /// `meta.json`'s mtime, epoch ms (when `finished` was written).
+    meta_written: Option<u64>,
+    /// `meta.json` says it was launched in the background.
+    background: bool,
 }
 
 struct Entry {
@@ -152,6 +162,7 @@ struct AgentMeta {
     description: String,
     finished: bool,
     model: Option<String>,
+    background: bool,
 }
 
 pub struct ClaudeSource {
@@ -326,6 +337,7 @@ fn parse_registry(p: &Path) -> Option<RegEntry> {
     let (Some(pid), Some(sid)) = (v["pid"].as_u64().and_then(|p| u32::try_from(p).ok()), v["sessionId"].as_str()) else { return None };
     let live = Live {
         pid,
+        started_at: v["startedAt"].as_u64(),
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
         // `nameSource: "derived"` is Claude Code's placeholder ("proj-a3": the folder and a few hex digits) until the
         // session has a real name; taken as a title it showed until the first prompt and then stayed in the
@@ -350,17 +362,51 @@ fn session(id: &str, e: &Entry) -> Session {
     // Waiting for the user (or gone): whatever the transcript last showed
     // (e.g. "thinking…" before an Esc interrupt) is stale.
     let current = if status == Status::Busy { v.current.clone() } else { None };
+    // Launches, stops and ends are recorded by whoever started the agent: the session, or (nested) one of its agents.
+    let views: Vec<_> = e.agents.iter().map(|a| a.slot.view()).collect();
+    let mut marks = (*v.agent_marks).clone();
+    for av in &views {
+        if !av.agent_marks.is_empty() {
+            crate::subagents::merge(&mut marks, &av.agent_marks);
+        }
+    }
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let agents: Vec<Agent> = e
         .agents
         .iter()
-        .map(|a| {
-            let av = a.slot.view();
-            let finished = a.finished || status == Status::Ended;
+        .zip(&views)
+        .map(|(a, av)| {
+            let facts = crate::subagents::Facts {
+                meta_finished: a.finished,
+                meta_written: a.meta_written,
+                meta_background: a.background,
+                marks: marks.get(&a.id).copied().unwrap_or_default(),
+                own_last: av.last_event,
+                in_tool: av.in_tool,
+                parent_live: status != Status::Ended,
+                parent_started: e.live.as_ref().and_then(|r| r.started_at),
+                parent_last: v.last_event,
+                parent_in_turn: status == Status::Busy || v.in_turn,
+                now,
+            };
+            // Before the parse knows anything, `meta.json` alone says how it stands (as before).
+            let state = if v.loaded {
+                crate::subagents::state(&facts)
+            } else if a.finished {
+                AgentState::Done
+            } else if status == Status::Ended {
+                AgentState::Quiet
+            } else {
+                AgentState::Running
+            };
+            let finished = state != AgentState::Running;
             Agent {
                 id: a.id.clone(),
                 kind: a.kind.clone(),
                 description: a.description.clone(),
                 finished,
+                state,
+                last_event: av.last_event,
                 current: if finished { None } else { av.current.clone() },
                 tokens: av.tokens.clone(),
                 activity: av.activity.clone(),
@@ -416,12 +462,13 @@ fn scan_agents(e: &mut Entry, dir: &Path, memo: &mut Memos, seen: &mut HashSet<P
     let live = e.live.is_some();
     for (aid, meta_path) in metas {
         // Re-read only when it changed (`finished` flips once, at the end).
-        let meta = match fs::metadata(&meta_path) {
+        let (meta, written) = match fs::metadata(&meta_path) {
             Ok(m) => {
                 seen.insert(meta_path.clone());
-                memo.metas.get(&meta_path, &m, || parse_agent_meta(&meta_path)).clone()
+                let at = m.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
+                (memo.metas.get(&meta_path, &m, || parse_agent_meta(&meta_path)).clone(), at)
             }
-            Err(_) => parse_agent_meta(&meta_path),
+            Err(_) => (parse_agent_meta(&meta_path), None),
         };
         let jl = dir.join(format!("agent-{aid}.jsonl"));
         let idx = match e.agents.iter().position(|a| a.id == aid) {
@@ -435,6 +482,8 @@ fn scan_agents(e: &mut Entry, dir: &Path, memo: &mut Memos, seen: &mut HashSet<P
                     description: String::new(),
                     finished: false,
                     meta_model: None,
+                    meta_written: None,
+                    background: false,
                 });
                 e.agents.len() - 1
             }
@@ -444,6 +493,8 @@ fn scan_agents(e: &mut Entry, dir: &Path, memo: &mut Memos, seen: &mut HashSet<P
         a.description = meta.description;
         a.finished = meta.finished;
         a.meta_model = meta.model;
+        a.meta_written = written;
+        a.background = meta.background;
         match fs::metadata(&jl) {
             Ok(m) => {
                 a.has_file = true;
@@ -462,6 +513,7 @@ fn parse_agent_meta(p: &Path) -> AgentMeta {
         description: meta["description"].as_str().unwrap_or("").to_string(),
         finished: meta["finished"].as_bool().unwrap_or(false),
         model: meta["model"].as_str().map(str::to_string),
+        background: meta["requestShape"] == "background",
     }
 }
 
@@ -489,6 +541,8 @@ pub fn live_pid_for(session_id: &str, pid: u32) -> bool {
 #[derive(Clone)]
 struct Live {
     pid: u32,
+    /// Registry `startedAt`, epoch ms.
+    started_at: Option<u64>,
     cwd: String,
     name: String,
     busy: bool,
@@ -515,6 +569,11 @@ fn parse_line(
     }
     let Ok(v) = serde_json::from_str::<Value>(line) else { return };
     let ts = v["timestamp"].as_str().map(short_time).unwrap_or_default();
+    if matches!(v["type"].as_str(), Some("user" | "attachment"))
+        && let Some(at) = v["timestamp"].as_str().and_then(parse_rfc3339_ms)
+    {
+        crate::subagents::record(&mut st.agents, &v, at);
+    }
     if let Some(t) = event_ms(&v) {
         st.last_event = st.last_event.max(Some(t));
         if v["type"] == "system" {
@@ -1089,6 +1148,8 @@ mod tests {
             kind: "Explore".into(),
             description: String::new(),
             finished: true,
+            state: AgentState::Done,
+            last_event: None,
             current: None,
             tokens: Tokens::default(),
             activity: Default::default(),
@@ -1243,5 +1304,75 @@ mod tests {
         assert!(!pid_reused(me, Some(start + 500)), "registry written just after start");
         assert!(!pid_reused(me, None));
         assert!(pid_reused(me, Some(start.saturating_sub(3_600_000))), "process is newer than the registry entry");
+    }
+
+    /// A session that launched background agents, stopped two (one then resumed), lost two to a usage
+    /// limit (one then resumed and completed) and ran one in the foreground (subagent_fixtures/parent.jsonl):
+    /// each reads as it ended, and none as working. `meta.json` says `finished` only for those that ran to
+    /// their end, as Claude Code writes it.
+    #[test]
+    fn subagent_states_follow_the_parents_records() {
+        let root = std::env::temp_dir().join(format!("coool-subagents-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let proj = root.join("projects").join("-tmp-proj");
+        let sub = proj.join("s-lifecycle").join("subagents");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(proj.join("s-lifecycle.jsonl"), include_str!("subagent_fixtures/parent.jsonl")).unwrap();
+        // (id, meta finished, background, last event of its own transcript)
+        let agents = [
+            ("a1111111111111111", false, true, "10:01:58"),
+            ("a2222222222222222", true, true, "10:04:58"),
+            ("a3333333333333333", true, true, "10:19:58"),
+            ("a4444444444444444", false, true, "10:05:58"),
+            ("a5555555555555555", false, true, "10:31:30"),
+            ("a6666666666666666", true, false, "10:32:58"),
+            ("a7777777777777777", true, true, "10:39:58"),
+        ];
+        for (id, finished, bg, last) in agents {
+            let shape = if bg { "background" } else { "foreground" };
+            let fin = if finished { r#","finished":true"# } else { "" };
+            fs::write(sub.join(format!("agent-{id}.meta.json")), format!(r#"{{"agentType":"general-purpose","description":"task {id}","requestShape":"{shape}","model":"opus"{fin}}}"#)).unwrap();
+            let line = |t: &str, text: &str| format!(r#"{{"type":"assistant","isSidechain":true,"agentId":"{id}","timestamp":"2026-11-20T{t}.000Z","message":{{"model":"claude-opus-5-5","id":"m-{id}-{t}","content":[{{"type":"text","text":"{text}"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#);
+            fs::write(sub.join(format!("agent-{id}.jsonl")), format!("{}\n{}\n", line("10:00:30", "start"), line(last, "last"))).unwrap();
+        }
+        let mut src = ClaudeSource::with_root(root.clone(), Duration::from_secs(3600));
+        let s = src.refresh().into_iter().find(|s| s.id == "s-lifecycle").expect("session");
+        let _ = fs::remove_dir_all(&root);
+        let got: Vec<(&str, AgentState, bool)> = s.agents.iter().map(|a| (a.id.as_str(), a.state, a.finished)).collect();
+        use AgentState::*;
+        assert_eq!(
+            got,
+            vec![
+                ("a1111111111111111", Stopped, true),
+                ("a2222222222222222", Done, true),
+                ("a3333333333333333", Done, true),
+                ("a4444444444444444", Failed, true),
+                // Resumed after its stop, but its session's process is gone: no end on record, not working.
+                ("a5555555555555555", Quiet, true),
+                ("a6666666666666666", Done, true),
+                ("a7777777777777777", Done, true),
+            ]
+        );
+        assert!(s.agents.iter().all(|a| a.current.is_none()));
+        assert_eq!(s.agents[4].last_event, parse_rfc3339_ms("2026-11-20T10:31:30Z"));
+    }
+
+    /// Read-only check against a real session: `COOOL_SESSION=<id> cargo test -p coool-core --lib
+    /// real_session_agent_states -- --ignored --nocapture`. Prints counts only, never content.
+    #[test]
+    #[ignore]
+    fn real_session_agent_states() {
+        let Ok(id) = std::env::var("COOOL_SESSION") else { return };
+        let mut src = ClaudeSource::new(Duration::from_secs(30 * 86_400));
+        let Some(s) = src.refresh().into_iter().find(|s| s.id == id) else { panic!("no such session") };
+        let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+        for a in &s.agents {
+            *by.entry(format!("{:?}", a.state)).or_default() += 1;
+        }
+        let before = src.entries[&id].agents.iter().filter(|a| !a.finished && s.status != Status::Ended).count();
+        println!("status {:?} · {} agents · now {:?} · before (meta.json only) running: {before}", s.status, s.agents.len(), by);
+        for a in s.agents.iter().filter(|a| a.state != AgentState::Done) {
+            println!("  {} {:?}", a.id, a.state);
+        }
     }
 }

@@ -67,6 +67,29 @@ export function hmsToMs(ts: string, now = Date.now()): number | null {
   return t;
 }
 
+/**
+ * Epoch ms for each entry of a timeline whose `ts` is only a clock time (HH:MM:SS). With `last`, the epoch ms
+ * of its newest entry (`Session.last_event`, `Agent.last_event`), the times are walked back from it, each one
+ * the latest moment at or before the entry after it, so a timeline from days ago keeps its days (without it,
+ * every clock time is put in the last 24 hours, and an edit from last week reads as this morning's).
+ */
+export function timelineTimes(list: { ts: string }[], last: number | null | undefined, now = Date.now()): (number | null)[] {
+  if (!last) return list.map((a) => hmsToMs(a.ts, now));
+  const out: (number | null)[] = list.map(() => null);
+  let anchor = last + 1000;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = /^(\d\d):(\d\d):(\d\d)$/.exec(list[i].ts);
+    if (!m) continue;
+    const d = new Date(anchor);
+    d.setHours(+m[1], +m[2], +m[3], 0);
+    let t = d.getTime();
+    if (t > anchor) t -= 86_400_000;
+    out[i] = t;
+    anchor = t + 1000;
+  }
+  return out;
+}
+
 /** "Edit · ~/a/b.ts" -> { name: "Edit", detail: "~/a/b.ts" }. */
 function split(text: string): { name: string; detail: string } {
   const i = text.indexOf(" · ");
@@ -422,8 +445,9 @@ function publishRow(a: ArtifactInfo): Effect {
  * effects, published pages and device-pilot runs. The timeline has no tool results, so a failed step
  * shows too unless an error row follows it.
  */
-export function changesFromActivity(session: string, activity: Activity[], root: string, branch: string | null = null, now = Date.now()): Change[] {
+export function changesFromActivity(session: string, activity: Activity[], root: string, branch: string | null = null, now = Date.now(), last: number | null = null): Change[] {
   const rows: Change[] = [];
+  const times = timelineTimes(activity, last, now);
   const turnOf = new Map<string, string>();
   let turn = "";
   for (let i = 0; i < activity.length; i++) {
@@ -436,7 +460,7 @@ export function changesFromActivity(session: string, activity: Activity[], root:
     // A failed step: the timeline puts its error right after it.
     const next = activity[i + 1];
     if (next?.kind === "error" && next.step) continue;
-    const ts = hmsToMs(a.ts, now) ?? now;
+    const ts = times[i] ?? now;
     const id = `${session}|${a.ts}|${a.text}`;
     const { name, detail } = split(a.text);
     const effects: Effect[] = [];
@@ -769,6 +793,8 @@ export interface OverlapSession {
   live: boolean;
   /** Its copy of the project: "" for the project's own checkout, else the worktree (`treeOf`). */
   tree: string;
+  /** Whether each of its subagents still works, by id: a subagent's edits are live only while it is. */
+  agents?: Record<string, boolean>;
 }
 
 export interface OverlapEdit {
@@ -819,7 +845,8 @@ export const authorOf = (e: { session: string; agent: string | null }) => `${e.s
 
 /**
  * Files that two or more authors (sessions, or subagents of one: an orchestrator's agents each work in their
- * own worktree) of a project changed and neither has landed, while at least one of their sessions is live. A change still counts while it is pending:
+ * own worktree) of a project changed and neither has landed, while at least one of them still works (a live session; a subagent only while it
+ * runs: one that ended is history, like an ended session). A change still counts while it is pending:
  * - In the project's checkout: not committed yet (`committedBy`: the author committed after it, or a commit on
  *   the trail made after it lists the file).
  * - In a worktree: not merged yet. Its own commits stay in the worktree's branch, so only the trail (the
@@ -827,6 +854,13 @@ export const authorOf = (e: { session: string; agent: string | null }) => `${e.s
  * A move counts for both its old and its new path. Lockfiles and snapshots are left out. Two authors in the
  * same copy make it "same"; otherwise "merge". Same-copy clashes first, then newest.
  */
+/** An edit's author still works: its session is live, and a subagent author is still running. */
+const editLive = (e: Pick<OverlapEdit, "session" | "agent">, sessions: Record<string, OverlapSession>) => {
+  const who = sessions[e.session];
+  if (!who?.live) return false;
+  return !e.agent || who.agents?.[e.agent] !== false;
+};
+
 export function overlaps(rows: Change[], sessions: Record<string, OverlapSession>, o: { agentOf: (c: Change) => string | null; trail: TrailCommitLike[] | null }): Overlap[] {
   const committed = committedBy(rows, o.agentOf, o.trail);
   const commits = trailCommits(o.trail);
@@ -865,7 +899,7 @@ export function overlaps(rows: Change[], sessions: Record<string, OverlapSession
       if (!p || e.ts > p.ts) per.set(authorOf(e), e);
     }
     const edits = [...per.values()].sort((a, b) => b.ts - a.ts || authorOf(a).localeCompare(authorOf(b)));
-    if (edits.length < 2 || !edits.some((e) => sessions[e.session]?.live)) continue;
+    if (edits.length < 2 || !edits.some((e) => editLive(e, sessions))) continue;
     // Same copy: two different authors edited it in one tree.
     const all = [...m.values()];
     const same = all.some((e) => all.some((f) => f.tree === e.tree && authorOf(f) !== authorOf(e)));

@@ -368,6 +368,8 @@ impl CodexSource {
                         kind: if name.is_empty() { "subagent".into() } else { name },
                         description: child.last_prompt.clone().map(|t| one_line(&t, 120)).unwrap_or_default(),
                         finished,
+                        state: if finished { AgentState::Done } else { AgentState::Running },
+                        last_event: child.last_event,
                         current: if finished { None } else { child.current.clone() },
                         tokens: child.tokens.clone(),
                         activity: child.activity.clone(),
