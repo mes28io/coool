@@ -3,6 +3,7 @@
 // statuses flip, steps arrive, subagents run, and coool-run sessions get a
 // fake terminal stream. Also the demo for coool.sh.
 
+import { mockCtx } from "./mockChatContext";
 import { mockExplain, runWhyDemo } from "./mockWhy";
 import { NotAvailable, type Backend, type ChatBatch, type PtyChunk } from "./backend";
 import { AGENTS_DEMO_ID, AGENTS_JOBS_ID, AGENTS_SHELLS_ID } from "./agentsDemo";
@@ -1373,6 +1374,7 @@ export function mockBackend(): Backend {
     }, 600);
   }
   if (location.search.includes("agents=chat")) void import("./mockAgents").then((m) => m.runAgentsChat(newChat("claude", `${HOME}/code/blender-addon`, {}, 0))); // see mockAgents.ts
+  if (location.search.includes("context=")) void import("./mockChatContext").then((m) => m.ctxDemo() && m.runContextDemo((cwd) => newChat("claude", cwd, { model: "claude-opus-5-5" }, 0))); // see mockChatContext.ts
   if (location.search.includes("ladder=demo")) void import("./mockLadder").then((m) => m.runLadderChat(newChat("claude", `${HOME}/code/blender-addon`, { model: "claude-opus-5-5" }, 0))); // see mockLadder.ts
   // `?tools=demo`: a chat that drives the Browser, iPhone and Mac through coool-device (readable step rows, where the
   // turn went, a subagent near its context limit): one finished turn, then a live one (`?tools=demo&live=0`: no live turn).
@@ -1699,6 +1701,13 @@ export function mockBackend(): Backend {
       const a = agentId ? s?.agents.find((x) => x.id === agentId) : null;
       return { total: (a ?? s)?.tokens.context ?? 0, parts: [], compaction: null, note: "The mock itemises only the first session's context.", chars_per_token: null };
     },
+    // The Context panel: an in-memory set of files (mockChatContext.ts).
+    chatContext: (t) => mockCtx.chatContext(t),
+    chatContextRead: (t, p) => mockCtx.chatContextRead(t, p),
+    chatContextSave: (t, p, text, stamp) => mockCtx.chatContextSave(t, p, text, stamp),
+    chatContextCreate: (t, c) => mockCtx.chatContextCreate(t, c),
+    chatContextTrash: (t, p) => mockCtx.chatContextTrash(t, p),
+    chatContextReveal: () => mockCtx.chatContextReveal(),
     async environment() {
       // `?env=nocodex` / `?env=noclaude` / `?env=none`: a CLI not installed (the onboarding's and the new-session sheet's lines).
       const e = /[?&]env=(\w+)/.exec(location.search)?.[1] ?? "";

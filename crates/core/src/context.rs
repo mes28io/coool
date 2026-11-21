@@ -134,7 +134,7 @@ const DEFAULT_CPT: f64 = 3.0;
 /// Prose (memory, skills, prompts, summaries): typical characters per token.
 pub(crate) const PROSE_CPT: f64 = 3.8;
 /// Tool schemas (JSON with prose descriptions).
-const SCHEMA_CPT: f64 = 3.2;
+pub(crate) const SCHEMA_CPT: f64 = 3.2;
 /// Below this many characters per token, the step held more than its text explains.
 const MIN_CPT: f64 = 1.2;
 /// Above this, a step's sample is not used to learn the ratio (it is still split by length).

@@ -784,6 +784,12 @@ fn describe_wait(a: &Value) -> String {
     }
 }
 
+/// The server's tools for the Context panel: how many, and the size of their definitions (bytes of JSON).
+pub fn tools_size() -> (u32, u64) {
+    let t = tools();
+    (t.as_array().map_or(0, |a| a.len() as u32), t.to_string().len() as u64)
+}
+
 fn tools() -> Value {
     let mut all = vec![super::pilot::tool()];
     if let Value::Array(v) = device_tools() {

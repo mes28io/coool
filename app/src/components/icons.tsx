@@ -85,6 +85,8 @@ export const IStop = mk(<rect x="3.75" y="3.75" width="8.5" height="8.5" rx="1.2
 export const IPlay = mk(<path d="M4.75 2.75v10.5L12.75 8z" />);
 export const IFolder = mk(<path d="M1.75 3.75a1 1 0 011-1h3.69l1.5 1.5h5.31a1 1 0 011 1v7a1 1 0 01-1 1H2.75a1 1 0 01-1-1z" />);
 export const IFile = mk(<path d="M2.75 1.75h6l4.5 4.5v8H2.75zM8.75 1.75v4.5h4.5" />);
+/** What a chat starts with (the Context panel): a sheet of instructions behind another. */
+export const IContext = mk(<path d="M4.75 1.75h7.5a1 1 0 011 1v8.5M2.75 4.75a1 1 0 011-1h6.5a1 1 0 011 1v8.5a1 1 0 01-1 1h-6.5a1 1 0 01-1-1zM5.25 7.25h3.5M5.25 9.75h3.5M5.25 12.25h2" />);
 export const IPencil = mk(<path d="M10.5 2.25l3.25 3.25-8.25 8.25H2.25V10.5zM8.75 4l3.25 3.25" />);
 export const IGlobe = mk(
   <>

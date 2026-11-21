@@ -194,6 +194,22 @@ pub fn tokens(bytes: u64) -> u64 {
     (bytes as f64 / PROSE_CPT).round() as u64
 }
 
+/// Tokens of `bytes` bytes of tool definitions (JSON schemas), at the context map's ratio for them.
+pub fn schema_tokens(bytes: u64) -> u64 {
+    (bytes as f64 / crate::context::SCHEMA_CPT).round() as u64
+}
+
+/// The readable extras an overview implies for [`guard::Scope::extra_read`]: files instruction files import and
+/// the skill folders of plugins.
+pub fn extra_reads(ov: &Overview) -> Vec<PathBuf> {
+    ov.items
+        .iter()
+        .filter(|i| i.kind == "import" || i.kind == "loaded" || (i.group == Group::Skills && i.source.starts_with("Plugin")))
+        .filter_map(|i| i.path.as_deref().map(PathBuf::from))
+        .map(|p| if p.file_name().is_some_and(|n| n == "SKILL.md") { p.parent().map(Path::to_path_buf).unwrap_or(p) } else { p })
+        .collect()
+}
+
 // ---------- folders ----------
 
 /// The repository around `dir`: (its root, the `.git` entry there).

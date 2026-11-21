@@ -117,3 +117,10 @@ test("the sidebar is remembered per arrangement", () => {
   assert.notEqual(sidebarKeys("stacked").open, sidebarKeys("wide").open);
   assert.notEqual(sidebarKeys("stacked").width, sidebarKeys("wide").width);
 });
+
+test("the Context panel goes below a chat in a stacked pane and beside it otherwise", () => {
+  assert.equal(panelAxis("stacked", "context", 1080, 1700, 400), "y");
+  assert.equal(panelAxis("wide", "context", 1440, 800, 400), "x");
+  assert.equal(panelAxis("stacked", "context", 1080, 400, 400), "x");
+  assert.equal(STACK_DEFAULT.context, 0.48);
+});

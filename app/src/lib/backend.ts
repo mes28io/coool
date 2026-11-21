@@ -9,6 +9,7 @@ import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
 import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
+import type { CtxCreate, CtxFile, CtxOverview, CtxSaveReply, CtxStamp, CtxTarget } from "./chatContext";
 
 export interface PtyChunk {
   id: number;
@@ -56,6 +57,18 @@ export interface Backend extends SettingsBackend {
   gitTrail(path: string): Promise<GitTrail>;
   /** What fills a session's (or one of its subagents') context window, for the open Models panel only (crates/core/src/context.rs). */
   contextMap(a: { provider: Provider; sessionId: string; agentId?: string | null; cwd?: string }): Promise<ContextMap>;
+  // ---- the Context panel (crates/core/src/chatctx: the lookup and the allow-list are there) ----
+  /** What the chat's agent starts with: folder, instructions, memory, skills, what coool adds. */
+  chatContext(target: CtxTarget): Promise<CtxOverview>;
+  /** One file of it (refused unless the allow-list has it). */
+  chatContextRead(target: CtxTarget, path: string): Promise<CtxFile>;
+  /** Saves an edit atomically; "changed" (nothing written) when the file changed on disk since `stamp`. */
+  chatContextSave(target: CtxTarget, path: string, text: string, stamp: CtxStamp | null): Promise<CtxSaveReply>;
+  /** A new memory file / skill / instruction file: its path. */
+  chatContextCreate(target: CtxTarget, create: CtxCreate): Promise<string>;
+  /** To the Trash (a skill: its folder): what went. */
+  chatContextTrash(target: CtxTarget, path: string): Promise<string>;
+  chatContextReveal(target: CtxTarget, path: string): Promise<void>;
   quit(): Promise<void>;
   // ---- the updater (app/src-tauri/src/update/, lib/update.ts) ----
   /** What the updater knows (no network); null when this backend has no updater. */
@@ -610,6 +623,12 @@ async function tauriBackend(): Promise<Backend> {
     environment: () => invoke("environment"),
     gitTrail: (path) => invoke("git_trail", { path }),
     contextMap: ({ provider, sessionId, agentId, cwd }) => soft("context_map", { provider, sessionId, agentId: agentId ?? null, cwd: cwd ?? null }),
+    chatContext: (target) => soft("chat_context", { target }),
+    chatContextRead: (target, path) => soft("chat_context_read", { target, path }),
+    chatContextSave: (target, path, text, stamp) => soft("chat_context_save", { target, path, text, stamp }),
+    chatContextCreate: (target, create) => soft("chat_context_create", { target, create }),
+    chatContextTrash: (target, path) => soft("chat_context_trash", { target, path }),
+    chatContextReveal: (target, path) => soft("chat_context_reveal", { target, path }),
     quit: () => invoke("quit_app"),
     updateStatus: () => soft<UpdateStatus>("update_status").catch(() => null),
     updateCheck: () => soft<UpdateStatus>("update_check").catch(() => null),
