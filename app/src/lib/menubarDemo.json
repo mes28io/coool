@@ -33,6 +33,14 @@
           {
             "text": " 47%",
             "kind": "value"
+          },
+          {
+            "text": "DISK",
+            "kind": "label"
+          },
+          {
+            "text": "  51G",
+            "kind": "value"
           }
         ],
         "tooltip": "coool · CPU 7% · memory 47% used",
@@ -219,6 +227,14 @@
           },
           {
             "text": " 89%",
+            "kind": "value"
+          },
+          {
+            "text": "DISK",
+            "kind": "label"
+          },
+          {
+            "text": "  51G",
             "kind": "value"
           }
         ],
@@ -448,6 +464,14 @@
           {
             "text": " 70%",
             "kind": "value"
+          },
+          {
+            "text": "DISK",
+            "kind": "label"
+          },
+          {
+            "text": "  51G",
+            "kind": "value"
           }
         ],
         "tooltip": "coool · CPU 34% · memory 70% used · 2 sessions need you",
@@ -669,6 +693,14 @@
           },
           {
             "text": " 47%",
+            "kind": "value"
+          },
+          {
+            "text": "DISK",
+            "kind": "label"
+          },
+          {
+            "text": "  51G",
             "kind": "value"
           }
         ],

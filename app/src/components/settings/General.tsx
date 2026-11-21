@@ -254,7 +254,7 @@ export function General() {
               options={[
                 { value: "nothing", label: "Nothing", hint: "The icon alone" },
                 { value: "cpu", label: "CPU", hint: "All cores together, like Activity Monitor" },
-                { value: "cpu_memory", label: "CPU and memory", hint: "Memory used of the total" },
+                { value: "cpu_memory", label: "CPU, memory and disk", hint: "Memory used of the total, and free disk space" },
                 { value: "needs", label: "Sessions needing you", hint: "How many, when any do" },
               ]}
               onChange={(v) => save({ menubar: { show: prefs?.menubar?.show ?? true, mode: v } })}
