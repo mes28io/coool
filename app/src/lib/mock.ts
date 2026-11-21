@@ -1387,6 +1387,7 @@ export function mockBackend(): Backend {
   }
   if (location.search.includes("attach=")) void import("./mockAttach").then((m) => m.runAttachDemo(newChat("claude", `${HOME}/code/invoices`, {}, 0))); // see mockAttach.ts
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
+  if (location.search.includes("newsession=")) void import("./mockFolders").then((m) => m.runNewSessionDemo()); // see mockFolders.ts
 
   // `?presence=iphone|mac|browser`: an agent drives that panel on a loop (lib/mockPresence.ts).
   const presence = presenceDemo();
@@ -1690,6 +1691,13 @@ export function mockBackend(): Backend {
       await delay(200);
       return `${HOME}/code/new-project`;
     },
+    // The New session sheet's folder finder: an invented file system (mockFolders.ts).
+    foldersIndex: (extra, refresh) => import("./mockFolders").then((m) => m.mockFolders.index(extra, refresh)),
+    foldersList: (path, hidden, allow) => import("./mockFolders").then((m) => m.mockFolders.list(path, hidden, allow)),
+    foldersComplete: (input, allow) => import("./mockFolders").then((m) => m.mockFolders.complete(input, allow)),
+    foldersSummary: (path, provider, allow) => import("./mockFolders").then((m) => m.mockFolders.summary(path, provider, allow)),
+    foldersCreate: (parent, name, git) => import("./mockFolders").then((m) => m.mockFolders.create(parent, name, git)),
+    worktreeCreate: (project, name) => import("./mockFolders").then((m) => m.mockFolders.worktree(project, name)),
     async gitTrail(path) {
       await delay(80 + Math.random() * 120);
       return git.trail(path);

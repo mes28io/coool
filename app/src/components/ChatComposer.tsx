@@ -500,60 +500,21 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
                   <Caret />
                 </Chip>
                 <Popover open={pop === "mode"} onClose={() => setPop(null)} side="top" width={300}>
-                  <div className="p-1">
-                    <div className="px-2.5 pb-1 pt-1.5 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Permission mode</div>
-                    {lidOn && asksBeforeActing(chat.permissionMode) && (
-                      <div className="mx-1.5 mb-1 rounded-[8px] bg-[color-mix(in_oklab,var(--busy)_12%,transparent)] px-2 py-1.5 text-small leading-[17px] text-busy-text" data-lid-mode-hint>
-                        Lid closed: this mode stops to ask, and the Mac sleeps soon after a prompt nobody answers. For an unattended run, pick a mode that doesn’t ask{chat.provider === "claude" ? " (in Claude, only Bypass: use it only where you trust the task)" : ""}.
-                      </div>
-                    )}
-                    {modes.map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => {
-                          setPop(null);
-                          void chatCall(chat.id, () => api().chatSetPermissionMode(chat.id, m.id));
-                        }}
-                        className="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-hover"
-                      >
-                        <span className="mt-[3px]">
-                          <ModeGlyph id={m.id} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-base font-medium text-fg">{m.label}</span>
-                          <span className="block text-small text-dim">{m.description}</span>
-                        </span>
-                        {m.id === chat.permissionMode && <ICheck size={15} className="mt-[3px] text-accent-text" />}
-                      </button>
-                    ))}
-                    {(SANDBOX_MODES[chat.provider] ?? []).length > 0 && (
-                      <>
-                        <div className="mx-2.5 mt-1 border-t border-hairline px-0 pb-1 pt-2 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Sandbox · from the next turn</div>
-                        {SANDBOX_MODES[chat.provider].map((m) => (
-                          <button
-                            key={m.id}
-                            type="button"
-                            onClick={() => {
-                              setPop(null);
-                              void chatCall(chat.id, () => api().chatSetPermissionMode(chat.id, m.id)).then(
-                                (ok) => ok && useChats.getState().local(chat.id, { level: "info", text: `Sandbox: ${m.label.toLowerCase()} from the next turn on.` }),
-                              );
-                            }}
-                            className="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-hover"
-                          >
-                            <span className="mt-[3px]">
-                              <ModeGlyph id={m.id === "danger-full-access" ? "never" : m.id === "read-only" ? "plan" : "on-failure"} />
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-base font-medium text-fg">{m.label}</span>
-                              <span className="block text-small text-dim">{m.description}</span>
-                            </span>
-                          </button>
-                        ))}
-                      </>
-                    )}
-                  </div>
+                  <ModeMenu
+                    provider={chat.provider}
+                    current={chat.permissionMode}
+                    lidOn={lidOn}
+                    onPick={(m) => {
+                      setPop(null);
+                      void chatCall(chat.id, () => api().chatSetPermissionMode(chat.id, m));
+                    }}
+                    onSandbox={(m) => {
+                      setPop(null);
+                      void chatCall(chat.id, () => api().chatSetPermissionMode(chat.id, m.id)).then(
+                        (ok) => ok && useChats.getState().local(chat.id, { level: "info", text: `Sandbox: ${m.label.toLowerCase()} from the next turn on.` }),
+                      );
+                    }}
+                  />
                 </Popover>
               </div>
             )}
@@ -658,9 +619,67 @@ function KindTag({ group }: { group: Group }) {
   return null;
 }
 
-function Caret() {
+export function Caret() {
   return (
 <ICaret size={9} strokeWidth={1.75} className="opacity-60" aria-hidden />
+  );
+}
+
+/**
+ * The permission mode menu (the composer's chip, and the New session sheet's before the chat starts). `onSandbox`:
+ * Codex's sandbox modes too (a running chat only); `def`: a "CLI's default" row (the sheet).
+ */
+export function ModeMenu({ provider, current, lidOn, onPick, onSandbox, def }: { provider: string; current: string | null; lidOn: boolean; onPick: (id: string) => void; onSandbox?: (m: { id: string; label: string }) => void; def?: { label: string; description: string; onPick: () => void } }) {
+  const modes = PERMISSION_MODES[provider] ?? [];
+  return (
+    <div className="p-1">
+      <div className="px-2.5 pb-1 pt-1.5 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Permission mode</div>
+      {lidOn && asksBeforeActing(current) && (
+        <div className="mx-1.5 mb-1 rounded-[8px] bg-[color-mix(in_oklab,var(--busy)_12%,transparent)] px-2 py-1.5 text-small leading-[17px] text-busy-text" data-lid-mode-hint>
+          Lid closed: this mode stops to ask, and the Mac sleeps soon after a prompt nobody answers. For an unattended run, pick a mode that doesn’t ask{provider === "claude" ? " (in Claude, only Bypass: use it only where you trust the task)" : ""}.
+        </div>
+      )}
+      {def && (
+        <button type="button" data-mode-option="" onClick={def.onPick} className="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-hover">
+          <span className="mt-[3px]">
+            <ModeGlyph id={null} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-base font-medium text-fg">{def.label}</span>
+            <span className="block text-small text-dim">{def.description}</span>
+          </span>
+          {current === null && <ICheck size={15} className="mt-[3px] text-accent-text" />}
+        </button>
+      )}
+      {modes.map((m) => (
+        <button key={m.id} type="button" data-mode-option={m.id} onClick={() => onPick(m.id)} className="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-hover">
+          <span className="mt-[3px]">
+            <ModeGlyph id={m.id} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-base font-medium text-fg">{m.label}</span>
+            <span className="block text-small text-dim">{m.description}</span>
+          </span>
+          {m.id === current && <ICheck size={15} className="mt-[3px] text-accent-text" />}
+        </button>
+      ))}
+      {onSandbox && (SANDBOX_MODES[provider] ?? []).length > 0 && (
+        <>
+          <div className="mx-2.5 mt-1 border-t border-hairline px-0 pb-1 pt-2 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Sandbox · from the next turn</div>
+          {SANDBOX_MODES[provider].map((m) => (
+            <button key={m.id} type="button" onClick={() => onSandbox(m)} className="flex w-full items-start gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-hover">
+              <span className="mt-[3px]">
+                <ModeGlyph id={m.id === "danger-full-access" ? "never" : m.id === "read-only" ? "plan" : "on-failure"} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-base font-medium text-fg">{m.label}</span>
+                <span className="block text-small text-dim">{m.description}</span>
+              </span>
+            </button>
+          ))}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -677,19 +696,25 @@ function Hi({ text, q }: { text: string; q: string }) {
   );
 }
 
-function ModeGlyph({ id }: { id: string | null }) {
+export function ModeGlyph({ id }: { id: string | null }) {
   const c = id === "bypassPermissions" || id === "never" ? "var(--error)" : id === "plan" ? "var(--dim)" : id === "acceptEdits" || id === "on-failure" ? "var(--busy)" : "var(--dim)";
   return <span className="inline-block size-[7px] rounded-[4px]" style={{ background: c }} />;
 }
 
 function ModelPicker({ chat, current, onPick }: { chat: Chat; current: string | null; onPick: (m: string) => void }) {
+  return <ModelMenu provider={chat.provider} listed={chat.modelOptions} used={chat.models} ready={chat.ready} current={current} onPick={onPick} />;
+}
+
+/** The model menu (the composer's chip, and the New session sheet before a chat exists: `ready` false, `listed` the models this CLI reported before). */
+export function ModelMenu({ provider, listed, used = {}, ready, current, onPick, before }: { provider: string; listed: { id: string; label: string }[]; used?: Chat["models"]; ready: boolean; current: string | null; onPick: (m: string) => void; before?: React.ReactNode }) {
   const [custom, setCustom] = useState("");
-  const options = chat.modelOptions.length ? chat.modelOptions : current ? [{ id: current, label: modelLabel(current) }] : [];
-  const used = chat.models;
+  const chat = { provider, ready, modelOptions: listed };
+  const options = listed.length ? listed : current ? [{ id: current, label: modelLabel(current) }] : [];
   const total = Object.values(used).reduce((n, u) => n + tokTotal(u), 0);
   return (
     <div className="p-1">
       <div className="px-2.5 pb-1 pt-1.5 font-mono text-micro font-semibold uppercase tracking-[0.06em] text-faint">Model</div>
+      {before}
       {options.map((o) => {
         const u = used[o.id];
         return (

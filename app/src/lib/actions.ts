@@ -12,6 +12,7 @@ import { estimateSize } from "./termlite";
 import { setDraft } from "./drafts";
 import type { Provider, RememberOption, ResetOutcome, Session } from "./types";
 import { sessionKey } from "./types";
+import type { Attachment } from "./attachRules";
 
 const toast = (t: string, tone: "info" | "error" = "info") => useStore.getState().toast(t, tone);
 
@@ -24,7 +25,8 @@ function place(target: { kind: "chat"; id: number } | { kind: "pty"; id: number 
 /** New chat (default for anything coool starts). Falls back to a terminal session. */
 /** `draft`: text put in the new chat's composer, not sent. */
 /** `context`: this chat's coool context, over Settings' default (APP_SPEC "coool context"). */
-export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; draft?: string; leaf?: string; model?: string | null; permissionMode?: string | null; ladder?: ChatLadder; context?: boolean }): Promise<boolean> {
+/** `attachments`: sent with the first prompt (the New session sheet's tray). `started`: the new chat's id, once it exists. */
+export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; draft?: string; leaf?: string; model?: string | null; permissionMode?: string | null; ladder?: ChatLadder; context?: boolean; attachments?: Attachment[]; started?: (id: number) => void }): Promise<boolean> {
   try {
     // Settings > General: what a new chat starts with, unless the caller chose.
     const d = getChatDefaults()[a.provider];
@@ -41,7 +43,8 @@ export async function newChat(a: { provider: Provider; cwd: string; prompt?: str
     useChats.getState().ensure({ id, provider: a.provider, cwd: a.cwd, session_id: null, model: model ?? null, state: "idle", running: true });
     if (a.draft) setDraft(id, a.draft);
     place({ kind: "chat", id }, a.leaf);
-    if (a.prompt?.trim()) await api().chatSend(id, a.prompt.trim());
+    a.started?.(id);
+    if (a.prompt?.trim() || a.attachments?.length) await api().chatSend(id, a.prompt?.trim() ?? "", a.attachments);
     return true;
   } catch (e) {
     if (!isNotAvailable(e)) throw e;
