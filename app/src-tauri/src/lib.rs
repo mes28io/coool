@@ -66,6 +66,14 @@ struct Stream {
     exit_sent: bool,
 }
 
+/// How long a chat call waits for a restart of that chat to finish (the old CLI's exit, with its grace and SIGKILL,
+/// then the new start).
+const RESTART_WAIT: Duration = Duration::from_secs(20);
+
+/// Self-test only (`selftest_keepalive` `pump_hold`): the chat pump sends nothing while set, as when it is behind
+/// (a busy UI, helpers flooding it), so whatever happens meanwhile reaches the UI in one batch.
+pub(crate) static PUMP_HOLD: AtomicBool = AtomicBool::new(false);
+
 /// A chat's event handle and how far the pump has sent it.
 struct ChatStream {
     handle: ChatHandle,
@@ -645,6 +653,14 @@ impl Core {
     /// up only that call (which times out), never the refresher, the window or the other chats.
     fn with_chat<T>(&self, id: usize, f: impl FnOnce(&mut coool_core::chat::Chat) -> anyhow::Result<T>) -> Res<T> {
         let mut hub = self.hub.lock().unwrap();
+        // A restart under way (CHAT_SPEC "Restart"): the call goes to the CLI it starts, so a message typed meanwhile
+        // reaches it instead of the ended one. A restart that takes longer still fails the call, with its error.
+        let t = Instant::now();
+        while hub.is_restarting(id) && t.elapsed() < RESTART_WAIT {
+            drop(hub);
+            thread::sleep(Duration::from_millis(25));
+            hub = self.hub.lock().unwrap();
+        }
         let c = hub.chat_mut(id).ok_or("no such chat")?;
         if let Some(mut proxy) = c.host_proxy() {
             drop(hub);
@@ -1796,6 +1812,10 @@ fn spawn_refresher(app: AppHandle, core: Arc<Core>) {
 fn spawn_pump(app: AppHandle, core: Arc<Core>) {
     thread::spawn(move || {
         loop {
+            if PUMP_HOLD.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
             let mut out = Vec::new();
             let mut exits = Vec::new();
             // Anything still streaming? If not, nap until one is registered.
@@ -1827,7 +1847,9 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
             {
                 let mut chats = core.chats.lock().unwrap();
                 for (&id, c) in chats.iter_mut() {
-                    if c.exit_sent {
+                    // An ended chat is read again once its CLI runs again (a restart whose `restarted` came after the
+                    // batch that ended it, or after `chat_restart` let it go on).
+                    if c.exit_sent && !c.handle.is_running() {
                         continue;
                     }
                     active = true;
@@ -1845,6 +1867,11 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                         match e.kind {
                             ChatEventKind::Exited { .. } => {
                                 c.exit_sent = true;
+                                chat_changed = true;
+                            }
+                            // A restart: the exit before it (often in the same batch) was not the chat's end.
+                            ChatEventKind::Restarted => {
+                                c.exit_sent = false;
                                 chat_changed = true;
                             }
                             // Session id / model known, or a turn ended: the sidebar row may change.

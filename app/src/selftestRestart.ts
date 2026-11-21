@@ -11,6 +11,7 @@
 //      step and starts the CLI again (a new pid, the same session, the chat running and idle).
 
 import { newChat } from "./lib/actions";
+import { api } from "./lib/backend";
 import { useChats, type ChatItem } from "./lib/chat";
 import { sessionKey } from "./lib/types";
 import { leaves, useStore } from "./store";
@@ -163,8 +164,51 @@ export function restartScenarios(k: RestartKit): Record<string, () => Promise<vo
         return `asked while working; pid ${before} -> ${l.pid}; ${items(id).filter((i) => i.kind === "turn").length - n} turn(s) since`;
       });
 
+      // The bug of 0.4.4: the old CLI's exit and the restart reached the UI's pump in one batch (the usual case for a
+      // hosted chat), the pump took the exit as the chat's end, and nothing after it (the person's messages, the
+      // replies) showed until coool was reopened. The pump is held here so they always arrive together, while the
+      // chat's subagents stream, and a message is sent while the restart is still under way.
+      await k.step("restart: with subagents streaming and the exit and restart arriving together, a message sent during the restart and one after it show and are answered", async () => {
+        const before = (await launch(id)).pid;
+        await api().chatSend(id, "run the agent fan-out");
+        await k.waitFor("the subagents streaming", () => items(id).filter((i) => i.kind === "tool" && !!(i as { parent?: string | null }).parent).length >= 2, 20_000);
+        const hold = (on: boolean) => k.invoke("selftest_keepalive", { action: "pump_hold", value: on });
+        await hold(true);
+        let during = "";
+        try {
+          const r = api().chatRestart(id, null);
+          await k.sleep(60);
+          const s = api().chatSend(id, "sent during the restart").then(() => "ok", (e) => `refused: ${String(e).slice(0, 120)}`);
+          await r;
+          during = await s;
+          await k.sleep(400);
+        } finally {
+          await hold(false);
+        }
+        if (during !== "ok") throw new Error(`the message sent during the restart was ${during}`);
+        const answered = (text: string) => {
+          const its = items(id);
+          const i = its.findIndex((x) => x.kind === "prompt" && (x as Extract<ChatItem, { kind: "prompt" }>).text === text);
+          return i >= 0 && its.slice(i + 1).some((x) => x.kind === "text" && !x.parent && !x.streaming && /Done\./.test(x.text));
+        };
+        await k.waitFor("the message sent during the restart, shown and answered", () => answered("sent during the restart"), 20_000);
+        const ta = composer();
+        const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+        set.call(ta, "one more after the restart");
+        ta.dispatchEvent(new Event("input", { bubbles: true }));
+        await k.sleep(80);
+        ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        await k.waitFor("a message typed after the restart, shown and answered", () => answered("one more after the restart"), 20_000);
+        const l = await launch(id);
+        if (!l.pid || l.pid === before) throw new Error(`the CLI is still pid ${l.pid}`);
+        const c = useChats.getState().chats[id];
+        if (!c?.running) throw new Error("the chat shows as ended");
+        await k.shot("restart-streams-on");
+        return `pid ${before} -> ${l.pid}; both messages shown and answered`;
+      });
+
       // Leave nothing running.
-      await (await import("./lib/backend")).api().chatStop(id).catch(() => {});
+      await api().chatStop(id).catch(() => {});
     },
   };
 }

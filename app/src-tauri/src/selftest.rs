@@ -530,6 +530,8 @@ pub fn selftest_ladder(core: State<'_, Arc<Core>>, action: String, chat: Option<
 /// - `pids`: this app's pid, the chat hosts it is connected to, and every chat (id, CLI pid, hosted, running, cwd).
 /// - `alive`: whether process `pid` exists (the CLI after a quit, from the next launch).
 /// - `note_set` / `note_get`: a small JSON value kept in the test folder across launches (`keepalive-notes.json`).
+/// - `pump_hold`: holds the chat pump (`value: true`) or lets it go (the restart scenario).
+/// - `kill_host`: kills this app's own chat host `pid` (the restart scenario's host that dies).
 #[tauri::command(async)]
 pub fn selftest_keepalive(core: State<'_, Arc<Core>>, action: String, pid: Option<u32>, key: Option<String>, value: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
     let t = active(&core)?;
@@ -558,6 +560,26 @@ pub fn selftest_keepalive(core: State<'_, Arc<Core>>, action: String, pid: Optio
             let mut v = read();
             v[key.ok_or("key is required")?] = value.unwrap_or_default();
             std::fs::write(&notes, serde_json::to_vec_pretty(&v).unwrap_or_default()).map_err(|e| e.to_string())?;
+            Ok(serde_json::Value::Null)
+        }
+        // The chat pump held (true) or let go (false): see `PUMP_HOLD`.
+        "pump_hold" => {
+            crate::PUMP_HOLD.store(value.as_ref().and_then(|v| v.as_bool()).unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
+            Ok(serde_json::Value::Null)
+        }
+        // This run's own chat host, killed (a host that dies): only a host this app is connected to, in the run's
+        // own host folder.
+        "kill_host" => {
+            let p = pid.ok_or("pid is required")?;
+            let test_dir = std::env::var("COOOL_CHAT_HOST_DIR").is_ok_and(|d| d.starts_with("/tmp/coool-host-") || d.starts_with("/private/tmp/coool-host-"));
+            if !test_dir {
+                return Err("only a test host (COOOL_CHAT_HOST_DIR under /tmp/coool-host-)".into());
+            }
+            if !crate::chathost::host_pids(&core).contains(&p) {
+                return Err(format!("{p} is not this app's chat host"));
+            }
+            // SAFETY: a plain signal to the run's own host process.
+            unsafe { libc::kill(p as i32, libc::SIGKILL) };
             Ok(serde_json::Value::Null)
         }
         "note_get" => Ok(read()[key.ok_or("key is required")?].clone()),

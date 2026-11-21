@@ -930,6 +930,14 @@ impl Client {
         Some((rid, rx))
     }
 
+    /// Drops chat `key`'s mirror and detaches from it (see [`Chat::host_forget`]). Never waits for the host.
+    pub(super) fn forget(&self, key: &str) {
+        self.mirrors.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        // The answer has no one waiting for it (the reader drops it).
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        write_line(&self.out, &json!({"op": "detach", "chat": key, "id": id}));
+    }
+
     /// The app's copy of chat `key`'s events: made (and attached from the start) on first use.
     pub(super) fn mirror(&self, key: &str, info: &ChatInfo) -> Arc<Mutex<Shared>> {
         let mut ms = self.mirrors.lock().unwrap_or_else(|e| e.into_inner());

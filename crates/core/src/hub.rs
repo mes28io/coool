@@ -617,6 +617,11 @@ impl Hub {
                     // takes the chat over (below).
                     Some(Err(e)) => {
                         let e = format!("{e:#}");
+                        // No answer in time: the host may still be restarting it, and a second CLI here would run
+                        // the same conversation beside it.
+                        if e.contains("didn't answer") {
+                            anyhow::bail!("{e}");
+                        }
                         moved = Some(if e.contains("bad call") { "its chat host is from an earlier coool".into() } else { format!("its chat host couldn't restart it: {e}") });
                     }
                     None => {}
@@ -640,6 +645,9 @@ impl Hub {
         let mcp = old.mcp_servers().to_vec();
         let mut new = Chat::start_into(id, opts, &client_name, &mcp, ladder_root.as_deref(), Some(handle))?;
         new.carry_over(old);
+        // A hosted chat now runs here: its host no longer speaks for it (only once the start worked, so a failed one
+        // can still be restarted in the host later).
+        old.host_forget();
         if let Some(why) = moved {
             new.handle().note(&format!("This chat now runs inside coool ({why}), so it stops if coool quits."));
         }
