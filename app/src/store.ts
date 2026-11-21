@@ -1,6 +1,7 @@
 // The one store. Backend events are the only source of truth for sessions;
 // everything else here is UI state (tabs, splits, theme, overlays).
 
+import { markHelpers, type HelperInfo } from "./lib/ladderHelpers";
 import { create } from "zustand";
 import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Snapshot } from "./lib/types";
 import { sessionKey } from "./lib/types";
@@ -740,7 +741,11 @@ export const useStore = create<State>((set, get) => ({
     }
     // A payload built before a local change of the setting still carries the old value.
     const showAutomation = Date.now() - showAutomationSetAt < 3000 ? st.showAutomation : !!snap.show_automation;
-    const vis = visibleSessions(snap.sessions, showAutomation);
+    // Ladder helpers (another chat's `spawn`) nest under their caller's session, in the sidebar and the Jobs panel.
+    const helpers: Record<number, HelperInfo | null | undefined> = {};
+    for (const c of Object.values(chatInfos)) if (c.helper) helpers[c.id] = c.helper;
+    const sessionsIn = markHelpers(snap.sessions, helpers, (c) => chatOwner[c]?.split(":").slice(1).join(":") || null);
+    const vis = visibleSessions(sessionsIn, showAutomation);
     const usage = { claude: snap.usage?.claude ?? null, codex: snap.usage?.codex ?? null };
     const keptPtyOwner = keepRecord(st.ptyOwner, ptyOwner);
     const keptChatOwner = keepRecord(st.chatOwner, chatOwner);
@@ -756,7 +761,7 @@ export const useStore = create<State>((set, get) => ({
       ready: true,
       loading: !!snap.loading,
       sessions: keepList(st.sessions, vis.sessions),
-      allSessions: keepList(st.allSessions, snap.sessions),
+      allSessions: keepList(st.allSessions, sessionsIn),
       hiddenAutomation: vis.hidden,
       showAutomation,
       pending: keepList(st.pending, snap.pending),

@@ -178,7 +178,7 @@ pub(crate) struct Codex {
     /// `originator`, which is how a later launch recognises coool's own threads.
     pub(crate) client_name: String,
     /// Ladder's policy (APP_SPEC "Ladder"), sent as `developerInstructions` after the person's own; None: off.
-    ladder: Option<String>,
+    pub(super) ladder: Option<String>,
     /// The coool context (APP_SPEC "coool context"), sent after Ladder's policy; None: off. Set by the launch.
     pub(crate) context: Option<String>,
 }
@@ -187,9 +187,10 @@ pub(crate) struct Codex {
 /// context ([`crate::agent_context`]) is set on the backend at launch, and [`Codex::instructions`] joins the two.
 /// The Context panel's launch record ([`crate::chatctx::Launch::developer_instructions`]) is built from the same
 /// two functions in [`super::Chat::launch_record`], so it shows what the thread gets. Each part starts with its own
-/// `# ` heading (the panel splits on them).
-pub(crate) fn coool_instructions(opts: &ChatOptions) -> Option<String> {
-    opts.ladder.as_ref().map(|l| crate::ladder::policy(crate::ladder::Cli::Codex, l, std::path::Path::new(&opts.cwd), true))
+/// `# ` heading (the panel splits on them). `ladder_root`: coool's plugin folder, where the playbook the policy points
+/// at is written (None: a short inline guide).
+pub(crate) fn coool_instructions(opts: &ChatOptions, ladder_root: Option<&std::path::Path>) -> Option<String> {
+    opts.ladder.as_ref().map(|l| crate::ladder::codex_policy(l, std::path::Path::new(&opts.cwd), ladder_root))
 }
 
 impl Codex {
@@ -228,7 +229,7 @@ impl Codex {
             stopping: false,
             plans: 0,
             client_name: crate::origin::CLIENT_NAME.to_string(),
-            ladder: coool_instructions(opts),
+            ladder: coool_instructions(opts, None),
             context: None,
         };
         if let Some(m) = &opts.permission_mode {
@@ -1497,7 +1498,7 @@ mod tests {
     #[test]
     fn ladder_policy_rides_on_the_thread_after_the_persons_own() {
         use crate::ladder::{Ladder, Role, Tier};
-        let lad = Ladder { tiers: vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }], max_parallel: 2, verify_tests: false };
+        let lad = Ladder { tiers: vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }], max_parallel: 2, verify_tests: false, ..Default::default() };
         let sent = |o: &Out, method: &str| o.writes.iter().map(|w| serde_json::from_str::<Value>(w).unwrap()).find(|v| v["method"] == method);
         for resume in [None, Some("t-1".to_string())] {
             let mut c = Codex::new(&ChatOptions { ladder: Some(lad.clone()), resume: resume.clone(), ..opts() });

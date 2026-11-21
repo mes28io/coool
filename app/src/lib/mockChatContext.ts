@@ -70,10 +70,10 @@ put(
   `${HOME}/.claude/skills/commit-style/SKILL.md`,
   "---\nname: commit-style\ndescription: Write commit messages the way I like them: what changed and why, in plain words, no prefixes.\n---\n\n# Commit style\n\nFirst line: what changed, under 72 characters. Then why, as prose.\n",
 );
-put(`${LADDER}/skills/briefs/SKILL.md`, "---\nname: briefs\ndescription: Ladder brief shapes per delegate tier and how to check a delegate's report. Load before writing your first delegate brief.\n---\n\n# Ladder briefs\n\n…\n");
+put(`${LADDER}/skills/playbook/SKILL.md`, "---\nname: playbook\ndescription: Ladder playbook: routing by difficulty, brief shape per tier, cross-provider lanes, image generation, budget-aware planning, nested helpers and swarm mode. Load before your first helper brief.\n---\n\n# Ladder playbook\n\n…\n");
 
 const LADDER_TEXT =
-  "# Ladder (set by coool)\nYou lead: your tokens go to the plan, briefs, hard calls, checking and the answer. Hand other work to the cheapest tier that can carry it:\n  mid Sonnet 5.5 (`sonnet`): multi-file work, debugging, research needing judgment, review\n  small+bulk Haiku 5.5 (`haiku`): scoped edits, pattern clones, lookups, summaries; mechanical bulk work from an exact rule set\n- Up to 4 delegates at once. Check every delegate's work before you build on it (read the diff, run `pnpm test` or open the output yourself).\nBefore your first brief, load the `coool-ladder:briefs` skill (brief shape per tier).\n";
+  "# Ladder (set by coool)\nYou lead: your tokens go to the plan, briefs, hard calls, checking and the answer. Hand other work to the cheapest tier that can carry it:\n  mid Sonnet 5.5 (`sonnet`): multi-file work, debugging, research needing judgment, review\n  small+bulk Haiku 5.5 (`haiku`): scoped edits, pattern clones, lookups, summaries; mechanical bulk work from an exact rule set\n- Up to 4 delegates at once. Check every delegate's work before you build on it (read the diff, run `pnpm test` or open the output yourself).\nBefore your first brief, load the `coool-ladder:playbook` skill.\n";
 const COOOL_TEXT =
   "# coool\nYou run in coool, a Mac app where the person watches this chat, steers it and answers or approves you. Approvals show your command's `description` and a risk tag: say in it what the command does and why.\n\nYour own devices, in coool's window (never the person's screen):\n- Browser panel (`browser_*`): a change to a web page is done only once you have opened it there and seen the change.\n";
 

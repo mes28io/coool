@@ -251,15 +251,15 @@ fn the_launch_record_matches_the_real_launch() {
         resume: None,
         model: Some("opus".into()),
         permission_mode: None,
-        ladder: Some(Ladder { tiers: vec![Tier { role: Role::Small, model: "haiku".into(), label: "Haiku".into() }], max_parallel: 2, verify_tests: false }),
+        ladder: Some(Ladder { tiers: vec![Tier { role: Role::Small, model: "haiku".into(), label: "Haiku".into() }], max_parallel: 2, verify_tests: false, ..Default::default() }),
         context: Some(crate::agent_context::AgentContext { browser: true, iphone: false, mac: false, remote: false }),
     };
     let (_, _, args) = Chat::launch(&opts, "coool", &[], Some(&t.root.join("lp")), None);
-    let rec = Chat::launch_record(&opts, &args, &[]);
+    let rec = Chat::launch_record(&opts, &args, &[], None);
     let ov = overview(Provider::Claude, &t.deep, &t.home, &Inputs { launch: Some(rec), ..Inputs::default() });
     let ladder = ov.items.iter().find(|i| i.id.starts_with("coool:ladder")).unwrap();
     assert!(ladder.text.as_deref().unwrap().contains("haiku"));
-    assert!(ov.items.iter().any(|i| i.label == "coool-ladder:briefs"));
+    assert!(ov.items.iter().any(|i| i.label == "coool-ladder:playbook"));
     // The coool context rides in the same --append-system-prompt, after Ladder's: its own item, its own size.
     let incoool = ov.items.iter().find(|i| i.label == "You are in coool").unwrap();
     assert!(incoool.text.as_deref().unwrap().starts_with("# coool\n") && !incoool.text.as_deref().unwrap().contains("# Ladder"));
@@ -268,14 +268,14 @@ fn the_launch_record_matches_the_real_launch() {
     assert!(tokens(joined.len() as u64).abs_diff(ladder.tokens + incoool.tokens) <= 1, "the two parts cover the flag's text");
     let codex = ChatOptions { provider: Provider::Codex, ..opts };
     let (_, _, args) = Chat::launch(&codex, "coool", &[], None, None);
-    let rec = Chat::launch_record(&codex, &args, &[]);
+    let rec = Chat::launch_record(&codex, &args, &[], None);
     let di = rec.developer_instructions.clone().unwrap();
     assert!(di.starts_with("# Ladder") && di.contains("\n# coool\n"));
     let ov = overview(Provider::Codex, &t.deep, &t.home, &Inputs { launch: Some(rec), ..Inputs::default() });
     assert!(ov.items.iter().any(|i| i.label == "You are in coool" && i.source == "coool · developer instructions"));
     // Off: nothing of it.
     let off = ChatOptions { context: None, ..codex };
-    assert!(!Chat::launch_record(&off, &[], &[]).developer_instructions.unwrap().contains("# coool"));
+    assert!(!Chat::launch_record(&off, &[], &[], None).developer_instructions.unwrap().contains("# coool"));
 }
 
 #[test]

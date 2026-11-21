@@ -10,7 +10,7 @@ import type { Provider } from "./types";
 /** The feature's name everywhere it shows (rename here and in crates/core/src/ladder/mod.rs). */
 export const LADDER = "Ladder";
 /** What it does for the person, in one line (mechanism only: no claimed savings). */
-export const LADDER_LINE = "The chat's model plans and checks; cheaper models do the pieces, several at once, and results are checked before they are reported.";
+export const LADDER_LINE = "The chat's model plans and checks; helpers on the cheapest model that can carry each piece (Claude or Codex) do the work, several at once, and results are checked before they are reported.";
 
 export type LadderRole = "mid" | "small" | "bulk";
 export const ROLES: LadderRole[] = ["mid", "small", "bulk"];
@@ -20,9 +20,20 @@ export const ROLE_WORK: Record<LadderRole, string> = {
   bulk: "Mechanical bulk work",
 };
 
-/** One delegate tier as the backend takes it (`ChatOptions.ladder.tiers`). */
+/** Every role a tier can play: the pickable ones, the lead's own model for parallel work, and the other CLI's lanes. */
+export type TierRole = LadderRole | "same" | "exec" | "peer";
+export const ROLE_LINE: Record<TierRole, string> = {
+  same: "The lead's own model, only to run medium-high pieces in parallel",
+  mid: ROLE_WORK.mid,
+  small: ROLE_WORK.small,
+  bulk: ROLE_WORK.bulk,
+  exec: "Small self-contained parts, briefed step by step",
+  peer: "A second opinion on a hard call",
+};
+
+/** One helper tier as the backend takes it (`ChatOptions.ladder.tiers` / `.cross`). */
 export interface LadderTier {
-  role: LadderRole;
+  role: TierRole;
   /** What the CLI's delegate tool takes: a Claude Code alias (`sonnet`) or a Codex model id. */
   model: string;
   label: string;
@@ -30,9 +41,29 @@ export interface LadderTier {
 
 /** `ChatOptions.ladder` (crates/core/src/ladder `Ladder`). */
 export interface LadderOptions {
+  /** The lead's model as shown ("Opus 5.5"); "" for the CLI's default. */
+  lead?: string;
   tiers: LadderTier[];
+  /** The other CLI's lanes (`codex exec` / `claude -p`). */
+  cross?: LadderTier[];
+  /** Image generation (Codex's built-in image tool). */
+  image?: ImageLane | null;
   max_parallel: number;
   verify_tests: boolean;
+  /** Helper nesting depth (1: helpers start none). */
+  depth?: number;
+  swarm?: boolean;
+  /** coool's `coool-ladder` tools (budget, can, spawn). */
+  tools?: boolean;
+  /** Percent of every usage window kept back. */
+  reserve?: number;
+  bypass_helpers?: boolean;
+}
+
+export interface ImageLane {
+  provider: Provider;
+  model: string;
+  label: string;
 }
 
 /** The highest role a delegate may take: "small" keeps the mid tier's work on the small tier's model. */
@@ -147,8 +178,67 @@ export function tierTable(
   return ROLES.map((role) => ({ role, model: chosen[role].model, label: chosen[role].label }));
 }
 
+/** The lead's own model as a `same` tier (parallel medium-high work only); null when the lead is the CLI's default. */
+export function sameTier(provider: Provider, lead: string | null, seen: ModelChoice[]): LadderTier | null {
+  const r = modelRank(provider, lead);
+  if (!lead || r === null) return null;
+  if (provider === "claude") {
+    const c = candidates(provider, seen).find((x) => x.rank === r && modelFamily(x.model) === modelFamily(lead));
+    return c ? { role: "same", model: c.model, label: c.label } : null;
+  }
+  return { role: "same", model: lead, label: seen.find((m) => m.id === lead)?.label || lead };
+}
+
+const newest = (cs: Cand[]) => [...cs].sort((a, b) => b.ver - a.ver)[0];
+
+/**
+ * The other CLI's lanes for a lead, never above it. Codex's top (sol/astra) sits with Sonnet: a Claude lead may use
+ * Codex models one rank below its own (Fable/Opus: astra and sol; Sonnet: terra and luna; Haiku: luna), and a Codex
+ * lead Claude models at or below its rank (sol/astra: Sonnet and Haiku; terra: Haiku). Claude lead: peer = astra
+ * (second opinion), exec = sol (else the best allowed), bulk = the smallest. Codex lead: mid = the strongest allowed
+ * Claude model (multi-file reasoning, review, prose), bulk = the cheapest. `seen`: the other CLI's models.
+ */
+export function crossTable(provider: Provider, lead: string | null, seen: ModelChoice[]): LadderTier[] {
+  const other: Provider = provider === "claude" ? "codex" : "claude";
+  const lr = modelRank(provider, lead) ?? (provider === "claude" ? CLAUDE_RANK.opus : 3);
+  const t = (role: TierRole, c: Cand): LadderTier => ({ role, model: c.model, label: c.label });
+  if (provider === "claude") {
+    const all: Cand[] = seen.flatMap((m) => {
+      const r = modelRank(other, m.id);
+      return r === null || r >= lr ? [] : [{ model: m.id, label: m.label || m.id, rank: r, ver: version(m.id) }];
+    });
+    if (!all.length) return [];
+    const named = (w: string) => newest(all.filter((c) => c.model.includes(w)));
+    const top = Math.max(...all.map((c) => c.rank));
+    const out: LadderTier[] = [];
+    const peer = named("astra");
+    if (peer) out.push(t("peer", peer));
+    const exec = named("sol") ?? newest(all.filter((c) => c.rank === top && !c.model.includes("astra"))) ?? newest(all.filter((c) => c.rank === top));
+    if (exec) out.push(t("exec", exec));
+    const low = Math.min(...all.map((c) => c.rank));
+    const bulk = newest(all.filter((c) => c.rank === low));
+    if (bulk) out.push(t("bulk", bulk));
+    return out;
+  }
+  const cs = candidates(other, seen).filter((c) => c.rank <= lr);
+  if (!cs.length) return [];
+  return [t("mid", cs[0]), t("bulk", cs[cs.length - 1])];
+}
+
+/**
+ * Image generation: Codex's built-in image tool. A Claude lead (no image model of its own) reaches it through
+ * `codex exec` on Codex's cheapest listed model; a Codex lead uses its own tool. Null when Codex isn't installed or
+ * its models aren't known yet (`codexSeen` empty), or when switched off.
+ */
+export function imageLane(provider: Provider, lead: string | null, codexSeen: ModelChoice[]): ImageLane | null {
+  if (provider === "codex") return { provider: "codex", model: lead ?? "", label: lead ?? "" };
+  const cs = candidates("codex", codexSeen);
+  const c = cs[cs.length - 1];
+  return c ? { provider: "codex", model: c.model, label: c.label } : null;
+}
+
 /** The role a delegate's model plays in a chat's table (the first role it holds), or null when it is off the table. */
-export function roleOf(tiers: LadderTier[] | null | undefined, model: string | null | undefined, provider: Provider): LadderRole | null {
+export function roleOf(tiers: LadderTier[] | null | undefined, model: string | null | undefined, provider: Provider): TierRole | null {
   if (!tiers?.length || !model) return null;
   const exact = tiers.find((t) => t.model === model);
   if (exact) return exact.role;
@@ -161,8 +251,8 @@ export function roleOf(tiers: LadderTier[] | null | undefined, model: string | n
 }
 
 /** Rows to show: roles that share a model fold into one row ("Small and bulk"). */
-export function tierRows(tiers: LadderTier[]): { roles: LadderRole[]; model: string; label: string }[] {
-  const rows: { roles: LadderRole[]; model: string; label: string }[] = [];
+export function tierRows(tiers: LadderTier[]): { roles: TierRole[]; model: string; label: string }[] {
+  const rows: { roles: TierRole[]; model: string; label: string }[] = [];
   for (const t of tiers) {
     const r = rows.find((x) => x.model === t.model);
     if (r) r.roles.push(t.role);
@@ -171,8 +261,8 @@ export function tierRows(tiers: LadderTier[]): { roles: LadderRole[]; model: str
   return rows;
 }
 
-export const roleWord = (r: LadderRole) => r[0].toUpperCase() + r.slice(1);
-export const rolesWord = (rs: LadderRole[]) => rs.map((r, i) => (i ? r : roleWord(r))).join(" and ");
+export const roleWord = (r: TierRole) => r[0].toUpperCase() + r.slice(1);
+export const rolesWord = (rs: TierRole[]) => rs.map((r, i) => (i ? r : roleWord(r))).join(" and ");
 
 // ---------- the per-turn tally (from what the chat really shows) ----------
 
@@ -190,7 +280,12 @@ export interface TallyAgentUse {
 export interface Delegate {
   id: string;
   model: string | null;
-  role: LadderRole | null;
+  role: TierRole | "image" | null;
+  /** Which CLI ran it: the lead's own (Agent tool / spawn_agent), the other one (`codex exec`, `claude -p`), or a
+   * `spawn`ed coool chat on either. */
+  provider: Provider;
+  /** How it ran: a native sub-agent, a shell lane, or a coool chat. */
+  via: "agent" | "lane" | "spawn";
   tokens: number;
   ok: boolean | null;
   /** Test commands the delegate ran itself, and whether the last one passed. */
@@ -200,16 +295,33 @@ export interface Delegate {
 export interface Tally {
   delegates: Delegate[];
   /** Per model, in first-seen order: how many delegates and their tokens. */
-  byModel: { model: string; role: LadderRole | null; count: number; tokens: number }[];
+  byModel: { model: string; role: TierRole | "image" | null; provider: Provider; count: number; tokens: number }[];
   /** Delegates whose model is not cheaper than the lead's (should not happen with Ladder on). */
   onLead: number;
   /** The lead's own checks after the first delegate started. */
-  checks: { tests: number; testsPassed: number; testsFailed: number; diffs: number; reads: number };
+  checks: { tests: number; images: number; testsPassed: number; testsFailed: number; diffs: number; reads: number };
   /** Test commands delegates ran themselves. */
   delegateTests: number;
 }
 
 const AGENT = /^(task|agent|subagent|spawn_agent)$/i;
+/** coool's own helper tool (`mcp__coool-ladder__spawn`, Codex's `coool-ladder.spawn`). */
+const SPAWN = /coool-ladder(__|\.|\/)spawn$/i;
+/** A cross-provider lane run from the shell: `codex exec -m <model> …` or `claude -p … --model <model>`. */
+export function laneOf(cmd: string): { provider: Provider; model: string | null; image: boolean } | null {
+  const c = cmd.replace(/\\\n/g, " ");
+  const codex = /(^|[\s;&|(])codex\s+(exec|e)\b/.exec(c);
+  if (codex) {
+    const m = /\s(?:-m|--model)[=\s]+["']?([\w.:-]+)/.exec(c.slice(codex.index));
+    return { provider: "codex", model: m ? m[1] : null, image: /\b(image|icon|illustration|logo|picture|png|sprite|texture)\b/i.test(c) };
+  }
+  const claude = /(^|[\s;&|(])claude\s+(-p|--print)\b/.exec(c);
+  if (claude) {
+    const m = /\s--model[=\s]+["']?([\w.:-]+)/.exec(c.slice(claude.index));
+    return { provider: "claude", model: m ? m[1] : null, image: false };
+  }
+  return null;
+}
 const SHELL = /^(bash|shell|exec_command|local_shell|unified_exec)$/i;
 /** Test runners: what counts as "ran the tests". */
 export const TEST_CMD = /(^|[\s;&|(])(cargo (nextest|test)|go test|pytest|python -m pytest|vitest|jest|mocha|swift test|xcodebuild test|(npm|pnpm|yarn|bun)( run)? test|make (test|check)|node --test|deno test|rspec|phpunit|mix test|gradle(w)? test|mvn test)\b/;
@@ -233,33 +345,54 @@ const askedModel = (input: unknown): string | null => {
  * really answered on when the CLI reported it, else the one asked for), their tokens (Claude Code's count per
  * delegate), and the lead's own test runs, diffs and reads after the first delegate began. Nothing is estimated.
  */
-export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentUse | undefined>, o: { provider: Provider; lead: string | null; tiers: LadderTier[] | null }): Tally {
+export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentUse | undefined>, o: { provider: Provider; lead: string | null; tiers: LadderTier[] | null; cross?: LadderTier[] | null }): Tally {
   const tools = items.filter((i): i is Extract<TallyItem, { kind: "tool" }> => i.kind === "tool");
-  const calls = tools.filter((t) => t.parent === null && AGENT.test(t.name));
+  const top = tools.filter((t) => t.parent === null);
+  const calls = top.filter((t) => AGENT.test(t.name));
+  type Lane = { t: (typeof top)[number]; lane: { provider: Provider; model: string | null; image: boolean }; via: "lane" | "spawn" };
+  const lanes = top.flatMap((t): Lane[] => {
+    if (SPAWN.test(t.name)) {
+      const i = (t.input ?? {}) as { model?: unknown; provider?: unknown };
+      const p: Provider = i.provider === "codex" || i.provider === "claude" ? i.provider : o.provider;
+      return [{ t, lane: { provider: p, model: typeof i.model === "string" ? i.model : null, image: false }, via: "spawn" }];
+    }
+    if (!SHELL.test(t.name)) return [];
+    const lane = laneOf(cmdOf(t.input));
+    return lane ? [{ t, lane, via: "lane" }] : [];
+  });
   const leadR = modelRank(o.provider, o.lead);
-  const delegates: Delegate[] = calls.map((t) => {
+  const native: Delegate[] = calls.map((t) => {
     const use = agents[t.id];
     const reported = use ? Object.values(use.models).sort((a, b) => b.output + b.input - (a.output + a.input))[0]?.model : undefined;
     const spoke = (items.find((i) => i.kind === "text" && i.parent === t.id && (i as { model: string | null }).model) as { model: string | null } | undefined)?.model;
     const model = reported || spoke || askedModel(t.input) || null;
     const sum = use ? Object.values(use.models).reduce((n, u) => n + u.input + u.cached + u.output, 0) : 0;
     const kids = tools.filter((k) => k.parent === t.id && SHELL.test(k.name) && TEST_CMD.test(cmdOf(k.input)));
-    return { id: t.id, model, role: roleOf(o.tiers, model, o.provider), tokens: use?.total || sum, ok: t.endTs === null ? null : t.ok, tests: kids.length };
+    return { id: t.id, model, role: roleOf(o.tiers, model, o.provider), provider: o.provider, via: "agent", tokens: use?.total || sum, ok: t.endTs === null ? null : t.ok, tests: kids.length };
   });
+  const crossed: Delegate[] = lanes.map(({ t, lane, via }) => {
+    const own = lane.provider === o.provider;
+    const role = lane.image ? "image" : roleOf(own ? o.tiers : (o.cross ?? null), lane.model, lane.provider);
+    return { id: t.id, model: lane.model, role, provider: lane.provider, via, tokens: 0, ok: t.endTs === null ? null : t.ok, tests: 0 };
+  });
+  const delegates = [...native, ...crossed].sort((a, b) => (tools.find((t) => t.id === a.id)?.ts ?? 0) - (tools.find((t) => t.id === b.id)?.ts ?? 0));
   const byModel: Tally["byModel"] = [];
   // One row per model; Claude's alias and full id of one family ("haiku", "claude-haiku-5-5") are the same row.
   const same = (a: string, b: string) => a === b || (o.provider === "claude" && a !== "unknown" && b !== "unknown" && modelFamily(a) === modelFamily(b));
   for (const d of delegates) {
     const k = d.model ?? "unknown";
-    const row = byModel.find((r) => same(r.model, k));
+    const row = byModel.find((r) => r.provider === d.provider && (r.role === "image") === (d.role === "image") && same(r.model, k));
     if (row) {
       row.count++;
       row.tokens += d.tokens;
-    } else byModel.push({ model: k, role: d.role, count: 1, tokens: d.tokens });
+    } else byModel.push({ model: k, role: d.role, provider: d.provider, count: 1, tokens: d.tokens });
   }
-  const onLead = leadR === null ? 0 : delegates.filter((d) => d.model && (modelRank(o.provider, d.model) ?? -1) >= leadR).length;
-  const first = calls.length ? Math.min(...calls.map((c) => c.ts)) : Infinity;
-  const mine = tools.filter((t) => t.parent === null && t.ts >= first);
+  // On the lead's own model or above it (same CLI): counted, never hidden.
+  const onLead = leadR === null ? 0 : delegates.filter((d) => d.provider === o.provider && d.model && (modelRank(o.provider, d.model) ?? -1) >= leadR).length;
+  const starts = [...calls, ...lanes.map((l) => l.t)];
+  const first = starts.length ? Math.min(...starts.map((c) => c.ts)) : Infinity;
+  const laneIds = new Set(lanes.map((l) => l.t.id));
+  const mine = tools.filter((t) => t.parent === null && t.ts >= first && !laneIds.has(t.id));
   const tests = mine.filter((t) => SHELL.test(t.name) && TEST_CMD.test(cmdOf(t.input)));
   return {
     delegates,
@@ -267,6 +400,7 @@ export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentU
     onLead,
     checks: {
       tests: tests.length,
+      images: mine.filter((t) => READ.test(t.name) && /\.(png|jpe?g|webp|gif)$/i.test(String((t.input as { file_path?: unknown; path?: unknown } | null)?.file_path ?? (t.input as { path?: unknown } | null)?.path ?? ""))).length,
       testsPassed: tests.filter((t) => t.ok === true).length,
       testsFailed: tests.filter((t) => t.ok === false).length,
       diffs: mine.filter((t) => SHELL.test(t.name) && DIFF_CMD.test(cmdOf(t.input))).length,
@@ -277,13 +411,23 @@ export function turnTally(items: TallyItem[], agents: Record<string, TallyAgentU
 }
 
 /** "2 on Haiku 5.5, 1 on Sonnet 5.5" from a tally (labels via the tier table when the model is on it). */
-export function tallyModels(t: Tally, tiers: LadderTier[] | null): string {
+export function tallyModels(t: Tally, tiers: LadderTier[] | null, cross?: LadderTier[] | null, lead?: Provider): string {
   return t.byModel
     .map((r) => {
-      const label = tiers?.find((x) => x.role === r.role)?.label ?? (r.model === "unknown" ? "an unreported model" : modelLabel(r.model));
-      return `${r.count} on ${label}`;
+      if (r.role === "image") return `${r.count} image · ${r.provider === "codex" ? "GPT" : "Claude"}`;
+      const table = lead && r.provider !== lead ? cross : tiers;
+      const label = table?.find((x) => x.role === r.role && x.model === r.model)?.label ?? table?.find((x) => x.role === r.role)?.label ?? (r.model === "unknown" ? "an unreported model" : modelLabel(r.model));
+      const where = lead && r.provider !== lead ? ` (${r.provider === "codex" ? "Codex" : "Claude"})` : "";
+      return `${r.count}${r.role ? ` ${r.role}` : ""} on ${label}${where}`;
     })
     .join(", ");
+}
+
+/** Helpers per provider ("3 Claude, 1 Codex"); empty when all ran on the lead's own CLI. */
+export function tallyProviders(t: Tally, lead: Provider): string {
+  const n = (p: Provider) => t.delegates.filter((d) => d.provider === p).length;
+  if (!t.delegates.some((d) => d.provider !== lead)) return "";
+  return (["claude", "codex"] as Provider[]).filter((p) => n(p)).map((p) => `${n(p)} ${p === "claude" ? "Claude" : "Codex"}`).join(", ");
 }
 
 /** "tests run (1 passed), 2 diffs read" — what the lead checked; "nothing checked yet" when it did none of it. */
@@ -293,5 +437,39 @@ export function tallyChecks(t: Tally): string {
   if (c.tests) parts.push(`tests run ${c.tests}× (${c.testsPassed} passed${c.testsFailed ? `, ${c.testsFailed} failed` : ""})`);
   if (c.diffs) parts.push(`${c.diffs} diff${c.diffs === 1 ? "" : "s"} read`);
   if (c.reads) parts.push(`${c.reads} file${c.reads === 1 ? "" : "s"} reread`);
+  if (c.images) parts.push(`${c.images} image${c.images === 1 ? "" : "s"} viewed`);
   return parts.length ? parts.join(", ") : "nothing checked by the lead";
+}
+
+// ---------- the budget picture (chip, Settings) ----------
+
+/** "in 2 h 5 min" / "in 3 days". */
+export function untilWords(now: number, at: number): string {
+  const m = Math.max(0, Math.floor((at - now) / 60_000));
+  if (m < 60) return `in ${m} min`;
+  if (m < 48 * 60) return `in ${Math.floor(m / 60)} h ${m % 60} min`;
+  return `in ${Math.floor(m / (24 * 60))} days`;
+}
+
+/**
+ * One account's line: "Max 5x · 5-hour 27%, resets in 3 h 0 min", flagged tight at 80% or within the reserve (the
+ * lead plans narrow there; `can` and `spawn` refuse inside the reserve). `cli`: installed / logged in, when known.
+ */
+export function budgetLine(
+  u: { plan: string | null; windows: { label: string; used_percent: number | null; resets_ms: number | null }[]; error: string | null } | null,
+  reserve: number,
+  now: number,
+  cli: { installed: boolean; loggedIn: boolean | null } | null,
+): { text: string; tight: boolean } {
+  if (cli && !cli.installed) return { text: "not installed", tight: false };
+  if (cli && cli.loggedIn === false) return { text: "not logged in", tight: true };
+  if (!u) return { text: "usage not read yet", tight: false };
+  const ws = u.windows.filter((w) => w.used_percent !== null);
+  const top = ws.sort((a, b) => (b.used_percent ?? 0) - (a.used_percent ?? 0))[0];
+  const plan = u.plan ? `${u.plan} · ` : "";
+  if (!top) return { text: `${plan}${u.error ? "usage unavailable" : "no limits reported"}`, tight: false };
+  const pct = Math.round(top.used_percent ?? 0);
+  const out = pct >= 100 - reserve;
+  const reset = top.resets_ms ? `, resets ${untilWords(now, top.resets_ms)}` : "";
+  return { text: `${plan}${top.label} ${pct}%${reset}${out ? " · in reserve: no new helpers" : ""}`, tight: out || pct >= 80 };
 }

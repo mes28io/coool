@@ -313,7 +313,7 @@ pub(crate) struct Claude {
     open_failed: bool,
 }
 
-/// Ladder's briefs skill (from coool's own plugin): loaded by the lead, never offered in the composer.
+/// Ladder's playbook skill (from coool's own plugin): loaded by the lead, never offered in the composer.
 fn is_ladder_skill(name: &str) -> bool {
     name.strip_prefix(&crate::ladder::plugin_name()).is_some_and(|r| r.starts_with(':'))
 }

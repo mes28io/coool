@@ -62,8 +62,8 @@ pub struct McpServer {
     pub tool_timeout_sec: Option<u64>,
 }
 
-/// Builds the MCP servers for a chat from its id.
-pub type McpFor = Box<dyn Fn(usize, &str, crate::model::Provider) -> Vec<McpServer> + Send>;
+/// Builds the MCP servers for a chat from its id and how it starts.
+pub type McpFor = Box<dyn Fn(usize, &ChatOptions) -> Vec<McpServer> + Send>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -673,7 +673,7 @@ fn events_since(shared: &Mutex<Shared>, seq: u64) -> (Vec<ChatEvent>, u64) {
 fn context_text(opts: &ChatOptions, cli: crate::ladder::Cli, devices: bool) -> Option<String> {
     let c = opts.context.clone()?;
     let c = if devices { c } else { c.without_devices() };
-    let helpers = opts.ladder.as_ref().is_some_and(|l| !l.tiers.is_empty());
+    let helpers = opts.ladder.as_ref().is_some_and(|l| !l.solo());
     Some(crate::agent_context::text(cli, &c, helpers))
 }
 
@@ -706,7 +706,12 @@ impl Chat {
             }
             _ => None,
         };
-        let env = if opts.provider == Provider::Codex { codex::mcp_env(mcp) } else { Vec::new() };
+        let mut env = if opts.provider == Provider::Codex { codex::mcp_env(mcp) } else { Vec::new() };
+        if opts.provider == Provider::Claude
+            && let Some(l) = &opts.ladder
+        {
+            env.extend(crate::ladder::claude_env(l));
+        }
         let (backend, program, args) = Self::launch(&opts, client_name, mcp, ladder_root, mcp_file.as_deref());
         let r = Self::spawn(id, opts.provider, &opts.cwd, program, &args, &env, mcp_file.clone(), backend);
         if r.is_err()
@@ -715,19 +720,19 @@ impl Chat {
             let _ = std::fs::remove_file(p);
         }
         r.map(|mut c| {
-            c.launch = Self::launch_record(&opts, &args, mcp);
+            c.launch = Self::launch_record(&opts, &args, mcp, ladder_root);
             c
         })
     }
 
     /// What the Context panel shows coool added (crate::chatctx): the arguments as passed, what coool adds to Codex's
     /// developer instructions, and the MCP servers (names only: their env carries the chat's token).
-    pub(crate) fn launch_record(opts: &ChatOptions, args: &[String], mcp: &[McpServer]) -> crate::chatctx::Launch {
+    pub(crate) fn launch_record(opts: &ChatOptions, args: &[String], mcp: &[McpServer], ladder_root: Option<&std::path::Path>) -> crate::chatctx::Launch {
         crate::chatctx::Launch {
             args: args.to_vec(),
             // What `Codex::instructions` sends: Ladder's policy, then the coool context.
             developer_instructions: if opts.provider == Provider::Codex {
-                crate::agent_context::join_prompts(codex::coool_instructions(opts).as_deref(), context_text(opts, crate::ladder::Cli::Codex, !mcp.is_empty()).as_deref())
+                crate::agent_context::join_prompts(codex::coool_instructions(opts, ladder_root).as_deref(), context_text(opts, crate::ladder::Cli::Codex, !mcp.is_empty()).as_deref())
             } else {
                 None
             },
@@ -765,6 +770,8 @@ impl Chat {
             Provider::Codex => {
                 let mut b = codex::Codex::new(opts);
                 b.client_name = client_name.to_string();
+                // The policy points at the playbook file under coool's plugin root.
+                b.ladder = codex::coool_instructions(opts, ladder_root);
                 b.context = context_text(opts, crate::ladder::Cli::Codex, !mcp.is_empty());
                 let mut args = codex::args();
                 args.extend(codex::mcp_args(mcp));
@@ -1381,7 +1388,7 @@ mod tests {
             Provider::Claude => vec![Tier { role: Role::Mid, model: "sonnet".into(), label: "Sonnet 4.6".into() }, Tier { role: Role::Small, model: "haiku".into(), label: "Haiku 4.5".into() }],
             Provider::Codex => vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }],
         };
-        ChatOptions { provider, cwd: cwd.into(), resume: None, model: None, permission_mode: None, ladder: on.then(|| Ladder { tiers, max_parallel: 3, verify_tests: true }), context: None }
+        ChatOptions { provider, cwd: cwd.into(), resume: None, model: None, permission_mode: None, ladder: on.then(|| Ladder { tiers, max_parallel: 3, verify_tests: true, ..Default::default() }), context: None }
     }
 
     /// Ladder at launch (APP_SPEC "Ladder"): on adds the CLI's own per-launch flags, off adds nothing, and nothing is
@@ -1415,7 +1422,7 @@ mod tests {
         assert_eq!(prog, "codex");
         assert_eq!(coff, vec!["app-server"]);
         let (_, _, con) = Chat::launch(&ladder_opts(Provider::Codex, p, true), "coool", &[], Some(&root), None);
-        assert_eq!(con, vec!["app-server", "-c", "agents.max_threads=3", "-c", "agents.default_subagent_model=\"gpt-5.6-luna\""]);
+        assert_eq!(con, vec!["app-server", "-c", "agents.max_threads=3", "-c", "agents.max_depth=2", "-c", "agents.default_subagent_model=\"gpt-5.6-luna\""]);
         assert!(!con.iter().any(|x| x.contains("approval") || x.contains("sandbox")));
 
         // Only the plugin under the given root was written; the project is empty.

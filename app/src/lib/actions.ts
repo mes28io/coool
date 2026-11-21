@@ -31,7 +31,7 @@ export async function newChat(a: { provider: Provider; cwd: string; prompt?: str
     const model = a.model === undefined ? d.model : a.model;
     const mode = a.permissionMode === undefined ? d.mode : a.permissionMode;
     // Settings > Ladder (or the sheet's own choice): the tier table from the models this CLI reported.
-    const ladder = ladderOptions(a.provider, model ?? null, seenModelsNow()[a.provider], a.ladder);
+    const ladder = ladderOptions(a.provider, model ?? null, seenModelsNow(), a.ladder);
     const context = contextOptions(a.context);
     const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: model ?? null, permission_mode: mode ?? null, ladder, context });
     noteLaunched(id, ladder);
@@ -63,7 +63,7 @@ export async function resumeSession(s: Session, leaf?: string, opts?: { terminal
       try {
         // The session's own Ladder choice (the composer chip) applies from this start on; else the default.
         const own = chatLadderOf({ id: -1, provider: s.provider, sessionId: s.id });
-        const ladder = ladderOptions(s.provider, s.model || null, seenModelsNow()[s.provider], own);
+        const ladder = ladderOptions(s.provider, s.model || null, seenModelsNow(), own);
         const context = contextOptions();
         const id = await api().startChat({ provider: s.provider, cwd: s.cwd, resume: s.id, model: s.model || null, ladder, context });
         noteLaunched(id, ladder);

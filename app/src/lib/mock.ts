@@ -1788,6 +1788,20 @@ export function mockBackend(): Backend {
     onMotionHints() {
       return () => {};
     },
+    async ladderStatus() {
+      return {
+        claude: { installed: true, version: "2.1.330", logged_in: true },
+        codex: { installed: true, version: "0.171.0", logged_in: true },
+        image: { version: "0.171.0", available: true },
+        codex_models: [
+          { id: "gpt-6.2-sol", label: "GPT-6.2-Sol" },
+          { id: "gpt-6.2-astra", label: "GPT-6.2-Astra" },
+          { id: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+          { id: "gpt-6-luna", label: "GPT-6-Luna" },
+        ],
+        checked_ms: Date.now(),
+      };
+    },
     // Artifacts: the guide's local copy is "there" (served from app/public/mock-artifact), the release notes' is gone.
     async artifactStatus(urls) {
       return Object.fromEntries(urls.map((u) => [u, u === MOCK_ARTIFACT_URL]));

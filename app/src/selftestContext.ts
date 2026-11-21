@@ -102,8 +102,8 @@ export function contextScenarios(h: H): Record<string, (ctx: { cfg: { dir: strin
         if (!coool.some((c) => c.startsWith("You are in coool"))) throw h.fail(`no coool context: ${coool.join(", ")}`);
         const launched = (await h.invoke("selftest_chat_launch", { chat: id })) as { args: string[] };
         const plugin = launched.args.some((a) => a.startsWith("--plugin-dir="));
-        if (plugin && !o.items.some((i) => i.label === "coool-ladder:briefs")) throw h.fail("no Ladder plugin skill");
-        coool.push(plugin ? "plugin skill coool-ladder:briefs" : "no --plugin-dir (no cheaper tier known to the stand-in)");
+        if (plugin && !o.items.some((i) => i.label === "coool-ladder:playbook")) throw h.fail("no Ladder plugin skill");
+        coool.push(plugin ? "plugin skill coool-ladder:playbook" : "no --plugin-dir (no cheaper tier known to the stand-in)");
         const sum = o.items.reduce((n, i) => n + i.tokens, 0);
         if (sum !== o.total || !$("[data-context-total]")?.textContent?.includes("tokens")) throw h.fail(`total ${o.total} vs ${sum}`);
         await h.shot("context-overview");

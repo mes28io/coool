@@ -8,6 +8,8 @@ The project ("shelf", a bookshop inventory) is standard library only; `make test
   feature  - discount codes across four modules, specified by tests/test_discount.py (failing until done)
   fix      - one failing test caused by a bug in shelf/util.py
   rename   - rename calc_tot -> calculate_total in 12 modules and drop unused imports, checked by tests/test_names.py
+  multi    - six new independent modules (search, csvio, stats, receipt, dates, rules), each specified by its own failing test
+             module: big enough, and split cleanly enough by file, that delegating (or swarm mode) should pay
 """
 import os
 import subprocess
@@ -195,10 +197,186 @@ FILES["tests/test_names.py"] = '''
 TASKS = {
     "feature": "Add discount codes to shelf, as tests/test_discount.py specifies: a Discount model, Store.add_discount / apply_code / discount, pricing.total(lines, discount=None), and the Discount line in report.summary. Do not change the tests. Everything else must keep passing.",
     "fix": "tests/test_util.py has a failing test. Find the cause and fix the code (not the test). Everything else must keep passing.",
+    "multi": "Add six new modules to shelf, each specified by its own test file: shelf/search.py (tests/test_search.py), shelf/csvio.py (tests/test_csvio.py), shelf/stats.py (tests/test_stats.py), shelf/receipt.py (tests/test_receipt.py), shelf/dates.py (tests/test_dates.py) and shelf/rules.py (tests/test_rules.py). Each function gets a docstring. Do not change the tests. `make test` must pass at the end.",
     "rename": "Rename the function calc_tot to calculate_total everywhere in shelf/ (definition and every use), and remove the unused `import os` lines in shelf/legacy/. Do not touch tests/. Then tests/test_names.py and the rest of the suite must pass.",
 }
+# The multi task: four new modules, each specified by its own test module.
+FILES["tests/test_search.py"] = '''
+    import unittest
+    from shelf.models import Book
+    from shelf.store import Store
+    from shelf.search import search, by_price
+
+
+    class Search(unittest.TestCase):
+        def setUp(self):
+            self.s = Store()
+            for isbn, title, p in [("1", "Dune Messiah", 1250), ("2", "Dune", 999), ("3", "Emma", 799), ("4", "The Dune Encyclopedia", 1999), ("5", "Middlemarch", 999)]:
+                self.s.add_book(Book(isbn, title, p))
+
+        def test_all_words_case_insensitive_sorted_by_title(self):
+            self.assertEqual([b.title for b in search(self.s, "dune")], ["Dune", "Dune Messiah", "The Dune Encyclopedia"])
+            self.assertEqual([b.title for b in search(self.s, "DUNE messiah")], ["Dune Messiah"])
+            self.assertEqual(search(self.s, "nothing"), [])
+
+        def test_empty_query_returns_everything_sorted(self):
+            self.assertEqual([b.isbn for b in search(self.s, "  ")], ["2", "1", "3", "5", "4"])
+
+        def test_by_price_inclusive_then_by_title(self):
+            self.assertEqual([b.title for b in by_price(self.s, 900, 1250)], ["Dune", "Middlemarch", "Dune Messiah"])
+            self.assertEqual(by_price(self.s, 5000, 6000), [])
+            with self.assertRaises(ValueError):
+                by_price(self.s, 10, 5)
+'''
+FILES["tests/test_csvio.py"] = '''
+    import unittest
+    from shelf.models import Book
+    from shelf.store import Store
+    from shelf.csvio import export_csv, import_csv
+
+
+    class Csv(unittest.TestCase):
+        def setUp(self):
+            self.s = Store()
+            self.s.add_book(Book("9", "War, and Peace", 1500))
+            self.s.add_book(Book("1", "Emma", 799))
+
+        def test_export_sorted_by_isbn_with_quoting(self):
+            self.assertEqual(export_csv(self.s), 'isbn,title,price_cents\\n1,Emma,799\\n9,"War, and Peace",1500\\n')
+
+        def test_import_counts_new_books_and_skips_known_isbns(self):
+            n = import_csv(self.s, 'isbn,title,price_cents\\n1,Emma again,1\\n2,"Dune, Part One",999\\n3,Ulysses,1299\\n')
+            self.assertEqual(n, 2)
+            self.assertEqual(self.s.books["2"].title, "Dune, Part One")
+            self.assertEqual(self.s.books["1"].title, "Emma")
+
+        def test_round_trip(self):
+            t = Store()
+            self.assertEqual(import_csv(t, export_csv(self.s)), 2)
+            self.assertEqual(export_csv(t), export_csv(self.s))
+
+        def test_bad_price_raises_and_adds_nothing(self):
+            with self.assertRaises(ValueError):
+                import_csv(self.s, 'isbn,title,price_cents\\n5,Ok,100\\n6,Bad,abc\\n')
+            self.assertNotIn("5", self.s.books)
+'''
+FILES["tests/test_stats.py"] = '''
+    import unittest
+    from shelf.models import Book
+    from shelf.store import Store
+    from shelf.stats import inventory_value, price_stats, histogram
+
+
+    class Stats(unittest.TestCase):
+        def setUp(self):
+            self.s = Store()
+            for i, p in enumerate([500, 799, 999, 1250, 1999]):
+                self.s.add_book(Book(str(i), f"B{i}", p))
+
+        def test_inventory_value(self):
+            self.assertEqual(inventory_value(self.s), 5547)
+            self.assertEqual(inventory_value(Store()), 0)
+
+        def test_price_stats(self):
+            self.assertEqual(price_stats(self.s), {"min": 500, "max": 1999, "mean": 1109, "median": 999})
+            self.s.add_book(Book("x", "X", 1000))
+            self.assertEqual(price_stats(self.s)["median"], 999)  # even count: the lower middle
+            with self.assertRaises(ValueError):
+                price_stats(Store())
+
+        def test_histogram_buckets_sorted(self):
+            self.assertEqual(histogram(self.s, 500), {500: 3, 1000: 1, 1500: 1})
+            self.assertEqual(list(histogram(self.s, 1000)), [0, 1000])
+            with self.assertRaises(ValueError):
+                histogram(self.s, 0)
+'''
+FILES["tests/test_receipt.py"] = '''
+    import unittest
+    from shelf.models import Book
+    from shelf.store import Store
+    from shelf.receipt import receipt
+
+
+    class Receipt(unittest.TestCase):
+        def setUp(self):
+            self.s = Store()
+            self.s.add_book(Book("1", "Dune", 1250))
+            self.s.add_book(Book("2", "The Remarkably Long Title Of A Book", 799))
+
+        def test_lines_are_padded_to_the_width(self):
+            self.s.add_to_cart("1", 2)
+            out = receipt(self.s, width=24).split("\\n")
+            self.assertEqual(out, ["Dune          2 x $12.50", "-" * 24, "Total             $25.00"])
+            self.assertTrue(all(len(l) == 24 for l in out))
+
+        def test_long_titles_are_cut_with_an_ellipsis(self):
+            self.s.add_to_cart("2")
+            first = receipt(self.s, width=24).split("\\n")[0]
+            self.assertEqual(first, "The Remarkabl… 1 x $7.99")
+            self.assertEqual(len(first), 24)
+
+        def test_empty_cart(self):
+            self.assertEqual(receipt(self.s, width=12), "-" * 12 + "\\nTotal  $0.00")
+'''
+FILES["tests/test_dates.py"] = '''
+    import datetime
+    import unittest
+    from shelf.dates import parse_range, business_days, format_span
+
+
+    class Dates(unittest.TestCase):
+        def test_parse_range_inclusive(self):
+            d = parse_range("2026-03-01..2026-03-04")
+            self.assertEqual(d, [datetime.date(2026, 3, i) for i in range(1, 5)])
+            self.assertEqual(parse_range("2026-03-01"), [datetime.date(2026, 3, 1)])
+            with self.assertRaises(ValueError):
+                parse_range("2026-03-05..2026-03-01")
+            with self.assertRaises(ValueError):
+                parse_range("yesterday")
+
+        def test_business_days_counts_weekdays_inclusive(self):
+            # 2026-03-02 is a Monday.
+            self.assertEqual(business_days(datetime.date(2026, 3, 2), datetime.date(2026, 3, 8)), 5)
+            self.assertEqual(business_days(datetime.date(2026, 3, 7), datetime.date(2026, 3, 8)), 0)
+            self.assertEqual(business_days(datetime.date(2026, 3, 6), datetime.date(2026, 3, 16)), 7)
+
+        def test_format_span(self):
+            self.assertEqual(format_span(0), "0 days")
+            self.assertEqual(format_span(1), "1 day")
+            self.assertEqual(format_span(6), "6 days")
+            self.assertEqual(format_span(7), "1 week")
+            self.assertEqual(format_span(17), "2 weeks 3 days")
+            self.assertEqual(format_span(15), "2 weeks 1 day")
+'''
+FILES["tests/test_rules.py"] = '''
+    import unittest
+    from shelf.rules import apply_rules, parse_rule
+
+
+    class Rules(unittest.TestCase):
+        def test_rules_apply_in_order(self):
+            self.assertEqual(apply_rules(1999, ["-10%"]), 1799)  # rounds down to the cent
+            self.assertEqual(apply_rules(1999, ["-10%", "round:50"]), 1750)
+            self.assertEqual(apply_rules(1000, ["-300", "-50%"]), 350)
+            self.assertEqual(apply_rules(1000, ["-50%", "-300"]), 200)
+            self.assertEqual(apply_rules(1000, ["-900", "min:500"]), 500)
+            self.assertEqual(apply_rules(1000, []), 1000)
+
+        def test_never_below_zero(self):
+            self.assertEqual(apply_rules(300, ["-500"]), 0)
+
+        def test_parse_rule(self):
+            self.assertEqual(parse_rule("-10%"), ("percent", 10))
+            self.assertEqual(parse_rule(" -250 "), ("minus", 250))
+            self.assertEqual(parse_rule("min:500"), ("min", 500))
+            self.assertEqual(parse_rule("round:50"), ("round", 50))
+            for bad in ["", "+10%", "-101%", "round:0", "min:-1", "half"]:
+                with self.assertRaises(ValueError, msg=bad):
+                    parse_rule(bad)
+'''
+
 # Which test modules must still fail on the untouched repo (sanity check of the setup) - others must pass.
-FAIL_AT_START = {"feature": "tests.test_discount", "fix": "tests.test_util", "rename": "tests.test_names"}
+FAIL_AT_START = {"feature": ["tests.test_discount"], "fix": ["tests.test_util"], "rename": ["tests.test_names"], "multi": ["tests.test_search", "tests.test_csvio", "tests.test_stats", "tests.test_receipt", "tests.test_dates", "tests.test_rules"]}
 
 
 def main():

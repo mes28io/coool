@@ -479,6 +479,53 @@ pub fn selftest_chat_launch(core: State<'_, Arc<Core>>, chat: usize) -> Result<C
     Ok(ChatLaunch { args, ps, pid })
 }
 
+/// The `ladder2` scenario's probes (APP_SPEC "Ladder"): `files` lists the files under the run's folder (relative path,
+/// bytes, and a PNG's pixel size); `tool` calls a `coool-ladder` tool as chat `chat` would over MCP (its refusals and
+/// the budget's answer are checked without a model turn); `env` is a chat CLI process's environment entries that
+/// Ladder sets (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`), read with `ps eww`.
+#[tauri::command(async)]
+pub fn selftest_ladder(core: State<'_, Arc<Core>>, action: String, chat: Option<usize>, name: Option<String>, args: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    let t = active(&core)?;
+    match action.as_str() {
+        "files" => {
+            let mut out = Vec::new();
+            let mut stack = vec![t.dir.clone()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+                    let p = e.path();
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if n.starts_with('.') || n == "selftest.log" {
+                        continue;
+                    }
+                    if p.is_dir() {
+                        stack.push(p);
+                        continue;
+                    }
+                    let bytes = std::fs::read(&p).unwrap_or_default();
+                    let png = (bytes.len() > 24 && bytes.starts_with(b"\x89PNG")).then(|| (u32::from_be_bytes(bytes[16..20].try_into().unwrap()), u32::from_be_bytes(bytes[20..24].try_into().unwrap())));
+                    out.push(serde_json::json!({ "path": p.strip_prefix(&t.dir).unwrap_or(&p).to_string_lossy(), "bytes": bytes.len(), "png": png }));
+                }
+            }
+            Ok(serde_json::Value::Array(out))
+        }
+        "tool" => {
+            let chat = chat.ok_or("chat is required")?;
+            Ok(match crate::ladder::call(core.inner(), chat, name.as_deref().unwrap_or(""), &args.unwrap_or_default()) {
+                Ok(v) => serde_json::json!({ "ok": true, "value": v }),
+                Err(e) => serde_json::json!({ "ok": false, "error": e }),
+            })
+        }
+        "env" => {
+            let pid = core.hub.lock().unwrap().chat(chat.ok_or("chat is required")?).and_then(|c| c.pid).ok_or("no pid")?;
+            let o = std::process::Command::new("ps").args(["eww", "-o", "command=", "-p", &pid.to_string()]).output().map_err(|e| e.to_string())?;
+            let s = String::from_utf8_lossy(&o.stdout).into_owned();
+            let v: Vec<&str> = s.split_whitespace().filter(|w| w.starts_with("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=")).collect();
+            Ok(serde_json::json!(v))
+        }
+        _ => Err(format!("unknown action {action}")),
+    }
+}
+
 /// Counters and resource use for the `perf-*` scenarios (see `crate::perf`).
 #[derive(Serialize)]
 pub struct PerfStats {

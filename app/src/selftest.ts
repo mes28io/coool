@@ -66,6 +66,7 @@ import { useReads } from "./lib/explainStore";
 import { changesFromActivity } from "./lib/mission";
 import { voiceScenarios } from "./selftestVoice";
 import { ladderScenarios } from "./selftestLadder";
+import { ladder2Scenarios } from "./selftestLadder2";
 import { contextScenarios } from "./selftestContext";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
@@ -6916,6 +6917,7 @@ const combo: Record<string, (ctx: Ctx) => Promise<void>> = {
 Object.assign(scenarios, combo);
 // Voice (selftestVoice.ts): fixtures through the real engine, the composer, memory; no microphone, no model calls.
 Object.assign(scenarios, ladderScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a) }));
+Object.assign(scenarios, ladder2Scenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a) }));
 // `context` (selftestContext.ts): the Context panel on a throwaway HOME; no model calls. Not in `all`.
 Object.assign(scenarios, contextScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a) }));
 Object.assign(scenarios, attachScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a), say }, { claude: CLAUDE_MODEL, codex: CODEX_MODEL }));

@@ -50,7 +50,7 @@ pub struct Hub {
     client_name: String,
     /// MCP servers coool hands each chat it starts, by chat id (see [`Hub::set_chat_mcp`]).
     chat_mcp: Option<crate::chat::McpFor>,
-    /// Where coool keeps its Claude Code plugin for Ladder (see [`crate::ladder`]); None: briefs go inline.
+    /// Where coool keeps its Claude Code plugin for Ladder (see [`crate::ladder`]); None: the playbook goes inline.
     ladder_root: Option<PathBuf>,
     /// Live child run pid -> pid of the session above it (see [`crate::lineage`]).
     ancestors: crate::lineage::AncestorCache,
@@ -380,7 +380,12 @@ impl Hub {
     /// Start a structured chat (see [`crate::chat`]). Returns its id, stable for the process.
     pub fn start_chat(&mut self, opts: ChatOptions) -> Result<usize> {
         let id = self.chats.len();
-        let mcp = self.chat_mcp.as_ref().map(|f| f(id, &opts.cwd, opts.provider)).unwrap_or_default();
+        let mut opts = opts;
+        let mcp = self.chat_mcp.as_ref().map(|f| f(id, &opts)).unwrap_or_default();
+        // Ladder's tools are named in the policy only when their server really is attached.
+        if let Some(l) = opts.ladder.as_mut() {
+            l.tools = l.tools && mcp.iter().any(|m| m.name == crate::ladder::SERVER);
+        }
         let c = Chat::start(id, opts, &self.client_name, &mcp, self.ladder_root.as_deref())?;
         // Claude chats know their session id up front: remember it before the
         // transcript exists, so a crash right away still leaves it marked.

@@ -235,6 +235,8 @@ export interface ChatInfo {
   running: boolean;
   /** CLI process id (additive; real backend only). */
   pid?: number | null;
+  /** A Ladder helper started by another chat's `spawn` (APP_SPEC "Ladder"). */
+  helper?: import("./ladderHelpers").HelperInfo | null;
 }
 
 export interface Snapshot {

@@ -18,6 +18,7 @@ import { cx, ease, spring, StatusDot, TokenCount } from "./primitives";
 import { reducedMotion } from "./StepRail";
 import type { Shell } from "../lib/types";
 import { useStore } from "../store";
+import { rootOf, treeOrder } from "../lib/ladderHelpers";
 
 /** Finished cards shown before "Show N more". */
 const DONE_CAP = 6;
@@ -45,10 +46,15 @@ export function AgentsBody({
 }) {
   const [hover, setHover] = useState(false);
   const [all, setAll] = useState(false);
-  const ordered = useStableOrder(orderCards(cards), (c) => c.id, hover);
+  const stable = useStableOrder(orderCards(cards), (c) => c.id, hover);
+  // Nested helpers (Ladder) sit under their parent: a tree, grouped by whether its root is live.
+  const nested = stable.some((c) => c.parentRef);
+  const ordered = nested ? treeOrder(stable) : stable;
+  const byId = new Map(ordered.map((c) => [c.id, c]));
+  const liveRoot = (c: AgentCardData) => (nested ? isLive(byId.get(rootOf(c, byId)) ?? c) || isLive(c) : isLive(c));
   // Finished = done, failed or stopped; they share one recency order and one "Show more" cap.
-  const done = ordered.filter((c) => !isLive(c));
-  const rest = ordered.filter(isLive);
+  const done = ordered.filter((c) => !liveRoot(c));
+  const rest = ordered.filter(liveRoot);
   const shownDone = all ? done : done.slice(0, DONE_CAP);
   const more = done.length - shownDone.length;
   // What can move a card: the lists' order and the shells between them. Layout animations re-measure only when
@@ -78,8 +84,8 @@ export function AgentsBody({
               transition={{ duration: reducedMotion() ? 0 : 0.3, ease, layout: reducedMotion() ? { duration: 0 } : spring }}
               className="overflow-hidden"
             >
-              <div className="pb-2">
-                <Card role={roles?.[c.id]} card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
+              <div className="pb-2" style={c.depth ? { paddingLeft: Math.min(c.depth, 4) * 14 } : undefined} data-agent-depth={c.depth || undefined}>
+                <Card role={roleWord(c, roles)} card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
               </div>
             </motion.div>
           ))}
@@ -97,8 +103,8 @@ export function AgentsBody({
               transition={{ duration: reducedMotion() ? 0 : 0.3, ease, layout: reducedMotion() ? { duration: 0 } : spring }}
               className="overflow-hidden"
             >
-              <div className="pb-2">
-                <Card role={roles?.[c.id]} card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
+              <div className="pb-2" style={c.depth ? { paddingLeft: Math.min(c.depth, 4) * 14 } : undefined} data-agent-depth={c.depth || undefined}>
+                <Card role={roleWord(c, roles)} card={c} onOpen={() => onOpenCard(c)} onStop={() => onStop(c)} />
               </div>
             </motion.div>
           ))}
@@ -111,6 +117,13 @@ export function AgentsBody({
       </div>
     </div>
   );
+}
+
+/** The Ladder word before a card's model: its tier ("small"), "image" for an image job, "helper" for a coool chat. */
+function roleWord(c: AgentCardData, roles?: Record<string, string>): string | undefined {
+  if (roles?.[c.id]) return roles[c.id];
+  if (c.helper) return /\b(image|icon|illustration|logo|png)\b/i.test(`${c.helper.title} ${c.description}`) ? "image" : "helper";
+  return undefined;
 }
 
 function Timer({ since, className }: { since: number | null; className?: string }) {
@@ -152,7 +165,7 @@ function Card({ card, role, onOpen, onStop }: { card: AgentCardData; role?: stri
             {card.description || (card.model ? modelLabel(card.model) : "Agent")}
           </div>
           <div className="truncate text-small leading-[16px] text-dim" title={full}>
-            {[card.model ? (role ? `${role} · ${modelLabel(card.model)}` : modelLabel(card.model)) : null, card.kind].filter(Boolean).join(" · ")}
+            {[card.model ? (role ? `${role} · ${role === "image" && /gpt|codex/i.test(card.model) ? "GPT" : modelLabel(card.model)}` : modelLabel(card.model)) : null, card.depth ? `nested ${card.depth}` : null, card.kind].filter(Boolean).join(" · ")}
           </div>
         </div>
         <span className="-mt-[2px] flex shrink-0 items-center gap-1">
