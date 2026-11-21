@@ -16,7 +16,7 @@ pub(crate) const MODEL: &str = "claude-haiku-5-5";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2026-10-21";
 const MAX_TOKENS: u32 = 300;
-const KEYCHAIN_SERVICE: &str = "coool-anthropic-api-key";
+pub(crate) const KEYCHAIN_SERVICE: &str = "coool-anthropic-api-key";
 const KEYCHAIN_ACCOUNT: &str = "coool";
 
 const HISTORY_LINES: usize = 40;
@@ -81,7 +81,7 @@ fn keychain_get() -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn keychain_get_in(service: &str) -> Option<String> {
+pub(crate) fn keychain_get_in(service: &str) -> Option<String> {
     let out = std::process::Command::new("/usr/bin/security")
         .args(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", service, "-w"])
         .stdin(std::process::Stdio::null())
@@ -100,10 +100,34 @@ fn keychain_get() -> Option<String> {
     None
 }
 
+/// Whether the Keychain holds item `service`, without reading its secret (no `-w`: `security` prints only the item's
+/// attributes, which are dropped).
+#[cfg(target_os = "macos")]
+pub(crate) fn keychain_has_in(service: &str) -> bool {
+    std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", service])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Whether Assist has a key (env or Keychain), without reading the Keychain item's value.
+pub fn has_api_key() -> bool {
+    if std::env::var("COOOL_ANTHROPIC_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    return keychain_has_in(KEYCHAIN_SERVICE);
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
 /// A key `security -i` can take inside double quotes: printable ASCII without
 /// quotes or backslashes (Anthropic keys are `sk-ant-` plus [A-Za-z0-9_-]).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn keychain_safe(key: &str) -> bool {
+pub(crate) fn keychain_safe(key: &str) -> bool {
     !key.is_empty() && key.bytes().all(|b| (0x21..0x7f).contains(&b) && b != b'"' && b != b'\\' && b != b'\'')
 }
 
@@ -123,7 +147,7 @@ fn keychain_set(key: &str) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn keychain_set_in(service: &str, key: &str) -> Result<()> {
+pub(crate) fn keychain_set_in(service: &str, key: &str) -> Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
     if !keychain_safe(key) {
@@ -161,7 +185,7 @@ fn keychain_delete() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn keychain_delete_in(service: &str) -> Result<()> {
+pub(crate) fn keychain_delete_in(service: &str) -> Result<()> {
     let out = std::process::Command::new("/usr/bin/security")
         .args(["delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", service])
         .stdin(std::process::Stdio::null())

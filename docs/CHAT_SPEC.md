@@ -22,6 +22,7 @@ pub struct ChatOptions {
     pub resume: Option<String>,          // provider session id to continue
     pub model: Option<String>,
     pub permission_mode: Option<String>, // provider's own names, passed through
+    pub account: Option<String>,         // Claude Platform key id (APP_SPEC "Claude Platform"); None: the subscription
 }
 
 impl Hub {
@@ -64,6 +65,7 @@ Every event also carries `seq: u64` and `ts: u64` (epoch ms). This JSON is exact
 | `usage` | `model`, `tokens: {input, cached, output, context}`, `context_window: number \| null` | after each model response |
 | `state` | `state: "idle" \| "working" \| "waiting_permission"` | |
 | `turn_end` | `duration_ms`, `ok: bool` | |
+| `cost` | `usd: number` | Claude Platform (APP_SPEC "Claude Platform"): what an API-key chat's turn cost by the CLI's own count (the change in `result.total_cost_usd`); only for chats on an API key |
 | `notice` | `level: "info" \| "warn" \| "error"`, `text`, `needs_terminal: bool` | CLI output with no better home, errors, and "this command only works in the terminal" |
 | `exited` | `code: number \| null` | process ended |
 | `open_failed` | `error`, `reason: "newer_cli" \| "not_found" \| "exited" \| "other"`, `cli_version: string \| null`, `resumed: bool`, `unsent: [{id, text}]` | the conversation couldn't be opened (Codex `initialize` / `thread/start` / `thread/resume` error, or the app-server gone before the thread opened; Claude Code: an error `result` before it answered `initialize` on a `--resume`). Final: the CLI's input is closed so `exited` follows, sends and notes are refused, `unsent` lists the prompts shown as sent that never reached the agent. `newer_cli`: Codex's "failed to deserialize stored thread item … unknown variant" (a newer Codex saved it). The app shows one card (plain reason, the raw error folded, the unsent text with Copy, "New chat in this folder" carrying it as a draft), no `exited` row, and the composer and its chips disabled |

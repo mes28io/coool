@@ -248,6 +248,10 @@ struct RawCommand {
 static KNOWN_KINDS: std::sync::Mutex<Option<(Vec<String>, Vec<String>)>> = std::sync::Mutex::new(None);
 
 pub(crate) struct Claude {
+    /// Claude Platform: this chat runs on an API key (its rate limits aren't the subscription's; its turns cost).
+    api_key: bool,
+    /// `total_cost_usd` of the CLI's latest result (cumulative for the process), for each turn's own cost.
+    cost_seen: f64,
     session_id: String,
     resume: Option<String>,
     cwd: String,
@@ -415,6 +419,8 @@ impl Claude {
             .and_then(|k| k.clone())
             .unwrap_or_else(|| (Vec::new(), TERMINAL_COMMANDS_FALLBACK.iter().map(|s| s.to_string()).collect()));
         Self {
+            api_key: opts.account.is_some(),
+            cost_seen: 0.0,
             session_id: opts.resume.clone().unwrap_or_else(uuid_v4),
             resume: opts.resume.clone(),
             cwd: opts.cwd.clone(),
@@ -1055,6 +1061,16 @@ impl Claude {
             self.ready(o);
         }
         o.ev(ChatEventKind::TurnEnd { duration_ms: v["duration_ms"].as_u64().unwrap_or(0), ok });
+        if self.api_key
+            && let Some(total) = v["total_cost_usd"].as_f64().filter(|c| c.is_finite() && *c >= 0.0)
+        {
+            // Cumulative for the process; a smaller number than before means the CLI counts per turn.
+            let usd = if total >= self.cost_seen { total - self.cost_seen } else { total };
+            self.cost_seen = total;
+            if usd > 0.0 {
+                o.ev(ChatEventKind::Cost { usd });
+            }
+        }
         self.perms.clear();
         if self.stopping {
             self.stopping = false;
@@ -1228,6 +1244,14 @@ impl Backend for Claude {
                     if self.agents.is_empty() {
                         self.agents = names(&v["agents"]);
                     }
+                    // Claude Platform: say so when the CLI didn't take the login this chat was started with.
+                    if let Some(src) = v["apiKeySource"].as_str() {
+                        if self.api_key && src != crate::platform::KEY_ENV {
+                            o.ev(ChatEventKind::notice(NoticeLevel::Warn, format!("This chat was started on a Claude Platform API key, but Claude Code says it uses {src} instead. Check the bill before relying on it.")));
+                        } else if !self.api_key && src == crate::platform::KEY_ENV {
+                            o.ev(ChatEventKind::notice(NoticeLevel::Info, "Claude Code found ANTHROPIC_API_KEY in coool's environment, so this chat is billed to that API key, not your subscription."));
+                        }
+                    }
                     // (The context-usage answer still completes the first `ready`.)
                     self.init_done = true;
                     self.ready(o);
@@ -1287,7 +1311,10 @@ impl Backend for Claude {
             Some("result") => self.on_result(&v, o),
             Some("command_lifecycle") => self.on_lifecycle(&v, o),
             Some("rate_limit_event") => {
-                crate::usage::observe_claude_rate_limit_event(&v);
+                // An API-key chat's limits are the key's organization's, not the subscription's plan usage.
+                if !self.api_key {
+                    crate::usage::observe_claude_rate_limit_event(&v);
+                }
                 let info = &v["rate_limit_info"];
                 if info["status"] == "rejected" {
                     o.ev(ChatEventKind::notice(NoticeLevel::Error, "Usage limit reached"));
@@ -1488,11 +1515,43 @@ mod tests {
     use crate::chat::testutil::replay;
 
     fn opts() -> ChatOptions {
-        ChatOptions { provider: Provider::Claude, cwd: "/work".into(), resume: None, model: Some("haiku".into()), permission_mode: None, ladder: None, context: None }
+        ChatOptions { provider: Provider::Claude, cwd: "/work".into(), resume: None, model: Some("haiku".into()), permission_mode: None, ladder: None, context: None, account: None }
     }
 
     fn kinds(evs: &[ChatEventKind]) -> Vec<String> {
         evs.iter().map(|e| serde_json::to_value(e).unwrap()["type"].as_str().unwrap().to_string()).collect()
+    }
+
+    /// Claude Platform: an API-key chat reports each turn's cost (from the CLI's cumulative count), keeps its rate
+    /// limits out of plan usage, and warns when the CLI didn't take the key; a subscription chat does none of that.
+    #[test]
+    fn api_key_chats_count_cost_and_check_the_key_source() {
+        let init = |src: &str| json!({"type": "system", "subtype": "init", "session_id": "s1", "model": "claude-haiku-5-5", "permissionMode": "default", "apiKeySource": src}).to_string();
+        let result = |c: f64| json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 10, "total_cost_usd": c}).to_string();
+        let warn = |o: &Out| o.events.iter().any(|e| matches!(e, ChatEventKind::Notice { level: NoticeLevel::Warn, text, .. } if text.contains("Claude Platform")));
+        let costs = |o: &Out| o.events.iter().filter_map(|e| if let ChatEventKind::Cost { usd } = e { Some(*usd) } else { None }).collect::<Vec<_>>();
+
+        let mut c = Claude::new(&ChatOptions { account: Some("aaa111".into()), ..opts() });
+        let mut o = Out::default();
+        c.on_line(&init("ANTHROPIC_API_KEY"), &mut o);
+        assert!(!warn(&o));
+        let mut o = Out::default();
+        c.on_line(&result(0.25), &mut o);
+        c.on_line(&result(0.75), &mut o);
+        c.on_line(&result(0.75), &mut o);
+        assert_eq!(costs(&o), vec![0.25, 0.5], "per turn, nothing for a turn that cost nothing");
+        let mut o = Out::default();
+        c.on_line(&init("none"), &mut o);
+        assert!(warn(&o), "the CLI used something else: say so");
+
+        let mut s = Claude::new(&opts());
+        let mut o = Out::default();
+        s.on_line(&init("none"), &mut o);
+        s.on_line(&result(0.25), &mut o);
+        assert!(!warn(&o) && costs(&o).is_empty());
+        let mut o = Out::default();
+        s.on_line(&init("ANTHROPIC_API_KEY"), &mut o);
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::Notice { level: NoticeLevel::Info, text, .. } if text.contains("not your subscription"))));
     }
 
     #[test]

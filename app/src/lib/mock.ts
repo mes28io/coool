@@ -26,7 +26,7 @@ import { mockMac } from "./mockMac";
 import { mockHistory } from "./mockHistory";
 import { mockName, mockRename } from "./mockTitles";
 import { CTX_DEMO_ID, ctxAgentMap, ctxCompacting, ctxDemoMap } from "./mockContext";
-import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, LaneInfo, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
+import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, LaneInfo, PlanUsage, PlatformKey, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
 const enc = new TextEncoder();
@@ -1150,7 +1150,7 @@ export function mockBackend(): Backend {
       sessions,
       pending: ptys.filter((p) => p.running && !linked.has(p.id)).map((p) => p.id),
       ptys: ptys.map(({ id, provider, cwd, running, started }) => ({ id, provider, cwd, running, started })),
-      chats: chats.map((c) => c.info()).filter((c) => !cap || MC_PROJECTS.slice(0, cap).includes((c.project || c.cwd).split("/").pop() ?? "")),
+      chats: chats.map((c) => ({ ...c.info(), account: platform.chats.get(c.id) ?? null })).filter((c) => !cap || MC_PROJECTS.slice(0, cap).includes((c.project || c.cwd).split("/").pop() ?? "")),
       loading: scan.loading,
       usage,
       show_automation: showAutomation,
@@ -1438,6 +1438,17 @@ export function mockBackend(): Backend {
   }
 
   const insights: InsightsStatus = readInsights();
+  // Claude Platform (APP_SPEC "Claude Platform"): names only, in memory; a key pasted here is dropped at once.
+  const platform = {
+    keys: [{ id: "k-work", name: "Work", last4: "9Q2x", assist: false }] as PlatformKey[],
+    folders: {} as Record<string, string>,
+    chats: new Map<number, string>(),
+  };
+  const platformDefault = (cwd: string) => {
+    let best: string | null = null;
+    for (const f of Object.keys(platform.folders)) if ((cwd === f || cwd.startsWith(f + "/")) && (!best || f.length > best.length)) best = f;
+    return best ? platform.folders[best] : null;
+  };
   const sim = mockSim();
   const pilotLog = { enabled: true, dir: "~/Library/Application Support/sh.coool.app/pilot", bytes: 184_320, files: 1 };
   const saveInsights = () => {
@@ -1916,8 +1927,10 @@ export function mockBackend(): Backend {
     ...mockUpdate(),
 
     // ---------- chats ----------
-    async startChat({ provider, cwd, resume, model, permission_mode }) {
+    async startChat({ provider, cwd, resume, model, permission_mode, account }) {
       await delay(140);
+      const acct = provider !== "claude" || account === "subscription" ? null : (account ?? platformDefault(cwd));
+      if (acct) platform.chats.set(chats.length, acct);
       if (resume) {
         const l = live.find((x) => x.s.id === resume);
         if (l?.chat?.running) return l.chat.id;
@@ -2010,6 +2023,36 @@ export function mockBackend(): Backend {
     onChatEvent(cb) {
       subs.chat.add(cb);
       return () => subs.chat.delete(cb);
+    },
+
+    // ---------- Claude Platform ----------
+    async platformStatus() {
+      await delay(60);
+      return { keys: platform.keys.map((k) => ({ ...k })), folders: { ...platform.folders } };
+    },
+    async platformAddKey(name, key) {
+      await delay(200);
+      const k = key.trim();
+      if (!/^sk-ant-/.test(k) || k.length < 20) throw new Error("that doesn't look like an Anthropic API key (they start with sk-ant-)");
+      if (!name.trim()) throw new Error("give the key a name (e.g. Work)");
+      const meta = { id: `k-${Date.now().toString(36)}`, name: name.trim().slice(0, 40), last4: k.slice(-4) };
+      platform.keys.push({ ...meta, assist: false });
+      return meta;
+    },
+    async platformRenameKey(id, name) {
+      const k = platform.keys.find((x) => x.id === id);
+      if (k) k.name = name.trim().slice(0, 40);
+    },
+    async platformRemoveKey(id) {
+      platform.keys = platform.keys.filter((k) => k.id !== id);
+      for (const [f, a] of Object.entries(platform.folders)) if (a === id) delete platform.folders[f];
+    },
+    async platformSetFolder(folder, account) {
+      if (account && account !== "subscription") platform.folders[folder.replace(/\/$/, "")] = account;
+      else delete platform.folders[folder.replace(/\/$/, "")];
+    },
+    async platformDefault(cwd) {
+      return platformDefault(cwd);
     },
 
     // ---------- insights ----------

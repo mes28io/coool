@@ -44,6 +44,7 @@ import { useShellFocus } from "../lib/shellFocus";
 import { countRender } from "../lib/perfCount";
 import { useLayout, useLayoutMode } from "../lib/layout";
 import { BESIDE_CHAT_MIN, defaultFrac, fracOf, panelAxis, stackHeight, type Axis } from "../lib/layoutRules";
+import { PlatformBadge } from "./Platform";
 
 // xterm.js is only needed once a terminal is shown: keep it out of the main chunk.
 const TerminalView = lazy(() => import("./TerminalView").then((m) => ({ default: m.TerminalView })));
@@ -480,6 +481,7 @@ export function SessionView({
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
             <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />
+            {chat?.account && <PlatformBadge chat={chat} />}
           </div>
         </div>
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}

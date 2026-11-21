@@ -271,6 +271,8 @@ export interface ChatInfo {
   hosted?: boolean;
   /** It keeps running when coool quits (hosted, with "Keep chats running when coool quits" on). */
   kept?: boolean;
+  /** Claude Platform: the id of the API key it is billed to; absent: the subscription. */
+  account?: string | null;
 }
 
 export interface Snapshot {
@@ -414,6 +416,8 @@ export type ChatEvent = Ev &
     | { type: "agent_total"; tool_id: string; tokens: number }
     | { type: "state"; state: ChatRunState }
     | { type: "turn_end"; duration_ms: number; ok: boolean }
+    /** Claude Platform: what an API-key chat's turn cost, by the CLI's own count (APP_SPEC "Claude Platform"). */
+    | { type: "cost"; usd: number }
     | { type: "compacting"; active: boolean }
     | { type: "notice"; level: "info" | "warn" | "error"; text: string; needs_terminal: boolean }
     | { type: "exited"; code: number | null }
@@ -434,6 +438,25 @@ export interface ChatOptions {
   ladder?: import("./ladderTiers").LadderOptions | null;
   /** The coool context (APP_SPEC "coool context"): `{}` on (the backend fills in what the chat has); null/absent: off. */
   context?: Record<string, never> | null;
+  /** Claude Platform (APP_SPEC "Claude Platform"): a key's id, or "subscription"; null/absent: the default (a resumed
+   *  session's own account, else the folder's default). */
+  account?: string | null;
+}
+
+/** Claude Platform (APP_SPEC "Claude Platform"): an API key as the page may see it (never the key itself). */
+export interface PlatformKey {
+  id: string;
+  name: string;
+  /** Its last four characters; null for Assist's key (its value isn't read to list it). */
+  last4: string | null;
+  /** Assist's key (Settings > Assist), offered as one more choice. */
+  assist: boolean;
+}
+
+export interface PlatformStatus {
+  keys: PlatformKey[];
+  /** Folder -> key id: chats started there run on that key unless chosen otherwise (subfolders too). */
+  folders: Record<string, string>;
 }
 
 export interface InsightsStatus {

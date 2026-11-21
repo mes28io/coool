@@ -1439,7 +1439,7 @@ mod tests {
     use crate::chat::testutil::{replay, replay_full};
 
     fn opts() -> ChatOptions {
-        ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()), ladder: None, context: None }
+        ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()), ladder: None, context: None, account: None }
     }
 
     #[test]

@@ -144,15 +144,30 @@ def status_line():
     out({"type": "system", "subtype": "status", "status": "requesting", "session_id": SID, "uuid": str(uuid.uuid4())})
 
 
+# Claude Platform (the `platform` self-test): like the real CLI in print mode, an ANTHROPIC_API_KEY in the environment
+# is the key source, and each result reports what the process has cost so far. Only a boolean and the last four
+# characters of the key are ever said back, never the key.
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+OTHER_AUTH = [v for v in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX") if os.environ.get(v)]
+COST = [0.0]
+
+
+def auth_words():
+    key = f"api key ••{API_KEY[-4:]}" if API_KEY else "no api key"
+    return f"{key}, other logins: {', '.join(OTHER_AUTH) if OTHER_AUTH else 'none'}"
+
+
 def init_line():
     out({"type": "system", "subtype": "init", "cwd": str(CWD), "session_id": SID, "tools": ["Agent", "Bash", "Edit", "Glob", "Grep", "Read", "Write", "WebFetch", "TodoWrite"],
-         "mcp_servers": [], "model": MODEL, "permissionMode": MODE, "slash_commands": [c["name"] for c in COMMANDS], "apiKeySource": "none", "claude_code_version": "2.9.0",
+         "mcp_servers": [], "model": MODEL, "permissionMode": MODE, "slash_commands": [c["name"] for c in COMMANDS], "apiKeySource": "ANTHROPIC_API_KEY" if API_KEY else "none", "claude_code_version": "2.9.0",
          "output_style": "default", "agents": ["general-purpose", "Explore", "Plan"], "skills": [], "plugins": [], "uuid": str(uuid.uuid4())})
 
 
 def result(start, turns=1):
+    if API_KEY:
+        COST[0] += 0.0125 * turns
     out({"type": "result", "subtype": "success", "is_error": False, "duration_ms": int((time.time() - start) * 1000), "duration_api_ms": int((time.time() - start) * 800), "num_turns": turns,
-         "result": "", "stop_reason": "end_turn", "session_id": SID, "total_cost_usd": 0.0, "usage": usage(), "uuid": str(uuid.uuid4())})
+         "result": "", "stop_reason": "end_turn", "session_id": SID, "total_cost_usd": round(COST[0], 6), "usage": usage(), "uuid": str(uuid.uuid4())})
     if PRINT_LIKE:
         record({"type": "system", "subtype": "stop_hook_summary", "hookCount": 0, "hookInfos": [], "hookErrors": [], "preventedContinuation": False, "stopReason": "", "hasOutput": False, "level": "suggestion"})
     else:
@@ -433,6 +448,12 @@ def settings_turn(prompt, start):
     result(start, turns=2)
 
 
+def billing_turn(prompt, start):
+    """Says how it is logged in (the `platform` self-test): a boolean and the key's last four, never the key."""
+    text(f"Billing check (stand-in pid {os.getpid()}, session {SID}): {auth_words()}.")
+    result(start)
+
+
 def continue_turn(prompt, start):
     """After a restart: says which process and session it is (the `restart` self-test checks both)."""
     text(f"Continuing after the restart (stand-in pid {os.getpid()}, session {SID}): the notes server is connected.")
@@ -510,6 +531,8 @@ def run_turn(prompt):
             changes_turn(prompt, start)
         elif "settings demo" in low:
             settings_turn(prompt, start)
+        elif "billing check" in low:
+            billing_turn(prompt, start)
         elif "slow demo" in low:
             slow_demo_turn(prompt, start)
         elif low.strip() == "continue":

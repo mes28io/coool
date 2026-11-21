@@ -46,6 +46,10 @@ pub struct ChatOptions {
     /// (filled in by the app at launch); None: off.
     #[serde(default)]
     pub context: Option<crate::agent_context::AgentContext>,
+    /// Claude Platform (APP_SPEC "Claude Platform"): the id of the API key this chat is billed to; None: the
+    /// subscription (the CLI's own login). Only the id: the key is read from the Keychain by whoever spawns the CLI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// An MCP server (stdio) handed to a chat's CLI at launch: Claude Code gets it through `--mcp-config=<private file>`, Codex through
@@ -289,6 +293,11 @@ pub enum ChatEventKind {
         duration_ms: u64,
         ok: bool,
     },
+    /// Claude Platform: what an API-key chat's turn cost, by the CLI's own count (`result.total_cost_usd`, as the
+    /// change since the CLI's previous result). Only for chats on an API key; follows that turn's `turn_end`.
+    Cost {
+        usd: f64,
+    },
     /// The CLI started (`active`) or finished summarizing the conversation to
     /// free context (Claude `status: compacting`, Codex `contextCompaction`).
     Compacting {
@@ -410,6 +419,9 @@ pub struct ChatInfo {
     pub permission_mode: String,
     pub state: ChatState,
     pub running: bool,
+    /// The Claude Platform key it runs on (see [`ChatOptions::account`]); None: the subscription.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// What a backend wants done after handling input: lines for the CLI's stdin
@@ -854,6 +866,21 @@ impl Chat {
         {
             env.extend(crate::ladder::claude_env(l));
         }
+        // Claude Platform: the key, read from the Keychain now, rides in the CLI's environment only (never argv, a
+        // file, or the host's socket); spawn_into removes the other logins.
+        if opts.provider == Provider::Claude
+            && let Some(a) = &opts.account
+        {
+            match crate::platform::env_for(a) {
+                Ok(e) => env.extend(e),
+                Err(e) => {
+                    if let Some(p) = &mcp_file {
+                        let _ = std::fs::remove_file(p);
+                    }
+                    return Err(e);
+                }
+            }
+        }
         let (backend, program, args) = Self::launch(&opts, client_name, mcp, ladder_root, mcp_file.as_deref());
         let r = Self::spawn_into(id, opts.provider, &opts.cwd, program, &args, &env, mcp_file.clone(), backend, reuse);
         if r.is_err()
@@ -940,6 +967,12 @@ impl Chat {
         }
         let mut cmd = Command::new(program);
         cmd.args(args).envs(env.iter().map(|(k, v)| (k, v))).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // An API-key chat (Claude Platform): nothing else may decide where its bill goes.
+        if env.iter().any(|(k, _)| k == crate::platform::KEY_ENV) {
+            for v in crate::platform::OTHER_AUTH {
+                cmd.env_remove(v);
+            }
+        }
         // Own process group, so stop() reaches the tools it spawned too.
         cmd.process_group(0);
         let mut child = cmd.spawn().with_context(|| format!("spawn `{program}` (is it installed and on PATH?)"))?;
@@ -1403,6 +1436,7 @@ impl Chat {
             permission_mode: sh.permission_mode.clone(),
             state: sh.state,
             running: sh.running,
+            account: self.opts.as_ref().and_then(|o| o.account.clone()),
         }
     }
 
@@ -1768,7 +1802,7 @@ mod tests {
             Provider::Claude => vec![Tier { role: Role::Mid, model: "sonnet".into(), label: "Sonnet 4.6".into() }, Tier { role: Role::Small, model: "haiku".into(), label: "Haiku 4.5".into() }],
             Provider::Codex => vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }],
         };
-        ChatOptions { provider, cwd: cwd.into(), resume: None, model: None, permission_mode: None, ladder: on.then(|| Ladder { tiers, max_parallel: 3, verify_tests: true, ..Default::default() }), context: None }
+        ChatOptions { provider, cwd: cwd.into(), resume: None, model: None, permission_mode: None, ladder: on.then(|| Ladder { tiers, max_parallel: 3, verify_tests: true, ..Default::default() }), context: None, account: None }
     }
 
     /// Ladder at launch (APP_SPEC "Ladder"): on adds the CLI's own per-launch flags, off adds nothing, and nothing is
@@ -2016,7 +2050,7 @@ mod tests {
 
     #[test]
     fn missing_folder_is_an_error_not_a_spawn() {
-        let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None, ladder: None, context: None };
+        let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None, ladder: None, context: None, account: None };
         assert!(Chat::start(0, opts, "coool", &[], None).is_err());
     }
 
@@ -2071,6 +2105,63 @@ mod tests {
         assert!(!h.is_running());
         assert!(c.send("late").is_err());
         assert_eq!(c.info().id, 7);
+    }
+
+    /// Claude Platform: a CLI spawned with the key in its environment gets no other login (an OAuth token in coool's
+    /// own environment, a Bedrock switch, ...), and the key isn't on its command line. The fake CLI reports only
+    /// booleans and the last four characters.
+    #[test]
+    fn an_api_key_chat_gets_the_key_and_no_other_login() {
+        struct Lines;
+        impl Backend for Lines {
+            fn start(&mut self, _: &mut Out) {}
+            fn on_line(&mut self, line: &str, o: &mut Out) {
+                o.ev(ChatEventKind::notice(NoticeLevel::Info, line));
+            }
+            fn send(&mut self, _: &str, _: &[crate::attach::Attachment], _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn interrupt(&mut self, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn set_model(&mut self, _: &str, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn set_permission_mode(&mut self, _: &str, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn respond_permission(&mut self, _: &str, _: bool, _: bool, _: &mut Out) -> Result<()> {
+                Ok(())
+            }
+            fn on_exit(&mut self, _: &mut Out) {}
+        }
+        let script = r#"k="${ANTHROPIC_API_KEY:-}"; echo "key=${k#"${k%????}"} oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} token=${ANTHROPIC_AUTH_TOKEN:+set} bedrock=${CLAUDE_CODE_USE_BEDROCK:+set} other=${OTHER_VAR:-}""#;
+        let run = |env: Vec<(String, String)>| {
+            let c = Chat::spawn(11, Provider::Claude, "/", "/bin/sh", &["-c".into(), script.into()], &env, None, Box::new(Lines)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while c.is_running() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            let (evs, _) = c.events_since(0);
+            assert!(!c.launch_args().iter().any(|a| a.contains("sk-ant")));
+            evs.iter().find_map(|e| if let ChatEventKind::Notice { text, .. } = &e.kind { text.starts_with("key=").then(|| text.clone()) } else { None }).unwrap()
+        };
+        let others = || vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "oauth-x".to_string()), ("ANTHROPIC_AUTH_TOKEN".into(), "t".into()), ("CLAUDE_CODE_USE_BEDROCK".into(), "1".into()), ("OTHER_VAR".into(), "kept".into())];
+        let mut with_key = others();
+        with_key.push((crate::platform::KEY_ENV.into(), "sk-ant-api03-TESTTESTTEST".into()));
+        assert_eq!(run(with_key), "key=TEST oauth= token= bedrock= other=kept");
+        assert_eq!(run(others()), "key= oauth=set token=set bedrock=set other=kept", "a subscription chat's environment is left alone");
+    }
+
+    /// An API-key chat whose key is gone doesn't start (and says so without any key in the error).
+    #[test]
+    fn a_chat_on_a_missing_key_does_not_start() {
+        if std::env::var_os("COOOL_PLATFORM_TEST_KEY").is_some() {
+            return;
+        }
+        let opts = ChatOptions { provider: Provider::Claude, cwd: "/tmp".into(), resume: None, model: None, permission_mode: None, ladder: None, context: None, account: Some("doesnotexist000".into()) };
+        let e = Chat::start(0, opts, "coool", &[], None).err().expect("no key, no start");
+        assert!(format!("{e:#}").contains("Keychain"), "{e:#}");
     }
 
     /// coool's own permission requests (the device gate's): shown like the CLI's, answered through the same calls,

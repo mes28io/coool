@@ -987,7 +987,7 @@ mod tests {
     }
 
     fn req() -> StartReq {
-        StartReq { opts: ChatOptions { provider: Provider::Claude, cwd: "/tmp".into(), resume: None, model: None, permission_mode: None, ladder: None, context: None }, client_name: "test".into(), mcp: vec![], ladder_root: None, meta: json!({"helper": {"parent": "x"}}) }
+        StartReq { opts: ChatOptions { provider: Provider::Claude, cwd: "/tmp".into(), resume: None, model: None, permission_mode: None, ladder: None, context: None, account: None }, client_name: "test".into(), mcp: vec![], ladder_root: None, meta: json!({"helper": {"parent": "x"}}) }
     }
 
     fn client(s: &Server) -> Arc<Client> {

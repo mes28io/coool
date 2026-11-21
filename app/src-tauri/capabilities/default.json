@@ -29,6 +29,7 @@
     "allow-chat-set-model", "allow-chat-set-permission-mode", "allow-chat-respond-permission",
     "allow-chat-respond-question", "allow-chat-stop", "allow-chat-restart", "allow-chat-replay", "allow-open-in-terminal",
     "allow-insights-status", "allow-insights-set-key", "allow-insights-clear-key", "allow-insights-set-enabled",
+    "allow-platform-status", "allow-platform-add-key", "allow-platform-rename-key", "allow-platform-remove-key", "allow-platform-set-folder", "allow-platform-default",
     "allow-explain-request", "allow-rename-session", "allow-set-show-automation", "allow-pilot-log-status",
     "allow-pilot-log-set-enabled", "allow-pilot-log-reveal", "allow-pilot-log-delete", "allow-usage-refresh",
     "allow-usage-reset-codex", "allow-pick-folder", "allow-environment", "allow-git-trail", "allow-context-map", "allow-chat-context", "allow-chat-context-read",
