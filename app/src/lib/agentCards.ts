@@ -15,6 +15,7 @@ import { isStopReason } from "./stopped";
 import { agentEnd, agentWorking } from "./agentState";
 import type { Activity, Agent, Provider, Session } from "./types";
 import { sessionKey } from "./types";
+import { descendants } from "./ladderHelpers";
 
 export type CardState = "running" | "needs" | "failed" | "done";
 
@@ -73,6 +74,11 @@ export interface AgentCardData {
   handoff: string | null;
   /** The whole handoff, for the tooltip. */
   handoffFull: string | null;
+  /** Nesting (Ladder): 0 for a direct helper, 1 for a helper's helper, ...; the parent card's id. */
+  depth?: number;
+  parentRef?: string | null;
+  /** A coool `spawn` helper: its model and whether it is an image job. */
+  helper?: { model: string; title: string } | null;
 }
 
 const firstLine = (s: string | null | undefined) => (s ?? "").split("\n").find((l) => l.trim())?.trim() ?? "";
@@ -274,14 +280,31 @@ const agentCards = new WeakMap<Agent, { status: Session["status"]; provider: Ses
 
 export function buildCards(session: Session | null, chat: Chat | undefined, kids: Session[], digest: ChatDigest): AgentCardData[] {
   const out: AgentCardData[] = [];
-  const chatAgents = chat ? chat.items.filter((i): i is Extract<ChatItem, { kind: "tool" }> => i.kind === "tool" && i.agent && !i.parent) : [];
+  // Sub-agents, nested ones included (a sub-agent that started its own: Ladder's nested helpers), as a tree.
+  const chatAgents = chat ? chat.items.filter((i): i is Extract<ChatItem, { kind: "tool" }> => i.kind === "tool" && i.agent) : [];
   if (chat && chatAgents.length) {
     const nested = new Map<string, ChatItem[]>();
+    const tools = new Map<string, Extract<ChatItem, { kind: "tool" }>>();
     for (const it of chat.items) {
       const p = "parent" in it ? it.parent : null;
       if (p) nested.set(p, [...(nested.get(p) ?? []), it]);
+      if (it.kind === "tool") tools.set(it.id, it);
     }
-    for (const t of chatAgents) out.push(cardFromChatTool(chat, t, nested.get(t.id) ?? []));
+    for (const t of chatAgents) {
+      // The nearest agent above it, and how many there are.
+      let depth = 0;
+      let parentRef: string | null = null;
+      for (let p = t.parent, i = 0; p && i < 8; i++) {
+        const x = tools.get(p);
+        if (!x) break;
+        if (x.agent) {
+          depth++;
+          parentRef ??= `chat:${x.id}`;
+        }
+        p = x.parent;
+      }
+      out.push({ ...cardFromChatTool(chat, t, nested.get(t.id) ?? []), depth, parentRef });
+    }
   } else if (session) {
     for (const a of session.agents) {
       // A subagent the last payload left alone keeps its object (sessionsMerge), and so its card.
@@ -298,10 +321,37 @@ export function buildCards(session: Session | null, chat: Chat | undefined, kids
   return out;
 }
 
+/** Job cards for a session's children and their own children (Ladder helpers of helpers), as a tree. */
+export function jobTree(session: Session, all: Session[], digest: ChatDigest, helpers: Record<number, { model: string; title: string } | null | undefined> = {}): AgentCardData[] {
+  const kidsOf = (id: string) => all.filter((c) => c.nested && c.parent === id);
+  return descendants(session.id, kidsOf, (s) => s.id).map(({ item, depth, parent }) => ({
+    ...cardFromJob(item, digest),
+    depth: depth - 1,
+    parentRef: depth > 1 ? `job:${sessionKey(all.find((s) => s.id === parent) ?? item)}` : null,
+    helper: item.chat != null ? (helpers[item.chat] ?? null) : null,
+  }));
+}
+
 export function useAgentCards(session: Session | null, chat: Chat | undefined): AgentCardData[] {
   const kids = useStore(useShallow((st) => (session ? st.sessions.filter((c) => c.nested && c.parent === session.id) : EMPTY)));
+  // Grandchildren (helpers' helpers) only matter when a child is a Ladder helper; else this stays the empty list.
+  const all = useStore((st) => st.sessions);
+  const infos = useStore((st) => st.chatInfos);
+  const deep = kids.some((k) => k.chat != null && infos[k.chat]?.helper);
   const digest = useChatDigest();
-  return useMemo(() => buildCards(session, chat, kids, digest), [session, chat?.items, chat?.running, kids, digest]);
+  const allDeep = deep ? all : null;
+  const infosDeep = deep ? infos : null;
+  const items = chat?.items;
+  const running = chat?.running;
+  return useMemo(() => {
+    void items;
+    void running;
+    if (!allDeep || !infosDeep || !session) return buildCards(session, chat, kids, digest);
+    const helpers: Record<number, { model: string; title: string } | null> = {};
+    for (const c of Object.values(infosDeep)) if (c.helper) helpers[c.id] = { model: c.helper.model, title: c.helper.title };
+    return [...buildCards(session, chat, [], digest), ...jobTree(session, allDeep, digest, helpers)];
+    // `chat` changes identity on every event; its items and running state are what the cards read.
+  }, [session, items, running, kids, digest, allDeep, infosDeep]);
 }
 
 /**

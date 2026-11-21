@@ -18,7 +18,8 @@ import { startPresence } from "./lib/presence";
 import { startLaneLog } from "./lib/laneLog";
 import { onMotion, reducedMotion, setMotionHints } from "./lib/motion";
 import { useChats } from "./lib/chat";
-import { rememberModels } from "./lib/prefs";
+import { rememberModels, seenModelsNow } from "./lib/prefs";
+import { setLadderStatus } from "./lib/ladder";
 
 // "Reduce motion: Auto" follows the device (Low Power Mode, heat, battery) as well as the system setting.
 void initBackend().then((b) => {
@@ -40,6 +41,14 @@ void initBackend().then((b) => {
   onMotion(sendMotion);
   b.onMotionHints(setMotionHints);
   void b.motionHints().then(setMotionHints);
+  // Ladder: which CLIs are installed and logged in, and Codex's models, for the cross-provider and image lanes.
+  const ladderStatus = () =>
+    void b.ladderStatus().then((st) => {
+      setLadderStatus(st);
+      if (st?.codex.installed && st.codex_models.length && !seenModelsNow().codex.length) rememberModels("codex", st.codex_models);
+    });
+  ladderStatus();
+  setInterval(ladderStatus, 10 * 60_000);
   // The models chats report, for Settings > General's default model before any chat of that provider runs.
   useChats.subscribe((s, p) => {
     if (s.chats === p.chats) return;

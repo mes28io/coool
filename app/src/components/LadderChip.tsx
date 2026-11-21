@@ -1,10 +1,12 @@
-// The composer's Ladder chip: on or off for this chat, the tier table it runs (or will run), the highest delegate
-// tier and how many delegates run at once. A choice made here applies when the chat next starts or resumes.
+// The composer's Ladder chip: on or off for this chat, the lead and the tier table it runs (or will run) on both
+// providers, the image lane, nesting depth, swarm mode, the budget picture, the highest helper tier and how many
+// helpers run at once. A choice made here applies when the chat next starts or resumes.
 
 import { useState } from "react";
 import { type Chat } from "../lib/chat";
-import { LADDER, LADDER_LINE, ladderOn, MAX_PARALLEL, sameLadder, setChatLadder, useChatLadder, useLadderPrefs, useLadderPreview, useLaunchedLadder } from "../lib/ladder";
-import { ROLE_WORK, rolesWord, tierRows, type LadderCap } from "../lib/ladderTiers";
+import { DEPTHS, LADDER, LADDER_LINE, ladderOn, MAX_PARALLEL, sameLadder, setChatLadder, useChatLadder, useLadderPrefs, useLadderPreview, useLaunchedLadder } from "../lib/ladder";
+import { ROLE_LINE, rolesWord, tierRows, type LadderCap, type LadderTier } from "../lib/ladderTiers";
+import { LadderBudget } from "./LadderBudget";
 import { useSeenModels } from "../lib/prefs";
 import { useStore } from "../store";
 import { ICaret } from "./icons";
@@ -23,7 +25,13 @@ export function LadderChip({ chat, disabled }: { chat: Chat; disabled?: string |
   const preview = useLadderPreview(chat.provider, lead, own);
   const asOn = useLadderPreview(chat.provider, lead, { ...own, on: true });
   const openSettings = useStore((s) => s.openSettings);
+  const shown = launched ?? asOn;
   const tiers = (launched?.tiers.length ? launched.tiers : asOn?.tiers) ?? [];
+  const cross = shown?.cross ?? [];
+  const image = shown?.image ?? null;
+  const depth = own.depth ?? prefs.depth;
+  const swarm = own.swarm ?? prefs.swarm;
+  const other = chat.provider === "claude" ? "Codex" : "Claude";
   const cap: LadderCap = own.cap ?? prefs.cap[chat.provider];
   const par = own.maxParallel ?? prefs.maxParallel;
   const differs = launched !== undefined && !sameLadder(launched, preview);
@@ -46,31 +54,37 @@ export function LadderChip({ chat, disabled }: { chat: Chat; disabled?: string |
             </div>
             <Switch label={`${LADDER} on for this chat`} on={on} onChange={(v) => setChatLadder(chat, { on: v })} />
           </div>
+          {shown?.lead ? <div className="text-small text-dim" data-ladder-lead>Lead: <span className="text-fg">{shown.lead}</span></div> : null}
           {tiers.length ? (
-            <div className="flex flex-col gap-1.5 border-t border-hairline pt-2.5">
-              {tierRows(tiers).map((r) => (
-                <div key={r.model} className={cx("flex flex-col", !on && "opacity-60")}>
-                  <div className="flex items-baseline gap-2 text-small">
-                    <span className="w-[104px] shrink-0 whitespace-nowrap text-dim">{rolesWord(r.roles)}</span>
-                    <span className="text-fg">{r.label}</span>
-                  </div>
-                  <div className="pl-[112px] text-small text-faint">{r.roles.map((x) => ROLE_WORK[x]).join("; ")}</div>
-                </div>
-              ))}
-            </div>
+            <TierBlock tiers={tiers} dim={!on} attr="own" />
           ) : unknown ? (
             <div className="border-t border-hairline pt-2.5 text-small text-dim" data-ladder-unknown>
               {!lead ? "This chat hasn’t said which model it runs yet" : `${chat.provider === "claude" ? "Claude Code" : "Codex"} hasn’t listed its models yet`}, so the tiers can’t be shown.
             </div>
           ) : (
-            <div className="border-t border-hairline pt-2.5 text-small text-dim">No cheaper model in this CLI: the lead works alone, with the same checks.</div>
+            <div className="border-t border-hairline pt-2.5 text-small text-dim">No cheaper model in this CLI{cross.length ? `; ${other} lanes below` : ": the lead works alone, with the same checks"}.</div>
           )}
-          {tiers.length > 0 && (
+          {cross.length > 0 && (
+            <>
+              <div className="text-small text-faint">{other} lanes ({chat.provider === "claude" ? "codex exec" : "claude -p"})</div>
+              <TierBlock tiers={cross} dim={!on} attr="cross" />
+            </>
+          )}
+          {image && (
+            <div className={cx("flex items-baseline gap-2 text-small", !on && "opacity-60")} data-ladder-image>
+              <span className="w-[104px] shrink-0 whitespace-nowrap text-dim">Image</span>
+              <span className="text-fg">{chat.provider === "claude" ? `GPT helper · ${image.label || image.model}` : "its own image tool"}</span>
+            </div>
+          )}
+          <div className="border-t border-hairline pt-2.5">
+            <LadderBudget reserve={own.reserve ?? prefs.reserve} compact />
+          </div>
+          {(tiers.length > 0 || cross.length > 0) && (
             <>
               <div className="flex items-center gap-3">
-                <span className="min-w-0 flex-1 text-small text-dim">Highest delegate tier</span>
+                <span className="min-w-0 flex-1 text-small text-dim">Highest helper tier</span>
                 <Select<LadderCap>
-                  label="Highest delegate tier"
+                  label="Highest helper tier"
                   value={cap}
                   width={110}
                   options={[
@@ -81,14 +95,28 @@ export function LadderChip({ chat, disabled }: { chat: Chat; disabled?: string |
                 />
               </div>
               <div className="flex items-center gap-3">
-                <span className="min-w-0 flex-1 text-small text-dim">Max parallel delegates</span>
+                <span className="min-w-0 flex-1 text-small text-dim">Max parallel helpers</span>
                 <Select<string>
-                  label="Max parallel delegates"
+                  label="Max parallel helpers"
                   value={String(par)}
                   width={110}
                   options={MAX_PARALLEL.map((n) => ({ value: String(n), label: String(n) }))}
                   onChange={(v) => setChatLadder(chat, { maxParallel: Number(v) })}
                 />
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="min-w-0 flex-1 text-small text-dim">Helpers start helpers</span>
+                <Select<string>
+                  label="Helper nesting depth"
+                  value={String(depth)}
+                  width={110}
+                  options={DEPTHS.map((n) => ({ value: String(n), label: n === 1 ? "No" : `${n} levels` }))}
+                  onChange={(v) => setChatLadder(chat, { depth: Number(v) })}
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="min-w-0 flex-1 text-small text-dim">Swarm mode for big jobs</span>
+                <Switch label="Swarm mode for big jobs" on={swarm} onChange={(v) => setChatLadder(chat, { swarm: v })} />
               </div>
             </>
           )}
@@ -105,6 +133,23 @@ export function LadderChip({ chat, disabled }: { chat: Chat; disabled?: string |
           </button>
         </div>
       </Popover>
+    </div>
+  );
+}
+
+/** Tier rows: roles that share a model fold into one row, with what each does. */
+function TierBlock({ tiers, dim, attr }: { tiers: LadderTier[]; dim: boolean; attr: string }) {
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-hairline pt-2.5" data-ladder-tiers={attr}>
+      {tierRows(tiers).map((r) => (
+        <div key={r.model} className={cx("flex flex-col", dim && "opacity-60")}>
+          <div className="flex items-baseline gap-2 text-small">
+            <span className="w-[104px] shrink-0 whitespace-nowrap text-dim">{rolesWord(r.roles)}</span>
+            <span className="text-fg">{r.label}</span>
+          </div>
+          <div className="pl-[112px] text-small text-faint">{r.roles.map((x) => ROLE_LINE[x]).join("; ")}</div>
+        </div>
+      ))}
     </div>
   );
 }

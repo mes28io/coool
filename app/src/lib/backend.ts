@@ -138,6 +138,8 @@ export interface Backend extends SettingsBackend {
 
   /** Device hints for "Reduce motion: Auto" (null when the build can't tell); pushed again when they change. */
   motionHints(): Promise<MotionHints | null>;
+  /** Ladder: the CLIs (installed, version, logged in), Codex's image tool and model list (APP_SPEC "Ladder"). */
+  ladderStatus(): Promise<import("./ladder").LadderStatus | null>;
   onMotionHints(cb: (h: MotionHints) => void): Unlisten;
 
   /** Whether each artifact's local page is still on disk (by claude.ai URL). */
@@ -630,6 +632,7 @@ async function tauriBackend(): Promise<Backend> {
     onPtyExit: (cb) => sub<{ id: number }>("pty-exit", (p) => cb(p.id)),
     onConfirmQuit: (cb) => sub<null>("confirm-quit", () => cb()),
     motionHints: () => soft<MotionHints>("motion_hints").catch(() => null),
+    ladderStatus: () => soft<import("./ladder").LadderStatus>("ladder_status").catch(() => null),
     onMotionHints: (cb) => sub<MotionHints>("motion-hints", cb),
     artifactStatus: (urls) => invoke("artifact_status", { urls }),
     artifactWindow: (url) => invoke("artifact_window", { url }),

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { candidates, modelRank, roleOf, tallyChecks, tallyModels, tierRows, tierTable, turnTally, type TallyItem } from "./ladderTiers.ts";
+import { budgetLine, candidates, crossTable, imageLane, laneOf, modelRank, roleOf, sameTier, tallyChecks, tallyModels, tallyProviders, tierRows, tierTable, turnTally, untilWords, type TallyItem } from "./ladderTiers.ts";
 
 // What Claude Code 2.1.329 reported in `initialize.models` (aliases first, then ids), trimmed.
 const CLAUDE = [
@@ -132,10 +132,10 @@ test("the tally counts what ran, on which model, and what the lead checked after
     ],
   );
   assert.equal(t.onLead, 0);
-  assert.deepEqual(t.checks, { tests: 2, testsPassed: 1, testsFailed: 1, diffs: 1, reads: 1 });
+  assert.deepEqual(t.checks, { tests: 2, images: 0, testsPassed: 1, testsFailed: 1, diffs: 1, reads: 1 });
   assert.equal(t.delegateTests, 1);
   assert.equal(tallyChecks(t), "tests run 2× (1 passed, 1 failed), 1 diff read, 1 file reread");
-  assert.equal(tallyModels(t, tiers), "2 on Haiku 5.5, 1 on Sonnet 5.5");
+  assert.equal(tallyModels(t, tiers), "2 small on Haiku 5.5, 1 mid on Sonnet 5.5");
 });
 
 test("a delegate on the lead's own model is counted, not hidden", () => {
@@ -143,4 +143,117 @@ test("a delegate on the lead's own model is counted, not hidden", () => {
   assert.equal(t.onLead, 1);
   assert.equal(tallyChecks(t), "nothing checked by the lead");
   assert.equal(turnTally([], {}, { provider: "codex", lead: null, tiers: null }).delegates.length, 0);
+});
+
+// What codex 0.171 lists (`codex debug models`, visibility "list").
+const CODEX6 = [
+  { id: "gpt-6.2-sol", label: "GPT-6.2-Sol" },
+  { id: "gpt-6.2-astra", label: "GPT-6.2-Astra" },
+  { id: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+  { id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+  { id: "gpt-6-astra", label: "GPT-6-Astra" },
+  { id: "gpt-6-luna", label: "GPT-6-Luna" },
+  { id: "gpt-5.6-luna", label: "GPT-5.6-Luna" },
+];
+const CLAUDE55 = [...CLAUDE, { id: "claude-fable-5-2", label: "Fable 5.2" }];
+
+test("the owner's example: a Fable lead orchestrates Opus, Sonnet, Haiku and Codex's strong and small models", () => {
+  const lead = "claude-fable-5-2";
+  assert.deepEqual(sameTier("claude", lead, CLAUDE55), { role: "same", model: "fable", label: "Fable 5.2" });
+  assert.deepEqual(tierTable("claude", lead, CLAUDE55).map((t) => [t.role, t.model]), [
+    ["mid", "opus"],
+    ["small", "sonnet"],
+    ["bulk", "haiku"],
+  ]);
+  assert.deepEqual(crossTable("claude", lead, CODEX6).map((t) => [t.role, t.model]), [
+    ["peer", "gpt-6.2-astra"],
+    ["exec", "gpt-6.2-sol"],
+    ["bulk", "gpt-6-luna"],
+  ]);
+  assert.deepEqual(imageLane("claude", lead, CODEX6), { provider: "codex", model: "gpt-6-luna", label: "GPT-6-Luna" });
+});
+
+test("an Opus lead: helpers on Opus (parallel only), Sonnet or Haiku, and Codex's strong lanes", () => {
+  const lead = "claude-opus-5-5";
+  assert.equal(sameTier("claude", lead, CLAUDE55)?.model, "opus");
+  assert.deepEqual(tierTable("claude", lead, CLAUDE55).map((t) => t.model), ["sonnet", "haiku", "haiku"]);
+  assert.deepEqual(crossTable("claude", lead, CODEX6).map((t) => t.model), ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-luna"]);
+});
+
+test("cross lanes never sit above the lead", () => {
+  // Sonnet: Codex one rank below (terra, luna), never sol or astra.
+  assert.deepEqual(crossTable("claude", "sonnet", CODEX6).map((t) => [t.role, t.model]), [
+    ["exec", "gpt-6.1-terra"],
+    ["bulk", "gpt-6-luna"],
+  ]);
+  // Haiku: only Codex's smallest.
+  assert.deepEqual(crossTable("claude", "claude-haiku-5-5", CODEX6).map((t) => [t.role, t.model]), [
+    ["exec", "gpt-6-luna"],
+    ["bulk", "gpt-6-luna"],
+  ]);
+  // A Codex lead: Claude at or below its rank (Sonnet and Haiku for sol; Haiku for terra; nothing for luna).
+  assert.deepEqual(crossTable("codex", "gpt-6.2-sol", CLAUDE).map((t) => [t.role, t.model]), [
+    ["mid", "sonnet"],
+    ["bulk", "haiku"],
+  ]);
+  assert.deepEqual(crossTable("codex", "gpt-6.1-terra", CLAUDE).map((t) => t.model), ["haiku", "haiku"]);
+  assert.deepEqual(crossTable("codex", "gpt-6-luna", CLAUDE), []);
+  // Nothing known of the other CLI: no lanes.
+  assert.deepEqual(crossTable("claude", "opus", []), []);
+  // The CLI's default lead (unknown): no same tier.
+  assert.equal(sameTier("claude", null, CLAUDE), null);
+  assert.equal(imageLane("claude", "opus", []), null);
+  assert.deepEqual(imageLane("codex", "gpt-6.2-sol", []), { provider: "codex", model: "gpt-6.2-sol", label: "gpt-6.2-sol" });
+});
+
+test("lanes from the shell: codex exec and claude -p, image work recognised", () => {
+  assert.deepEqual(laneOf(`codex exec -m gpt-6-luna -c model_reasoning_effort="low" -s workspace-write -C . "Generate an app icon, save as assets/icon.png" < /dev/null`), { provider: "codex", model: "gpt-6-luna", image: true });
+  assert.deepEqual(laneOf("cd x && codex exec --model gpt-6.2-sol -s read-only 'review the parser'"), { provider: "codex", model: "gpt-6.2-sol", image: false });
+  assert.deepEqual(laneOf("claude -p --model haiku --permission-mode default 'summarise'"), { provider: "claude", model: "haiku", image: false });
+  assert.equal(laneOf("codex --version"), null);
+  assert.equal(laneOf("echo claude"), null);
+});
+
+test("the tally counts helpers per tier and provider, and an image helper as image · GPT", () => {
+  const lead = "claude-opus-5-5";
+  const tiers = tierTable("claude", lead, CLAUDE55);
+  const cross = crossTable("claude", lead, CODEX6);
+  const items: TallyItem[] = [
+    tool("a1", "Agent", { model: "haiku", prompt: "x" }, 10),
+    tool("l1", "Bash", { command: "codex exec -m gpt-6.2-sol -s workspace-write 'write parse_date in util.py'" }, 11),
+    tool("l2", "Bash", { command: "codex exec -m gpt-6-luna -s workspace-write 'Generate an icon image, save at assets/icon.png'" }, 12),
+    tool("s1", "mcp__coool-ladder__spawn", { model: "sonnet", brief: "refactor" }, 13),
+    tool("v1", "Read", { file_path: "/p/assets/icon.png" }, 20),
+    tool("c1", "Bash", { command: "pnpm test" }, 21),
+  ];
+  const t = turnTally(items, {}, { provider: "claude", lead, tiers, cross });
+  assert.equal(t.delegates.length, 4);
+  assert.deepEqual(t.delegates.map((d) => [d.provider, d.via, d.role]), [
+    ["claude", "agent", "small"],
+    ["codex", "lane", "exec"],
+    ["codex", "lane", "image"],
+    ["claude", "spawn", "mid"],
+  ]);
+  assert.equal(tallyModels(t, tiers, cross, "claude"), "1 small on Haiku 5.5, 1 exec on GPT-6.2-Sol (Codex), 1 image · GPT, 1 mid on Sonnet 5.5");
+  assert.equal(tallyProviders(t, "claude"), "2 Claude, 2 Codex");
+  assert.equal(t.checks.images, 1);
+  assert.equal(t.checks.tests, 1);
+  assert.match(tallyChecks(t), /1 image viewed/);
+  // The lane commands themselves are not the lead's checks.
+  assert.equal(t.checks.diffs, 0);
+  // All on the lead's own CLI: no provider split shown.
+  assert.equal(tallyProviders(turnTally([tool("a", "Agent", { model: "haiku" }, 1)], {}, { provider: "claude", lead, tiers }), "claude"), "");
+});
+
+test("the budget line: plan, fullest window, reset, tight and reserve", () => {
+  const now = 0;
+  const u = (pct: number) => ({ plan: "Max 5x", error: null, windows: [{ label: "5-hour", used_percent: pct, resets_ms: 3 * 3600_000 }, { label: "Weekly", used_percent: 10, resets_ms: 72 * 3600_000 }] });
+  assert.deepEqual(budgetLine(u(27), 10, now, { installed: true, loggedIn: true }), { text: "Max 5x · 5-hour 27%, resets in 3 h 0 min", tight: false });
+  assert.equal(budgetLine(u(85), 10, now, null).tight, true);
+  assert.match(budgetLine(u(92), 10, now, null).text, /in reserve: no new helpers/);
+  assert.deepEqual(budgetLine(null, 10, now, { installed: false, loggedIn: null }), { text: "not installed", tight: false });
+  assert.equal(budgetLine(u(5), 10, now, { installed: true, loggedIn: false }).text, "not logged in");
+  assert.equal(budgetLine(null, 10, now, null).text, "usage not read yet");
+  assert.equal(untilWords(0, 3 * 86400_000), "in 3 days");
+  assert.equal(untilWords(0, 59 * 60_000), "in 59 min");
 });

@@ -29,7 +29,7 @@ export async function newChat(a: { provider: Provider; cwd: string; prompt?: str
     const model = a.model === undefined ? d.model : a.model;
     const mode = a.permissionMode === undefined ? d.mode : a.permissionMode;
     // Settings > Ladder (or the sheet's own choice): the tier table from the models this CLI reported.
-    const ladder = ladderOptions(a.provider, model ?? null, seenModelsNow()[a.provider], a.ladder);
+    const ladder = ladderOptions(a.provider, model ?? null, seenModelsNow(), a.ladder);
     const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: model ?? null, permission_mode: mode ?? null, ladder });
     noteLaunched(id, ladder);
     // The sheet's own choice is this chat's from now on (its chip shows it; a resume keeps it once the session is known).
@@ -59,7 +59,7 @@ export async function resumeSession(s: Session, leaf?: string, opts?: { terminal
       try {
         // The session's own Ladder choice (the composer chip) applies from this start on; else the default.
         const own = chatLadderOf({ id: -1, provider: s.provider, sessionId: s.id });
-        const ladder = ladderOptions(s.provider, s.model || null, seenModelsNow()[s.provider], own);
+        const ladder = ladderOptions(s.provider, s.model || null, seenModelsNow(), own);
         const id = await api().startChat({ provider: s.provider, cwd: s.cwd, resume: s.id, model: s.model || null, ladder });
         noteLaunched(id, ladder);
         useChats.getState().ensure({ id, provider: s.provider, cwd: s.cwd, session_id: s.id, model: s.model || null, state: "idle", running: true });
