@@ -71,6 +71,15 @@ impl Mcp {
         })
     }
 
+    /// A hosted chat taken in again after a relaunch (chathost.rs): the token its proxy still holds (from the host's
+    /// record of its MCP servers) names it again, so the same proxy is accepted by this app.
+    pub fn adopt(&self, chat: usize, mcp: &[coool_core::chat::McpServer], cwd: &str, provider: coool_core::model::Provider) {
+        let Some(token) = mcp.iter().find(|m| m.name == SERVER_NAME).and_then(|m| m.env.iter().find(|(k, _)| k == TOKEN_ENV)).map(|(_, v)| v.clone()) else { return };
+        self.tokens.lock().unwrap().insert(token, chat);
+        self.cwds.lock().unwrap().insert(chat, cwd.to_string());
+        self.providers.lock().unwrap().insert(chat, provider.label());
+    }
+
     /// Registers a token for a chat without a CLI (the self-test's scripted client).
     pub fn token_for(&self, chat: usize) -> String {
         let t = random_token();
@@ -115,17 +124,7 @@ pub fn start(devices: Arc<Devices>, dir: &Path) -> Result<(), String> {
             }
         }
     }
-    let mut path = dir.join(format!("device-{}.sock", std::process::id()));
-    // A socket path must fit sockaddr_un (104 bytes on macOS): fall back to the per-user temp folder.
-    if path.as_os_str().len() > 100 {
-        path = std::env::temp_dir().join(format!("coool-device-{}.sock", std::process::id()));
-    }
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path).map_err(|e| format!("bind {}: {e}", path.display()))?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-    }
+    let (listener, path) = bind_stable(dir, "device")?;
     let _ = devices.mcp.socket.set(path);
     std::thread::Builder::new()
         .name("coool-device mcp".into())
@@ -137,6 +136,26 @@ pub fn start(devices: Arc<Devices>, dir: &Path) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Binds `<dir>/<name>.sock` (mode 0600): one path per app data folder, so the MCP proxies of chats the chat host
+/// kept running across a quit find the next launch of coool at the same place (APP_SPEC "Chats that outlive the app").
+/// When another live coool holds it, or the path is too long for a socket, a per-process name instead.
+pub(crate) fn bind_stable(dir: &Path, name: &str) -> Result<(UnixListener, PathBuf), String> {
+    let pid = std::process::id();
+    let stable = dir.join(format!("{name}.sock"));
+    let mut path = if stable.as_os_str().len() <= 100 && UnixStream::connect(&stable).is_err() { stable } else { dir.join(format!("{name}-{pid}.sock")) };
+    // A socket path must fit sockaddr_un (104 bytes on macOS): fall back to the per-user temp folder.
+    if path.as_os_str().len() > 100 {
+        path = std::env::temp_dir().join(format!("coool-{name}-{pid}.sock"));
+    }
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).map_err(|e| format!("bind {}: {e}", path.display()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    }
+    Ok((listener, path))
 }
 
 /// Removes this process's socket (on quit).
@@ -188,45 +207,183 @@ pub fn proxy() -> i32 {
     proxy_with(SOCKET_ENV, TOKEN_ENV, SERVER_NAME)
 }
 
+/// What a tool call made while coool is away gets: an error the agent can act on.
+pub const AWAY: &str = "coool is restarting or was quit, so its devices (iPhone, Browser, Mac panels) and Ladder tools are away for a moment. Your chat keeps running. Try this again in a few seconds; tools that need coool's window work again once it is open.";
+
+/// The JSON-RPC requests (with an id) in one line from the CLI: a message or a batch.
+fn request_ids(line: &str) -> Vec<(Value, String)> {
+    let one = |m: &Value| m.get("id").filter(|i| !i.is_null()).map(|i| (i.clone(), m["method"].as_str().unwrap_or("").to_string()));
+    match serde_json::from_str::<Value>(line) {
+        Ok(Value::Array(b)) => b.iter().filter(|m| m.get("method").is_some()).filter_map(one).collect(),
+        Ok(m) if m.get("method").is_some() => one(&m).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The ids of the responses in one line from coool.
+fn response_ids(line: &str) -> Vec<Value> {
+    let one = |m: &Value| m.get("id").filter(|i| !i.is_null() && m.get("method").is_none()).cloned();
+    match serde_json::from_str::<Value>(line) {
+        Ok(Value::Array(b)) => b.iter().filter_map(one).collect(),
+        Ok(m) => one(&m).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// coool's answer for a request it couldn't serve because it is away: a tool error for a call, else an RPC error.
+pub(crate) fn away_reply(id: &Value, method: &str) -> Value {
+    if method == "tools/call" {
+        json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":AWAY}],"isError":true}})
+    } else {
+        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":AWAY}})
+    }
+}
+
 /// The same relay for another of coool's per-chat servers (`coool-ladder`): its socket and token come from
 /// `socket_env` / `token_env`.
+///
+/// It outlives the app: when coool goes (a quit, an update's restart, a crash) while the chat host keeps the chat
+/// running, the proxy stays up for the CLI, answers every call made meanwhile (and any cut by the drop) with
+/// [`AWAY`], and connects again once coool's socket answers and knows the token (APP_SPEC "Chats that outlive the app").
 pub fn proxy_with(socket_env: &str, token_env: &str, name: &str) -> i32 {
     let (Some(sock), Some(token)) = (std::env::var_os(socket_env), std::env::var(token_env).ok()) else {
         eprintln!("{name}: started without {socket_env} / {token_env} (coool sets these for chats it starts)");
         return 2;
     };
-    let mut conn = match UnixStream::connect(&sock) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{name}: coool isn't reachable ({e}); is the app still running?");
-            return 1;
-        }
-    };
-    if writeln!(conn, "{}", json!({ "token": token })).is_err() {
-        return 1;
+    let sock = PathBuf::from(sock);
+    let relay = Arc::new(Relay { sock, token, conn: Mutex::new(None), inflight: Mutex::new(HashMap::new()), out: Mutex::new(()), epoch: std::sync::atomic::AtomicU64::new(0) });
+    if relay.connect().is_none() {
+        eprintln!("{name}: coool isn't reachable now; calls get a \"try again\" until it is");
     }
-    let mut back = match conn.try_clone() {
-        Ok(c) => c,
-        Err(_) => return 1,
-    };
-    let up = std::thread::spawn(move || {
-        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut conn);
-        let _ = conn.shutdown(std::net::Shutdown::Write);
-    });
-    let mut stdout = std::io::stdout().lock();
-    let mut buf = [0u8; 64 * 1024];
+    {
+        let r = relay.clone();
+        std::thread::spawn(move || r.down());
+    }
+    // Up: the CLI's lines to coool, or the away answer while it is gone. Ends with the CLI's stdin.
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    let mut rd = stdin.lock();
     loop {
-        match back.read(&mut buf) {
+        line.clear();
+        match rd.read_line(&mut line) {
             Ok(0) | Err(_) => break,
-            Ok(n) => {
-                if stdout.write_all(&buf[..n]).and_then(|_| stdout.flush()).is_err() {
-                    break;
+            Ok(_) => {}
+        }
+        let reqs = request_ids(&line);
+        let sent = {
+            // Only the reader connects (so it always reads the connection requests go out on).
+            let mut c = relay.conn.lock().unwrap_or_else(|e| e.into_inner());
+            match c.as_mut() {
+                Some(s) => {
+                    {
+                        let mut f = relay.inflight.lock().unwrap_or_else(|e| e.into_inner());
+                        for (id, m) in &reqs {
+                            f.insert(id.to_string(), (id.clone(), m.clone()));
+                        }
+                    }
+                    if s.write_all(line.as_bytes()).and_then(|_| s.flush()).is_ok() {
+                        true
+                    } else {
+                        *c = None;
+                        false
+                    }
                 }
+                None => false,
+            }
+        };
+        if !sent {
+            let mut f = relay.inflight.lock().unwrap_or_else(|e| e.into_inner());
+            for (id, m) in &reqs {
+                f.remove(&id.to_string());
+                relay.emit(&away_reply(id, m));
             }
         }
     }
-    drop(up);
     0
+}
+
+struct Relay {
+    sock: PathBuf,
+    token: String,
+    /// The connection to coool, while there is one (written by the up side).
+    conn: Mutex<Option<UnixStream>>,
+    /// Requests sent to coool and not answered yet: id (as text) -> (id, method).
+    inflight: Mutex<HashMap<String, (Value, String)>>,
+    /// Serialises lines to the CLI's stdin (our stdout).
+    out: Mutex<()>,
+    /// Bumped on every new connection, so the reader follows the current one.
+    epoch: std::sync::atomic::AtomicU64,
+}
+
+impl Relay {
+    /// Connects and sends the token; the reader then picks the connection up. None: coool isn't there.
+    fn connect(&self) -> Option<()> {
+        let mut c = UnixStream::connect(&self.sock).ok()?;
+        writeln!(c, "{}", json!({ "token": self.token })).ok()?;
+        *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = Some(c);
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(())
+    }
+
+    fn emit(&self, v: &Value) {
+        let _g = self.out.lock().unwrap_or_else(|e| e.into_inner());
+        let mut o = std::io::stdout().lock();
+        let _ = writeln!(o, "{v}").and_then(|_| o.flush());
+    }
+
+    /// The connection dropped (coool quit or crashed): every call it held gets the away answer.
+    fn dropped(&self) {
+        *self.conn.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let cut: Vec<(Value, String)> = self.inflight.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, v)| v).collect();
+        for (id, m) in cut {
+            self.emit(&away_reply(&id, &m));
+        }
+    }
+
+    /// Down: coool's lines to the CLI, and reconnecting after a drop.
+    fn down(&self) {
+        loop {
+            let reader = self.conn.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|c| c.try_clone().ok());
+            let Some(reader) = reader else {
+                std::thread::sleep(Duration::from_millis(1000));
+                let _ = self.connect();
+                continue;
+            };
+            let seen = self.epoch.load(std::sync::atomic::Ordering::SeqCst);
+            let mut rd = BufReader::new(reader);
+            let mut line = String::new();
+            let mut refused = false;
+            loop {
+                line.clear();
+                match rd.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                // A coool that doesn't know this chat (yet: it takes hosted chats in at launch) refuses the token.
+                if line.contains("unknown token") && serde_json::from_str::<Value>(&line).is_ok_and(|v| v["id"].is_null() && v.get("error").is_some()) {
+                    refused = true;
+                    break;
+                }
+                {
+                    let mut f = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+                    for id in response_ids(&line) {
+                        f.remove(&id.to_string());
+                    }
+                }
+                let _g = self.out.lock().unwrap_or_else(|e| e.into_inner());
+                let mut o = std::io::stdout().lock();
+                if o.write_all(line.as_bytes()).and_then(|_| o.flush()).is_err() {
+                    // The CLI is gone.
+                    std::process::exit(0);
+                }
+            }
+            if self.epoch.load(std::sync::atomic::Ordering::SeqCst) == seen {
+                self.dropped();
+            }
+            std::thread::sleep(Duration::from_millis(if refused { 1500 } else { 300 }));
+            let _ = self.connect();
+        }
+    }
 }
 
 // ---- protocol ----

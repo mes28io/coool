@@ -9,6 +9,11 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some(coool_app_lib::LADDER_MCP_FLAG) {
         std::process::exit(coool_app_lib::ladder_mcp_proxy());
     }
+    // The chat host: owns chats' CLIs so they keep running when the app quits (started by the app, detached).
+    if std::env::args().nth(1).as_deref() == Some(coool_app_lib::CHAT_HOST_FLAG) {
+        let dir = std::env::args().nth(2).expect("usage: coool --coool-chat-host <dir>");
+        std::process::exit(coool_app_lib::chat_host(std::path::Path::new(&dir)));
+    }
     if std::env::args().nth(1).as_deref() == Some("--coool-device-serve") {
         let dir = std::env::args().nth(2).expect("usage: coool --coool-device-serve <dir>");
         std::process::exit(coool_app_lib::device_serve_headless(std::path::Path::new(&dir)));

@@ -5,6 +5,9 @@ import { api, isNotAvailable, isTauri } from "../../lib/backend";
 import type { InsightsStatus } from "../../lib/types";
 import { useStore } from "../../store";
 import { openOnboarding } from "../../lib/onboarding";
+import { updateAndRestart, useUpdates } from "../../lib/update";
+import { itemLine, keepLine, stopLine } from "../../lib/updateView";
+import type { QuitCounts } from "../../lib/backend";
 import { IAlert, ICheck } from "../icons";
 import { Button, cx } from "../primitives";
 import { UsageBlock, useUsageProviders } from "../Usage";
@@ -131,6 +134,63 @@ export function UsageSection() {
 
 // ---------- About ----------
 
+/** A newer coool on GitHub (the hourly check or Check now found it): "Update and restart", the same path as the rail
+ *  panel's Restart. Working chats the chat host runs keep running across it; anything that would stop is named first. */
+function AboutUpdate() {
+  const status = useUpdates((s) => s.status);
+  const [confirm, setConfirm] = useState<QuitCounts | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const app = status?.items.find((i) => i.id === "coool");
+  if (!app || !app.latest || !["available", "downloading", "installing", "staged", "failed"].includes(app.state)) return null;
+  const go = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await updateAndRestart();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+  const press = async () => {
+    const q = await api().quitCounts();
+    if (q.stop > 0) setConfirm(q);
+    else await go();
+  };
+  const working = app.state === "downloading" || app.state === "installing";
+  const desc = working ? itemLine(app) : app.state === "staged" ? `coool ${app.latest} is installed. Restart to use it; working chats keep running.` : `coool ${app.latest} is out. Update and restart; working chats keep running.`;
+  return (
+    <Row
+      attr="about-update"
+      label="Update available"
+      desc={desc}
+      k="update upgrade new version release restart"
+      control={
+        <Button variant="primary" className="h-[30px] px-2.5 text-small" disabled={busy || working || !!status?.blocked} onClick={() => void press()} data-about-update={app.state}>
+          {busy ? "Updating…" : "Update and restart"}
+        </Button>
+      }
+    >
+      {confirm && (
+        <div className="flex flex-col gap-2 rounded-[10px] bg-[color-mix(in_oklab,var(--busy)_12%,transparent)] px-3 py-2.5" data-about-update-confirm>
+          <div className="text-small text-fg/90">coool will restart into {app.latest}. {[stopLine(confirm.stop), keepLine(confirm.keep)].filter(Boolean).join(" ")}</div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" className="h-[28px] px-2.5 text-small" onClick={() => setConfirm(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" className="h-[28px] px-2.5 text-small" onClick={() => void go()}>
+              Stop and restart
+            </Button>
+          </div>
+        </div>
+      )}
+      {status?.blocked && <Note>{status.blocked}</Note>}
+      {err && <div className="text-small text-err-text">{err}</div>}
+    </Row>
+  );
+}
+
 export function About() {
   const open = useStore((s) => s.openSettings);
   const [version, setVersion] = useState<string | null>(null);
@@ -148,6 +208,7 @@ export function About() {
   return (
     <Group>
       <Row attr="version" label="coool" desc="Open source (MIT). A workspace for the coding agents you already pay for." k="version build" control={<span className="text-base text-dim tnum">{isTauri ? (version ? `Version ${version}` : "…") : "Browser preview"}</span>} />
+      <AboutUpdate />
       <Row
         attr="about-clis"
         label="Claude Code and Codex"

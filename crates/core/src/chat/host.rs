@@ -110,6 +110,9 @@ pub struct Entry {
     pub meta: Value,
     pub info: ChatInfo,
     pub started_ms: u64,
+    /// The seq of its latest event when listed: what an app taking it in already missed (it isn't notified again).
+    #[serde(default)]
+    pub last_seq: u64,
 }
 
 /// The host's answer to `hello`.
@@ -290,6 +293,7 @@ impl HostChat {
             meta: self.meta.clone(),
             info: self.chat.info(),
             started_ms: self.started_ms,
+            last_seq: self.chat.handle().last_seq(),
         }
     }
 }

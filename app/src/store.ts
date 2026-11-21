@@ -25,7 +25,7 @@ export type ThemePref = "system" | "dark" | "light";
 export type Sheet =
   | null
   | { kind: "new"; cwd?: string; provider?: Provider }
-  | { kind: "quit"; running: number }
+  | { kind: "quit"; running: number; keep?: number }
   | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null };
 
 /** What a browser tab shows (components/BrowserPanel.tsx). */

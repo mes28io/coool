@@ -667,6 +667,11 @@ impl ChatHandle {
         lock(&self.shared).running
     }
 
+    /// The seq of the latest event.
+    pub fn last_seq(&self) -> u64 {
+        lock(&self.shared).next_seq
+    }
+
     /// The chat's permission mode as the CLI last reported it (`ready.permission_mode`): Claude's mode, Codex's
     /// approval policy. Empty until the CLI said.
     pub fn permission_mode(&self) -> String {

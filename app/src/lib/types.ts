@@ -237,6 +237,10 @@ export interface ChatInfo {
   pid?: number | null;
   /** A Ladder helper started by another chat's `spawn` (APP_SPEC "Ladder"). */
   helper?: import("./ladderHelpers").HelperInfo | null;
+  /** coool's chat host runs it (APP_SPEC "Chats that outlive the app"). */
+  hosted?: boolean;
+  /** It keeps running when coool quits (hosted, with "Keep chats running when coool quits" on). */
+  kept?: boolean;
 }
 
 export interface Snapshot {

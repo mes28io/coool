@@ -1739,6 +1739,12 @@ export function mockBackend(): Backend {
     async quit() {
       ptys.forEach((p) => endPty(p.id));
     },
+    async quitCounts() {
+      return { stop: ptys.filter((p) => p.running).length, keep: 0 };
+    },
+    async stopAllChats() {
+      ptys.forEach((p) => endPty(p.id));
+    },
     async usageRefresh(provider) {
       await delay(900);
       const u = usage[provider];

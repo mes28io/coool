@@ -35,6 +35,8 @@ export interface AppPrefs {
   lid?: LidPrefs | null;
   /** The menu bar item (Settings > General > Menu bar). Older backends: absent. */
   menubar?: MenuBarPrefs | null;
+  /** "Keep chats running when coool quits" (on by default; APP_SPEC "Chats that outlive the app"). Older backends: absent. */
+  keep_chats?: boolean | null;
 }
 
 /** What the menu bar item shows beside its glyph (menubar/model.rs `Mode`). */

@@ -4,21 +4,13 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/backend";
-import { useChats } from "../lib/chat";
 import { registerOverlay } from "../lib/overlays";
 import { checkNow, useUpdates } from "../lib/update";
-import { itemLine, percent, railLabel, railUpdate, stopLine, type UpdateItem } from "../lib/updateView";
-import { useStore } from "../store";
+import { itemLine, keepLine, percent, railLabel, railUpdate, stopLine, type UpdateItem } from "../lib/updateView";
+import type { QuitCounts } from "../lib/backend";
 import { Command } from "./settings/ui";
 import { IAlert, IArrowDown, ICheck } from "./icons";
 import { Button, cx, ease, ProviderMark } from "./primitives";
-
-/** Chats and terminal sessions coool runs (what a restart stops), as the quit confirmation counts them. */
-function useWorking(): number {
-  const chats = useChats((s) => Object.values(s.chats).filter((c) => c.running).length);
-  const ptys = useStore((s) => Object.values(s.ptys).filter((p) => p.running && !s.exited[p.id]).length);
-  return chats + ptys;
-}
 
 /** The rail's update icon: a blue spinner while it works, a blue check once coool's update is installed, a blue arrow
  *  when something needs the person. */
@@ -136,8 +128,8 @@ function Mark({ id }: { id: UpdateItem["id"] }) {
 }
 
 function Row({ item: i, autoApp, blocked }: { item: UpdateItem; autoApp: boolean; blocked: string | null }) {
-  const working = useWorking();
-  const [confirm, setConfirm] = useState(false);
+  // What the restart would stop, and what the chat host keeps running across it: asked when Restart is pressed.
+  const [confirm, setConfirm] = useState<QuitCounts | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const run = (f: () => Promise<void>) => {
     setErr(null);
@@ -148,7 +140,11 @@ function Row({ item: i, autoApp, blocked }: { item: UpdateItem; autoApp: boolean
   let action: ReactNode = null;
   if (i.id === "coool" && i.state === "staged" && !blocked)
     action = (
-      <Button variant="primary" className="h-[28px] bg-running! px-2.5 text-small text-white!" onClick={() => (working > 0 ? setConfirm(true) : restart())} data-update-restart>
+      <Button variant="primary" className="h-[28px] bg-running! px-2.5 text-small text-white!" onClick={() => run(async () => {
+          const q = await api().quitCounts();
+          if (q.stop > 0) setConfirm(q);
+          else await api().updateRestart();
+        })} data-update-restart>
         Restart
       </Button>
     );
@@ -199,9 +195,9 @@ function Row({ item: i, autoApp, blocked }: { item: UpdateItem; autoApp: boolean
       {i.id === "coool" && blocked && i.state !== "current" && i.state !== "unknown" && <div className="ml-[26px] text-small text-faint">{blocked}</div>}
       {confirm && (
         <div className="ml-[26px] flex flex-col gap-2 rounded-[10px] bg-[color-mix(in_oklab,var(--busy)_12%,transparent)] px-3 py-2.5" data-update-confirm>
-          <div className="text-small text-fg/90">coool will restart into {i.latest}. {stopLine(working)}</div>
+          <div className="text-small text-fg/90">coool will restart into {i.latest}. {[stopLine(confirm.stop), keepLine(confirm.keep)].filter(Boolean).join(" ")}</div>
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" className="h-[28px] px-2.5 text-small" onClick={() => setConfirm(false)}>
+            <Button variant="ghost" className="h-[28px] px-2.5 text-small" onClick={() => setConfirm(null)}>
               Cancel
             </Button>
             <Button variant="danger" className="h-[28px] px-2.5 text-small" onClick={restart}>

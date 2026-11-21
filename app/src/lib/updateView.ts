@@ -59,6 +59,8 @@ export interface LaunchUpdate {
   /** Failed because it ran past the launch gate's limit. */
   timed_out: boolean;
   detail: string | null;
+  /** At the restart: the working chats coool's chat host keeps running across it. Older backends: absent. */
+  kept?: number;
 }
 
 /** "Updated to": the version the restart into this one came from (update/marker.rs). */
@@ -143,6 +145,12 @@ export function itemLine(i: UpdateItem): string {
   }
 }
 
+/** "Your 3 working chats keep running." when coool's chat host keeps them across a quit or restart; null for none. */
+export function keepLine(kept: number): string | null {
+  if (kept <= 0) return null;
+  return kept === 1 ? "Your working chat keeps running." : `Your ${kept} working chats keep running.`;
+}
+
 /** "2 working chats will stop." for the restart confirmation, or null when nothing runs. */
 export function stopLine(running: number): string | null {
   if (running <= 0) return null;
@@ -197,7 +205,7 @@ export function launchView(l: LaunchUpdate | null | undefined, shownMs: number):
     case "install":
       return { ...v, stage: "Installing" };
     case "restarting":
-      return { ...v, stage: "Restarting", bar: "full", note: "coool will open again in a moment." };
+      return { ...v, stage: "Restarting", bar: "full", note: ["coool will open again in a moment.", keepLine(l.kept ?? 0)].filter(Boolean).join(" ") };
     case "failed":
       // One plain line, nothing else: the screen steps aside a moment later.
       return { ...v, title: "", stage: FAILED_LINE, bar: "none", failed: true };

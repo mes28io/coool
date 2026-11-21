@@ -115,12 +115,20 @@ impl Hub {
             if self.chats.iter().flatten().any(|x| x.host_key() == Some(e.key.as_str())) {
                 continue;
             }
-            let id = self.chats.len();
+            // The id it had in the app that started it, when that slot is free here: what an agent was told about
+            // its helpers (Ladder's `spawn` returns the id) stays true.
+            let id = match e.meta["app_id"].as_u64().map(|i| i as usize) {
+                Some(i) if self.chats.get(i).is_none_or(|s| s.is_none()) => i,
+                _ => self.chats.len(),
+            };
             let chat = Chat::hosted(id, c.clone(), &e);
             if let Some(sid) = chat.session_id() {
                 self.own.record(chat.provider, &sid);
             }
-            self.chats.push(Some(chat));
+            if self.chats.len() <= id {
+                self.chats.resize_with(id + 1, || None);
+            }
+            self.chats[id] = Some(chat);
             out.push((id, e));
         }
         Ok(out)
@@ -420,7 +428,7 @@ impl Hub {
         }
         let c = match self.host.clone().filter(|h| h.is_alive()) {
             Some(h) => {
-                let req = crate::chat::host::StartReq { opts: opts.clone(), client_name: self.client_name.clone(), mcp: mcp.clone(), ladder_root: self.ladder_root.clone(), meta: serde_json::Value::Null };
+                let req = crate::chat::host::StartReq { opts: opts.clone(), client_name: self.client_name.clone(), mcp: mcp.clone(), ladder_root: self.ladder_root.clone(), meta: serde_json::json!({ "app_id": id }) };
                 match h.start(&req) {
                     Ok(e) => Chat::hosted(id, h, &e),
                     // The host can't take it: the chat still starts, inside this process.

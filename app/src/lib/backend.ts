@@ -46,6 +46,12 @@ export interface ChatBatch {
 }
 
 /** The Settings page's calls are in settingsTypes.ts. */
+/** What a quit or an update's restart stops, and the working chats the chat host keeps running across it. */
+export interface QuitCounts {
+  stop: number;
+  keep: number;
+}
+
 export interface Backend extends SettingsBackend {
   kind: "tauri" | "mock";
   listSessions(): Promise<Snapshot>;
@@ -95,6 +101,10 @@ export interface Backend extends SettingsBackend {
   chatContextTrash(target: CtxTarget, path: string): Promise<string>;
   chatContextReveal(target: CtxTarget, path: string): Promise<void>;
   quit(): Promise<void>;
+  /** What quitting (or an update's restart) would stop, and the working chats that keep running in the chat host. */
+  quitCounts(): Promise<QuitCounts>;
+  /** "Stop all chats": every chat and terminal session coool runs, hosted ones too, without quitting. */
+  stopAllChats(): Promise<void>;
   // ---- the updater (app/src-tauri/src/update/, lib/update.ts) ----
   /** What the updater knows (no network); null when this backend has no updater. */
   updateStatus(): Promise<UpdateStatus | null>;
@@ -664,6 +674,8 @@ async function tauriBackend(): Promise<Backend> {
     chatContextTrash: (target, path) => soft("chat_context_trash", { target, path }),
     chatContextReveal: (target, path) => soft("chat_context_reveal", { target, path }),
     quit: () => invoke("quit_app"),
+    quitCounts: () => soft<QuitCounts>("quit_counts").catch(() => ({ stop: 0, keep: 0 })),
+    stopAllChats: () => soft("stop_all_chats"),
     updateStatus: () => soft<UpdateStatus>("update_status").catch(() => null),
     updateCheck: () => soft<UpdateStatus>("update_check").catch(() => null),
     updateSetAuto: ({ app, cli }) => soft("update_set_auto", { app: app ?? null, cli: cli ?? null }),

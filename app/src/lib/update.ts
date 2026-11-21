@@ -96,6 +96,14 @@ export function watchUpdates(): () => void {
   };
 }
 
+/** "Update and restart" (Settings > About, the rail's panel): installs the version the last check found when it isn't
+ *  yet, then restarts into it. Chats the chat host runs keep running across it (APP_SPEC "Chats that outlive the app"). */
+export async function updateAndRestart(): Promise<void> {
+  const app = useUpdates.getState().status?.items.find((i) => i.id === "coool");
+  if (app && app.state !== "staged") await api().updateInstall();
+  await api().updateRestart();
+}
+
 /** "Check now": the fresh report, or an error line. */
 export async function checkNow(): Promise<string | null> {
   const s = await api().updateCheck();

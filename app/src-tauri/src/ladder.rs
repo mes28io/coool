@@ -29,7 +29,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -136,6 +136,43 @@ impl State {
             // `wait` can block for a helper's whole turn.
             tool_timeout_sec: Some(WAIT_MAX_S + 60),
         })
+    }
+
+    /// A hosted chat taken in again after a relaunch (chathost.rs): its token (from the host's record of its MCP
+    /// servers), what it was launched with, and its helper record if it is a helper (`meta.helper`, written by
+    /// [`save_meta`]). Its results are read again from its own events.
+    pub fn adopt(&self, chat: usize, opts: &ChatOptions, mcp: &[McpServer], meta: &Value, started_ms: u64) {
+        if let Some(l) = opts.ladder.as_ref().filter(|l| l.tools)
+            && let Some(token) = mcp.iter().find(|m| m.name == SERVER_NAME).and_then(|m| m.env.iter().find(|(k, _)| k == TOKEN_ENV)).map(|(_, v)| v.clone())
+        {
+            self.tokens.lock().unwrap().insert(token, chat);
+            self.chats.lock().unwrap().insert(chat, Launched { provider: opts.provider, cwd: opts.cwd.clone(), model: opts.model.clone(), ladder: l.clone(), context: opts.context.clone() });
+        }
+        let h = &meta["helper"];
+        let Some(parent) = h["parent"].as_u64() else { return };
+        let age = Duration::from_millis(now_ms().saturating_sub(started_ms));
+        let started = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+        let worktree = match (h["worktree"].as_str(), h["branch"].as_str()) {
+            (Some(w), Some(b)) => Some((w.to_string(), b.to_string())),
+            _ => None,
+        };
+        self.helpers.lock().unwrap().insert(
+            chat,
+            Helper {
+                parent: parent as usize,
+                depth: h["depth"].as_u64().unwrap_or(1) as u32,
+                provider: opts.provider,
+                model: h["model"].as_str().unwrap_or("").to_string(),
+                title: h["title"].as_str().unwrap_or("").to_string(),
+                worktree,
+                started,
+                seq: 0,
+                sent: true,
+                last_text: String::new(),
+                done: None,
+                collected: h["collected"].as_bool().unwrap_or(false),
+            },
+        );
     }
 
     /// The chat a connection's first line (`{"token": …}`) belongs to; None: refused.
@@ -361,16 +398,8 @@ pub fn start(core: &Arc<Core>, app: &AppHandle, dir: &Path) -> Result<(), String
     let _ = st.app.set(app.clone());
     let _ = st.dir.set(dir.to_path_buf());
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut path = dir.join(format!("ladder-{}.sock", std::process::id()));
-    if path.as_os_str().len() > 100 {
-        path = std::env::temp_dir().join(format!("coool-ladder-{}.sock", std::process::id()));
-    }
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path).map_err(|e| format!("bind {}: {e}", path.display()))?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-    }
+    // One path per data folder, so a hosted chat's proxy finds the next launch of coool (device/mcp.rs).
+    let (listener, path) = crate::device::mcp::bind_stable(dir, "ladder")?;
     let _ = st.socket.set(path);
     let core = core.clone();
     std::thread::Builder::new()
@@ -540,6 +569,7 @@ fn spawn(core: &Arc<Core>, chat: usize, a: &Value) -> Result<Value, String> {
     if let Some(h) = st.helpers.lock().unwrap().get_mut(&id) {
         h.sent = true;
     }
+    save_meta(core, id);
     core.kick();
     Ok(json!({
         "helper": id,
@@ -551,6 +581,19 @@ fn spawn(core: &Arc<Core>, chat: usize, a: &Value) -> Result<Value, String> {
         "branch": worktree.as_ref().map(|w| &w.1),
         "next": "collect its result with `wait`",
     }))
+}
+
+/// Keeps a helper's record with its chat in the chat host, so the app knows it again after a relaunch (APP_SPEC
+/// "Chats that outlive the app"); read back by [`State::adopt`]. No-op for a chat of this process.
+fn save_meta(core: &Core, id: usize) {
+    let meta = {
+        let h = core.ladder.helpers.lock().unwrap();
+        let Some(x) = h.get(&id) else { return };
+        json!({"app_id": id, "helper": {"parent": x.parent, "depth": x.depth, "model": x.model, "title": x.title, "worktree": x.worktree.as_ref().map(|w| &w.0), "branch": x.worktree.as_ref().map(|w| &w.1), "collected": x.collected}})
+    };
+    if let Some(c) = core.hub.lock().unwrap().chat(id) {
+        c.set_meta(meta);
+    }
 }
 
 /// The helper's own Ladder: the caller's, one level deeper, with only the tiers at or below the helper's model.
@@ -664,6 +707,9 @@ fn wait(core: &Arc<Core>, chat: usize, a: &Value) -> Result<Value, String> {
         }
     }
     // A finished helper's process ends once its result is collected; its session stays in the sidebar.
+    for &i in &finished {
+        save_meta(core, i);
+    }
     for i in finished {
         let _ = core.with_chat(i, |c| {
             if c.info().state == ChatState::Idle {
