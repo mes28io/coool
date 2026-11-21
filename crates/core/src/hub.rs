@@ -59,6 +59,8 @@ pub struct Hub {
     shells: crate::shells::Shells,
     /// Live sessions as of the last refresh (id, pid, cwd, provider, background tasks), for [`Hub::stop_shell`].
     shell_targets: Vec<(String, u32, String, Provider, bool)>,
+    /// Chats the person typed into before they had a session id (recorded as typed once they have one).
+    typed_pending: std::collections::HashSet<usize>,
     /// The chat host new chats start in (APP_SPEC "Chats that outlive the app"); None: inside this process.
     host: Option<Arc<crate::chat::host::Client>>,
 }
@@ -94,6 +96,7 @@ impl Hub {
             ancestors: Default::default(),
             shells: Default::default(),
             shell_targets: Vec::new(),
+            typed_pending: Default::default(),
             host: None,
         }
     }
@@ -291,6 +294,9 @@ impl Hub {
         for c in self.chats.iter().flatten() {
             if let Some(sid) = c.session_id() {
                 self.own.record(c.provider, &sid);
+                if self.typed_pending.remove(&c.id) {
+                    self.own.record_typed(c.provider, &sid);
+                }
             }
         }
         for s in &mut all {
@@ -320,6 +326,14 @@ impl Hub {
         use crate::lineage::session_ancestor;
         let live_pids: HashMap<u32, String> = all.iter().filter(|s| s.status != Status::Ended).filter_map(|s| Some((s.pid?, s.id.clone()))).collect();
         for s in all.iter_mut() {
+            // A coool chat a Ladder helper ran in (remembered by [`Hub::note_helper`]) belongs to its caller, unless
+            // the person has typed into it since.
+            if s.origin == Origin::Coool {
+                if s.parent.is_none() && !self.own.typed(s.provider, &s.id) {
+                    s.parent = self.own.parent_of(s.provider, &s.id).filter(|p| *p != s.id).map(str::to_string);
+                }
+                continue;
+            }
             if s.origin != Origin::Automation {
                 continue;
             }
@@ -542,6 +556,30 @@ impl Hub {
         }
         self.chats.push(Some(c));
         Ok(id)
+    }
+
+    /// Remembers that chat `chat` is a Ladder helper of chat `parent` (by their sessions, once both have one), so it
+    /// is listed as the caller's helper after both ended, here and in History. Cheap to call every refresh.
+    pub fn note_helper(&mut self, chat: usize, parent: usize) {
+        let (Some(c), Some(p)) = (self.chat(chat), self.chat(parent)) else { return };
+        let (Some(sid), Some(pid)) = (c.session_id(), p.session_id()) else { return };
+        let provider = c.provider;
+        self.own.record_parent(provider, &sid, &pid);
+    }
+
+    /// The person typed into chat `chat` (`chat_send`): its session is theirs, even one an agent started.
+    pub fn note_typed(&mut self, chat: usize) {
+        if let Some(c) = self.chat(chat) {
+            match c.session_id() {
+                Some(sid) => {
+                    let provider = c.provider;
+                    self.own.record_typed(provider, &sid);
+                }
+                None => {
+                    self.typed_pending.insert(chat);
+                }
+            }
+        }
     }
 
     pub fn chat(&self, id: usize) -> Option<&Chat> {
@@ -880,7 +918,16 @@ mod tests {
         rollout(&id(4), &format!(r#""originator":"Codex Desktop","source":{{"subagent":{{"thread_spawn":{{"parent_thread_id":"{}","agent_nickname":"Galileo"}}}}}},"agent_nickname":"Galileo""#, id(3)));
         rollout(&id(5), r#""originator":"Codex Desktop","source":{"subagent":{"thread_spawn":{"parent_thread_id":"gone"}}}"#);
         rollout(&id(6), r#""originator":"coool-selftest","source":"vscode""#);
-        OwnSessions::at(Some(d.join("own-sessions.json"))).record(Provider::Claude, "mine");
+        // Two Ladder helper chats of "mine" from an earlier run; the person typed into the second one since.
+        fs::write(proj.join("helper.jsonl"), KILN.replace("k1", "helper")).unwrap();
+        fs::write(proj.join("taken.jsonl"), KILN.replace("k1", "taken")).unwrap();
+        let mut own = OwnSessions::at(Some(d.join("own-sessions.json")));
+        for x in ["mine", "helper", "taken"] {
+            own.record(Provider::Claude, x);
+        }
+        own.record_parent(Provider::Claude, "helper", "mine");
+        own.record_parent(Provider::Claude, "taken", "mine");
+        own.record_typed(Provider::Claude, "taken");
 
         let mut h = hub(&d, false);
         let all = until_loaded(&mut h);
@@ -889,6 +936,10 @@ mod tests {
         assert_eq!(o("phone"), Some(Origin::User));
         assert_eq!(o("scratch-terminal"), Some(Origin::User), "classified by how it started, not where");
         assert_eq!(o("mine"), Some(Origin::Coool), "remembered from an earlier run");
+        let parent_of = |sid: &str| all.iter().find(|s| s.id == sid).and_then(|s| s.parent.clone());
+        assert_eq!((o("helper"), parent_of("helper").as_deref()), (Some(Origin::Coool), Some("mine")), "a helper stays its caller's");
+        assert_eq!(parent_of("taken"), None, "a helper the person typed into is theirs");
+        assert_eq!(parent_of("mine"), None);
         assert_eq!(o("big-human"), Some(Origin::User));
         assert_eq!(o(&id(1)), Some(Origin::Automation));
         assert_eq!(o(&id(2)), Some(Origin::Coool));

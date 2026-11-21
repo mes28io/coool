@@ -276,16 +276,16 @@ export function General() {
       <Group label="Sessions">
         <Row
           attr="show-automation"
-          label="Show runs started by other tools"
-          k="automation claude -p sdk codex exec hidden"
+          label="Show runs started by agents or other tools"
+          k="automation agents helpers lanes claude -p sdk codex exec hidden"
           desc={
             <>
-              Sessions that apps and agents launched programmatically (<span className="font-mono text-mono-small">claude -p</span>, the Agent SDK, <span className="font-mono text-mono-small">codex exec</span>). Off, only sessions you started are
-              listed.
+              Sessions that agents and apps started on their own: Ladder helpers and lanes, <span className="font-mono text-mono-small">claude -p</span>, the Agent SDK, <span className="font-mono text-mono-small">codex exec</span>. Off, the sidebar lists the sessions
+              you started, with an agent's runs under the session that started them; History has them under “Started by agents”.
               {!showAutomation && hiddenAutomation > 0 && <span className="text-faint"> {hiddenAutomation} hidden right now.</span>}
             </>
           }
-          control={<Switch label="Show runs started by other tools" on={showAutomation} onChange={setShowAutomation} />}
+          control={<Switch label="Show runs started by agents or other tools" on={showAutomation} onChange={setShowAutomation} />}
         />
       </Group>
       {unavailable && <p className="px-1 pt-3 text-small text-faint">This build of coool can’t save these options yet.</p>}

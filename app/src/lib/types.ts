@@ -282,7 +282,7 @@ export interface Snapshot {
   chats?: ChatInfo[];
   /** Plan usage per provider (CHAT_SPEC "Plan usage"); missing = nothing known. */
   usage?: { claude: PlanUsage | null; codex: PlanUsage | null };
-  /** Settings: "Show runs started by other tools". Missing = false. */
+  /** Settings: "Show runs started by agents or other tools". Missing = false. */
   show_automation?: boolean;
 }
 

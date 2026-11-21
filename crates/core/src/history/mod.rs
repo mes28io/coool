@@ -26,7 +26,8 @@
 pub mod parse;
 mod query;
 
-pub use query::{Facet, Page, Query, Row, Seg, Where};
+pub use crate::origin::Starter;
+pub use query::{Facet, Helper, Page, Query, Row, Seg, Where};
 
 use crate::model::Provider;
 use parse::{Meta, Sink};
@@ -219,8 +220,10 @@ struct Texts {
 /// How far the index is.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Status {
-    /// Sessions listed (rows), and transcripts known in all.
+    /// Sessions listed by default (the person's, and those that can't be told), and transcripts known in all.
     pub sessions: usize,
+    /// Sessions agents and other tools started (listed only on asking).
+    pub agents: usize,
     pub transcripts: usize,
     /// Transcripts with something left to read.
     pub pending: usize,
@@ -379,8 +382,10 @@ impl History {
 
     pub fn status(&self) -> Status {
         let live = self.docs.iter().filter(|d| !d.gone);
+        let agents = live.clone().filter(|d| listed(d) && self.starter(d).0 == Starter::Agent).count();
         Status {
-            sessions: live.clone().filter(|d| listed(d)).count(),
+            sessions: live.clone().filter(|d| listed(d)).count() - agents,
+            agents,
             transcripts: live.clone().count(),
             pending: self.queue.len(),
             text_bytes: live.map(|d| d.text as u64).sum(),
@@ -879,6 +884,29 @@ impl History {
                 }
             },
         }
+    }
+
+    /// Who started a session ([`crate::origin::started_by`]) and the session that started it, when known.
+    fn starter(&self, d: &Doc) -> (Starter, Option<String>) {
+        let m = &d.meta;
+        let parent = m
+            .parent
+            .clone()
+            .or_else(|| self.own.parent_of(d.provider, &m.id).map(str::to_string))
+            .or_else(|| crate::project::scratch_session(&m.cwd))
+            .filter(|p| *p != m.id && !p.is_empty());
+        let f = crate::origin::Facts {
+            entry: &m.entry,
+            source: &m.source,
+            human: m.human,
+            interactive: m.interactive,
+            sidechain: m.sidechain,
+            own: self.own.contains(d.provider, &m.id),
+            typed: self.own.typed(d.provider, &m.id),
+            parent: parent.as_deref(),
+            ..crate::origin::Facts::new(d.provider)
+        };
+        (crate::origin::started_by(&f), parent)
     }
 
     /// The title a row shows: the person's name in coool, else the CLI's rename, else its title, else the first prompt.

@@ -37,6 +37,12 @@ export interface HistoryQuery {
   to_ms?: number | null;
   /** Only sessions that changed files. */
   has_changes?: boolean;
+  /**
+   * Also sessions agents and other tools started (Ladder helpers, lanes, `claude -p`, `codex exec`, ...); each one
+   * whose session is among the results is listed under it (`helpers`). Off (the default): only the person's
+   * sessions are listed, searched and counted.
+   */
+  agents?: boolean;
   offset?: number;
   /** Rows to return (default 100). */
   limit?: number;
@@ -72,10 +78,36 @@ export interface HistoryRow {
   missing: boolean;
   archived: boolean;
   snippet?: HistorySeg[];
+  /** Who started it (crates/core/src/origin.rs `started_by`); "unknown" is listed with the person's. */
+  by: Starter;
+  /** The session that started it (an id), when known. */
+  parent?: string;
+  /** With `agents`: the sessions it started that match too, newest first. */
+  helpers?: HistoryHelper[];
+}
+
+export type Starter = "person" | "agent" | "unknown";
+
+/** A session an agent started, listed under the session that started it. */
+export interface HistoryHelper {
+  key: string;
+  provider: Provider;
+  id: string;
+  cwd: string;
+  title: string;
+  model: string;
+  where: Where;
+  via: string;
+  last_ms: number;
+  prompts: number;
+  edits: number;
 }
 
 export interface HistoryStatus {
+  /** Sessions listed by default (the person's). */
   sessions: number;
+  /** Sessions agents and other tools started. */
+  agents: number;
   transcripts: number;
   pending: number;
   text_bytes: number;
@@ -86,6 +118,8 @@ export interface HistoryStatus {
 export interface HistoryPage {
   rows: HistoryRow[];
   total: number;
+  /** Sessions agents started that match every filter and the words (listed only with `agents`). */
+  agents: number;
   projects: { project: string; count: number; last_ms: number }[];
   status: HistoryStatus;
   took_ms: number;

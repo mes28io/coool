@@ -38,6 +38,13 @@ pub struct Meta {
     /// Claude: a turn typed by a person through a programmatic client (see `origin::claude_human`).
     #[serde(default)]
     pub human: bool,
+    /// Claude: some record came from an interactive client (`cli`, an IDE, the app), e.g. a headless run resumed in a
+    /// terminal (see `origin::started_by`).
+    #[serde(default)]
+    pub interactive: bool,
+    /// Claude: records marked `isSidechain` (a sub-agent's transcript).
+    #[serde(default)]
+    pub sidechain: bool,
     /// Codex subagent rollouts: the thread that spawned it (such a rollout is part of its parent, not a row).
     #[serde(default)]
     pub parent: Option<String>,
@@ -174,6 +181,16 @@ pub fn claude_line(l: &str, m: &mut Meta, sink: &mut Sink) {
     }
     if v["type"] == "user" && crate::origin::claude_human(&v) {
         m.human = true;
+    }
+    if !m.interactive
+        && let Some(e) = v["entrypoint"].as_str()
+        && !e.is_empty()
+        && crate::origin::claude_interactive(e)
+    {
+        m.interactive = true;
+    }
+    if v["isSidechain"].as_bool() == Some(true) {
+        m.sidechain = true;
     }
     if m.cwd.is_empty()
         && let Some(c) = v["cwd"].as_str()
