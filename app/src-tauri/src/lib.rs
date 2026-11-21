@@ -13,6 +13,7 @@ mod attach;
 mod apps;
 mod artifact;
 mod browser;
+mod chatctx;
 mod device;
 mod env;
 mod glass;
@@ -1868,6 +1869,7 @@ pub fn run() {
         .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
         .manage(core.clone())
         .manage(devices.clone())
+        .manage(chatctx::ContextState::default())
         .manage(Arc::new(voice::Voice::new()))
         .manage(Arc::new(update::Updater::new(core.selftest.is_some())))
         .invoke_handler(tauri::generate_handler![
@@ -1915,6 +1917,12 @@ pub fn run() {
             environment,
             git_trail,
             context_map,
+            chatctx::chat_context,
+            chatctx::chat_context_read,
+            chatctx::chat_context_save,
+            chatctx::chat_context_create,
+            chatctx::chat_context_trash,
+            chatctx::chat_context_reveal,
             running_count,
             quit_app,
             prefs_get,

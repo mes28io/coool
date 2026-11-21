@@ -45,7 +45,7 @@ export interface BrowserTabs {
   tabs: BrowserTab[];
   active: number;
 }
-export type RightPanelKind = "agents" | "models" | "browser" | "device" | "mac";
+export type RightPanelKind = "agents" | "models" | "browser" | "device" | "mac" | "context";
 
 /** The full-screen Settings page's categories, in order (components/SettingsPage.tsx). */
 export const SETTINGS_SECTIONS = ["general", "ladder", "notifications", "voice", "appearance", "shortcuts", "providers", "devices", "remote", "git", "connections", "storage", "usage", "insights", "about"] as const;
@@ -112,6 +112,8 @@ const BROWSER_DEFAULT = 600;
 /** The browser panel's narrowest; the pane's chat keeps at least `BROWSER_CHAT_MIN` beside it. */
 export const BROWSER_MIN = 360;
 export const BROWSER_CHAT_MIN = 320;
+/** The Context panel's least width (its editor needs room for a line of Markdown). */
+export const CONTEXT_MIN = 320;
 const clampBrowser = (w: number) => Math.round(Math.min(1600, Math.max(BROWSER_MIN, w)));
 const DEVICE_DEFAULT = 400;
 /** The iPhone panel's narrowest (the chat keeps `BROWSER_CHAT_MIN` beside it too) and widest. */
@@ -247,6 +249,9 @@ interface State {
   /** Width of the right panel (min 300, max 440); this run only. */
   agentsWidth: number;
   setAgentsWidth(w: number): void;
+  /** The Context panel's width (it has an editor, so it is wider than Jobs / Models). */
+  contextWidth: number;
+  setContextWidth(w: number): void;
   /** Per session (same keys as `rightPanel`): the browser panel's tabs; this run only. Absent = no browser open. */
   browser: Record<string, BrowserTabs>;
   /**
@@ -561,6 +566,8 @@ export const useStore = create<State>((set, get) => ({
   setRightPanel: (key, v) => set((s) => ({ rightPanel: { ...s.rightPanel, [key]: v } })),
   agentsWidth: 340,
   setAgentsWidth: (w) => set({ agentsWidth: Math.round(Math.min(440, Math.max(300, w))) }),
+  contextWidth: 420,
+  setContextWidth: (w) => set({ contextWidth: Math.round(Math.min(760, Math.max(320, w))) }),
   browser: {},
   openBrowser: (key, page, opts) =>
     set((s) => {

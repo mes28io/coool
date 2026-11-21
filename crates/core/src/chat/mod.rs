@@ -688,6 +688,7 @@ pub struct Chat {
     kill_requested: Option<Instant>,
     /// The arguments the CLI was launched with (the self-test checks Ladder's flags against them).
     args: Vec<String>,
+    launch: crate::chatctx::Launch,
 }
 
 impl Chat {
@@ -713,7 +714,31 @@ impl Chat {
         {
             let _ = std::fs::remove_file(p);
         }
-        r
+        r.map(|mut c| {
+            c.launch = Self::launch_record(&opts, &args, mcp);
+            c
+        })
+    }
+
+    /// What the Context panel shows coool added (crate::chatctx): the arguments as passed, what coool adds to Codex's
+    /// developer instructions, and the MCP servers (names only: their env carries the chat's token).
+    pub(crate) fn launch_record(opts: &ChatOptions, args: &[String], mcp: &[McpServer]) -> crate::chatctx::Launch {
+        crate::chatctx::Launch {
+            args: args.to_vec(),
+            // What `Codex::instructions` sends: Ladder's policy, then the coool context.
+            developer_instructions: if opts.provider == Provider::Codex {
+                crate::agent_context::join_prompts(codex::coool_instructions(opts).as_deref(), context_text(opts, crate::ladder::Cli::Codex, !mcp.is_empty()).as_deref())
+            } else {
+                None
+            },
+            mcp: mcp.iter().map(|m| crate::chatctx::McpInfo { name: m.name.clone(), ..Default::default() }).collect(),
+            model: opts.model.clone(),
+        }
+    }
+
+    /// What coool launched this chat with (see [`Self::launch_record`]).
+    pub fn launch_info(&self) -> &crate::chatctx::Launch {
+        &self.launch
     }
 
     /// The backend, program and arguments a chat starts with (unit-tested: nothing runs). `mcp_file`: where Claude
@@ -892,7 +917,7 @@ impl Chat {
             sh.backend.start(&mut o);
             apply(&mut sh, &writer, o);
         }
-        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, writer, kill_requested: None, args: args.to_vec() })
+        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, writer, kill_requested: None, args: args.to_vec(), launch: crate::chatctx::Launch::default() })
     }
 
     fn with_backend(&mut self, call: Value, f: impl FnOnce(&mut dyn Backend, &mut Out) -> Result<()>) -> Result<()> {
