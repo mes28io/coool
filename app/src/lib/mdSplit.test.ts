@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splitSettled } from "./mdSplit.ts";
+import { splitSettled, tableColumns } from "./mdSplit.ts";
 
 const cases = [
   "",
@@ -29,4 +29,13 @@ test("cuts between finished blocks only", () => {
   assert.deepEqual(splitSettled("- a\n\n- b\n\nend"), ["- a\n\n- b\n\n", "end"]);
   assert.deepEqual(splitSettled("1. a\n\n   more\n\n2. b"), ["1. a\n\n   more\n\n2. b"]);
   assert.deepEqual(splitSettled("Intro:\n- a\n\n- b"), ["Intro:\n- a\n\n- b"]);
+});
+
+test("tableColumns counts the widest row of a table's hast node", () => {
+  const el = (tagName: string, children: object[] = []) => ({ type: "element", tagName, children });
+  const text = { type: "text", value: "\n" };
+  const t = el("table", [el("thead", [el("tr", [el("th"), text, el("th")])]), el("tbody", [el("tr", [el("td"), el("td"), el("td")]), el("tr", [el("td")])])]);
+  assert.equal(tableColumns(t), 3);
+  assert.equal(tableColumns(el("table")), 1);
+  assert.equal(tableColumns(undefined), 1);
 });

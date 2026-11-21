@@ -16,7 +16,7 @@
 // The binary is signed ad-hoc with the com.apple.security.virtualization entitlement by build.rs; the app itself
 // needs no entitlement.
 //
-// Protocol: as coool-sim. Requests are JSON lines on stdin (`{"id":1,"cmd":"click","x":100,"y":200}`); everything
+// Protocol: as coool-sim. Requests are JSON lines on stdin (`{"id":1,"cmd":"pointer","x":100,"y":200}`); everything
 // out is framed on stdout as [u32 big-endian length][u8 kind][payload], kind 'J' = a JSON reply or event,
 // 'F' = one JPEG frame. `coool-vm <dir> --once '<json>'` runs one request and prints events and the reply as plain
 // JSON lines instead (for scripts). The helper exits when stdin closes, stopping the guest first.
@@ -1142,24 +1142,7 @@ static BOOL namedKey(NSString *name, unsigned short *code) {
   return NO;
 }
 
-static unsigned short modifierCode(NSString *m) {
-  unsigned short c = 0;
-  namedKey(m, &c);
-  return c;
-}
-
 static void usleepMs(double ms) { if (ms > 0) usleep((useconds_t)(ms * 1000)); }
-
-static NSString *pressKey(NSString *name, NSArray *mods) {
-  unsigned short code;
-  if (!namedKey(name, &code)) return [NSString stringWithFormat:@"unknown key %@", name];
-  for (NSString *m in mods) { key(modifierCode(m), YES); usleepMs(8); }
-  key(code, YES);
-  usleepMs(25);
-  key(code, NO);
-  for (NSString *m in mods.reverseObjectEnumerator) { usleepMs(8); key(modifierCode(m), NO); }
-  return nil;
-}
 
 static NSString *typeString(NSString *text, double perKeyMs) {
   for (NSUInteger i = 0; i < text.length; i++) {
@@ -1167,38 +1150,53 @@ static NSString *typeString(NSString *text, double perKeyMs) {
     unsigned short code;
     BOOL shift;
     if (!charKey(c, &code, &shift)) return [NSString stringWithFormat:@"can't type %C on a US keyboard", c];
-    if (shift) key(56, YES);
+    // Shift on a report of its own on both sides, so a capital never comes out lower case.
+    if (shift) { key(56, YES); usleepMs(MAX(10, perKeyMs / 2)); }
     key(code, YES);
     usleepMs(perKeyMs / 2);
     key(code, NO);
-    if (shift) key(56, NO);
+    if (shift) { usleepMs(MAX(10, perKeyMs / 2)); key(56, NO); }
     usleepMs(perKeyMs / 2);
   }
   return nil;
 }
 
-static void click(double x, double y, NSInteger button, int count) {
-  pointer(x, y, 0);
-  usleepMs(30);
-  for (int i = 0; i < count; i++) {
-    pointer(x, y, button);
-    usleepMs(40);
-    pointer(x, y, 0);
-    usleepMs(i + 1 < count ? 60 : 10);
+/// Plays a list of input steps made by coool (`device/vm_input.rs`: a click glides to its point, rests, then presses
+/// and releases on the spot; a shortcut's modifiers go down and up on reports of their own): `{"p":[x,y,buttons]}`
+/// a pointer report, `{"k":"name","d":true|false}` a key down or up, `{"w":ms}` a pause. Every key name is checked
+/// before anything is sent, so a bad one sends nothing; a key left down at the end is released.
+static NSString *play(NSArray *steps) {
+  if (![steps isKindOfClass:NSArray.class]) return @"play needs steps";
+  NSMutableArray *plan = [NSMutableArray arrayWithCapacity:steps.count];
+  for (NSDictionary *s in steps) {
+    if (![s isKindOfClass:NSDictionary.class]) return @"bad step";
+    NSArray *p = s[@"p"];
+    if ([p isKindOfClass:NSArray.class] && p.count == 3) {
+      [plan addObject:@[@"p", p[0], p[1], p[2]]];
+    } else if ([s[@"k"] isKindOfClass:NSString.class]) {
+      unsigned short code;
+      if (!namedKey(s[@"k"], &code)) return [NSString stringWithFormat:@"unknown key %@", s[@"k"]];
+      [plan addObject:@[@"k", @(code), @([s[@"d"] boolValue])]];
+    } else if ([s[@"w"] isKindOfClass:NSNumber.class]) {
+      [plan addObject:@[@"w", @(MAX(0, MIN(5000, [s[@"w"] doubleValue])))]];
+    } else {
+      return @"bad step";
+    }
   }
-}
-
-static void drag(double x, double y, double x2, double y2, double ms) {
-  pointer(x, y, 0);
-  usleepMs(30);
-  pointer(x, y, 1);
-  int steps = MAX(4, (int)(ms / 16));
-  for (int i = 1; i <= steps; i++) {
-    double t = (double)i / steps;
-    pointer(x + (x2 - x) * t, y + (y2 - y) * t, 1);
-    usleepMs(ms / steps);
+  NSMutableSet *held = [NSMutableSet set];
+  for (NSArray *s in plan) {
+    if ([s[0] isEqual:@"p"]) {
+      pointer([s[1] doubleValue], [s[2] doubleValue], [s[3] integerValue]);
+    } else if ([s[0] isEqual:@"k"]) {
+      key([s[1] unsignedShortValue], [s[2] boolValue]);
+      if ([s[2] boolValue]) [held addObject:s[1]];
+      else [held removeObject:s[1]];
+    } else {
+      usleepMs([s[1] doubleValue]);
+    }
   }
-  pointer(x2, y2, 0);
+  for (NSNumber *c in held) key(c.unsignedShortValue, NO);
+  return nil;
 }
 
 static void scroll(double x, double y, double dx, double dy) {
@@ -1560,9 +1558,11 @@ static void handle(NSDictionary *m) {
       CGImageRelease(img);
       reply(rid, r);
     });
-  } else if ([cmd isEqualToString:@"pointer"] || [cmd isEqualToString:@"click"] || [cmd isEqualToString:@"drag"] ||
-             [cmd isEqualToString:@"scroll"] || [cmd isEqualToString:@"key"] || [cmd isEqualToString:@"keyDown"] ||
-             [cmd isEqualToString:@"keyUp"] || [cmd isEqualToString:@"text"]) {
+  } else if ([cmd isEqualToString:@"mouse"]) {
+    // Where the pointer is (after every input queued before this): where a click's glide starts.
+    dispatch_async(gInputQ, ^{ reply(rid, @{@"x": @(gMouse.x), @"y": @(gMouse.y), @"buttons": @(gButtons)}); });
+  } else if ([cmd isEqualToString:@"pointer"] || [cmd isEqualToString:@"play"] || [cmd isEqualToString:@"scroll"] ||
+             [cmd isEqualToString:@"keyDown"] || [cmd isEqualToString:@"keyUp"] || [cmd isEqualToString:@"text"]) {
     dispatch_async(gInputQ, ^{
       __block BOOL running = NO;
       dispatch_sync(gVMQ, ^{ running = gVM && gVM.state == VZVirtualMachineStateRunning; });
@@ -1571,15 +1571,10 @@ static void handle(NSDictionary *m) {
       double x = num(m, @"x", gMouse.x), y = num(m, @"y", gMouse.y);
       if ([cmd isEqualToString:@"pointer"]) {
         pointer(x, y, (NSInteger)num(m, @"buttons", 0));
-      } else if ([cmd isEqualToString:@"click"]) {
-        NSString *b = str(m, @"button") ?: @"left";
-        click(x, y, [b isEqual:@"right"] ? 2 : 1, (int)num(m, @"count", 1));
-      } else if ([cmd isEqualToString:@"drag"]) {
-        drag(x, y, num(m, @"x2", x), num(m, @"y2", y), num(m, @"ms", 300));
+      } else if ([cmd isEqualToString:@"play"]) {
+        err = play(m[@"steps"]);
       } else if ([cmd isEqualToString:@"scroll"]) {
         scroll(x, y, num(m, @"dx", 0), num(m, @"dy", 0));
-      } else if ([cmd isEqualToString:@"key"]) {
-        err = pressKey(str(m, @"name") ?: @"", [m[@"modifiers"] isKindOfClass:NSArray.class] ? m[@"modifiers"] : @[]);
       } else if ([cmd isEqualToString:@"keyDown"] || [cmd isEqualToString:@"keyUp"]) {
         unsigned short code = (unsigned short)num(m, @"code", 0xFFFF);
         if (code == 0xFFFF && !namedKey(str(m, @"name") ?: @"", &code)) err = @"unknown key";

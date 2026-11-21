@@ -349,6 +349,14 @@ html.no-transitions *::after {
 .scroll.overflow-x-auto {
   scrollbar-gutter: auto;
 }
+/* A markdown table too wide for its column: the bar shows at rest, so its hidden columns never look cut off
+   (it only appears when the table does overflow). */
+.scroll[data-md-table] {
+  scrollbar-color: color-mix(in oklab, var(--dim) 30%, transparent) transparent;
+}
+.scroll[data-md-table]::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--dim) 25%, transparent);
+}
 .scroll:hover,
 .scroll.is-scrolling {
   scrollbar-color: color-mix(in oklab, var(--dim) 35%, transparent) transparent;

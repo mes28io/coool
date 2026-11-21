@@ -8,7 +8,7 @@ import remarkGfm from "remark-gfm";
 import { useOpenPage, webUrl } from "../lib/browser";
 import { ICheck, IFile } from "./icons";
 import { cx } from "./primitives";
-import { splitSettled } from "../lib/mdSplit";
+import { splitSettled, tableColumns } from "../lib/mdSplit";
 import { addTime, countRender } from "../lib/perfCount";
 
 const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
@@ -154,13 +154,16 @@ const components: Components = {
   ),
   pre: ({ node: _n, children }) => <CodeBlock>{children}</CodeBlock>,
   code: ({ node: _n, className, children }) => <code className={cx("rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-[5px] py-[1px] font-mono text-[0.88em] text-fg", className)}>{children}</code>,
-  table: ({ node: _n, ...p }) => (
-    <div className="scroll my-2 max-w-full overflow-x-auto">
-      <table className="w-max min-w-full border-collapse text-base tnum" {...p} />
+  // A table takes the column's width and its cells wrap (long words and paths too), so it fits; one with too many
+  // columns to wrap readably (under ~7rem a column) keeps that width and scrolls sideways in its own box. Never wider
+  // than the column, never clipped.
+  table: ({ node, ...p }) => (
+    <div className="scroll my-2 max-w-full overflow-x-auto" data-md-table>
+      <table className="w-full border-collapse text-base tnum" style={{ minWidth: `${tableColumns(node) * 7}rem` }} {...p} />
     </div>
   ),
-  th: ({ node: _n, ...p }) => <th className="whitespace-nowrap border-b border-line px-[10px] py-[6px] text-left align-bottom font-medium text-fg" {...p} />,
-  td: ({ node: _n, ...p }) => <td className="border-b border-hairline px-[10px] py-[6px] align-top" {...p} />,
+  th: ({ node: _n, ...p }) => <th className="border-b border-line px-[10px] py-[6px] text-left align-bottom font-medium text-fg [overflow-wrap:anywhere]" {...p} />,
+  td: ({ node: _n, ...p }) => <td className="border-b border-hairline px-[10px] py-[6px] align-top [overflow-wrap:anywhere]" {...p} />,
 };
 
 /** Assistant prose as markdown. `streaming`: the text is still arriving. */
