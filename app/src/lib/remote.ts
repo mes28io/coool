@@ -4,6 +4,7 @@
 
 import { isTauri } from "./backend";
 import { chatDefaultsNow, seenModelsNow } from "./prefs";
+import { contextPrefNow } from "./agentContext";
 
 export interface RemoteDevice {
   id: string;
@@ -97,10 +98,11 @@ function syncDefaults() {
     claude: [...CLAUDE_ALIASES, ...seen.claude.filter((m) => !CLAUDE_ALIASES.some((a) => a.id === m.id))],
     codex: seen.codex,
   };
-  const s = JSON.stringify({ d, models });
+  const context = contextPrefNow();
+  const s = JSON.stringify({ d, models, context });
   if (s === lastDefaults) return;
   lastDefaults = s;
-  import("@tauri-apps/api/core").then(({ invoke }) => invoke("remote_set_defaults", { defaults: { ...d, models } }).catch(() => (lastDefaults = "")));
+  import("@tauri-apps/api/core").then(({ invoke }) => invoke("remote_set_defaults", { defaults: { ...d, models, context } }).catch(() => (lastDefaults = "")));
 }
 // Minor 1: the Needs-you page's words, risk tags and AI reads for the pending requests, so the phone shows them too.
 let lastNotes = "";

@@ -522,7 +522,7 @@ async function tauriBackend(): Promise<Backend> {
     kind: "tauri",
     startChat: (o) =>
       soft("start_chat", {
-        opts: { provider: o.provider, cwd: o.cwd, resume: o.resume ?? null, model: o.model ?? null, permission_mode: o.permission_mode ?? null, ladder: o.ladder ?? null },
+        opts: { provider: o.provider, cwd: o.cwd, resume: o.resume ?? null, model: o.model ?? null, permission_mode: o.permission_mode ?? null, ladder: o.ladder ?? null, context: o.context ?? null },
       }),
     chatSend: (id, text, attachments) => soft("chat_send", { id, text, attachments: attachments?.length ? attachments : null }),
     attachPaths: (paths) => invoke("attach_paths", { paths }),
