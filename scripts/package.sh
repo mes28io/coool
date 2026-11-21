@@ -33,8 +33,20 @@ fi
 app="$target/release/bundle/macos/coool.app"
 [ -d "$app" ] || { echo "package.sh: $app is missing" >&2; exit 1; }
 # One signature over the whole bundle, so the installer's `codesign --verify --deep` has something to check.
-codesign --force --deep --sign - "$app"
+# Signed with the owner's self-signed "coool release signing" certificate (private key non-exportable, in the login
+# Keychain; public cert in scripts/coool-release-signing.cer.pem). The designated requirement is then the bundle id AND
+# that certificate, so macOS privacy grants (Files & Folders, Full Disk Access) survive updates while no other program
+# can claim them. Ad-hoc signing (a per-build hash) lost the grants on every update; an id-only requirement would let
+# any ad-hoc program named sh.coool.app inherit them. COOOL_SIGN_IDENTITY=- falls back to ad-hoc (local builds only).
+sign_id="${COOOL_SIGN_IDENTITY:-9A2CC611EEAC050D80C78C8D283A3853AA4BBF86}"
+codesign --force --deep --sign "$sign_id" "$app"
 codesign --verify --deep --strict "$app"
+if [ "$sign_id" != "-" ]; then
+  codesign -d -r- "$app" 2>&1 | grep -q 'certificate leaf = H"9a2cc611eeac050d80c78c8d283a3853aa4bbf86"' || {
+    echo "package.sh: the app is not signed with the coool release certificate" >&2
+    exit 1
+  }
+fi
 
 mkdir -p dist
 out="dist/coool-macos-arm64.tar.gz"
