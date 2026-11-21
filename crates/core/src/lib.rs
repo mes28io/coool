@@ -5,6 +5,7 @@ pub mod artifact;
 pub mod attach;
 pub mod cache;
 pub mod chat;
+pub mod chatctx;
 pub mod context;
 pub mod explain;
 pub mod gitlog;

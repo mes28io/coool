@@ -132,7 +132,7 @@ pub struct ContextMap {
 /// Characters per token before a transcript has taught us better (JSON-ish tool output).
 const DEFAULT_CPT: f64 = 3.0;
 /// Prose (memory, skills, prompts, summaries): typical characters per token.
-const PROSE_CPT: f64 = 3.8;
+pub(crate) const PROSE_CPT: f64 = 3.8;
 /// Tool schemas (JSON with prose descriptions).
 const SCHEMA_CPT: f64 = 3.2;
 /// Below this many characters per token, the step held more than its text explains.
@@ -1049,36 +1049,13 @@ fn file_read(cmd: &str) -> Option<String> {
     (!last.starts_with('-') && pathish).then(|| last.to_string())
 }
 
-/// CLAUDE.md files Claude Code would load for `cwd` (user, each folder up from it), with their sizes.
+/// The instruction and memory files Claude Code loads at start for `cwd`, with their sizes: the Context panel's
+/// lookup ([`crate::chatctx`]), so the two panels count the same files.
 pub fn claude_memory_files(cwd: &str) -> Vec<(String, u64)> {
-    let mut out = Vec::new();
-    let mut add = |p: PathBuf| {
-        if let Ok(m) = std::fs::metadata(&p)
-            && m.is_file()
-            && m.len() > 0
-        {
-            out.push((p.to_string_lossy().into_owned(), m.len()));
-        }
-    };
-    if let Some(h) = dirs::home_dir() {
-        add(h.join(".claude").join("CLAUDE.md"));
+    match dirs::home_dir() {
+        Some(h) if !cwd.is_empty() => crate::chatctx::claude_start_files(&h, Path::new(cwd)),
+        _ => Vec::new(),
     }
-    if cwd.is_empty() {
-        return out;
-    }
-    let mut dir = Some(Path::new(cwd));
-    while let Some(d) = dir {
-        if dirs::home_dir().as_deref() == Some(d) && d != Path::new(cwd) {
-            // The home folder's own CLAUDE.md, if any, still counts; nothing above it.
-            add(d.join("CLAUDE.md"));
-            break;
-        }
-        add(d.join("CLAUDE.md"));
-        add(d.join("CLAUDE.local.md"));
-        add(d.join(".claude").join("CLAUDE.md"));
-        dir = d.parent();
-    }
-    out
 }
 
 // ---------- reading transcripts ----------

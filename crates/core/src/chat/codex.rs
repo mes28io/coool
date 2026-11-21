@@ -181,6 +181,14 @@ pub(crate) struct Codex {
     ladder: Option<String>,
 }
 
+/// Everything coool adds to a Codex thread's `developerInstructions` (after the person's own): today Ladder's
+/// policy. Anything else coool adds there belongs here too, so the Context panel (which shows what a chat was
+/// launched with: [`crate::chatctx::Launch::developer_instructions`]) and the thread get the same text. Each part
+/// starts with its own `# ` heading (the panel splits on them).
+pub(crate) fn coool_instructions(opts: &ChatOptions) -> Option<String> {
+    opts.ladder.as_ref().map(|l| crate::ladder::policy(crate::ladder::Cli::Codex, l, std::path::Path::new(&opts.cwd), true))
+}
+
 impl Codex {
     pub fn new(opts: &ChatOptions) -> Self {
         let mut c = Self {
@@ -217,7 +225,7 @@ impl Codex {
             stopping: false,
             plans: 0,
             client_name: crate::origin::CLIENT_NAME.to_string(),
-            ladder: opts.ladder.as_ref().map(|l| crate::ladder::policy(crate::ladder::Cli::Codex, l, std::path::Path::new(&opts.cwd), true)),
+            ladder: coool_instructions(opts),
         };
         if let Some(m) = &opts.permission_mode {
             let m = approval_policy(m);
