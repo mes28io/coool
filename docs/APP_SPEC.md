@@ -489,6 +489,27 @@ Ladder 2 replaces the delegate-only design below where they differ. The lead pla
   - `ladder2-refuse`: with 99% kept in reserve, `can image` says no, no `codex exec` runs, the lead says why, and `spawn` is refused.
   - `ladder2-image`: asked for "a small app icon for this project, saved as assets/icon.png", the Haiku lead calls `can`, hands it to a GPT helper, and views the PNG before reporting.
 
+**Ladder 2 A/B, 2026-11-21** (`run_ab.py --tasks multi`: six new independent modules, each specified by its own failing tests, which a reference implementation passes; Claude Code 2.1.330; the "on" arm gets Ladder 2's flags and nesting limit exactly as a coool chat does, without coool's MCP tools, which need the app; tokens = input + output + cache reads + cache writes from `modelUsage`; usage = Claude's own reading for the whole account, other sessions included):
+
+| Lead | Arm | Wall | Turns | Tokens | Helpers | Tests after | Claude 5-hour |
+|---|---|---|---|---|---|---|---|
+| Sonnet 5.5 | off | 54.2 s | 19 | 225,800 | 0 | pass | 50→51% |
+| Sonnet 5.5 | on | 47.8 s | 16 | 293,631 | 0 | pass | 51→51% |
+| Sonnet 5.5 | on | 49.1 s | 15 | 254,494 | 0 | pass | 51→52% |
+| Sonnet 5.5 | off | 49.6 s | 13 | 219,476 | 0 | pass | 52→52% |
+| Opus 5.5 | on | 54.0 s | 12 | 194,993 | 0 | pass | 52→53% |
+| Opus 5.5 | off | 62.7 s | 13 | 225,771 | 0 | pass | 53→54% |
+
+Neither lead delegated anything, in either arm. Both judged six ~30-line modules small enough to write directly ("the pieces were small enough to write directly"), although the swarm rule (3 or more independent parts) applied. The policy allows that judgment and does not force it. So these runs measure Ladder 2's overhead, not delegation.
+
+- Sonnet with Ladder on used +23% tokens on average (274k against 223k) and was 7% faster (48.5 s against 51.9 s). That is about 1 k extra system-prompt tokens per request, plus run-to-run variance.
+- Opus with Ladder on was 14% faster and used 14% fewer tokens, in one pair.
+- These are within noise. No claim of savings or better results is made.
+- Codex usage did not move (0% / 9%).
+- An earlier pair is discarded: its stats test expected an impossible histogram, so both arms stopped and reported it. Both correctly refused to edit the test.
+
+What was shown to work is in the self-tests: a lane to Codex, an image through a GPT helper, a spawned helper, and the refusals. Whether delegation saves usage on a job large enough that a lead chooses to delegate is still unmeasured. The next benchmark needs pieces of a few hundred lines each.
+
 ### Ladder 1 (2026-11-20, kept where Ladder 2 does not change it)
 
 - **The policy** (`crates/core/src/ladder/policy.md`, always loaded; `briefs.md`, loaded by the lead only when it delegates) generalises a delegation skill written for one model stack: the lead spends its tokens on judgment (plan, briefs, hard calls, checking, the answer) and hands the rest to the cheapest tier that can carry it; every delegate gets an explicit model, never the lead's own or a stronger one; when unsure take the cheaper tier and move one up only on failure; small things (a handful of tool calls, one known file) it does itself; independent pieces go out together, at most N at once, and delegates that would edit the same files run in turn or in their own git worktrees (Settings > Git & worktrees and Mission control's overlap rows show them); a delegate's report is a claim to check (diff, the project's test command, the output) before calling anything done, saying what was checked; and the lead asks the person before anything destructive or outward-facing exactly as it would alone. It names no lead model. Brief shape per tier: mid fairly loose (goal, context, constraints, done), small a notch tighter (files, steps, output shape, what not to touch, when to stop), bulk an exact rule set with examples in small batches. No cheaper model (Haiku leading): a short single-agent discipline instead (plan, do, check, say what was checked).

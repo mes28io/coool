@@ -325,7 +325,7 @@ fn delegate_tests(l: &Ladder, tests: Option<&str>) -> String {
 /// The exact command a lane runs on (the playbook has the full form).
 fn lane_command(cli: Cli) -> &'static str {
     match cli {
-        Cli::Claude => "`codex exec -m <model> -c model_reasoning_effort=\"low\" -s <read-only|workspace-write> -C <dir> -o <file> \"<brief>\" < /dev/null`",
+        Cli::Claude => "`codex exec -m <model> -c model_reasoning_effort=\"low\" -s <read-only|workspace-write> --skip-git-repo-check -C <dir> -o <file> \"<brief>\" < /dev/null`",
         Cli::Codex => "`claude -p --model <alias> --permission-mode <default|acceptEdits> \"<brief>\" < /dev/null`",
     }
 }
@@ -342,7 +342,7 @@ fn image_line(cli: Cli, l: &Ladder) -> String {
     let label = if i.label.is_empty() { i.model.clone() } else { i.label.clone() };
     match (cli, i.provider) {
         (Cli::Claude, Provider::Codex) => format!(
-            "\nImage generation: you have no image model, so a GPT helper makes every raster image (icon, logo, illustration, photo, PNG or JPG). Don't draw one yourself with code or SVG unless {}. Run `codex exec -m {} -c model_reasoning_effort=\"low\" -s workspace-write -C <project> \"<brief>\" < /dev/null`; its built-in image tool draws it ({label}). The brief names the subject, style, size, background, variants and the output path inside this project. Open the file and look at it before you report.",
+            "\nImage generation: you have no image model, so a GPT helper makes every raster image (icon, logo, illustration, photo, PNG or JPG). Don't draw one yourself with code or SVG unless {}. Run `codex exec -m {} -c model_reasoning_effort=\"low\" -s workspace-write --skip-git-repo-check -C <project> \"<brief>\" < /dev/null`; its built-in image tool draws it ({label}). The brief names the subject, style, size, background, variants and the output path inside this project. Open the file and look at it before you report.",
             if l.tools { "`can` with `image` says no; call `can` first" } else { "the helper fails" },
             i.model
         ),
@@ -585,6 +585,7 @@ mod tests {
         assert!(p.contains("  exec GPT-6.2-Sol (`gpt-6.2-sol`): small self-contained parts"));
         assert!(p.contains("Image generation: you have no image model, so a GPT helper makes every raster image"));
         assert!(p.contains("unless `can` with `image` says no; call `can` first. Run `codex exec -m gpt-6-luna"));
+        assert!(p.contains("-s workspace-write --skip-git-repo-check -C <project>"), "a project need not be a repository");
         assert!(p.contains("output path inside this project"));
         assert!(p.contains("the Agent tool's `model`"));
         assert!(p.contains("at most 4 at once"));
