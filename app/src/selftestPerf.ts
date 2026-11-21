@@ -10,6 +10,10 @@
 // perf-long    the sessions with the most activity: open time, then scrolling top to bottom (frame gaps).
 // perf-stream  a long coool chat (3000 items, made up on the page; no CLI) streaming a reply for 15 s, then tool
 //              steps: renders per batch, frame gaps, page CPU.
+// perf-changes the Changes view on the heavy case of app/scripts/perf/make-changes-home.py (run through
+//              app/scripts/perf/changes-run.sh, which starts the live writer on LIVE-START): panel closed and open,
+//              the session idle and working: changes_load calls, backend ms and bytes, page ms per update, CPU,
+//              frame gaps, scrolling the panel and the chat.
 // perf-soak    5 min of perf-stream style events into the long chat with the sessions view live: memory growth.
 
 import { addTime, ipcCalls as ipc, renders, timings } from "./lib/perfCount";
@@ -55,6 +59,10 @@ interface Stats {
   git_trails: number;
   git_spawns: number;
   context_maps: number;
+  changes_loads: number;
+  changes_us: number;
+  changes_bytes: number;
+  changes_git: number;
   boot: [string, number][];
 }
 interface Snap {
@@ -858,6 +866,84 @@ export function perfScenarios(k: PerfKit): Record<string, () => Promise<void>> {
      * each: CPU and wakeups, sessions payloads, store updates, renders, animation frames by caller; then the session
      * with Motion's JS animations made instant (what they cost).
      */
+    async "perf-changes"() {
+      const SID = "5e55c0de-0000-4000-8000-00000000c0de";
+      const secs = 60;
+      closeAllTabs();
+      await home();
+      const s = await k.waitFor("the heavy session", () => useStore.getState().sessions.find((x) => x.id === SID), 60_000);
+      openSession(s);
+      const timeline = await k.waitFor("its timeline", () => document.querySelector<HTMLElement>("[data-main] [data-activity-timeline]"), 20_000);
+      const key = sessionKey(s);
+      const panel = (v: "changes" | "closed") => useStore.getState().setRightPanel(key, v);
+      panel("closed");
+      await k.sleep(3000);
+      const t0 = { ...timings };
+      const tm = (name: string, base: Record<string, number>) => (timings[name] ?? 0) - (base[name] ?? 0);
+      /** A CPU window (no frame loop of its own), then the Changes numbers for it. */
+      const phase = async (name: string, ms: number) => {
+        const base = { ...timings };
+        const a = await snap();
+        await k.sleep(ms);
+        const b = await snap();
+        await report(name, a, b);
+        const n = b.s.changes_loads - a.s.changes_loads;
+        const ups = tm("changes.updates", base);
+        await k.log(
+          `PERF ${name} changes_loads=${n} per_min=${r1((n * 60_000) / (b.t - a.t))} backend_ms_per_load=${n ? r1((b.s.changes_us - a.s.changes_us) / 1000 / n) : 0} kb_per_load=${n ? r1((b.s.changes_bytes - a.s.changes_bytes) / 1024 / n) : 0} ` +
+            `changes_git=${b.s.changes_git - a.s.changes_git} page_updates=${ups} page_ms_per_update=${ups ? r1(tm("changes.render", base) / ups) : 0} ipc_ms_per_call=${n ? r1(tm("changes.ipc", base) / n) : 0}`,
+        );
+      };
+      /** Frame gaps over a window (what a person scrolling or watching would see). */
+      const gapsFor = async (name: string, ms: number) => {
+        const { gaps } = await frames(() => k.sleep(ms));
+        await k.log(`PERF ${name}-frames ${gapLine(gaps)}`);
+      };
+      const scroll = async (name: string, el: HTMLElement | null) => {
+        if (!el) return k.log(`PERF ${name} nothing to scroll`);
+        el.scrollTop = 0;
+        await raf2();
+        const { v: steps, gaps } = await frames(async () => {
+          let i = 0;
+          while (el.scrollTop + el.clientHeight < el.scrollHeight - 2 && i < 600) {
+            el.scrollTop += Math.max(200, el.clientHeight / 2);
+            i++;
+            await new Promise((r) => requestAnimationFrame(r));
+          }
+          return i;
+        });
+        await k.log(`PERF ${name} steps=${steps} height=${el.scrollHeight} ${gapLine(gaps)}`);
+      };
+      await phase("changes-closed-idle", secs * 1000);
+      await gapsFor("changes-closed-idle", 10_000);
+      await k.log("LIVE-START");
+      await k.waitFor("the session busy", () => useStore.getState().sessions.find((x) => x.id === SID)?.status === "busy", 30_000);
+      await k.sleep(3000);
+      await phase("changes-closed-working", secs * 1000);
+      await gapsFor("changes-closed-working", 10_000);
+      await scroll("changes-closed-working-chat-scroll", timeline);
+      const o0 = performance.now();
+      panel("changes");
+      await k.waitFor("the panel's files", () => document.querySelectorAll("[data-changes-panel] [data-change-file]").length > 0, 60_000);
+      await raf2();
+      await k.log(`PERF changes-open open_ms=${Math.round(performance.now() - o0)} files=${document.querySelectorAll("[data-changes-panel] [data-change-file]").length} dom_nodes=${document.querySelector("[data-changes-panel]")?.getElementsByTagName("*").length ?? 0} hunk_lines=${document.querySelectorAll("[data-changes-panel] [data-diff-line]").length}`);
+      await k.sleep(3000);
+      await phase("changes-open-working", secs * 1000);
+      await gapsFor("changes-open-working", 10_000);
+      await scroll("changes-open-working-panel-scroll", document.querySelector<HTMLElement>("[data-changes-body]"));
+      await scroll("changes-open-working-chat-scroll", timeline);
+      await k.log("LIVE-STOP");
+      await k.waitFor("the session idle", () => useStore.getState().sessions.find((x) => x.id === SID)?.status !== "busy", 60_000);
+      await k.sleep(3000);
+      await phase("changes-open-idle", secs * 1000);
+      await gapsFor("changes-open-idle", 10_000);
+      await scroll("changes-open-idle-panel-scroll", document.querySelector<HTMLElement>("[data-changes-body]"));
+      await k.log(`PERF changes-total page_updates=${tm("changes.updates", t0)} page_ms=${r1(tm("changes.render", t0))}`);
+      panel("closed");
+      closeAllTabs();
+      await home();
+    },
+
     async "perf-busy"() {
       closeAllTabs();
       await home();

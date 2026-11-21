@@ -19,7 +19,11 @@ pub struct GitInfo {
     pub staged: Vec<String>,
 }
 
+/// `git` processes started (the perf scenarios count them).
+pub static SPAWNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn run(dir: &Path, args: &[&str], input: Option<&[u8]>) -> Result<(bool, String, String)> {
+    SPAWNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut c = Command::new("git");
     c.arg("-C").arg(dir).arg("--no-optional-locks").args(args).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     // Never ask for anything (a credential, an editor).

@@ -83,7 +83,17 @@ pub fn state_dir(selftest: Option<&crate::selftest::SelfTest>) -> Option<PathBuf
 
 #[tauri::command(async)]
 pub fn changes_load(core: State<'_, Arc<Core>>, target: Target) -> Res<ChangeSet> {
-    with(&core, &target, |e, r| e.load(r))
+    let t = std::time::Instant::now();
+    let r = with(&core, &target, |e, r| e.load(r));
+    if core.selftest.is_some() {
+        use crate::perf::*;
+        bump(&CHANGES_LOADS, 1);
+        bump(&CHANGES_US, t.elapsed().as_micros() as u64);
+        if let Ok(cs) = &r {
+            bump(&CHANGES_BYTES, serde_json::to_vec(cs).map(|v| v.len() as u64).unwrap_or(0));
+        }
+    }
+    r
 }
 
 #[tauri::command(async)]

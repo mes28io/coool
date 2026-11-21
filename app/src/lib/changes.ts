@@ -2,9 +2,10 @@
 // works), the actions, and the requests that open the panel from elsewhere (the turn's "4 files changed").
 // The rules are in changesRules.ts; the engine is crates/core/src/changes.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { api } from "./backend";
+import { addTime } from "./perfCount";
 import type { Chat } from "./chat";
 import type { Provider, Session } from "./types";
 import { sessionKey } from "./types";
@@ -41,13 +42,26 @@ export function useChanges(target: ChangesTarget | null, scope: Scope, tick: unk
   t.current = target;
   const k = targetKey(target);
   const seq = useRef(0);
+  // Main-thread ms from a new set to its layout (perf scenarios, lib/perfCount.ts).
+  const applied = useRef(0);
+  useLayoutEffect(() => {
+    if (!applied.current) return;
+    // Layout included (what the frame after it would pay).
+    void document.querySelector("[data-changes-body]")?.scrollHeight;
+    addTime("changes.render", performance.now() - applied.current);
+    addTime("changes.updates", 1);
+    applied.current = 0;
+  }, [data]);
   const reload = useCallback(async () => {
     const tg = t.current;
     if (!tg) return;
     const my = ++seq.current;
     try {
+      const t0 = performance.now();
       const cs = await api().changesLoad({ ...tg, scope });
+      addTime("changes.ipc", performance.now() - t0);
       if (my === seq.current) {
+        applied.current = performance.now();
         setData(cs);
         setError(null);
       }
