@@ -543,7 +543,7 @@ pub fn selftest_keepalive(core: State<'_, Arc<Core>>, action: String, pid: Optio
                 .iter()
                 .map(|i| {
                     let c = hub.chat(i.id);
-                    serde_json::json!({ "id": i.id, "pid": c.and_then(|c| c.pid), "hosted": c.is_some_and(|c| c.is_hosted()), "running": i.running, "cwd": i.cwd, "session_id": i.session_id })
+                    serde_json::json!({ "id": i.id, "pid": c.and_then(|c| c.pid), "hosted": c.is_some_and(|c| c.is_hosted()), "running": i.running, "state": i.state, "cwd": i.cwd, "session_id": i.session_id })
                 })
                 .collect();
             drop(hub);

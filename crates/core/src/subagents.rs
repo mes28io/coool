@@ -227,6 +227,8 @@ pub(crate) struct Facts {
     /// The parent's newest real event, and whether its turn is still open.
     pub parent_last: Option<u64>,
     pub parent_in_turn: bool,
+    /// The parent's CLI says it is idle (its registry `status: "idle"`: no turn, no background task), since then.
+    pub parent_idle_since: Option<u64>,
     pub now: u64,
 }
 
@@ -239,6 +241,13 @@ pub(crate) struct Facts {
 /// 2. Still running by the record, it reads as not running only on evidence:
 ///    - the parent's process is gone, or is a later run than the agent's last sign of life (a
 ///      subagent runs inside its parent's process and dies with it): quiet;
+///    - the parent's CLI says it is idle (its registry: no turn, no background task) since after the
+///      agent's last sign of life: stopped (foreground) or quiet (background, unless it is inside a
+///      tool call: a CLI that doesn't say `shell` for background agents may still run it). A subagent
+///      runs inside its parent's process, so an idle CLI runs none. This ends an agent cut off with no
+///      end on record in a live `claude -p` session (every coool chat: its transcript has no turn end
+///      record, so the turn rule below only sees the turn close by the registry), which a chat kept
+///      running across coool's restarts otherwise showed as working for as long as its CLI lived;
 ///    - a foreground agent whose parent's turn ended after its last sign of life (the turn waited on
 ///      it, so it was cut off with it): stopped;
 ///    - a background agent, out of any tool call, silent for [`QUIET_MS`] while its parent was too:
@@ -272,6 +281,13 @@ pub(crate) fn state(f: &Facts) -> AgentState {
         return AgentState::Quiet;
     }
     let background = m.background || f.meta_background;
+    // Same clock (both the CLI's): a cut-off agent's last line comes before the turn that dropped it ends.
+    if let (Some(idle), Some(a)) = (f.parent_idle_since, alive_at)
+        && idle > a
+        && !(background && f.in_tool)
+    {
+        return if background { AgentState::Quiet } else { AgentState::Stopped };
+    }
     if !background
         && !f.parent_in_turn
         && let (Some(p), Some(a)) = (f.parent_last, alive_at)
@@ -390,6 +406,33 @@ mod tests {
         assert_eq!(state(&f), Stopped);
         assert_eq!(state(&Facts { parent_in_turn: true, ..f }), Running);
         assert_eq!(state(&Facts { meta_background: true, ..f }), Running, "a background agent outlives the turn");
+    }
+
+    /// A coool chat's CLI (`claude -p`) whose Agent call was cut off (the person denied or stopped it): no end
+    /// on record, `meta.json` never `finished`, and the transcript never closes a turn. Once the CLI says it is
+    /// idle, after the agent's last line, the agent isn't running; while the CLI works or runs background tasks
+    /// it may be.
+    #[test]
+    fn an_idle_cli_runs_no_agent() {
+        let now = T0 + 80 * MIN;
+        // The person's case: cut off at T0, the CLI idle since T0 + 47 min (it answered other messages meanwhile).
+        let cut = Facts { own_last: Some(T0), parent_last: Some(T0 + 47 * MIN), parent_in_turn: true, parent_started: Some(T0 - 8 * MIN), ..live(Marks::default(), now) };
+        assert_eq!(state(&cut), Running, "before: the transcript keeps the turn open for good");
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0 + 47 * MIN), ..cut }), Stopped);
+        // Cut off inside a tool call: stopped all the same. Launched in the background: quiet, unless inside a
+        // tool call (a CLI that doesn't say `shell` for background agents may still run it; silence decides then).
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0 + 47 * MIN), in_tool: true, ..cut }), Stopped);
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0 + 47 * MIN), meta_background: true, ..cut }), Quiet);
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0 + 47 * MIN), meta_background: true, in_tool: true, ..cut }), Running);
+        // Idle only since before the agent's last line (it was launched or wrote after): it may run.
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0 - MIN), ..cut }), Running);
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0), ..cut }), Running, "idle from the instant of its last line, not after");
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0 + 1), ..cut }), Stopped, "right after it (the turn that dropped it ended)");
+        // Busy, waiting or running background tasks: the registry says no idle time, nothing changes.
+        assert_eq!(state(&Facts { parent_idle_since: None, meta_background: true, in_tool: true, ..cut }), Running);
+        // An end on record still decides first.
+        let done = Marks { background: true, start: Some(T0 - MIN), end: Some((T0, Done)) };
+        assert_eq!(state(&Facts { parent_idle_since: Some(T0 + 47 * MIN), marks: done, ..cut }), Done);
     }
 
     /// The record shapes of a real session (invented content): launch, stop, kill notification, failure

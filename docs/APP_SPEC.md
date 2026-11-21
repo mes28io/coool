@@ -757,6 +757,7 @@ Newline-delimited JSON on the socket. The first line must be `{"op":"hello","tok
 - **coool Remote**: in the app (it reads the mirrors). While coool is closed the phone can't reach the chats; after the relaunch it can.
 - **Menu bar item**: in the app; gone while coool is closed, back with it.
 - **Notifications**: posted by the app as events arrive. What happened while coool was closed is not notified again after a relaunch (it is in the timeline).
+- **The row's subagents** (discovery, `subagents::state`): a chat's own transcript (`claude -p`) has no `turn_duration` record, so by the transcript its turn never closes, and a subagent cut off with no end on record (an Agent call denied or stopped, `meta.json` never `finished`) used to read as running for as long as its CLI lived: with chats kept across restarts, hours, so the row, its tab and the title bar's "N working" kept spinning after every turn ended (0.4.1 to 0.4.3). The CLI's registry decides instead: its turn is open while it says `busy` or `waiting`, and once it says `idle` (no turn, no background task) since after an agent's last line, that agent is stopped (foreground) or quiet (background, unless inside a tool call). This is read by the app at every refresh, so a chat taken in from an older host shows right at once. `keepalive-idle-e2e.sh` (stand-in CLIs, `KA_SEED_BIN` for an older first launch, `KA_REAL=1` for the real CLI on Haiku) checks idle and mid-turn hosted chats across a restart and after a turn.
 
 ### Lifecycle and safety
 

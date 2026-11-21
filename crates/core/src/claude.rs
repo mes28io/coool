@@ -342,8 +342,12 @@ impl ClaudeSource {
     /// What [`crate::lanes::assign`] needs of a session that may be a helper (`claude -p`): its turn closed is
     /// its end (a print run has one turn).
     pub(crate) fn child(&self, s: &Session) -> crate::lanes::Child {
-        let v = self.entries.get(&s.id).map(|e| e.slot.view()).unwrap_or_default();
-        let busy = s.status == Status::Busy || v.in_turn;
+        let e = self.entries.get(&s.id);
+        let v = e.map(|e| e.slot.view()).unwrap_or_default();
+        let busy = match e.and_then(|e| e.live.as_ref()).and_then(Live::turn_open) {
+            Some(open) => open,
+            None => s.status == Status::Busy || v.in_turn,
+        };
         let last = v.last_event.or(s.last_event);
         let failed = s.activity.last().is_some_and(|a| a.kind == ActivityKind::Error && !a.step);
         crate::lanes::Child {
@@ -404,6 +408,8 @@ fn parse_registry(p: &Path) -> Option<RegEntry> {
         // CLI's own UI shows that as working). `waiting`: blocked on the person.
         shell: v["status"].as_str() == Some("shell"),
         waiting_for: (v["status"].as_str() == Some("waiting")).then(|| v["waitingFor"].as_str().unwrap_or("input").to_string()),
+        said: v["status"].as_str().is_some(),
+        idle_since: (v["status"].as_str() == Some("idle")).then(|| v["statusUpdatedAt"].as_u64().or(v["updatedAt"].as_u64())).flatten(),
         entrypoint: v["entrypoint"].as_str().map(str::to_string),
     };
     Some((pid, sid.to_string(), v["startedAt"].as_u64(), live))
@@ -442,7 +448,8 @@ fn session(id: &str, e: &Entry) -> Session {
                 parent_live: status != Status::Ended,
                 parent_started: e.live.as_ref().and_then(|r| r.started_at),
                 parent_last: v.last_event,
-                parent_in_turn: status == Status::Busy || v.in_turn,
+                parent_in_turn: e.live.as_ref().and_then(Live::turn_open).unwrap_or(status == Status::Busy || v.in_turn),
+                parent_idle_since: e.live.as_ref().and_then(|r| r.idle_since),
                 now,
             };
             // Before the parse knows anything, `meta.json` alone says how it stands (as before).
@@ -606,7 +613,20 @@ struct Live {
     busy: bool,
     shell: bool,
     waiting_for: Option<String>,
+    /// The registry has a `status` at all (older CLIs wrote none).
+    said: bool,
+    /// `status: "idle"`: no turn, nothing waiting on the person and no background task (that is `shell`), since
+    /// this (`statusUpdatedAt`, epoch ms).
+    idle_since: Option<u64>,
     entrypoint: Option<String>,
+}
+
+impl Live {
+    /// Whether the CLI's turn is open, by the CLI's own word (its registry status), when it says. A `claude -p`
+    /// transcript (every coool chat's) has no `turn_duration` record, so its turn never closes by the transcript.
+    fn turn_open(&self) -> Option<bool> {
+        self.said.then_some(self.busy || self.waiting_for.is_some())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1422,6 +1442,77 @@ mod tests {
         );
         assert!(s.agents.iter().all(|a| a.current.is_none()));
         assert_eq!(s.agents[4].last_event, parse_rfc3339_ms("2026-11-20T10:31:30Z"));
+    }
+
+    /// A coool chat (`claude -p`, still running): its transcript has no `turn_duration` record, so by the
+    /// transcript its turn never closes. An Agent call cut off in it (denied: no end on record, `meta.json` never
+    /// `finished`) read as running for as long as the CLI lived, which a chat kept across coool's restarts made
+    /// hours: its row showed working although every turn ended. The CLI's registry decides instead: idle since after
+    /// the agent's last line, the agent stopped; busy, it may still run.
+    #[test]
+    fn an_agent_cut_off_in_a_live_print_session_ends_when_the_cli_is_idle() {
+        let root = std::env::temp_dir().join(format!("coool-print-agent-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let proj = root.join("projects").join("-tmp-proj");
+        let sub = proj.join("s-print").join("subagents");
+        fs::create_dir_all(&sub).unwrap();
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        // This test process plays the chat's live CLI; everything happens after it started (else it reads as a
+        // later run of the CLI than the agent's).
+        let pid = std::process::id();
+        let started = crate::util::process_start_ms(pid).unwrap_or(0);
+        let at = |ms: u64| {
+            let (days, rem) = ((ms / 1000 / 86_400) as i64, ms / 1000 % 86_400);
+            // Civil from days (Howard Hinnant's algorithm).
+            let z = days + 719_468;
+            let era = z.div_euclid(146_097);
+            let doe = z - era * 146_097;
+            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            let y = yoe + era * 400 + i64::from(m <= 2);
+            format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem / 60 % 60, rem % 60, ms % 1000)
+        };
+        let t = |s: u64| started + 2_000 + s * 1000;
+        let id = "a4588732500000000";
+        let rec = |ms: u64, kind: &str, body: &str| format!(r#"{{"type":"{kind}","sessionId":"s-print","cwd":"/tmp/proj","entrypoint":"sdk-cli","timestamp":"{}",{body}}}"#, at(ms));
+        let transcript = [
+            rec(t(0), "user", r#""message":{"role":"user","content":"look into it"}"#),
+            rec(t(1), "assistant", r#""message":{"model":"claude-opus-5-5","id":"m1","content":[{"type":"tool_use","id":"toolu_1","name":"Agent","input":{"description":"look","prompt":"look","subagent_type":"general-purpose"}}],"usage":{"input_tokens":1,"output_tokens":1}}"#),
+            rec(t(4), "user", r#""message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"User rejected tool use","is_error":true}]},"toolUseResult":"User rejected tool use""#),
+            // A later turn, answered (a print session writes `stop_hook_summary`, never `turn_duration`).
+            rec(t(30), "user", r#""message":{"role":"user","content":"hey"}"#),
+            rec(t(33), "assistant", r#""message":{"model":"claude-opus-5-5","id":"m2","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":1,"output_tokens":1}}"#),
+            format!(r#"{{"type":"system","subtype":"stop_hook_summary","timestamp":"{}"}}"#, at(t(34))),
+        ];
+        fs::write(proj.join("s-print.jsonl"), transcript.join("\n") + "\n").unwrap();
+        fs::write(sub.join(format!("agent-{id}.meta.json")), r#"{"agentType":"general-purpose","description":"look","toolUseId":"toolu_1","requestShape":"foreground","model":"opus"}"#).unwrap();
+        let line = |ms: u64| format!(r#"{{"type":"assistant","isSidechain":true,"agentId":"{id}","timestamp":"{}","message":{{"model":"claude-opus-5-5","id":"m-{ms}","content":[{{"type":"text","text":"x"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#, at(ms));
+        fs::write(sub.join(format!("agent-{id}.jsonl")), format!("{}\n{}\n", line(t(2)), line(t(4)))).unwrap();
+        let n = std::cell::Cell::new(0usize);
+        let reg = |status: &str, ms: u64| {
+            // A different length each time, so the registry memo sees a change within the same instant.
+            n.set(n.get() + 1);
+            let pad = " ".repeat(n.get());
+            fs::write(root.join("sessions").join(format!("{pid}.json")), format!(r#"{{"pid":{pid},"sessionId":"s-print","cwd":"/tmp/proj","startedAt":{started},"kind":"interactive","entrypoint":"sdk-cli","status":"{status}","statusUpdatedAt":{ms},"updatedAt":{ms}}}{pad}"#)).unwrap();
+        };
+        let mut src = ClaudeSource::with_root(root.clone(), Duration::from_secs(30 * 86_400));
+        let mut look = || {
+            let s = src.refresh().into_iter().find(|s| s.id == "s-print").expect("session");
+            (s.status, s.agents.iter().map(|a| a.state).collect::<Vec<_>>())
+        };
+        // Its turn is going (the CLI says busy): the agent may be running.
+        reg("busy", t(31));
+        assert_eq!(look(), (Status::Busy, vec![AgentState::Running]));
+        // The CLI idle since its last turn ended: the agent isn't running, so nothing makes the session look busy.
+        reg("idle", t(34));
+        assert_eq!(look(), (Status::Idle, vec![AgentState::Stopped]));
+        // Background tasks running (`shell`): the turn is over, so the cut-off foreground agent stays stopped.
+        reg("shell", t(40));
+        assert_eq!(look(), (Status::Idle, vec![AgentState::Stopped]));
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// Read-only check against a real session: `COOOL_SESSION=<id> cargo test -p coool-core --lib
