@@ -403,6 +403,23 @@ def changes_turn(prompt, start):
     result(start)
 
 
+def long_reply_turn(prompt, start):
+    """Ten tool uses, one file edited, then a long reply: the composer-typing self-test (app/src/selftestTyping.ts)."""
+    time.sleep(0.4)
+    for i in range(9):
+        tool("Read", {"file_path": str(CWD / "a.txt")}, f"line {i}\n", pause=0.15)
+    edit_file("a.txt", "line 3\n", "line three\n")
+    paras = []
+    for i in range(14):
+        paras.append(f"**Step {i + 1}.** The environment variable is read once at start, then cached; the loader walks the folders in order and "
+                     f"keeps the first match, so a value set in the shell wins over the one in the file. Item {i + 1} of the list checks that.")
+        if i % 4 == 2:
+            paras.append("```sh\nexport COOOL_EXAMPLE=1\nnpm test -- --watch=false\n```")
+    text("\n\n".join(paras))
+    title("A long reply")
+    result(start, turns=10)
+
+
 def generic_turn(prompt, start):
     text("Done.")
     result(start)
@@ -418,6 +435,8 @@ def run_turn(prompt):
     try:
         if "changes demo" in low:
             changes_turn(prompt, start)
+        elif "long reply" in low:
+            long_reply_turn(prompt, start)
         elif "march" in low:
             invoices_turn(prompt, start)
         elif "browser panel" in low:

@@ -19,6 +19,7 @@ import { InfoPanel, type InfoTab } from "./InfoPanel";
 import { useInfoRequest } from "../lib/infoRequest";
 import { flushLocal, steer } from "../lib/steer";
 import { takeDraft } from "../lib/drafts";
+import { fitTextarea } from "../lib/fitTextarea";
 import { SteerStrip } from "./SteerStrip";
 import { LidAskBanner } from "./LidAskBanner";
 import { asksBeforeActing } from "../lib/lid";
@@ -146,11 +147,9 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   useEffect(() => void listenDrops().catch(() => {}), []);
   const voiceId = useVoiceField(ta, { inline: true, send: () => sendRef.current() });
 
+  // Fits its text without moving the timeline above (lib/fitTextarea.ts).
   useLayoutEffect(() => {
-    const el = ta.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = Math.min(200, el.scrollHeight) + "px";
+    if (ta.current) fitTextarea(ta.current, 200);
   }, [text]);
   useEffect(() => {
     if (focused && !disabled) ta.current?.focus({ preventScroll: true });

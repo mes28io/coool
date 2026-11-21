@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { api } from "../lib/backend";
+import { fitTextarea } from "../lib/fitTextarea";
 import { useStore } from "../store";
 import { IArrowUp } from "./icons";
 import { cx, Kbd } from "./primitives";
@@ -14,10 +15,7 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
   useVoiceField(ta);
 
   useLayoutEffect(() => {
-    const el = ta.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = Math.min(180, el.scrollHeight) + "px";
+    if (ta.current) fitTextarea(ta.current, 180);
   }, [text]);
 
   const send = async () => {
