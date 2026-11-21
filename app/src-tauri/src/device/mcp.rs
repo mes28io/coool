@@ -40,7 +40,7 @@ pub struct Mcp {
     providers: Mutex<HashMap<usize, &'static str>>,
 }
 
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut b = [0u8; 16];
     if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_err() {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
@@ -185,14 +185,20 @@ fn serve(devices: Arc<Devices>, conn: UnixStream) {
 
 /// Runs in the chat's CLI as its MCP server process: connects to the app and pipes stdio both ways.
 pub fn proxy() -> i32 {
-    let (Some(sock), Some(token)) = (std::env::var_os(SOCKET_ENV), std::env::var(TOKEN_ENV).ok()) else {
-        eprintln!("coool-device: started without {SOCKET_ENV} / {TOKEN_ENV} (coool sets these for chats it starts)");
+    proxy_with(SOCKET_ENV, TOKEN_ENV, SERVER_NAME)
+}
+
+/// The same relay for another of coool's per-chat servers (`coool-ladder`): its socket and token come from
+/// `socket_env` / `token_env`.
+pub fn proxy_with(socket_env: &str, token_env: &str, name: &str) -> i32 {
+    let (Some(sock), Some(token)) = (std::env::var_os(socket_env), std::env::var(token_env).ok()) else {
+        eprintln!("{name}: started without {socket_env} / {token_env} (coool sets these for chats it starts)");
         return 2;
     };
     let mut conn = match UnixStream::connect(&sock) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("coool-device: coool isn't reachable ({e}); is the app still running?");
+            eprintln!("{name}: coool isn't reachable ({e}); is the app still running?");
             return 1;
         }
     };

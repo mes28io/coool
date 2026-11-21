@@ -122,7 +122,7 @@ pub struct HelperOf {
 }
 
 /// A chat's Ladder settings, as the app sends them in [`crate::chat::ChatOptions::ladder`] (None: off).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ladder {
     /// The lead's model as shown ("Opus 5.5"); empty: the CLI's default.
     #[serde(default)]
@@ -155,6 +155,14 @@ pub struct Ladder {
     /// This chat is a helper started by `spawn`.
     #[serde(default)]
     pub helper: Option<HelperOf>,
+    /// Settings > Ladder "Keep in reserve": `can` and `spawn` refuse a provider once any of its windows has less than
+    /// this percent left.
+    #[serde(default = "default_reserve")]
+    pub reserve: f64,
+    /// Settings > Ladder "Helpers may use Bypass": a `spawn` helper of a chat in Bypass runs in Bypass too (off: it
+    /// runs in Accept edits). Never lifts a chat that isn't in Bypass.
+    #[serde(default)]
+    pub bypass_helpers: bool,
 }
 
 fn default_max() -> u32 {
@@ -166,10 +174,13 @@ fn default_depth() -> u32 {
 fn yes() -> bool {
     true
 }
+fn default_reserve() -> f64 {
+    budget::DEFAULT_RESERVE
+}
 
 impl Default for Ladder {
     fn default() -> Self {
-        Self { lead: String::new(), tiers: Vec::new(), cross: Vec::new(), image: None, max_parallel: default_max(), verify_tests: true, depth: default_depth(), swarm: true, tools: false, helper: None }
+        Self { lead: String::new(), tiers: Vec::new(), cross: Vec::new(), image: None, max_parallel: default_max(), verify_tests: true, depth: default_depth(), swarm: true, tools: false, helper: None, reserve: default_reserve(), bypass_helpers: false }
     }
 }
 

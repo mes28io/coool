@@ -16,6 +16,7 @@ mod browser;
 mod device;
 mod env;
 mod glass;
+mod ladder;
 mod lid;
 mod login;
 mod menubar;
@@ -116,6 +117,8 @@ struct Core {
     browsers: browser::Browsers,
     /// Context maps of the transcripts whose Models panel is open (see `context_map`).
     contexts: Mutex<coool_core::context::ContextMaps>,
+    /// Ladder's `coool-ladder` MCP server: budget, preflight, helpers (see [`ladder`]).
+    ladder: Arc<ladder::State>,
 }
 
 /// The last payload the UI got, per session, so the next refresh sends only
@@ -305,6 +308,8 @@ struct ChatRow {
     state: ChatState,
     running: bool,
     pid: Option<u32>,
+    /// A Ladder helper started by another chat's `spawn` (APP_SPEC "Ladder"): its caller, depth and model.
+    helper: Option<ladder::HelperRow>,
 }
 
 #[derive(Clone, Serialize)]
@@ -365,6 +370,8 @@ impl Core {
                     Some(PtyInfo { id, provider: m.provider, project: coool_core::project::project_root(&m.cwd), cwd: m.cwd.clone(), running: m.is_running(), started })
                 })
                 .collect();
+            // Helpers whose caller is gone stop (no orphan keeps spending).
+            self.ladder.reap(&mut hub);
             let chats: Vec<ChatRow> = hub
                 .chats()
                 .into_iter()
@@ -379,6 +386,7 @@ impl Core {
                     permission_mode: none_if_empty(c.permission_mode),
                     state: c.state,
                     running: c.running,
+                    helper: self.ladder.helper_row(c.id),
                 })
                 .collect();
             // Chats the Hub no longer holds: stop pumping them once their exit went out.
@@ -1722,6 +1730,13 @@ pub fn device_mcp_proxy() -> i32 {
     device::mcp::proxy()
 }
 
+/// `coool --coool-ladder-mcp`: a chat's `coool-ladder` MCP server process, relaying to the app (ladder.rs).
+pub fn ladder_mcp_proxy() -> i32 {
+    ladder::proxy()
+}
+
+pub const LADDER_MCP_FLAG: &str = ladder::PROXY_FLAG;
+
 /// `coool --coool-pilot-eval <file>`: a pilot decision log's summary (device/pilot/dataset.rs).
 pub fn pilot_eval_report(file: &std::path::Path) -> String {
     device::pilot::dataset::report(file)
@@ -1818,6 +1833,7 @@ pub fn run() {
         previews: artifact::Previews::default(),
         browsers: browser::Browsers::default(),
         contexts: Mutex::default(),
+        ladder: Arc::default(),
     });
 
     perf::boot_mark("core");
@@ -1970,6 +1986,7 @@ pub fn run() {
             selftest::selftest_request_quit,
             trace::trace_sessions,
             motion::motion_hints,
+            ladder::ladder_status,
             glass::glass_set,
             artifact::artifact_status,
             artifact::artifact_window,
@@ -2083,7 +2100,18 @@ pub fn run() {
                 devices.gate.set_timeout(std::time::Duration::from_millis(ms));
             }
             let d = devices.clone();
-            c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, cwd, provider| d.mcp.server_for(id, cwd, provider).into_iter().collect())));
+            // Ladder's tools (budget, can, spawn) on their own socket, beside the device server.
+            let ladder_dir = match &c.selftest {
+                Some(t) => Some(t.dir().join(".coool-ladder-mcp")),
+                None => handle.path().app_local_data_dir().ok(),
+            };
+            if let Some(dir) = ladder_dir
+                && let Err(e) = ladder::start(&c, &handle, &dir)
+            {
+                eprintln!("coool: ladder MCP server not started: {e}");
+            }
+            let lad = c.ladder.clone();
+            c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, opts| d.mcp.server_for(id, &opts.cwd, opts.provider).into_iter().chain(lad.server_for(id, opts)).collect())));
             // Voice (APP_SPEC "Voice"): its folder (the self-test's own during a run) and the Fn key watcher.
             voice::init(&handle, c.selftest.as_ref().map(|t| t.dir()));
             // coool Remote (docs/REMOTE.md): off unless the person turned it on.
@@ -2151,6 +2179,7 @@ pub fn run() {
             update::on_exit(handle);
             let devices = handle.state::<Arc<device::Devices>>();
             device::mcp::cleanup(&devices);
+            ladder::cleanup(&core);
             devices.shutdown_all();
         }
         _ => {}
