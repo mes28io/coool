@@ -71,6 +71,7 @@ import { contextScenarios } from "./selftestContext";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
 import { changesScenarios } from "./selftestChanges";
+import { keepaliveScenarios } from "./selftestKeepalive";
 import { coverOf, launchTrace, useUpdates } from "./lib/update";
 
 interface Config {
@@ -7782,6 +7783,10 @@ for (const n of ["film", "film-measure", "film-probe"]) {
 for (const n of ["changes", "changes-codex"]) {
   scenarios[n] = (c: Ctx) => changesScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })[n]();
 }
+
+// `ka-*` (selftestKeepalive.ts): chats that outlive the app, across quits, a kill and an update's restart
+// (app/scripts/keepalive-e2e.sh). Real model calls on the cheapest models. Not in `all`.
+Object.assign(scenarios, keepaliveScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), log, invoke: (c, a) => invoke(c, a) }));
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

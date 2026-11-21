@@ -2088,6 +2088,7 @@ pub fn run() {
             selftest::selftest_log,
             selftest::selftest_chat_launch,
             selftest::selftest_ladder,
+            selftest::selftest_keepalive,
             selftest::selftest_shot,
             selftest::film::selftest_film,
             selftest::selftest_window,

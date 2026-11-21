@@ -526,6 +526,45 @@ pub fn selftest_ladder(core: State<'_, Arc<Core>>, action: String, chat: Option<
     }
 }
 
+/// The keep-alive scenarios (app/src/selftestKeepalive.ts; APP_SPEC "Chats that outlive the app"):
+/// - `pids`: this app's pid, the chat hosts it is connected to, and every chat (id, CLI pid, hosted, running, cwd).
+/// - `alive`: whether process `pid` exists (the CLI after a quit, from the next launch).
+/// - `note_set` / `note_get`: a small JSON value kept in the test folder across launches (`keepalive-notes.json`).
+#[tauri::command(async)]
+pub fn selftest_keepalive(core: State<'_, Arc<Core>>, action: String, pid: Option<u32>, key: Option<String>, value: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    let t = active(&core)?;
+    let notes = t.dir.join("keepalive-notes.json");
+    let read = || std::fs::read(&notes).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()).unwrap_or_else(|| serde_json::json!({}));
+    match action.as_str() {
+        "pids" => {
+            let hub = core.hub.lock().unwrap();
+            let chats: Vec<serde_json::Value> = hub
+                .chats()
+                .iter()
+                .map(|i| {
+                    let c = hub.chat(i.id);
+                    serde_json::json!({ "id": i.id, "pid": c.and_then(|c| c.pid), "hosted": c.is_some_and(|c| c.is_hosted()), "running": i.running, "cwd": i.cwd, "session_id": i.session_id })
+                })
+                .collect();
+            drop(hub);
+            Ok(serde_json::json!({ "app": std::process::id(), "hosts": crate::chathost::host_pids(&core), "chats": chats, "keep": core.keep_chats.load(std::sync::atomic::Ordering::Relaxed) }))
+        }
+        "alive" => {
+            let p = pid.ok_or("pid is required")?;
+            // SAFETY: signal 0 only checks whether the process exists.
+            Ok(serde_json::json!(p > 0 && unsafe { libc::kill(p as i32, 0) } == 0))
+        }
+        "note_set" => {
+            let mut v = read();
+            v[key.ok_or("key is required")?] = value.unwrap_or_default();
+            std::fs::write(&notes, serde_json::to_vec_pretty(&v).unwrap_or_default()).map_err(|e| e.to_string())?;
+            Ok(serde_json::Value::Null)
+        }
+        "note_get" => Ok(read()[key.ok_or("key is required")?].clone()),
+        _ => Err(format!("unknown action {action}")),
+    }
+}
+
 /// Counters and resource use for the `perf-*` scenarios (see `crate::perf`).
 #[derive(Serialize)]
 pub struct PerfStats {
