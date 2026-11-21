@@ -33,8 +33,15 @@ fi
 app="$target/release/bundle/macos/coool.app"
 [ -d "$app" ] || { echo "package.sh: $app is missing" >&2; exit 1; }
 # One signature over the whole bundle, so the installer's `codesign --verify --deep` has something to check.
-codesign --force --deep --sign - "$app"
+# Ad-hoc, with a designated requirement on the bundle id alone: macOS privacy grants (Files & Folders, Full Disk
+# Access) are keyed on that requirement, and an ad-hoc default one is the build's hash, so every update silently
+# lost the Desktop/Documents grant and chats there failed with EPERM after a restart.
+codesign --force --deep --sign - -r='designated => identifier "sh.coool.app"' "$app"
 codesign --verify --deep --strict "$app"
+codesign -d -r- "$app" 2>&1 | grep -q 'designated => identifier "sh.coool.app"' || {
+  echo "package.sh: the designated requirement is not the bundle id" >&2
+  exit 1
+}
 
 mkdir -p dist
 out="dist/coool-macos-arm64.tar.gz"
