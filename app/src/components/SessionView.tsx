@@ -20,7 +20,7 @@ import { displayTitle, folderName, titleWas } from "../lib/format";
 import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
-import { BROWSER_CHAT_MIN, BROWSER_MIN, DEVICE_MIN, MAC_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
+import { BROWSER_CHAT_MIN, BROWSER_MIN, CONTEXT_MIN, DEVICE_MIN, MAC_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
 import { liveTime, Timeline, ThinkingRow } from "./Activity";
 import { AgentsButton } from "./AgentsButton";
 import { AgentsBody } from "./AgentsPanel";
@@ -28,7 +28,9 @@ import { RightPanel, type RightKind } from "./RightPanel";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IMac, IPhone, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IContext, IMac, IPhone, ITerminal } from "./icons";
+import { ContextPanelBody } from "./ContextPanel";
+import type { CtxTarget } from "../lib/chatContext";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
 import { SessionSkeleton, Skel } from "./Skeletons";
 import { ContextMeter, cx, ease, IconButton, PathText } from "./primitives";
@@ -115,6 +117,8 @@ export function SessionView({
   const browserFits = paneW >= BROWSER_MIN + (axisOf("browser") === "y" ? 0 : BROWSER_CHAT_MIN);
   const deviceFits = paneW >= DEVICE_MIN + (axisOf("device") === "y" ? 0 : BROWSER_CHAT_MIN);
   const macFits = axisOf("mac") === "y" ? paneW >= BROWSER_MIN : paneW >= MAC_MIN + BROWSER_CHAT_MIN;
+  // The Context panel: beside a readable chat, or below it at any width.
+  const contextFits = axisOf("context") === "y" || paneW >= CONTEXT_MIN + BROWSER_CHAT_MIN;
   const cards = useAgentCards(r.session, chat);
   const ladderTiers = useChatTiers(r.chat);
   const panelKey = r.session ? sessionKey(r.session) : r.chat !== null ? `chat:${r.chat}` : null;
@@ -151,6 +155,8 @@ export function SessionView({
   const setDeviceWidth = useStore((st) => st.setDeviceWidth);
   const macWidth = useStore((st) => st.macWidth);
   const setMacWidth = useStore((st) => st.setMacWidth);
+  const contextWidth = useStore((st) => st.contextWidth);
+  const setContextWidth = useStore((st) => st.setContextWidth);
   const showing: RightKind | null =
     panelState === "browser" && tabs && browserFits
       ? "browser"
@@ -158,6 +164,8 @@ export function SessionView({
         ? "device"
         : panelState === "mac" && macFits
           ? "mac"
+          : panelState === "context" && contextFits
+          ? "context"
           : !wide
           ? null
           : panelState === "agents" && hasAgents
@@ -174,6 +182,7 @@ export function SessionView({
   const browserOpen = showing === "browser";
   const deviceOpen = showing === "device";
   const macOpen = showing === "mac";
+  const contextOpen = showing === "context";
   // The chat's agent driving its iPhone: the panel shows that device, and opens if no panel is showing (not again in the
   // same stretch of activity once the person closed it); when another panel is showing, the iPhone button lights up.
   const [phoneBusy, setPhoneBusy] = useState(false);
@@ -259,7 +268,9 @@ export function SessionView({
         ? Math.max(DEVICE_MIN, Math.min(deviceWidth, paneW - deviceChatMin))
         : k === "mac"
           ? Math.max(MAC_MIN, Math.min(macWidth, paneW - BROWSER_CHAT_MIN))
-          : agentsWidth;
+          : k === "context"
+            ? Math.max(CONTEXT_MIN, Math.min(contextWidth, paneW - BROWSER_CHAT_MIN))
+            : agentsWidth;
   const onPanelWidth = (k: RightKind, w: number) =>
     k === "browser"
       ? setBrowserWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
@@ -267,7 +278,9 @@ export function SessionView({
         ? setDeviceWidth(Math.min(w, paneW - deviceChatMin))
         : k === "mac"
           ? setMacWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
-          : setAgentsWidth(w);
+          : k === "context"
+            ? setContextWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
+            : setAgentsWidth(w);
   // Artifact cards' Open and links in this view open in a tab of its browser panel.
   const openPage = useCallback(
     (p: OpenPage) => {
@@ -306,6 +319,12 @@ export function SessionView({
     if (!deviceFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the iPhone with the chat" : "Make this pane wider to show the iPhone beside the chat");
     setPanel("device");
   };
+  const onContext = () => {
+    if (!panelKey) return;
+    if (contextOpen) return setPanel("closed");
+    if (!contextFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the chat's context with it" : "Make this pane wider to show the chat's context beside it");
+    setPanel("context");
+  };
   const onMac = () => {
     if (!panelKey) return;
     if (macOpen) return setPanel("closed");
@@ -314,6 +333,10 @@ export function SessionView({
   };
 
   const { session, pty, starting, startingChat } = r;
+  const ctxProvider: Provider = session?.provider ?? chat?.provider ?? startingChat?.provider ?? starting?.provider ?? "claude";
+  const ctxCwd = session?.cwd ?? chat?.cwd ?? startingChat?.cwd ?? starting?.cwd ?? "";
+  const ctxSession = chat?.sessionId ?? session?.id ?? null;
+  const ctxTarget: CtxTarget = useMemo(() => ({ provider: ctxProvider, cwd: ctxCwd, chat: r.chat, sessionId: ctxSession }), [ctxProvider, ctxCwd, r.chat, ctxSession]);
   const isChat = r.chat !== null;
   const hasTerm = pty !== null;
   const mode: ViewMode = !hasTerm ? "activity" : (stored ?? (isChat ? "activity" : running ? "terminal" : "activity"));
@@ -409,6 +432,11 @@ export function SessionView({
           </div>
         </div>
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
+        {panelKey && cwd && (
+          <IconButton title={contextOpen ? "Hide this chat's context" : "This chat's context: folder, instructions, memory, skills, model"} active={contextOpen} onClick={onContext}>
+            <IContext size={18} />
+          </IconButton>
+        )}
         {panelKey && (
           <IconButton
             title={browserOpen ? "Hide the browser" : `Show the browser${browserBusy ? " (the agent is using it)" : pageName(tabs ?? lastTabs) ? ` (${pageName(tabs ?? lastTabs)})` : ""}`}
@@ -522,7 +550,7 @@ export function SessionView({
           ) : null}
         </div>
         </AttachSource.Provider>
-        {(wide || browserFits || deviceFits || macFits) && panelKey && (
+        {(wide || browserFits || deviceFits || macFits || contextFits) && panelKey && (
           <RightPanel
             which={showing}
             width={panelWidth}
@@ -541,6 +569,22 @@ export function SessionView({
                 <DevicePanel panelKey={panelKey} chat={r.chat} active={active} onClose={() => setPanel("closed")} />
               ) : k === "mac" ? (
                 <MacPanel chat={r.chat} active={active} onClose={() => setPanel("closed")} />
+              ) : k === "context" ? (
+                <ContextPanelBody
+                  key={`${ctxTarget.provider}:${ctxTarget.cwd}:${ctxTarget.chat ?? ""}`}
+                  target={ctxTarget}
+                  active={active}
+                  model={model}
+                  onChangeModel={
+                    chat
+                      ? () => {
+                          const b = root?.querySelector("[data-model-chip]")?.closest("button");
+                          if (b instanceof HTMLButtonElement && !b.disabled) b.click();
+                          else useStore.getState().toast("The model can be switched in the composer once the chat is ready");
+                        }
+                      : undefined
+                  }
+                />
               ) : (
                 <ModelsPanelBody data={models ?? { main: [], agents: [] }} current={model} cards={cards} history={chat?.usageHistory} context={context} window={chat?.contextWindow} map={contextMapProps(session, chat)} />
               )

@@ -8,6 +8,7 @@ import { DEPTHS, LADDER, LADDER_LINE, ladderOn, MAX_PARALLEL, sameLadder, setCha
 import { ROLE_LINE, rolesWord, tierRows, type LadderCap, type LadderTier } from "../lib/ladderTiers";
 import { LadderBudget } from "./LadderBudget";
 import { useSeenModels } from "../lib/prefs";
+import { useLaunchedContext } from "../lib/agentContext";
 import { useStore } from "../store";
 import { ICaret } from "./icons";
 import { Chip, cx, Popover } from "./primitives";
@@ -20,6 +21,7 @@ export function LadderChip({ chat, disabled }: { chat: Chat; disabled?: string |
   const own = useChatLadder(chat);
   const prefs = useLadderPrefs();
   const launched = useLaunchedLadder(chat.id);
+  const context = useLaunchedContext(chat.id);
   const lead = chat.model || null;
   const on = ladderOn(own, prefs);
   const preview = useLadderPreview(chat.provider, lead, own);
@@ -121,6 +123,11 @@ export function LadderChip({ chat, disabled }: { chat: Chat; disabled?: string |
             </>
           )}
           {differs && <div className="text-small text-faint">Applies when this chat next starts or resumes.</div>}
+          {context !== undefined && (
+            <div className="border-t border-hairline pt-2.5 text-small text-dim" data-context-state={context ? "on" : "off"}>
+              {context ? "This chat was told about coool: its devices, the pilot, where you see it." : "This chat wasn’t told about coool (Settings > Ladder)."}
+            </div>
+          )}
           <button
             type="button"
             className="self-start text-small text-dim underline-offset-2 hover:text-fg hover:underline"

@@ -396,6 +396,8 @@ export interface ChatOptions {
   permission_mode?: string | null;
   /** Ladder (APP_SPEC "Ladder"): the tier table and limits handed to the CLI at launch; null/absent: off. */
   ladder?: import("./ladderTiers").LadderOptions | null;
+  /** The coool context (APP_SPEC "coool context"): `{}` on (the backend fills in what the chat has); null/absent: off. */
+  context?: Record<string, never> | null;
 }
 
 export interface InsightsStatus {

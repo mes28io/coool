@@ -537,6 +537,32 @@ pub fn read(home: &Path, project: Option<&Path>) -> Connections {
     Connections { claude: read_claude(home, project), codex: read_codex(home) }
 }
 
+/// Claude Code plugins that are installed and turned on for `project` (user, project and local settings; a later
+/// file wins): (name, install folder). Read only, like the rest of this module; the Context panel lists their skills.
+pub fn enabled_plugins(home: &Path, project: Option<&Path>) -> Vec<(String, PathBuf)> {
+    let f = files(home, project);
+    let mut c = ProviderConn::default();
+    let mut on: BTreeMap<String, bool> = BTreeMap::new();
+    for (path, label) in &f.settings {
+        let Some(v) = load_json(&mut c, home, path, label) else { continue };
+        for (name, en) in v.get("enabledPlugins").and_then(Value::as_object).into_iter().flatten() {
+            on.insert(name.clone(), en.as_bool().unwrap_or(false));
+        }
+    }
+    let Some(v) = load_json(&mut c, home, &f.installed, "Installed plugins") else { return Vec::new() };
+    let mut out = Vec::new();
+    for (full, entry) in v.get("plugins").and_then(Value::as_object).into_iter().flatten() {
+        if on.get(full) != Some(&true) {
+            continue;
+        }
+        let first = entry.as_array().and_then(|a| a.first()).unwrap_or(entry);
+        if let Some(p) = first.get("installPath").and_then(Value::as_str) {
+            out.push((full.split('@').next().unwrap_or(full).to_string(), PathBuf::from(p)));
+        }
+    }
+    out
+}
+
 /// [`read`] for the real home folder.
 pub fn read_default(project: Option<&Path>) -> Connections {
     match dirs::home_dir() {

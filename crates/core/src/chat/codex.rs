@@ -179,6 +179,18 @@ pub(crate) struct Codex {
     pub(crate) client_name: String,
     /// Ladder's policy (APP_SPEC "Ladder"), sent as `developerInstructions` after the person's own; None: off.
     pub(super) ladder: Option<String>,
+    /// The coool context (APP_SPEC "coool context"), sent after Ladder's policy; None: off. Set by the launch.
+    pub(crate) context: Option<String>,
+}
+
+/// Ladder's part of what coool adds to a Codex thread's `developerInstructions` (after the person's own); the coool
+/// context ([`crate::agent_context`]) is set on the backend at launch, and [`Codex::instructions`] joins the two.
+/// The Context panel's launch record ([`crate::chatctx::Launch::developer_instructions`]) is built from the same
+/// two functions in [`super::Chat::launch_record`], so it shows what the thread gets. Each part starts with its own
+/// `# ` heading (the panel splits on them). `ladder_root`: coool's plugin folder, where the playbook the policy points
+/// at is written (None: a short inline guide).
+pub(crate) fn coool_instructions(opts: &ChatOptions, ladder_root: Option<&std::path::Path>) -> Option<String> {
+    opts.ladder.as_ref().map(|l| crate::ladder::codex_policy(l, std::path::Path::new(&opts.cwd), ladder_root))
 }
 
 impl Codex {
@@ -217,7 +229,8 @@ impl Codex {
             stopping: false,
             plans: 0,
             client_name: crate::origin::CLIENT_NAME.to_string(),
-            ladder: opts.ladder.as_ref().map(|l| crate::ladder::codex_policy(l, std::path::Path::new(&opts.cwd), None)),
+            ladder: coool_instructions(opts, None),
+            context: None,
         };
         if let Some(m) = &opts.permission_mode {
             let m = approval_policy(m);
@@ -228,6 +241,11 @@ impl Codex {
             }
         }
         c
+    }
+
+    /// coool's developer instructions for the thread: Ladder's policy, then the coool context (None: neither is on).
+    fn instructions(&self) -> Option<String> {
+        crate::agent_context::join_prompts(self.ladder.as_deref(), self.context.as_deref())
     }
 
     fn request(&mut self, method: &str, params: Value, kind: Req, o: &mut Out) {
@@ -291,8 +309,8 @@ impl Codex {
     /// `developerInstructions` replaces the configured value for this thread).
     fn start_thread_with(&mut self, theirs: Option<&str>, o: &mut Out) {
         let mut p = json!({"cwd": self.cwd});
-        if let Some(l) = &self.ladder {
-            p["developerInstructions"] = json!(crate::ladder::merge_instructions(theirs, l));
+        if let Some(ours) = self.instructions() {
+            p["developerInstructions"] = json!(crate::ladder::merge_instructions(theirs, &ours));
         }
         if !self.model.is_empty() {
             p["model"] = json!(self.model);
@@ -481,7 +499,7 @@ impl Codex {
                 self.cli_version = r["userAgent"].as_str().and_then(cli_version);
                 o.write(&json!({"jsonrpc": "2.0", "method": "initialized"}));
                 self.request("model/list", json!({}), Req::ModelList, o);
-                if self.ladder.is_some() {
+                if self.instructions().is_some() {
                     self.request("config/read", json!({}), Req::ConfigRead, o);
                 } else {
                     self.start_thread(o);
@@ -1416,7 +1434,7 @@ mod tests {
     use crate::chat::testutil::{replay, replay_full};
 
     fn opts() -> ChatOptions {
-        ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()), ladder: None }
+        ChatOptions { provider: Provider::Codex, cwd: "/work".into(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()), ladder: None, context: None }
     }
 
     #[test]

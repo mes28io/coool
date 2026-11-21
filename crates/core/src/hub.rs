@@ -50,7 +50,7 @@ pub struct Hub {
     client_name: String,
     /// MCP servers coool hands each chat it starts, by chat id (see [`Hub::set_chat_mcp`]).
     chat_mcp: Option<crate::chat::McpFor>,
-    /// Where coool keeps its Claude Code plugin for Ladder (see [`crate::ladder`]); None: briefs go inline.
+    /// Where coool keeps its Claude Code plugin for Ladder (see [`crate::ladder`]); None: the playbook goes inline.
     ladder_root: Option<PathBuf>,
     /// Live child run pid -> pid of the session above it (see [`crate::lineage`]).
     ancestors: crate::lineage::AncestorCache,

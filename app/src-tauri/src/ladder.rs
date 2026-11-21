@@ -54,6 +54,8 @@ struct Launched {
     cwd: String,
     model: Option<String>,
     ladder: Ladder,
+    /// The coool context it got: its helpers get the same.
+    context: Option<coool_core::agent_context::AgentContext>,
 }
 
 /// A helper `spawn` started.
@@ -123,7 +125,7 @@ impl State {
         let exe = std::env::current_exe().ok()?;
         let token = crate::device::mcp::random_token();
         self.tokens.lock().unwrap().insert(token.clone(), chat);
-        self.chats.lock().unwrap().insert(chat, Launched { provider: opts.provider, cwd: opts.cwd.clone(), model: opts.model.clone(), ladder: l.clone() });
+        self.chats.lock().unwrap().insert(chat, Launched { provider: opts.provider, cwd: opts.cwd.clone(), model: opts.model.clone(), ladder: l.clone(), context: opts.context.clone() });
         Some(McpServer {
             name: SERVER_NAME.into(),
             command: exe.to_string_lossy().into_owned(),
@@ -498,7 +500,7 @@ fn spawn(core: &Arc<Core>, chat: usize, a: &Value) -> Result<Value, String> {
     let worktree = if a["worktree"].as_bool() == Some(true) { Some(make_worktree(st, &launched.cwd, chat, n)?) } else { None };
     let cwd = worktree.as_ref().map(|w| w.0.clone()).unwrap_or_else(|| launched.cwd.clone());
     let ladder = child_ladder(&launched, &plan, chat);
-    let opts = ChatOptions { provider: plan.provider, cwd, resume: None, model: Some(plan.model.clone()), permission_mode: Some(plan.permission_mode.clone()), ladder: Some(ladder) };
+    let opts = ChatOptions { provider: plan.provider, cwd, resume: None, model: Some(plan.model.clone()), permission_mode: Some(plan.permission_mode.clone()), ladder: Some(ladder), context: launched.context.clone() };
     let app = st.app.get().ok_or("coool-ladder: not ready")?;
     let id = crate::start_chat_with(app, core, opts)?;
     st.helpers.lock().unwrap().insert(id, Helper { parent: chat, depth: plan.depth, provider: plan.provider, model: plan.model.clone(), title: title.clone(), worktree: worktree.clone(), started: Instant::now(), seq: 0, sent: false, last_text: String::new(), done: None, collected: false });
@@ -657,7 +659,7 @@ mod tests {
     }
 
     fn opts(tools: bool) -> ChatOptions {
-        ChatOptions { provider: Provider::Claude, cwd: "/p".into(), resume: None, model: Some("sonnet".into()), permission_mode: None, ladder: Some(Ladder { tools, ..Default::default() }) }
+        ChatOptions { provider: Provider::Claude, cwd: "/p".into(), resume: None, model: Some("sonnet".into()), permission_mode: None, ladder: Some(Ladder { tools, ..Default::default() }), context: None }
     }
 
     #[test]
@@ -703,6 +705,7 @@ mod tests {
             provider: Provider::Claude,
             cwd: "/p".into(),
             model: Some("opus".into()),
+            context: None,
             ladder: Ladder {
                 tiers: vec![Tier { role: Role::Same, model: "opus".into(), label: String::new() }, Tier { role: Role::Mid, model: "sonnet".into(), label: String::new() }, Tier { role: Role::Small, model: "haiku".into(), label: String::new() }],
                 cross: vec![Tier { role: Role::Exec, model: "gpt-6.2-sol".into(), label: String::new() }, Tier { role: Role::Bulk, model: "gpt-6-luna".into(), label: String::new() }],
