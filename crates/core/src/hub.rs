@@ -835,7 +835,8 @@ mod tests {
             let p = e.unwrap().path();
             let name = p.file_name().unwrap().to_owned();
             let to = if name.to_string_lossy().starts_with("rollout-") { day.join(name) } else { proj.join(name) };
-            fs::copy(&p, to).unwrap();
+            // Written, not copied: a copy keeps the fixture's old mtime, and a Codex rollout untouched for 10 min has ended.
+            fs::write(to, fs::read(&p).unwrap()).unwrap();
         }
         let mut h = hub(&d, false);
         let all = until_loaded(&mut h);
