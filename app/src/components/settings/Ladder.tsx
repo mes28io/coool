@@ -3,6 +3,7 @@
 import { LADDER, LADDER_LINE, MAX_PARALLEL, defaultLead, setLadderCap, setLadderPick, setLadderPrefs, useLadderPrefs } from "../../lib/ladder";
 import { candidates, modelRank, ROLE_WORK, ROLES, roleWord, tierTable, type LadderCap, type LadderRole } from "../../lib/ladderTiers";
 import { useSeenModels } from "../../lib/prefs";
+import { CONTEXT_LABEL, CONTEXT_LINE, setContextPref, useContextPref } from "../../lib/agentContext";
 import type { Provider } from "../../lib/types";
 import { ProviderMark } from "../primitives";
 import { Group, Note, Row, Select, Switch, type Option } from "./ui";
@@ -77,6 +78,7 @@ function ProviderRows({ provider }: { provider: Provider }) {
 
 export function LadderSettings() {
   const prefs = useLadderPrefs();
+  const context = useContextPref();
   return (
     <div data-ladder-settings>
       <Group label={LADDER}>
@@ -86,6 +88,13 @@ export function LadderSettings() {
           desc={LADDER_LINE}
           k={`${LADDER} delegate cheaper models subagents`}
           control={<Switch label={`${LADDER} on for new chats`} on={prefs.on} onChange={(v) => setLadderPrefs({ on: v })} />}
+        />
+        <Row
+          attr="context-on"
+          label={CONTEXT_LABEL}
+          desc={CONTEXT_LINE}
+          k="coool context agents devices browser iphone mac pilot instructions"
+          control={<Switch label={CONTEXT_LABEL} on={context} onChange={setContextPref} />}
         />
       </Group>
       {(["claude", "codex"] as Provider[]).map((p) => (

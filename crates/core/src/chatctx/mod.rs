@@ -646,6 +646,9 @@ fn coool_items(launch: &Launch, provider: Provider) -> Vec<Item> {
             let label = heading.trim_end_matches("(set by coool)").trim().trim_end_matches(':').to_string();
             let label = if label.is_empty() { "Instructions from coool".to_string() } else { label };
             let ladder = heading.starts_with(crate::ladder::NAME);
+            // The coool context (crate::agent_context) is headed `# coool`.
+            let incoool = heading == "coool";
+            let label = if incoool { "You are in coool".to_string() } else { label };
             out.push(Item {
                 id: format!("coool:{}:{i}", if ladder { "ladder" } else { &heading }),
                 group: Group::Coool,
@@ -660,7 +663,13 @@ fn coool_items(launch: &Launch, provider: Provider) -> Vec<Item> {
                 used: false,
                 editable: false,
                 depth: 0,
-                note: ladder.then(|| format!("Settings > {} turns it on or off for new chats.", crate::ladder::NAME)),
+                note: if ladder {
+                    Some(format!("Settings > {} turns it on or off for new chats.", crate::ladder::NAME))
+                } else if incoool {
+                    Some(format!("Settings > {} > Tell agents about coool turns it on or off for new chats.", crate::ladder::NAME))
+                } else {
+                    None
+                },
                 text: Some(body),
             });
         }

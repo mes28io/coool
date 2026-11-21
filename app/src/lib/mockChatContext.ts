@@ -75,7 +75,7 @@ put(`${LADDER}/skills/briefs/SKILL.md`, "---\nname: briefs\ndescription: Ladder 
 const LADDER_TEXT =
   "# Ladder (set by coool)\nYou lead: your tokens go to the plan, briefs, hard calls, checking and the answer. Hand other work to the cheapest tier that can carry it:\n  mid Sonnet 5.5 (`sonnet`): multi-file work, debugging, research needing judgment, review\n  small+bulk Haiku 5.5 (`haiku`): scoped edits, pattern clones, lookups, summaries; mechanical bulk work from an exact rule set\n- Up to 4 delegates at once. Check every delegate's work before you build on it (read the diff, run `pnpm test` or open the output yourself).\nBefore your first brief, load the `coool-ladder:briefs` skill (brief shape per tier).\n";
 const COOOL_TEXT =
-  "# You are in coool\nThis chat runs inside coool, a desktop app. The person sees your work as a chat with panels beside it: a browser, an iPhone simulator and a sandbox Mac your coool-device tools drive.\n";
+  "# coool\nYou run in coool, a Mac app where the person watches this chat, steers it and answers or approves you. Approvals show your command's `description` and a risk tag: say in it what the command does and why.\n\nYour own devices, in coool's window (never the person's screen):\n- Browser panel (`browser_*`): a change to a web page is done only once you have opened it there and seen the change.\n";
 
 const tok = (s: string) => Math.round(s.length / 3.8);
 const stampOf = (p: string): CtxStamp | null => {
@@ -132,7 +132,7 @@ function overview(target: CtxTarget): CtxOverview {
   items.push(
     item({ id: "builtin:dataviz", group: "skills", kind: "skill", label: "dataviz", source: "Built in or managed", description: "Charts, plots and dashboards in any medium.", load: "listed", tokens: 30, note: "Listed by Claude Code for this session; its file isn't in a folder the panel reads." }),
     item({ id: "coool:ladder:0", group: "coool", kind: "coool_text", label: "Ladder", source: "coool · --append-system-prompt", description: "Ladder (set by coool)", tokens: tok(LADDER_TEXT), full_tokens: tok(LADDER_TEXT), text: LADDER_TEXT, note: "Settings > Ladder turns it on or off for new chats." }),
-    item({ id: "coool:You are in coool:1", group: "coool", kind: "coool_text", label: "You are in coool", source: "coool · --append-system-prompt", description: "You are in coool", tokens: tok(COOOL_TEXT), full_tokens: tok(COOOL_TEXT), text: COOOL_TEXT }),
+    item({ id: "coool:You are in coool:1", group: "coool", kind: "coool_text", label: "You are in coool", source: "coool · --append-system-prompt", description: "coool", tokens: tok(COOOL_TEXT), note: "Settings > Ladder > Tell agents about coool turns it on or off for new chats.", full_tokens: tok(COOOL_TEXT), text: COOOL_TEXT }),
     item({ id: "coool-mcp:coool-device", group: "coool", kind: "coool_mcp", label: "coool-device", source: "coool · MCP server", description: "34 tools: the chat's iPhone, Mac and browser panels", load: "on_demand", full_tokens: 9_840, note: "Claude Code lists these tools by name at start and loads a tool's definition when the agent searches for it." }),
     item({ id: "mcp:user:linear", group: "mcp", kind: "mcp", label: "linear", source: "User · ~/.claude.json", load: "on_demand", note: "Its tools are known once the CLI connects to it." }),
   );

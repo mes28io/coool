@@ -13,6 +13,7 @@ pub mod claude;
 pub mod codex;
 pub mod hub;
 pub mod insights;
+pub mod agent_context;
 pub mod ladder;
 pub mod lineage;
 mod loader;

@@ -17,6 +17,9 @@
 // Codex's cheapest model), `agent-iphone` (a Haiku chat reads the iOS version in Settings on a simulator the test
 // creates for itself, "coool selftest iPhone", and deletes at the end), `pilot-iphone` / `pilot-browser` (a Haiku chat hands
 // Settings > About / the coffee form to the device pilot, `pilot_run`, twice: learned, then from muscle memory),
+// `context-ab` / `context-ab-on` / `context-codex` (the coool context A/B: a visible change to a static page in folders
+// `ab-on-<k>` / `ab-off-<k>` / `ab-codex-on` the run writes under the test's folder; one `AB` log line per run saying
+// whether the agent opened the page in the Browser panel after its last edit; APP_SPEC "coool context"),
 // `agent-mac` (a Haiku chat opens TextEdit in coool's sandbox Mac, types a sentence and reads it back; the harness
 // reads the document from the Mac itself). Those answer the device gate's requests as they come ("this chat" for using
 // a device or a site, "Allow once" for the rest). `gate-browser` / `gate-browser-codex` and `gate-mac` /
@@ -554,6 +557,57 @@ async function agentBrowser(ctx: Ctx, provider: "claude" | "codex", model: strin
     return `tab mark after ${r.seen["[data-browser-agent-tab]"]} ms`;
   });
   if (key) useStore.getState().closeBrowser(key);
+}
+
+// ---------- the coool context A/B (APP_SPEC "coool context") ----------
+
+/**
+ * One arm run of the context A/B: a chat of `provider` on `model` in `<dir>/<folder>` (a tiny static page the run
+ * script wrote there: index.html with an <h1> and a <button>) is asked for a visible change without a word about the
+ * browser. Logs what it did: whether its launch carried the context, its tool calls in order, and whether it opened
+ * the page in the Browser panel after its last edit (before it reported done). Never fails on behaviour: it records.
+ */
+async function contextArm(ctx: Ctx, o: { provider: "claude" | "codex"; model: string; folder: string; on: boolean }) {
+  const cwd = `${ctx.cfg.dir}/${o.folder}`;
+  const label = `context-ab ${o.provider} ${o.on ? "on" : "off"} ${o.folder}`;
+  let id = -1;
+  await step(`${label}: starts, the context ${o.on ? "in" : "not in"} its launch`, async () => {
+    const before = new Set(Object.keys(useChats.getState().chats).map(Number));
+    await newChat({ provider: o.provider, cwd, model: o.model, permissionMode: o.provider === "claude" ? "acceptEdits" : "on-request", context: o.on });
+    id = (await waitFor("the new chat", () => newId(before), 10_000)).id;
+    await waitFor("ready", () => chat(id)?.ready, 90_000);
+    await waitFor("the chat on screen", () => $("[data-chat-timeline]"), 20_000);
+    await sleep(1000);
+    if (o.provider === "claude") {
+      const l = (await invoke("selftest_chat_launch", { chat: id })) as { args: string[] };
+      const sent = l.args.some((a) => a.startsWith("--append-system-prompt=") && a.includes("# coool\n"));
+      if (sent !== o.on) throw new Fail(`context in the launch: ${sent}`);
+      return `chat ${id}; ${sent ? "--append-system-prompt carries # coool" : "no context flag"}`;
+    }
+    return `chat ${id}`;
+  });
+  if (id < 0) return;
+  const n = items(id).length;
+  const r = await agentTurn(id, {
+    prompt: 'In index.html, make the heading say "Hello from coool" and make the button green. Tell me when it\'s done.',
+    marks: [],
+    ms: 300_000,
+    allow: /./,
+  });
+  await step(`${label}: what it did`, async () => {
+    const tools = after(id, n).filter((i) => i.kind === "tool") as Tool[];
+    const name = (t: Tool) => (/coool-device(__|\.)/.test(t.name) ? toolName(t) : t.name);
+    const isEdit = (t: Tool) => /^(Edit|Write|MultiEdit|apply_patch|patch|fileChange|edit)$/i.test(t.name) || (/^(shell|exec|Bash|command)/i.test(t.name) && /index\.html/.test(JSON.stringify(t.input)) && /sed|cat >|tee|python|perl|>/.test(JSON.stringify(t.input)));
+    const isBrowser = (t: Tool) => /^(browser_|pilot_run)/.test(name(t));
+    const lastEdit = tools.map(isEdit).lastIndexOf(true);
+    const browser = tools.filter(isBrowser);
+    const checkedAfter = tools.some((t, i) => i > lastEdit && isBrowser(t) && t.ok !== false && /^(browser_navigate|browser_reload|browser_observe|browser_screenshot|pilot_run)/.test(name(t)));
+    const line = `AB provider=${o.provider} arm=${o.on ? "on" : "off"} run=${o.folder} edits=${tools.filter(isEdit).length} browser_calls=${browser.length} browser_ok=${browser.filter((t) => t.ok).length} checked_after_last_edit=${checkedAfter ? "yes" : "no"} turn_ms=${r.turnMs} tokens=${r.tokens ?? "?"} tools=[${tools.map((t) => `${name(t)}${t.ok === false ? "!" : ""}`).join(",")}] reply=${JSON.stringify(r.reply.trim().slice(0, 200))}`;
+    await log(line);
+    return line;
+  });
+  await (await import("./lib/backend")).api().chatStop(id);
+  await sleep(1500);
 }
 
 // ---------- the device gate (APP_SPEC "Device permissions") ----------
@@ -2447,6 +2501,28 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
   /** The same on Codex's cheapest model. */
   async "agent-browser-codex"(ctx) {
     await agentBrowser(ctx, "codex", CODEX_MODEL);
+  },
+
+  /**
+   * The coool context A/B (not in `all`; real Haiku turns): six folders the run script wrote under the test's folder,
+   * `ab-on-1`…`ab-on-3` and `ab-off-1`…`ab-off-3`, each a tiny static page; the arms alternate. Logs one `AB` line
+   * per run (see `contextArm`).
+   */
+  async "context-ab"(ctx) {
+    for (const k of [1, 2, 3]) {
+      await contextArm(ctx, { provider: "claude", model: PERF_MODEL, folder: `ab-on-${k}`, on: true });
+      await contextArm(ctx, { provider: "claude", model: PERF_MODEL, folder: `ab-off-${k}`, on: false });
+    }
+  },
+
+  /** Only the "on" arm, three runs (a second round after a wording change). */
+  async "context-ab-on"(ctx) {
+    for (const k of [1, 2, 3]) await contextArm(ctx, { provider: "claude", model: PERF_MODEL, folder: `ab-on-${k}`, on: true });
+  },
+
+  /** One Codex turn on its cheapest model with the context on (folder `ab-codex-on`). */
+  async "context-codex"(ctx) {
+    await contextArm(ctx, { provider: "codex", model: CODEX_MODEL, folder: "ab-codex-on", on: true });
   },
 
   /** The device gate in an asking mode (Claude "default"): a form submit stops and asks; Allow submits, Deny doesn't. */
