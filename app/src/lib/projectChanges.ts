@@ -8,6 +8,7 @@ import { useStore } from "../store";
 import { useChats } from "./chat";
 import { displayTitle, projectOf } from "./format";
 import { authorOf, changesFromActivity, changesFromChat, mergeChanges, treeOf, type Change, type ItemLike, type Overlap, type OverlapEdit, type OverlapSession } from "./mission";
+import { agentWorking } from "./agentState";
 import type { Provider } from "./types";
 import { sessionKey } from "./types";
 
@@ -61,7 +62,7 @@ export function useProjectChanges(path: string, branch: string | null): { change
     feeding.forEach((s, i) => {
       const key = sessionKey(s);
       sources[key] = { provider: s.provider, title: displayTitle(s), agents: Object.fromEntries(s.agents.map((a) => [a.id, a.description || a.kind])) };
-      people[key] = { live: s.status !== "ended", tree: treeOf(s.cwd, path) };
+      people[key] = { live: s.status !== "ended", tree: treeOf(s.cwd, path), agents: Object.fromEntries(s.agents.map((a) => [a.id, agentWorking(s, a)])) };
       // Paths are judged against the project (an agent's worktree inside it maps back to the project's files).
       const its = items[i];
       const memoKey = `${key}\u0001${path}\u0001${branch}`;
@@ -69,9 +70,14 @@ export function useProjectChanges(path: string, branch: string | null): { change
         lists.push(rowsOf(its, memoKey, () => changesFromChat(key, its as ItemLike[], path, branch)));
         return;
       }
-      lists.push(rowsOf(s.activity, memoKey, () => changesFromActivity(key, s.activity, path, branch)));
-      for (const a of s.agents)
-        lists.push(rowsOf(a.activity, `${memoKey}\u0001${a.id}`, () => changesFromActivity(key, a.activity, path, branch).map((c) => ({ ...c, id: `${c.id}@${a.id}`, step: `g:${a.id}` }))));
+      // Clock times walked back from the newest event: a long session's old edits keep their days.
+      lists.push(rowsOf(s.activity, `${memoKey}\u0001${s.last_event}`, () => changesFromActivity(key, s.activity, path, branch, Date.now(), s.last_event ?? null)));
+      const cut = Date.now() - LEDGER_WINDOW_MS;
+      for (const a of s.agents) {
+        // A subagent that ended before the window is history, like an ended session.
+        if (!agentWorking(s, a) && a.last_event && a.last_event < cut) continue;
+        lists.push(rowsOf(a.activity, `${memoKey}\u0001${a.id}\u0001${a.last_event}`, () => changesFromActivity(key, a.activity, path, branch, Date.now(), a.last_event ?? null).map((c) => ({ ...c, id: `${c.id}@${a.id}`, step: `g:${a.id}` }))));
+      }
     });
     return { changes: mergeChanges(lists, Infinity), sources, people };
   }, [feeding, items, path, branch]);
