@@ -14,6 +14,7 @@ mod apps;
 mod changes;
 mod artifact;
 mod browser;
+mod chatctx;
 mod device;
 mod env;
 mod glass;
@@ -750,6 +751,9 @@ fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize
     let mut opts = opts;
     opts.cwd = private_alias(&expand_tilde(&opts.cwd));
     check_launch(opts.provider, &opts.cwd)?;
+    if let Some(c) = opts.context.as_mut() {
+        fill_context(app, c);
+    }
     update::hold(app, opts.provider);
     let provider = opts.provider;
     let cwd = opts.cwd.clone();
@@ -764,6 +768,19 @@ fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize
     // The chat row (and a pending tab) shows up right away.
     core.publish(app);
     Ok(id)
+}
+
+/// What a chat about to start really has, for its coool context (APP_SPEC "coool context"): the devices this Mac can
+/// run (the core drops them again when the chat gets no `coool-device` server) and whether a phone is paired.
+fn fill_context(app: &AppHandle, c: &mut coool_core::agent_context::AgentContext) {
+    static IPHONE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    c.browser = true;
+    c.iphone = *IPHONE.get_or_init(|| device::simctl::unavailable().is_none());
+    c.mac = device::vm::unavailable().is_none();
+    c.remote = app.try_state::<remote::RemoteState>().is_some_and(|r| {
+        let s = r.0.status();
+        s.enabled && !s.devices.is_empty()
+    });
 }
 
 /// macOS's `/tmp` and `/var` are links into `/private`, and the CLIs record the real path: a chat started in
@@ -1857,6 +1874,7 @@ pub fn run() {
         .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
         .manage(core.clone())
         .manage(devices.clone())
+        .manage(chatctx::ContextState::default())
         .manage(Arc::new(voice::Voice::new()))
         .manage(Arc::new(update::Updater::new(core.selftest.is_some())))
         .invoke_handler(tauri::generate_handler![
@@ -1911,6 +1929,12 @@ pub fn run() {
             changes::changes_commit,
             changes::changes_preview,
             changes::changes_open,
+            chatctx::chat_context,
+            chatctx::chat_context_read,
+            chatctx::chat_context_save,
+            chatctx::chat_context_create,
+            chatctx::chat_context_trash,
+            chatctx::chat_context_reveal,
             running_count,
             quit_app,
             prefs_get,

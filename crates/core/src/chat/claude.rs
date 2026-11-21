@@ -1488,7 +1488,7 @@ mod tests {
     use crate::chat::testutil::replay;
 
     fn opts() -> ChatOptions {
-        ChatOptions { provider: Provider::Claude, cwd: "/work".into(), resume: None, model: Some("haiku".into()), permission_mode: None, ladder: None }
+        ChatOptions { provider: Provider::Claude, cwd: "/work".into(), resume: None, model: Some("haiku".into()), permission_mode: None, ladder: None, context: None }
     }
 
     fn kinds(evs: &[ChatEventKind]) -> Vec<String> {

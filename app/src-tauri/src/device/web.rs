@@ -713,8 +713,19 @@ impl<'a> Browser<'a> {
     }
 
     pub(super) fn pilot_navigate(&self, raw: &str) -> Result<(), String> {
+        self.navigate(self.url(raw)?).map(|_| ())
+    }
+
+    /// What the agent's `url` opens: a page ([`agent_url`]), or a file in the chat's project folder, served read-only
+    /// on 127.0.0.1 ([`super::files`]).
+    fn url(&self, raw: &str) -> Result<tauri::Url, String> {
         let origin = self.app()?.state::<Arc<crate::Core>>().browsers.app_origin();
-        self.navigate(agent_url(raw, origin.as_deref())?).map(|_| ())
+        let cwd = self.devices.mcp.cwd(self.chat);
+        if super::files::is_local(raw, cwd.as_deref()) {
+            let cwd = cwd.ok_or("this chat has no project folder to open files from")?;
+            return agent_url(&super::files::url_for(raw, &cwd)?, origin.as_deref());
+        }
+        agent_url(raw, origin.as_deref())
     }
 
     /// "Agent" marks on: the run is acting (`kind`: `pilot`, `think`), or off for good (`end`: its cursor rests,
@@ -821,8 +832,7 @@ impl<'a> Browser<'a> {
             }
             "browser_navigate" => {
                 let raw = a["url"].as_str().ok_or("browser_navigate needs `url`")?;
-                let origin = self.app()?.state::<Arc<crate::Core>>().browsers.app_origin();
-                let url = agent_url(raw, origin.as_deref())?;
+                let url = self.url(raw)?;
                 let (p, settled) = self.navigate(url)?;
                 let note = format!("opened {raw}");
                 let ms = t0.elapsed().as_millis();
@@ -1021,8 +1031,7 @@ impl<'a> Browser<'a> {
             "list" => Ok(list(self.panel())),
             "new" => {
                 let raw = a["url"].as_str().ok_or("tabs new needs `url`")?;
-                let origin = self.app()?.state::<Arc<crate::Core>>().browsers.app_origin();
-                let url = agent_url(raw, origin.as_deref())?;
+                let url = self.url(raw)?;
                 self.gate_nav(&url)?;
                 let old: Vec<u32> = self.panel().map(|p| p.tabs.iter().map(|t| t.tab).collect()).unwrap_or_default();
                 self.activity(None, "tab", Some(url.to_string()));
@@ -1147,8 +1156,7 @@ impl<'a> Browser<'a> {
     /// `{"forward":true}`, `{"reload":true}`, `{"wait_for":"Saved"|{…}}`, `{"wait_ms":300}`.
     fn step(&self, s: &Value) -> Result<String, String> {
         if let Some(u) = s["navigate"].as_str() {
-            let origin = self.app()?.state::<Arc<crate::Core>>().browsers.app_origin();
-            self.navigate(agent_url(u, origin.as_deref())?)?;
+            self.navigate(self.url(u)?)?;
             return Ok(format!("opened {u}"));
         }
         if let Some(ms) = s["wait_ms"].as_f64() {
@@ -1249,7 +1257,7 @@ fn describe_wait(a: &Value) -> String {
 }
 
 pub const INSTRUCTIONS: &str = "Browser tools (browser_*) drive the Browser panel beside this chat (a real WebKit page the person \
-watches), never their own browser. browser_navigate opens a page (the panel opens if needed). browser_observe lists the \
+watches), never their own browser. browser_navigate opens a page, or a file of this project by its path (the panel opens if needed). browser_observe lists the \
 page's interactive elements as `[12] role \"name\" value=… (x,y wxh)` plus the text in view; act by id with \
 browser_click / browser_type (replaces the field's contents) / browser_select / browser_press / browser_scroll. Every \
 action waits for the page to settle and returns the page again (or \"Page unchanged\"), so you rarely need to observe. Ids \
@@ -1305,7 +1313,7 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "browser_navigate",
-            "description": "Load a URL in the panel's current tab (http/https only; a bare host like example.com gets https://). Opens the Browser panel beside the chat if it isn't open. Returns the loaded page.",
+            "description": "Load a URL in the panel's current tab (http/https; a bare host like example.com gets https://), or a file in this chat's project folder by its path (e.g. index.html: coool serves the folder read-only on 127.0.0.1, so no server of your own is needed). Opens the Browser panel beside the chat if it isn't open. Returns the loaded page.",
             "inputSchema": { "type": "object", "required": ["url"], "properties": { "url": { "type": "string" } } }
         }),
         json!({ "name": "browser_back", "description": "Go back in the current tab's history; returns the page.", "inputSchema": { "type": "object", "properties": {} } }),

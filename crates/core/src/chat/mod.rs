@@ -41,6 +41,10 @@ pub struct ChatOptions {
     /// Ladder (APP_SPEC "Ladder"): the delegation policy and tier table handed to the CLI at launch; None: off.
     #[serde(default)]
     pub ladder: Option<crate::ladder::Ladder>,
+    /// The coool context (APP_SPEC "coool context"): what the agent is told about coool, with what this chat has
+    /// (filled in by the app at launch); None: off.
+    #[serde(default)]
+    pub context: Option<crate::agent_context::AgentContext>,
 }
 
 /// An MCP server (stdio) handed to a chat's CLI at launch: Claude Code gets it through `--mcp-config=<private file>`, Codex through
@@ -665,6 +669,14 @@ fn events_since(shared: &Mutex<Shared>, seq: u64) -> (Vec<ChatEvent>, u64) {
     (evs, sh.next_seq.max(seq))
 }
 
+/// The coool context for a chat about to launch (None: off). `devices`: the chat gets the `coool-device` server.
+fn context_text(opts: &ChatOptions, cli: crate::ladder::Cli, devices: bool) -> Option<String> {
+    let c = opts.context.clone()?;
+    let c = if devices { c } else { c.without_devices() };
+    let helpers = opts.ladder.as_ref().is_some_and(|l| !l.tiers.is_empty());
+    Some(crate::agent_context::text(cli, &c, helpers))
+}
+
 pub struct Chat {
     pub id: usize,
     pub provider: Provider,
@@ -676,6 +688,7 @@ pub struct Chat {
     kill_requested: Option<Instant>,
     /// The arguments the CLI was launched with (the self-test checks Ladder's flags against them).
     args: Vec<String>,
+    launch: crate::chatctx::Launch,
 }
 
 impl Chat {
@@ -701,7 +714,31 @@ impl Chat {
         {
             let _ = std::fs::remove_file(p);
         }
-        r
+        r.map(|mut c| {
+            c.launch = Self::launch_record(&opts, &args, mcp);
+            c
+        })
+    }
+
+    /// What the Context panel shows coool added (crate::chatctx): the arguments as passed, what coool adds to Codex's
+    /// developer instructions, and the MCP servers (names only: their env carries the chat's token).
+    pub(crate) fn launch_record(opts: &ChatOptions, args: &[String], mcp: &[McpServer]) -> crate::chatctx::Launch {
+        crate::chatctx::Launch {
+            args: args.to_vec(),
+            // What `Codex::instructions` sends: Ladder's policy, then the coool context.
+            developer_instructions: if opts.provider == Provider::Codex {
+                crate::agent_context::join_prompts(codex::coool_instructions(opts).as_deref(), context_text(opts, crate::ladder::Cli::Codex, !mcp.is_empty()).as_deref())
+            } else {
+                None
+            },
+            mcp: mcp.iter().map(|m| crate::chatctx::McpInfo { name: m.name.clone(), ..Default::default() }).collect(),
+            model: opts.model.clone(),
+        }
+    }
+
+    /// What coool launched this chat with (see [`Self::launch_record`]).
+    pub fn launch_info(&self) -> &crate::chatctx::Launch {
+        &self.launch
     }
 
     /// The backend, program and arguments a chat starts with (unit-tested: nothing runs). `mcp_file`: where Claude
@@ -714,14 +751,21 @@ impl Chat {
                 if let Some(f) = mcp_file {
                     args.extend(claude::mcp_args(mcp, f));
                 }
-                if let Some(l) = &opts.ladder {
-                    args.extend(crate::ladder::claude_args(l, std::path::Path::new(&opts.cwd), ladder_root));
+                let mut ladder = opts.ladder.as_ref().map(|l| crate::ladder::claude_args(l, std::path::Path::new(&opts.cwd), ladder_root)).unwrap_or_default();
+                // Ladder's policy and the coool context share the one `--append-system-prompt` the CLI keeps.
+                const APPEND: &str = "--append-system-prompt=";
+                let policy = ladder.iter().position(|a| a.starts_with(APPEND)).map(|i| ladder.remove(i)[APPEND.len()..].to_string());
+                let context = context_text(opts, crate::ladder::Cli::Claude, !mcp.is_empty());
+                if let Some(p) = crate::agent_context::join_prompts(policy.as_deref(), context.as_deref()) {
+                    args.push(format!("{APPEND}{p}"));
                 }
+                args.extend(ladder);
                 (Box::new(b), "claude", args)
             }
             Provider::Codex => {
                 let mut b = codex::Codex::new(opts);
                 b.client_name = client_name.to_string();
+                b.context = context_text(opts, crate::ladder::Cli::Codex, !mcp.is_empty());
                 let mut args = codex::args();
                 args.extend(codex::mcp_args(mcp));
                 if let Some(l) = &opts.ladder {
@@ -873,7 +917,7 @@ impl Chat {
             sh.backend.start(&mut o);
             apply(&mut sh, &writer, o);
         }
-        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, writer, kill_requested: None, args: args.to_vec() })
+        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, writer, kill_requested: None, args: args.to_vec(), launch: crate::chatctx::Launch::default() })
     }
 
     fn with_backend(&mut self, call: Value, f: impl FnOnce(&mut dyn Backend, &mut Out) -> Result<()>) -> Result<()> {
@@ -1337,7 +1381,7 @@ mod tests {
             Provider::Claude => vec![Tier { role: Role::Mid, model: "sonnet".into(), label: "Sonnet 4.6".into() }, Tier { role: Role::Small, model: "haiku".into(), label: "Haiku 4.5".into() }],
             Provider::Codex => vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }],
         };
-        ChatOptions { provider, cwd: cwd.into(), resume: None, model: None, permission_mode: None, ladder: on.then(|| Ladder { tiers, max_parallel: 3, verify_tests: true }) }
+        ChatOptions { provider, cwd: cwd.into(), resume: None, model: None, permission_mode: None, ladder: on.then(|| Ladder { tiers, max_parallel: 3, verify_tests: true }), context: None }
     }
 
     /// Ladder at launch (APP_SPEC "Ladder"): on adds the CLI's own per-launch flags, off adds nothing, and nothing is
@@ -1382,6 +1426,75 @@ mod tests {
             for d in [".claude", ".codex"] {
                 for f in walk(&home.join(d).join("plugins")) {
                     assert!(!f.to_string_lossy().contains("coool-ladder"), "{f:?}");
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The coool context (APP_SPEC "coool context") in every combination: context on/off × Ladder on/off × the device
+    /// server present/absent, for both CLIs. Claude: one `--append-system-prompt` (Ladder's policy first). Codex: the
+    /// thread's `developerInstructions` after the person's own and Ladder's.
+    #[test]
+    fn coool_context_reaches_each_cli_only_when_on() {
+        use crate::agent_context::AgentContext;
+        let tmp = std::env::temp_dir().join(format!("coool-context-launch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let p = tmp.to_str().unwrap();
+        let mcp = [McpServer { name: "coool-device".into(), command: "/x/coool".into(), args: vec!["--coool-device-mcp".into()], env: vec![], allow_all: true, tool_timeout_sec: Some(900) }];
+        let has = AgentContext { browser: true, iphone: true, mac: false, remote: false };
+        for ctx_on in [false, true] {
+            for ladder_on in [false, true] {
+                for devices in [false, true] {
+                    let what = format!("context {ctx_on}, ladder {ladder_on}, devices {devices}");
+                    let mut o = ladder_opts(Provider::Claude, p, ladder_on);
+                    o.context = ctx_on.then(|| has.clone());
+                    let servers: &[McpServer] = if devices { &mcp } else { &[] };
+                    let file = std::path::Path::new("/private/coool-mcp/x.json");
+                    let (_, _, a) = Chat::launch(&o, "coool", servers, Some(&tmp.join("data")), devices.then_some(file));
+                    let prompts: Vec<&String> = a.iter().filter(|x| x.starts_with("--append-system-prompt=")).collect();
+                    assert!(prompts.len() <= 1, "{what}: one flag at most: {prompts:?}");
+                    let text = prompts.first().map(|s| s.as_str()).unwrap_or("");
+                    assert_eq!(text.contains("# coool\n"), ctx_on, "{what}");
+                    assert_eq!(text.contains("# Ladder"), ladder_on, "{what}");
+                    assert_eq!(text.contains("Browser panel"), ctx_on && devices, "{what}");
+                    assert_eq!(text.contains("iPhone simulator"), ctx_on && devices, "{what}");
+                    assert!(!text.contains("Sandboxed Mac"), "{what}: no Mac on this one");
+                    assert_eq!(text.contains("Jobs panel"), ctx_on && ladder_on, "{what}");
+                    if ctx_on && ladder_on {
+                        assert!(text.find("# Ladder").unwrap() < text.find("# coool\n").unwrap(), "{what}: policy first");
+                    }
+                    // Permissions are untouched by either.
+                    assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions"), "{what}");
+
+                    let mut o = ladder_opts(Provider::Codex, p, ladder_on);
+                    o.context = ctx_on.then(|| has.clone());
+                    let (mut b, _, args) = Chat::launch(&o, "coool", servers, None, None);
+                    assert!(!args.iter().any(|x| x.contains("# coool\n")), "{what}: never on the command line");
+                    let mut out = Out::default();
+                    b.start(&mut out);
+                    b.on_line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#, &mut out);
+                    let sent = |out: &Out, m: &str| out.writes.iter().filter_map(|w| serde_json::from_str::<Value>(w).ok()).find(|v| v["method"] == m);
+                    if let Some(read) = sent(&out, "config/read") {
+                        assert!(ctx_on || ladder_on, "{what}: config/read only when coool adds instructions");
+                        let id = read["id"].as_u64().unwrap();
+                        b.on_line(&format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"config":{{"developer_instructions":"Mine."}}}}}}"#), &mut out);
+                    } else {
+                        assert!(!ctx_on && !ladder_on, "{what}: config/read expected");
+                    }
+                    let start = sent(&out, "thread/start").unwrap();
+                    let di = start["params"]["developerInstructions"].as_str().unwrap_or("");
+                    assert_eq!(di.is_empty(), !ctx_on && !ladder_on, "{what}");
+                    if !di.is_empty() {
+                        assert!(di.starts_with("Mine.\n\n"), "{what}: the person's own first: {di}");
+                    }
+                    assert_eq!(di.contains("# coool\n"), ctx_on, "{what}");
+                    assert_eq!(di.contains("Browser panel"), ctx_on && devices, "{what}");
+                    assert_eq!(di.contains("justification"), ctx_on, "{what}");
+                    if ctx_on && ladder_on {
+                        assert!(di.find("# Ladder").unwrap() < di.find("# coool\n").unwrap(), "{what}");
+                    }
                 }
             }
         }
@@ -1468,7 +1581,7 @@ mod tests {
 
     #[test]
     fn missing_folder_is_an_error_not_a_spawn() {
-        let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None, ladder: None };
+        let opts = ChatOptions { provider: Provider::Claude, cwd: "/definitely/not/here".into(), resume: None, model: None, permission_mode: None, ladder: None, context: None };
         assert!(Chat::start(0, opts, "coool", &[], None).is_err());
     }
 

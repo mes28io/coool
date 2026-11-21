@@ -40,7 +40,7 @@ pub struct Mcp {
     providers: Mutex<HashMap<usize, &'static str>>,
 }
 
-fn random_token() -> String {
+pub(super) fn random_token() -> String {
     let mut b = [0u8; 16];
     if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_err() {
         let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
@@ -782,6 +782,12 @@ fn describe_wait(a: &Value) -> String {
         (_, Some(i)) => format!("[{i}] to {}", if gone { "disappear" } else { "appear" }),
         _ => "the screen to settle".into(),
     }
+}
+
+/// The server's tools for the Context panel: how many, and the size of their definitions (bytes of JSON).
+pub fn tools_size() -> (u32, u64) {
+    let t = tools();
+    (t.as_array().map_or(0, |a| a.len() as u32), t.to_string().len() as u64)
 }
 
 fn tools() -> Value {

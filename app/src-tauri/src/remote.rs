@@ -43,7 +43,8 @@ struct View {
     /// What the Needs-you page shows for each pending request (from the page): by need id.
     notes: HashMap<String, Note>,
     /// Commit trails per project root, read at most once a minute: (when, the trail's rows, branch).
-    trails: HashMap<String, (u64, Vec<Value>, Option<String>)>,
+    trails: HashMap<String, (u64, Vec<Value>, Option<String>)>,    /// Settings' "Tell agents about coool" (the page's): a remote start sends the coool context unless it is off.
+    context_off: bool,
 }
 
 #[derive(Clone)]
@@ -205,6 +206,9 @@ pub struct Defaults {
     /// The models a new chat can start on, per CLI (Settings > General's list): what a phone may choose from.
     #[serde(default)]
     models: Option<HashMap<String, Vec<ModelChoice>>>,
+    /// Settings' "Tell agents about coool" (APP_SPEC "coool context"); absent: on.
+    #[serde(default)]
+    context: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -436,8 +440,10 @@ impl coool_remote::Host for AppHost {
         let atts = attachments(atts)?;
         // The model the phone chose (one of `models`, checked by the rules), else the app's default for new chats.
         let model = s.model.clone().or_else(|| view(|v| v.defaults.get(&s.cli).and_then(|d| d.0.clone())));
-        // The mode is the one the rules chose (never Bypass or full access); Ladder stays off.
-        let opts = coool_core::chat::ChatOptions { provider, cwd: s.project.path.clone(), resume: None, model, permission_mode: Some(s.mode.to_string()), ladder: None };
+        // The mode is the one the rules chose (never Bypass or full access); Ladder stays off; the coool context as
+        // Settings say (the app fills in what the chat has).
+        let context = (!view(|v| v.context_off)).then(coool_core::agent_context::AgentContext::default);
+        let opts = coool_core::chat::ChatOptions { provider, cwd: s.project.path.clone(), resume: None, model, permission_mode: Some(s.mode.to_string()), ladder: None, context };
         let id = crate::start_chat_with(&self.app, &core, opts)?;
         self.note(&core, id, &format!("Started from {by}"));
         core.with_chat(id, |c| c.send_with(&s.text, &atts))?;
@@ -1183,6 +1189,7 @@ pub fn remote_set_defaults(defaults: Defaults) {
     view(|v| {
         v.defaults.insert(Cli::Claude, (defaults.claude.model, defaults.claude.mode));
         v.defaults.insert(Cli::Codex, (defaults.codex.model, defaults.codex.mode));
+        v.context_off = defaults.context == Some(false);
         if let Some(m) = defaults.models {
             for (k, cli) in [("claude", Cli::Claude), ("codex", Cli::Codex)] {
                 let list = m.get(k).map(|l| l.iter().filter(|x| !x.id.is_empty() && x.id.len() < 120).take(40).map(|x| (x.id.clone(), if x.label.is_empty() { x.id.clone() } else { x.label.chars().take(60).collect() })).collect()).unwrap_or_default();
