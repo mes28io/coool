@@ -1747,7 +1747,9 @@ export function mockBackend(): Backend {
     },
     async changesLoad(t) {
       await delay(40);
-      return (await import("./mockChanges")).changesLoadMock(t.cwd, t.scope);
+      // Always in full (the mock keeps no revisions).
+      const cs = (await import("./mockChanges")).changesLoadMock(t.cwd, t.scope);
+      return { rev: Date.now(), set: { ...cs, rev: Date.now() } };
     },
     async changesUndo(t, file, hunk, force) {
       await delay(120);

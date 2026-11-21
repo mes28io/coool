@@ -2,14 +2,17 @@
 // works), the actions, and the requests that open the panel from elsewhere (the turn's "4 files changed").
 // The rules are in changesRules.ts; the engine is crates/core/src/changes.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { create } from "zustand";
 import { api } from "./backend";
+import { addTime } from "./perfCount";
 import type { Chat } from "./chat";
 import type { Provider, Session } from "./types";
 import { sessionKey } from "./types";
 import { useStore } from "../store";
-import type { ChangeSet, Outcome, Scope } from "./changesRules";
+import { mergeWire, type ChangeSet, type Outcome, type Scope } from "./changesRules";
+
+export { mergeWire };
 
 export interface ChangesTarget {
   provider: Provider;
@@ -30,47 +33,133 @@ export function changesTarget(session: Session | null | undefined, chat: Chat | 
 
 const targetKey = (t: ChangesTarget | null) => (t ? `${t.provider}:${t.sessionId}:${t.agents.length}:${t.cwd}:${t.external}` : "");
 
+/** Whether the page is visible and the window focused (polling slows down or stops otherwise). */
+const pageState = (() => {
+  const subs = new Set<() => void>();
+  let snap = "";
+  const read = () => `${typeof document === "undefined" || document.visibilityState !== "hidden" ? 1 : 0}${typeof document === "undefined" || document.hasFocus() ? 1 : 0}`;
+  const fire = () => {
+    const n = read();
+    if (n === snap) return;
+    snap = n;
+    for (const f of subs) f();
+  };
+  return {
+    subscribe(f: () => void) {
+      if (!subs.size && typeof window !== "undefined") {
+        snap = read();
+        document.addEventListener("visibilitychange", fire);
+        window.addEventListener("focus", fire);
+        window.addEventListener("blur", fire);
+      }
+      subs.add(f);
+      return () => {
+        subs.delete(f);
+        if (!subs.size && typeof window !== "undefined") {
+          document.removeEventListener("visibilitychange", fire);
+          window.removeEventListener("focus", fire);
+          window.removeEventListener("blur", fire);
+        }
+      };
+    },
+    get: () => snap || (snap = read()),
+  };
+})();
+function usePageState(): { visible: boolean; focused: boolean } {
+  const s = useSyncExternalStore(pageState.subscribe, pageState.get, () => "11");
+  return { visible: s[0] === "1", focused: s[1] === "1" };
+}
+
 /**
- * The change set for `scope`, reloaded when `tick` changes (new activity) and every `every` ms (1.5 s while the agent
- * is working). Keeps the last good set while a reload is on its way.
+ * The change set for `scope`. `full` false: the counts, turns and re-edited files only (the header with the panel
+ * closed), no diffs. Asked again when `tick` changes (new activity), at most every `gap` ms, and every `every` ms
+ * (every 4 s at most while the window isn't focused); nothing at all while the page is hidden. Each call sends the
+ * revision the page has: when nothing changed the backend answers with a number, otherwise with only the files that
+ * changed. Keeps the last good set while a reload is on its way.
  */
-export function useChanges(target: ChangesTarget | null, scope: Scope, tick: unknown, every: number | null, enabled = true): { data: ChangeSet | null; error: string | null; reload: () => Promise<void> } {
-  const [data, setData] = useState<ChangeSet | null>(null);
+export function useChanges(
+  target: ChangesTarget | null,
+  scope: Scope,
+  tick: unknown,
+  every: number | null,
+  enabled = true,
+  full = true,
+  gap = 1000,
+): { data: ChangeSet | null; full: boolean; error: string | null; reload: () => Promise<void> } {
+  const [state, setState] = useState<{ data: ChangeSet | null; full: boolean }>({ data: null, full: false });
   const [error, setError] = useState<string | null>(null);
   const t = useRef(target);
   t.current = target;
   const k = targetKey(target);
+  const mode = `${k}|${scope}|${full ? "full" : "summary"}`;
+  // What the page has: for which target, scope and mode, at which revision.
+  const have = useRef<{ mode: string; rev: number; data: ChangeSet | null }>({ mode: "", rev: 0, data: null });
   const seq = useRef(0);
+  const last = useRef(0);
+  const { visible, focused } = usePageState();
+  // Main-thread ms from a new set to its layout (perf scenarios, lib/perfCount.ts).
+  const applied = useRef(0);
+  useLayoutEffect(() => {
+    if (!applied.current) return;
+    // Layout included (what the frame after it would pay).
+    void document.querySelector("[data-changes-body]")?.scrollHeight;
+    addTime("changes.render", performance.now() - applied.current);
+    addTime("changes.updates", 1);
+    applied.current = 0;
+  }, [state]);
   const reload = useCallback(async () => {
     const tg = t.current;
     if (!tg) return;
     const my = ++seq.current;
+    last.current = performance.now();
     try {
-      const cs = await api().changesLoad({ ...tg, scope });
-      if (my === seq.current) {
-        setData(cs);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const h = have.current;
+        const since = h.mode === mode && h.data ? h.rev : 0;
+        const t0 = performance.now();
+        const w = await api().changesLoad({ ...tg, scope }, since, !full);
+        addTime("changes.ipc", performance.now() - t0);
+        if (my !== seq.current) return;
+        const merged = mergeWire(since ? h.data : null, w);
+        if (!merged) {
+          // The page lacks a file the reply leaves out: ask again in full.
+          have.current = { mode: "", rev: 0, data: null };
+          continue;
+        }
+        have.current = { mode, rev: w.rev, data: merged };
+        if (merged !== h.data) {
+          applied.current = performance.now();
+          setState({ data: merged, full });
+        }
         setError(null);
+        return;
       }
     } catch (e) {
       if (my === seq.current) setError(String(e instanceof Error ? e.message : e));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [k, scope]);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const live = enabled && visible;
+  // New activity, at most every `gap` ms (a busy terminal session writes several lines a second); at once when the
+  // mode changed (the panel opened: its diffs are wanted now).
   useEffect(() => {
-    if (!enabled) return;
-    const h = setTimeout(() => void reload(), 250);
+    if (!live) return;
+    const fresh = have.current.mode !== mode;
+    const wait = fresh ? 0 : Math.max(250, gap - (performance.now() - last.current));
+    const h = setTimeout(() => void reload(), wait);
     return () => clearTimeout(h);
-  }, [reload, tick, enabled]);
+  }, [reload, tick, live, gap, mode]);
+  const period = every && !focused ? Math.max(every, 4000) : every;
   useEffect(() => {
-    if (!enabled || !every) return;
-    const h = setInterval(() => void reload(), every);
+    if (!live || !period) return;
+    const h = setInterval(() => void reload(), period);
     return () => clearInterval(h);
-  }, [reload, every, enabled]);
+  }, [reload, period, live]);
   useEffect(() => {
-    setData(null);
+    have.current = { mode: "", rev: 0, data: null };
+    setState({ data: null, full: false });
     setError(null);
   }, [k]);
-  return { data, error, reload };
+  return { data: state.data, full: state.full, error, reload };
 }
 
 export const changesUndo = (t: ChangesTarget, scope: Scope, file: string | null, hunk: string | null, force = false): Promise<Outcome> => api().changesUndo({ ...t, scope }, file, hunk, force);

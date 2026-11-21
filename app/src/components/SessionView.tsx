@@ -348,16 +348,17 @@ export function SessionView({
     setPanel("mac");
   };
 
-  // The Changes panel's data: loaded while the pane shows (the header's count), every 1.5 s while the agent works
-  // and the panel is open.
+  // The Changes panel's data. Closed: a summary for the header's count (counts and turns, no diffs). Open: the diffs,
+  // every 1.5 s while the agent works and every 4 s otherwise. Each call sends the revision the page has, so one with
+  // nothing new costs the backend a `stat` per file and sends a number back (lib/changes.ts, crates/core/src/changes).
   const [changesScope, setChangesScope] = useState<Scope>("pending");
   const changesExternal = !!r.session && r.pty === null && r.chat === null;
   const cTarget = useMemo(() => changesTarget(r.session, chat, changesExternal), [r.session, chat?.sessionId, chat?.provider, chat?.cwd, changesExternal]); // eslint-disable-line react-hooks/exhaustive-deps
   const cLive = chat ? chat.running && chat.state !== "idle" : r.session?.status === "busy";
-  // Open: every new step; closed (the header's count only): every finished turn or new transcript event.
-  const cTick = changesOpen ? `${chat?.items.length ?? 0}:${r.session?.last_event ?? 0}:${r.session?.agents.length ?? 0}` : `${chat?.items.filter((i) => i.kind === "turn").length ?? 0}:${chat ? 0 : (r.session?.last_event ?? 0)}`;
-  // Open: every 1.5 s while the agent works, every 4 s otherwise (a hand edit, a commit in a terminal).
-  const changes = useChanges(cTarget, changesScope, cTick, changesOpen ? (cLive ? 1500 : 4000) : null, !!cTarget);
+  // Open: every new step; closed: every new step too, at most every 2 s (a busy terminal session writes several
+  // transcript lines a second).
+  const cTick = `${chat?.items.length ?? 0}:${chat ? 0 : (r.session?.last_event ?? 0)}:${r.session?.agents.length ?? 0}`;
+  const changes = useChanges(cTarget, changesScope, cTick, changesOpen ? (cLive ? 1500 : 4000) : null, !!cTarget, changesOpen, changesOpen ? 1000 : 2000);
   useChangeNotes(chat ?? null, changes.data, cTarget);
   const onChanges = () => {
     if (!panelKey) return;
@@ -639,7 +640,7 @@ export function SessionView({
               ) : k === "mac" ? (
                 <MacPanel chat={r.chat} active={active} onClose={() => setPanel("closed")} />
               ) : k === "changes" ? (
-                <ChangesPanel data={changes.data} error={changes.error} reload={changes.reload} target={cTarget} scope={changesScope} onScope={setChangesScope} chat={chat ?? null} width={panelAxisNow === "y" ? paneW : panelWidth("changes")} onClose={() => setPanel("closed")} />
+                <ChangesPanel data={changes.full ? changes.data : null} error={changes.error} reload={changes.reload} target={cTarget} scope={changesScope} onScope={setChangesScope} chat={chat ?? null} width={panelAxisNow === "y" ? paneW : panelWidth("changes")} onClose={() => setPanel("closed")} />
               ) : k === "context" ? (
                 <ContextPanelBody
                   key={`${ctxTarget.provider}:${ctxTarget.cwd}:${ctxTarget.chat ?? ""}`}

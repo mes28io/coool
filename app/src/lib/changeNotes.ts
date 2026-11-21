@@ -41,12 +41,13 @@ export function useChangeNotes(chat: Chat | null, data: ChangeSet | null, target
     held.setState((s) => ({ notes: { ...s.notes, [id]: [] } }));
     void steer(c, notes.join("\n\n"), false);
   }, [id, isWorking, pending]);
-  const reedited = (data?.files ?? []).filter((f) => f.reedited);
-  const sig = reedited.map((f) => f.path).join("\n");
+  // From the set's own list: a summary (the panel closed) has no files.
+  const reedited = data?.reedited ?? [];
+  const sig = reedited.map(([p]) => p).join("\n");
   useEffect(() => {
     if (id === null || !sig || !target || !tellAgentPref()) return;
     const paths = sig.split("\n");
-    const rels = reedited.map((f) => f.rel);
+    const rels = reedited.map(([, r]) => r);
     void api().changesTold({ ...target, scope: "chat" }, paths).catch(() => {});
     queueAgentNote(id, reeditNote(rels));
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -71,6 +71,8 @@ export interface GitInfo {
 }
 
 export interface ChangeSet {
+  /** Its revision (the backend sends only what changed after the one the page has). */
+  rev: number;
   root: string;
   scope: string;
   git: GitInfo | null;
@@ -80,6 +82,14 @@ export interface ChangeSet {
   total: number;
   external: boolean;
   busy: boolean;
+  /** Files the agent edited again after the person undid them, not told yet: [path, rel]. */
+  reedited: [string, string][];
+}
+
+/** What `changes_load` answers: the revision, and the set when it is newer than the page's (files it has as `same`). */
+export interface ChangesWire {
+  rev: number;
+  set?: Omit<ChangeSet, "files" | "turns"> & { turns?: TurnInfo[]; files: (FileChange | { path: string; same: true })[] };
 }
 
 export interface Outcome {
@@ -294,4 +304,26 @@ export function turnFiles(tools: { name: string; ok: boolean | null; input: unkn
     for (const m of patch.matchAll(/\*\*\* (?:Add|Update|Delete) File: (.+)/g)) out.add(m[1].trim());
   }
   return [...out];
+}
+
+/**
+ * A reply of `changes_load` on top of the set the page has: files sent as `same` are the page's own objects (so
+ * their diffs aren't coloured or laid out again), and the turns are the page's when not sent. Null when the page
+ * lacks something the reply leaves out (then it asks again in full).
+ */
+export function mergeWire(prev: ChangeSet | null, w: ChangesWire): ChangeSet | null {
+  if (!w.set) return prev;
+  const s = w.set;
+  const old = new Map((prev?.files ?? []).map((f) => [f.path, f]));
+  const files: FileChange[] = [];
+  for (const f of s.files) {
+    if ("same" in f) {
+      const o = old.get(f.path);
+      if (!o) return null;
+      files.push(o);
+    } else files.push(f);
+  }
+  const turns = s.turns ?? prev?.turns;
+  if (!turns) return null;
+  return { ...s, files, turns };
 }

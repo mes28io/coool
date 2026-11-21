@@ -17,6 +17,10 @@ pub static PTY_CHUNKS: AtomicU64 = AtomicU64::new(0);
 /// `git_trail` and `context_map` calls served.
 pub static GIT_TRAILS: AtomicU64 = AtomicU64::new(0);
 pub static CONTEXT_MAPS: AtomicU64 = AtomicU64::new(0);
+/// `changes_load` calls served, their time in the backend (µs), and their payload bytes (self-test only).
+pub static CHANGES_LOADS: AtomicU64 = AtomicU64::new(0);
+pub static CHANGES_US: AtomicU64 = AtomicU64::new(0);
+pub static CHANGES_BYTES: AtomicU64 = AtomicU64::new(0);
 /// Epoch ms of the first sessions payload, and of the first payload with the initial load done (0: not yet).
 pub static FIRST_PUBLISH_MS: AtomicU64 = AtomicU64::new(0);
 pub static LOADED_MS: AtomicU64 = AtomicU64::new(0);

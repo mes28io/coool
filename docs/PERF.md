@@ -289,3 +289,67 @@ Measured by the `menubar` self-test (debug build, the item hidden, invented work
 the sampler's own time 47 ms in that minute (30 samples, 0.08 %). A second run (no live sessions, load spiking to 69):
 0.78 % on, 0.54 % off, sampler 58 ms (22 samples: the person was away, so it slowed to 10 s). A release build costs
 less. Re-run: `COOOL_BIN=<debug build> sh app/scripts/readme-shots/menubar.sh`.
+
+## Changes view (2026-11-21)
+
+"The Changes section makes the app laggy." Measured on an invented heavy case, then fixed.
+
+```sh
+python3 -I app/scripts/perf/make-changes-home.py make --out /tmp/coool-chperf-1   # 300 turns, 930 edits on 67 files (3 of 4000-9000 lines), 34 MB transcript, a subagent
+COOOL_BIN=<debug build, CARGO_PROFILE_DEV_OPT_LEVEL=2> sh app/scripts/perf/changes-run.sh /tmp/coool-chperf-1   # self-test perf-changes
+cargo run --release -p coool-core --example changes_bench -- <a case of its own> 10   # the engine alone
+```
+
+`perf-changes` opens the session (a terminal session to coool), then 60 s windows: panel closed with the session idle,
+closed while it works (`make-changes-home.py live`: 4 transcript lines a second, a real Edit every 20 lines, the
+registry saying busy), open while it works, open idle; frame gaps over 10 s after each, and scrolling the panel and the
+chat. Counters: `changes_load` calls, their backend time, bytes, the engine's `git` processes (perf.rs), page
+milliseconds from a new set to its layout (`changes.render` in lib/perfCount.ts).
+
+**Why it lagged.** Every pane loaded the full change set even with the panel closed (for the header's count), and for
+a session outside coool it did so on every transcript event of a working session (~1 a second). Each load re-cloned
+every recorded edit (Claude's `originalFile`, the whole file before each edit), re-resolved every path, read every
+touched file, re-diffed each file once per scope and once per turn it touched, ran three `git` processes, and sent
+the whole set with every file's full text: 180-240 ms backend and 2.2 MB per call. The page then replaced every file
+object, so every hunk was syntax coloured and word-diffed again, all 67 files drawn (74 000 DOM nodes).
+
+**What changed.** The engine (crates/core/src/changes/mod.rs) keeps each session's work: transcripts read from where
+they were, a file's chain rebuilt only when it got a new edit, each file's view per scope worked out again only when
+its edits, its `stat` (size, mtime, inode), what was kept or undone, staged, busy or what the agent said after
+changed; `git::info_cached` runs git again only when the index, HEAD, the branch ref, packed refs or a merge/rebase
+changed (or after 30 s). Each view and set carries a revision; the page sends the one it has and gets nothing back
+when nothing changed, otherwise only the files that changed (lib/changes.ts `mergeWire` keeps its own objects for
+the rest, so their diffs aren't coloured or laid out again). Panel closed: a summary (counts, turns, re-edited
+files), at most every 2 s. No polling while the page is hidden; every 4 s at most while unfocused. Sessions are
+locked one by one (no global lock across file I/O). The panel draws a file's diff when it comes within 1.5 screens of
+the view (the first 6 at once) and starts diffs over 800 lines folded.
+
+Debug build at opt-level 2, window out of sight, same case; load average (1 min) 5.6 at the start of "before" and 6.0
+of "after", 9-11 and 6.7 at their ends (a shared machine: CPU ±30 %, counts exact).
+
+| Case | Before | After |
+|---|---|---|
+| Closed, idle: `changes_load` calls / min | 0 | 0 |
+| Closed, working: calls / min | 60 | 29 |
+| … backend ms / call, KB / call | 180 / 2209 | 6.6 / 11.6 |
+| … engine `git` processes / min | 180 | 8 |
+| … app CPU ms/s (page ms/s) | 161 (110) | 25 (104, the session's own timeline) |
+| Open, working: calls / min | 90 | 65 |
+| … backend ms / call, KB / call | 194 / 2213 | 4.3 / 12.8 |
+| … page ms per update | 74.5 | 17.7 |
+| … app / page CPU ms/s | 237 / 399 | 34 / 179 |
+| … frames over 50 ms in 10 s (gap max) | 57 (265 ms) | 0 (28 ms) |
+| Open, idle: backend ms, KB / call; page updates | 242, 2218; 11 at 1038 ms each | 8.1, 0; none |
+| … app / page CPU ms/s | 30 / 40 | 2.5 / 4.1 |
+| Opening the panel | 1044 ms, 74 626 DOM nodes, 6169 diff lines | 328 ms, 18 842, 1422 |
+| Scrolling the panel top to bottom while working: frames over 50 ms (max) | 224 / 511 (1341 ms) | 5 / 511 (83 ms) |
+| … idle | 142 / 512 (8467 ms) | 2 / 511 (296 ms) |
+| Scrolling the chat with the panel open, working: over 50 ms (max) | 43 / 113 (1756 ms) | 3 / 107 (328 ms) |
+| Page ms in Changes updates over the whole run | 58 481 (257 updates) | 572 (35) |
+
+Engine alone (`changes_bench`, release, load ~15): cold 189 ms; warm with nothing new 0.45 ms and 20 bytes (summary
+0.37 ms); a transcript line that isn't an edit 0.66 ms; an edit landing 5.7 ms and 108 KB (the file and the turn
+list); a hand edit 4.7 ms, 61 KB. Before, every one of these was a full load (132 ms, 2.2 MB).
+
+With the panel closed and the frame gaps of the out-of-sight window, the numbers say little (a 30 Hz display link,
+p50 33 ms in both builds); the open-panel windows ran at 60 frames a second after.

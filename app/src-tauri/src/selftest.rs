@@ -585,6 +585,11 @@ pub struct PerfStats {
     git_trails: u64,
     git_spawns: u64,
     context_maps: u64,
+    /// `changes_load` calls served, their backend time (µs) and payload bytes; `git` processes the Changes engine started.
+    changes_loads: u64,
+    changes_us: u64,
+    changes_bytes: u64,
+    changes_git: u64,
     /// Start-up points (see `crate::perf::boot_mark`): name, epoch ms.
     boot: Vec<(&'static str, u64)>,
 }
@@ -622,6 +627,10 @@ pub fn selftest_perf_stats(app: AppHandle, core: State<'_, Arc<Core>>) -> Result
         git_trails: GIT_TRAILS.load(Relaxed),
         git_spawns: coool_core::gitlog::SPAWNS.load(Relaxed),
         context_maps: CONTEXT_MAPS.load(Relaxed),
+        changes_loads: CHANGES_LOADS.load(Relaxed),
+        changes_us: CHANGES_US.load(Relaxed),
+        changes_bytes: CHANGES_BYTES.load(Relaxed),
+        changes_git: coool_core::changes::git::SPAWNS.load(Relaxed),
         boot: BOOT.lock().map(|b| b.clone()).unwrap_or_default(),
     })
 }

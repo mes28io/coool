@@ -15,6 +15,7 @@
 //   person's list and the agents' chip on, ⌘K, the sidebar with agents' runs hidden.
 
 import { api } from "./lib/backend";
+import { mergeWire } from "./lib/changes";
 import { useChats } from "./lib/chat";
 import { byAgent, recentInFolder, type HistoryQuery, type HistoryRow } from "./lib/history";
 import { sessionKey } from "./lib/types";
@@ -257,7 +258,7 @@ export function historyScenarios(k: HistoryKit): Record<string, () => Promise<vo
         await shot("history-earlier");
         if (!firstPrompt) throw new Error("the first prompt is not in the timeline after loading the earlier history");
         const cur = useStore.getState().sessions.find((x) => sessionKey(x) === row.key)!;
-        const ch = await api().changesLoad({ provider: cur.provider, sessionId: cur.id, agents: [], cwd: cur.cwd, scope: "all", external: true });
+        const ch = mergeWire(null, await api().changesLoad({ provider: cur.provider, sessionId: cur.id, agents: [], cwd: cur.cwd, scope: "all", external: true }))!;
         const ctx = await api().contextMap({ provider: cur.provider, sessionId: cur.id, cwd: cur.cwd });
         if (!ch.files.length) throw new Error("the Changes view found no files");
         useStore.getState().setRightPanel(row.key, "changes");

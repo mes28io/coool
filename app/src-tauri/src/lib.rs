@@ -132,7 +132,7 @@ struct Core {
     /// Ladder's `coool-ladder` MCP server: budget, preflight, helpers (see [`ladder`]).
     ladder: Arc<ladder::State>,
     /// The Changes view: transcript readers and what the person kept (see [`changes`]).
-    changes: Mutex<coool_core::changes::Changes>,
+    changes: coool_core::changes::Changes,
 }
 
 /// The last payload the UI got, per session, so the next refresh sends only
@@ -1949,7 +1949,7 @@ pub fn run() {
         browsers: browser::Browsers::default(),
         contexts: Mutex::default(),
         ladder: Arc::default(),
-        changes: Mutex::new(coool_core::changes::Changes::new(changes_dir)),
+        changes: coool_core::changes::Changes::new(changes_dir),
     });
 
     perf::boot_mark("core");

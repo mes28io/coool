@@ -339,10 +339,12 @@ function fileView(d: Demo, f: DemoFile, scope: string): FileChange | null {
 
 export function changesLoadMock(cwd: string, scope: string): ChangeSet {
   const d = demo && cwd === demo.root ? demo : null;
-  if (!d) return { root: cwd, scope, git: null, turns: [], files: [], pending: 0, total: 0, external: false, busy: false };
+  if (!d) return { rev: 0, root: cwd, scope, git: null, turns: [], files: [], pending: 0, total: 0, external: false, busy: false, reedited: [] };
   const files = d.files.map((f) => fileView(d, f, scope)).filter((x): x is FileChange => !!x);
   const chat = d.files.map((f) => fileView(d, f, "chat")).filter((x): x is FileChange => !!x && x.status !== "unchanged");
   return {
+    rev: 0,
+    reedited: files.filter((f) => f.reedited).map((f) => [f.path, f.rel]),
     root: d.root,
     scope,
     git: { top: d.root, branch: "fix/march-period", busy: null, staged: [...d.staged].map((r) => `${d.root}/${r}`) },
