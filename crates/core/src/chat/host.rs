@@ -486,6 +486,19 @@ impl Server {
             }
             let Ok(req) = serde_json::from_str::<Value>(line.trim()) else { continue };
             let id = req["id"].clone();
+            // A start (its CLI being spawned) runs beside the rest: the app's calls to its other chats never wait
+            // behind it. Every other call stays in order (a chat's send before its interrupt).
+            if req["op"] == "start" {
+                let (srv, conn) = (self.clone(), conn.clone());
+                let _ = thread::Builder::new().name("chat-host start".into()).spawn(move || {
+                    let reply = match srv.request(&conn, &req) {
+                        Ok(r) => json!({"id": id, "ok": true, "result": r}),
+                        Err(e) => json!({"id": id, "ok": false, "error": format!("{e:#}")}),
+                    };
+                    write_line(&conn.out, &reply);
+                });
+                continue;
+            }
             let reply = match self.request(&conn, &req) {
                 Ok(r) => json!({"id": id, "ok": true, "result": r}),
                 Err(e) => json!({"id": id, "ok": false, "error": format!("{e:#}")}),
@@ -641,7 +654,14 @@ impl Server {
 /// `coool --coool-chat-host <dir>`: runs a host until it is idle or drained. `version`: coool's version.
 pub fn run(dir: &Path, version: &str) -> i32 {
     let name = std::process::id().to_string();
-    let spawn: Spawner = Arc::new(|id, r: &StartReq| Chat::start(id, r.opts.clone(), &r.client_name, &r.mcp, r.ladder_root.as_deref()));
+    // A self-test's host can be told to take its time with each start (a slow or stuck host, debug builds only).
+    let stall = std::env::var("COOOL_TEST_HOST_STALL_MS").ok().and_then(|v| v.parse::<u64>().ok()).filter(|_| cfg!(debug_assertions) && test_dir_ok(dir)).map(Duration::from_millis);
+    let spawn: Spawner = Arc::new(move |id, r: &StartReq| {
+        if let Some(d) = stall {
+            thread::sleep(d);
+        }
+        Chat::start(id, r.opts.clone(), &r.client_name, &r.mcp, r.ladder_root.as_deref())
+    });
     let srv = match Server::start(dir, &name, version, Timing::default(), spawn) {
         Ok(s) => s,
         Err(e) => {
@@ -933,6 +953,42 @@ mod tests {
 
     fn client(s: &Server) -> Arc<Client> {
         Client::connect(s.socket(), s.token(), "test").unwrap()
+    }
+
+    /// A start the host takes its time over (its CLI slow to spawn, a stuck host) holds neither the app's hub (the
+    /// refresher, the window's quit counts) nor the app's calls to its other hosted chats.
+    #[test]
+    fn a_slow_start_holds_up_nothing_else() {
+        let d = dir("slow");
+        let spawn: Spawner = Arc::new(move |id, r: &StartReq| {
+            if r.opts.cwd == "/private/tmp" {
+                thread::sleep(Duration::from_millis(2000));
+            }
+            let b = Box::new(claude::Claude::new(&r.opts));
+            Chat::spawn(id, Provider::Claude, &r.opts.cwd, "/bin/sh", &["-c".to_string(), "sleep 30".to_string()], &[], None, b)
+        });
+        let s = Server::start(&d, "t", "9.9.9", timing(), spawn).unwrap();
+        let hub = Arc::new(Mutex::new(crate::hub::Hub::for_test(&d.join("home"))));
+        hub.lock().unwrap().set_host(Some(client(&s)));
+        let first = crate::hub::Hub::start_chat_in(&hub, req().opts).unwrap();
+        assert!(hub.lock().unwrap().chat(first).unwrap().is_hosted());
+        let h2 = hub.clone();
+        let slow = thread::spawn(move || {
+            let mut o = req().opts;
+            o.cwd = "/private/tmp".into();
+            crate::hub::Hub::start_chat_in(&h2, o)
+        });
+        thread::sleep(Duration::from_millis(300));
+        let t = Instant::now();
+        let proxy = hub.lock().unwrap().chat(first).unwrap().host_proxy().unwrap();
+        assert!(t.elapsed() < Duration::from_millis(300), "the hub waited for the slow start: {:?}", t.elapsed());
+        let t = Instant::now();
+        proxy.set_meta(json!({"probe": 1}));
+        assert!(t.elapsed() < Duration::from_millis(500), "a call to another chat waited for the slow start: {:?}", t.elapsed());
+        let second = slow.join().unwrap().unwrap();
+        assert_ne!(first, second);
+        assert!(hub.lock().unwrap().chat(second).unwrap().is_hosted());
+        hub.lock().unwrap().kill_all();
     }
 
     /// The notice texts of a mirror, in order.

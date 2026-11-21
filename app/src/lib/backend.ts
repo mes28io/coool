@@ -11,6 +11,7 @@ import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
 import type { ChangesWire, FileChange, Outcome } from "./changesRules";
 import type { HistoryBackend } from "./history";
+import type { InvokeArgs, InvokeOptions } from "@tauri-apps/api/core";
 
 /** Which session's changes, and which part (crates/core/src/changes; `changes_load` and the rest). */
 export interface ChangesReq {
@@ -482,13 +483,49 @@ export function b64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+/**
+ * How long a call that starts or drives a chat may take before the page gives up on it, in ms. A start waits for the
+ * launch's update step and an update of its CLI that is under way (both bounded, update/mod.rs), the chat host to start
+ * (10 s) and to answer (30 s); a chat's call waits for its host (30 s).
+ */
+const START_LIMIT = 6 * 60_000;
+const CALL_LIMIT = 45_000;
+const CALL_LIMITS: Record<string, number> = {
+  start_chat: START_LIMIT,
+  resume_session: START_LIMIT,
+  spawn_session: START_LIMIT,
+  chat_send: CALL_LIMIT,
+  chat_steer: CALL_LIMIT,
+  chat_steer_cancel: CALL_LIMIT,
+  chat_interrupt: CALL_LIMIT,
+  chat_stop: CALL_LIMIT,
+  chat_set_model: CALL_LIMIT,
+  chat_set_permission_mode: CALL_LIMIT,
+  chat_respond_permission: CALL_LIMIT,
+  chat_respond_question: CALL_LIMIT,
+  quit_counts: CALL_LIMIT,
+  running_count: CALL_LIMIT,
+};
+const CALL_WHAT: Record<string, string> = { start_chat: "starting the chat", resume_session: "reopening the session", spawn_session: "starting the session", chat_send: "sending the message" };
+
 async function tauriBackend(): Promise<Backend> {
   const core = await import("@tauri-apps/api/core");
   const { Channel } = core;
   // Counted for the self-test's perf scenarios (lib/perfCount.ts).
-  const invoke: typeof core.invoke = (cmd, args, opts) => {
+  const invoke = <T,>(cmd: string, args?: InvokeArgs, opts?: InvokeOptions): Promise<T> => {
     countIpc(cmd);
-    return core.invoke(cmd, args, opts);
+    const p = core.invoke<T>(cmd, args, opts);
+    const ms = CALL_LIMITS[cmd];
+    if (!ms) return p;
+    // A chat's start and calls go to its CLI (through the chat host when it runs there): an answer that never comes
+    // ends as a clear error instead of a box that waits for ever.
+    return new Promise<T>((resolve, reject) => {
+      const h = setTimeout(() => reject(new Error(`coool didn't answer in ${Math.round(ms / 1000)} s (${CALL_WHAT[cmd] ?? cmd}). Try again; if it keeps happening, quit and reopen coool.`)), ms);
+      p.then(
+        (v) => (clearTimeout(h), resolve(v)),
+        (e) => (clearTimeout(h), reject(e)),
+      );
+    });
   };
   const { listen } = await import("@tauri-apps/api/event");
 

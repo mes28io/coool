@@ -63,6 +63,8 @@ pub struct Hub {
     typed_pending: std::collections::HashSet<usize>,
     /// The chat host new chats start in (APP_SPEC "Chats that outlive the app"); None: inside this process.
     host: Option<Arc<crate::chat::host::Client>>,
+    /// Chat ids handed out to starts still waiting for the host (see [`Hub::start_chat_in`]).
+    reserved: std::collections::HashSet<usize>,
 }
 
 impl Hub {
@@ -75,6 +77,15 @@ impl Hub {
     /// Like [`Hub::new`], with the parse cache rooted at `cache_root` (None: no cache).
     pub fn with_cache(recent_window: Duration, cache_root: Option<PathBuf>) -> Self {
         Self::with_sources(ClaudeSource::new(recent_window), CodexSource::new(recent_window), cache_root.map(Cache::at), Pool::default_threads())
+    }
+
+    /// A hub over `home`'s CLI folders only (tests elsewhere in the crate), its own-sessions file there too.
+    #[cfg(test)]
+    pub(crate) fn for_test(home: &std::path::Path) -> Self {
+        let w = Duration::from_secs(3600);
+        let mut h = Self::with_sources(ClaudeSource::with_root(home.join(".claude"), w), CodexSource::with_root(home.join(".codex"), w), None, 1);
+        h.set_own_sessions_file(Some(home.join("own-sessions.json")));
+        h
     }
 
     fn with_sources(claude: ClaudeSource, codex: CodexSource, cache: Option<Cache>, threads: usize) -> Self {
@@ -98,6 +109,7 @@ impl Hub {
             shell_targets: Vec::new(),
             typed_pending: Default::default(),
             host: None,
+            reserved: Default::default(),
         }
     }
 
@@ -121,8 +133,8 @@ impl Hub {
             // The id it had in the app that started it, when that slot is free here: what an agent was told about
             // its helpers (Ladder's `spawn` returns the id) stays true.
             let id = match e.meta["app_id"].as_u64().map(|i| i as usize) {
-                Some(i) if self.chats.get(i).is_none_or(|s| s.is_none()) => i,
-                _ => self.chats.len(),
+                Some(i) if self.chats.get(i).is_none_or(|s| s.is_none()) && !self.reserved.contains(&i) => i,
+                _ => self.next_id(),
             };
             let chat = Chat::hosted(id, c.clone(), &e);
             if let Some(sid) = chat.session_id() {
@@ -526,14 +538,66 @@ impl Hub {
     }
 
     /// Start a structured chat (see [`crate::chat`]). Returns its id, stable for the process.
-    pub fn start_chat(&mut self, opts: ChatOptions) -> Result<usize> {
-        let id = self.chats.len();
+    /// Starts a chat with `hub` locked only for the bookkeeping: a start in the chat host waits for the host (and its
+    /// CLI) with the lock let go, so nothing else that needs the hub (the refresher, the window's quit counts, other
+    /// chats' calls) waits behind a slow or stuck host.
+    pub fn start_chat_in(hub: &std::sync::Mutex<Hub>, opts: ChatOptions) -> Result<usize> {
+        let (id, opts, mcp, host, client_name, ladder_root) = {
+            let mut h = hub.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(host) = h.host.clone().filter(|x| x.is_alive()) else { return h.start_chat(opts) };
+            let id = h.next_id();
+            h.reserved.insert(id);
+            let (opts, mcp) = h.chat_setup(id, opts);
+            (id, opts, mcp, host, h.client_name.clone(), h.ladder_root.clone())
+        };
+        let req = crate::chat::host::StartReq { opts: opts.clone(), client_name: client_name.clone(), mcp: mcp.clone(), ladder_root: ladder_root.clone(), meta: serde_json::json!({ "app_id": id }) };
+        let hosted = host.start(&req).map(|e| Chat::hosted(id, host.clone(), &e));
+        let mut h = hub.lock().unwrap_or_else(|e| e.into_inner());
+        h.reserved.remove(&id);
+        let c = match hosted {
+            Ok(c) => c,
+            // The host can't take it (or didn't answer in time): the chat still starts, inside this process.
+            Err(e) => {
+                let c = Chat::start(id, opts, &client_name, &mcp, ladder_root.as_deref())?;
+                c.handle().note(&format!("This chat runs inside coool and stops if coool quits (the chat host couldn't take it: {e:#})."));
+                c
+            }
+        };
+        Ok(h.place_chat(id, c))
+    }
+
+    /// The next free chat id (past the ones handed to starts still on their way).
+    fn next_id(&self) -> usize {
+        self.chats.len().max(self.reserved.iter().max().map_or(0, |m| m + 1))
+    }
+
+    /// Chat `id`'s MCP servers, and its options as they go with them.
+    fn chat_setup(&self, id: usize, opts: ChatOptions) -> (ChatOptions, Vec<crate::chat::McpServer>) {
         let mut opts = opts;
         let mcp = self.chat_mcp.as_ref().map(|f| f(id, &opts)).unwrap_or_default();
         // Ladder's tools are named in the policy only when their server really is attached.
         if let Some(l) = opts.ladder.as_mut() {
             l.tools = l.tools && mcp.iter().any(|m| m.name == crate::ladder::SERVER);
         }
+        (opts, mcp)
+    }
+
+    fn place_chat(&mut self, id: usize, c: Chat) -> usize {
+        // Claude chats know their session id up front: remember it before the
+        // transcript exists, so a crash right away still leaves it marked.
+        if let Some(sid) = c.session_id() {
+            self.own.record(c.provider, &sid);
+        }
+        if self.chats.len() <= id {
+            self.chats.resize_with(id + 1, || None);
+        }
+        self.chats[id] = Some(c);
+        id
+    }
+
+    pub fn start_chat(&mut self, opts: ChatOptions) -> Result<usize> {
+        let id = self.next_id();
+        let (opts, mcp) = self.chat_setup(id, opts);
         let c = match self.host.clone().filter(|h| h.is_alive()) {
             Some(h) => {
                 let req = crate::chat::host::StartReq { opts: opts.clone(), client_name: self.client_name.clone(), mcp: mcp.clone(), ladder_root: self.ladder_root.clone(), meta: serde_json::json!({ "app_id": id }) };
@@ -549,13 +613,7 @@ impl Hub {
             }
             None => Chat::start(id, opts, &self.client_name, &mcp, self.ladder_root.as_deref())?,
         };
-        // Claude chats know their session id up front: remember it before the
-        // transcript exists, so a crash right away still leaves it marked.
-        if let Some(sid) = c.session_id() {
-            self.own.record(c.provider, &sid);
-        }
-        self.chats.push(Some(c));
-        Ok(id)
+        Ok(self.place_chat(id, c))
     }
 
     /// Remembers that chat `chat` is a Ladder helper of chat `parent` (by their sessions, once both have one), so it

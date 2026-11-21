@@ -22,7 +22,7 @@
 import { newChat } from "./lib/actions";
 import { api } from "./lib/backend";
 import { useChats, type Chat, type ChatItem } from "./lib/chat";
-import type { ChatEvent } from "./lib/types";
+import { sessionKey, type ChatEvent } from "./lib/types";
 import { useStore } from "./store";
 
 interface H {
@@ -58,6 +58,9 @@ const folder = (dir: string, name: string) => `${dir.replace(/\/$/, "")}/${name}
 const sameDir = (a: string, b: string) => a.replace(/^\/private/, "") === b.replace(/^\/private/, "");
 /** When this page (this launch of the app) started, epoch ms. */
 const launchedAt = () => Date.now() - performance.now();
+/** A backend call that must answer within `ms`: a hang fails the step instead of the whole run. */
+const within = <T>(what: string, p: Promise<T>, ms = 20_000): Promise<T> =>
+  Promise.race([p, new Promise<never>((_, no) => setTimeout(() => no(new Error(`${what} didn't answer in ${ms / 1000}s (hung)`)), ms))]);
 
 export function keepaliveScenarios(h: H): Record<string, (ctx: { cfg: { dir: string } }) => Promise<void>> {
   const pids = () => h.invoke("selftest_keepalive", { action: "pids" }) as Promise<Pids>;
@@ -281,6 +284,94 @@ export function keepaliveScenarios(h: H): Record<string, (ctx: { cfg: { dir: str
         await h.sleep(50);
       }
       await h.sleep(30_000);
+    },
+    // The 0.4.0 -> 0.4.1 update, as the person had it (keepalive-ended-e2e.sh, stand-in CLIs, no model): a chat that
+    // ran inside coool (no host) and ended with the app; the next launch has the host on, with no host folder yet.
+    async "ka-ended-seed"(ctx) {
+      await h.step("ka-ended: a chat inside coool (no host), then the app quits", async () => {
+        const cwd = folder(ctx.cfg.dir, "ka-ended");
+        const before = ids();
+        if (!(await within("newChat", newChat({ provider: "claude", cwd, model: "haiku", prompt: "hello from 0.4.0" })))) throw h.fail("couldn't start the chat");
+        const { id } = await h.waitFor("the new chat", () => {
+          const i = [...ids()].find((x) => !before.has(x));
+          return i === undefined ? null : { id: i };
+        }, 20_000);
+        await h.waitFor("its first turn", () => turns(id) >= 1, 60_000);
+        const p = await pids();
+        const c = p.chats.find((x) => x.id === id);
+        if (c?.hosted) throw h.fail("hosted: the seed must run inside coool");
+        await noteSet("ka-ended", { session: chat(id)?.sessionId ?? null });
+        return `chat ${id}, session ${chat(id)?.sessionId}, hosts [${p.hosts}]`;
+      });
+      await h.log("KA-QUIT ka-ended");
+      await h.sleep(300);
+      await h.invoke("quit_app");
+    },
+    // Launch 2 (the host on, its folder not made yet). With COOOL_TEST_HOST_STALL_MS the host takes that long over
+    // each start (a slow or stuck host): meanwhile the window, the backend and the other chats must still answer.
+    async "ka-ended-after"(ctx) {
+      const was = await noteGet<{ session: string | null }>("ka-ended");
+      /** The backend answers at once: a call the window's quit path makes, the sessions, and (when given) a send. */
+      const responsive = async (what: string, send?: number) => {
+        const t0 = Date.now();
+        await within(`${what}: quit_counts`, h.invoke("quit_counts"), 3_000);
+        await within(`${what}: listSessions`, api().listSessions(), 3_000);
+        if (send !== undefined) await within(`${what}: chatSend to chat ${send}`, api().chatSend(send, "are you there?"), 3_000);
+        return Date.now() - t0;
+      };
+      const newId = (before: Set<number>) => () => {
+        const i = [...ids()].find((x) => !before.has(x));
+        return i === undefined ? null : { id: i };
+      };
+      let resumed = -1;
+      await h.step("ka-ended: a message typed in the ended chat reopens it and is answered", async () => {
+        if (!was?.session) throw h.fail("no session from the seed launch");
+        const s = await h.waitFor("the ended session", () => useStore.getState().sessions.find((x) => x.id === was.session && x.status === "ended"), 30_000);
+        useStore.getState().open({ kind: "session", key: sessionKey(s) });
+        const before = ids();
+        const box = await h.waitFor("the ended chat's message box", () => document.querySelector("[data-ended-composer] textarea") as HTMLTextAreaElement | null, 15_000);
+        box.focus();
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "hello again after the update");
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+        await h.sleep(120);
+        const t0 = Date.now();
+        box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        // While the host is starting the chat's CLI.
+        await h.sleep(1_500);
+        const probe = await responsive("while the chat reopens");
+        const { id } = await h.waitFor("the reopened chat", newId(before), 60_000);
+        resumed = id;
+        await h.waitFor("its reply", () => turns(id) >= 1, 60_000);
+        const c = (await pids()).chats.find((x) => x.id === id);
+        return `chat ${id} in ${Date.now() - t0}ms (backend answered in ${probe}ms meanwhile), hosted ${c?.hosted}; toasts ${useStore.getState().toasts.map((x) => x.text).join(" | ") || "none"}`;
+      });
+      let fresh = -1;
+      await h.step("ka-ended: a new chat starts and answers, and the running one still takes messages meanwhile", async () => {
+        const before = ids();
+        const t0 = Date.now();
+        const started = within("newChat", newChat({ provider: "claude", cwd: folder(ctx.cfg.dir, "ka-ended-new"), model: "haiku", prompt: "a new chat" }), 90_000);
+        await h.sleep(1_500);
+        const probe = resumed >= 0 ? await responsive("while the new chat starts", resumed) : -1;
+        if (!(await started)) throw h.fail("couldn't start the chat");
+        const { id } = await h.waitFor("the new chat", newId(before), 20_000);
+        fresh = id;
+        await h.waitFor("its reply", () => turns(id) >= 1, 60_000);
+        const c = (await pids()).chats.find((x) => x.id === id);
+        return `chat ${id} in ${Date.now() - t0}ms (backend and a send answered in ${probe}ms meanwhile), hosted ${c?.hosted}`;
+      });
+      for (const [name, id] of [["the reopened chat", resumed], ["the new chat", fresh]] as const) {
+        await h.step(`ka-ended: a message to ${name} (running) is answered`, async () => {
+          if (id < 0) throw h.fail("no chat");
+          await h.waitFor("the chat idle", () => chat(id)?.state === "idle", 30_000);
+          const n = turns(id);
+          const t0 = Date.now();
+          await within("chatSend", api().chatSend(id, "one more"));
+          await h.waitFor("the reply", () => turns(id) > n, 30_000);
+          return `${Date.now() - t0}ms`;
+        });
+      }
+      await h.step("ka-ended: the window still answers (a backend round trip)", async () => `${await responsive("at the end")}ms`);
+      await h.shot("ka-ended-after");
     },
     async "ka-update-after"(ctx) {
       const { getVersion } = await import("@tauri-apps/api/app");

@@ -107,7 +107,11 @@ export function useChanges(
     addTime("changes.updates", 1);
     applied.current = 0;
   }, [state]);
-  const reload = useCallback(async () => {
+  // One load at a time: a reload asked for while one is on its way runs once after it (a slow load on a long session
+  // must never pile up calls that each hold one of the backend's threads).
+  const inFlight = useRef<Promise<void> | null>(null);
+  const again = useRef(false);
+  const load = useCallback(async () => {
     const tg = t.current;
     if (!tg) return;
     const my = ++seq.current;
@@ -138,6 +142,20 @@ export function useChanges(
       if (my === seq.current) setError(String(e instanceof Error ? e.message : e));
     }
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reload = useCallback(async () => {
+    if (inFlight.current) {
+      again.current = true;
+      return inFlight.current;
+    }
+    const run = async () => {
+      do {
+        again.current = false;
+        await load();
+      } while (again.current);
+    };
+    inFlight.current = run().finally(() => (inFlight.current = null));
+    return inFlight.current;
+  }, [load]);
   const live = enabled && visible;
   // New activity, at most every `gap` ms (a busy terminal session writes several lines a second); at once when the
   // mode changed (the panel opened: its diffs are wanted now).

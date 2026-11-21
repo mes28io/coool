@@ -752,6 +752,8 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
         await api().chatSend(id, t);
         setText("");
       }
+    } catch (e) {
+      useStore.getState().toast(`The message wasn't sent: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       setBusy(false);
     }

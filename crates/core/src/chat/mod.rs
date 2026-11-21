@@ -1049,6 +1049,24 @@ impl Chat {
         matches!(self.link, Link::Host(..))
     }
 
+    /// A hosted chat's calls without the hub: a copy that reaches the same host and chat (and shares its events), so
+    /// the caller can let go of the hub's lock while the host answers. None for a chat of this process.
+    pub fn host_proxy(&self) -> Option<Chat> {
+        let Link::Host(c, k) = &self.link else { return None };
+        Some(Chat {
+            id: self.id,
+            provider: self.provider,
+            cwd: self.cwd.clone(),
+            pid: self.pid,
+            started: self.started,
+            shared: self.shared.clone(),
+            link: Link::Host(c.clone(), k.clone()),
+            kill_requested: None,
+            args: Vec::new(),
+            launch: self.launch.clone(),
+        })
+    }
+
     /// The host key of a hosted chat.
     pub fn host_key(&self) -> Option<&str> {
         match &self.link {
