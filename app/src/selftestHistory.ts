@@ -132,7 +132,9 @@ export function historyScenarios(k: HistoryKit): Record<string, () => Promise<vo
       await step("history: opening it shows the session with its whole history, Changes and Context", async () => {
         const row = zebra!;
         useStore.getState().openHistory({ text: "zebracorn" });
-        const el = await waitFor("its row", () => $(`[data-history-row="${row.key}"]`), 20_000);
+        // The page still shows the filtered list a moment: wait for the search's own answer (one row).
+        const el = await waitFor("its row alone", () => $all("[data-history-row]").length === 1 && $(`[data-history-row="${row.key}"]`), 20_000);
+        await sleep(400);
         el.click();
         const s = await opened(row.key);
         if (s.status !== "ended") throw new Error(`status ${s.status}`);
@@ -149,7 +151,12 @@ export function historyScenarios(k: HistoryKit): Record<string, () => Promise<vo
           }
           return $('[data-earlier="start"]');
         }, 60_000);
-        const firstPrompt = $all("[data-activity-timeline] *").some((n) => n.childElementCount === 0 && (n.textContent ?? "").includes("Plan the zebracorn migration"));
+        // The timeline keeps the reader's place as history is added above: scroll to the very top to see its first prompt.
+        const firstPrompt = await waitFor("the first prompt at the top", () => {
+          const tl = $("[data-activity-timeline]");
+          if (tl) tl.scrollTop = 0;
+          return $all("[data-activity-timeline] *").some((n) => n.childElementCount === 0 && (n.textContent ?? "").includes("Plan the zebracorn migration"));
+        }, 20_000).catch(() => false);
         await sleep(600);
         await shot("history-earlier");
         if (!firstPrompt) throw new Error("the first prompt is not in the timeline after loading the earlier history");
