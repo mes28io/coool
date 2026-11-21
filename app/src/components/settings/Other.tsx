@@ -5,7 +5,7 @@ import { api, isNotAvailable, isTauri } from "../../lib/backend";
 import type { InsightsStatus } from "../../lib/types";
 import { useStore } from "../../store";
 import { openOnboarding } from "../../lib/onboarding";
-import { updateAndRestart, useUpdates } from "../../lib/update";
+import { checkNow, updateAndRestart, useUpdates } from "../../lib/update";
 import { itemLine, keepLine, stopLine } from "../../lib/updateView";
 import type { QuitCounts } from "../../lib/backend";
 import { IAlert, ICheck } from "../icons";
@@ -141,8 +141,35 @@ function AboutUpdate() {
   const [confirm, setConfirm] = useState<QuitCounts | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
   const app = status?.items.find((i) => i.id === "coool");
-  if (!app || !app.latest || !["available", "downloading", "installing", "staged", "failed"].includes(app.state)) return null;
+  if (!app || !app.latest || !["available", "downloading", "installing", "staged", "failed"].includes(app.state)) {
+    // Nothing to install: say so, when coool last looked, and offer a fresh look. The same row turns into
+    // "Update and restart" the moment a release is found.
+    const at = status?.checked_at ? new Date(status.checked_at) : null;
+    const when = at ? `checked ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "not checked yet";
+    const check = async () => {
+      setErr(null);
+      setChecking(true);
+      setErr(await checkNow().catch((e) => (e instanceof Error ? e.message : String(e))));
+      setChecking(false);
+    };
+    return (
+      <Row
+        attr="about-update"
+        label="Updates"
+        desc={`${app?.state === "current" || app?.latest == null ? "coool is up to date" : itemLine(app)} · ${when}. coool checks every hour; when a version is out, this row offers Update and restart, and working chats keep running.`}
+        k="update upgrade new version release restart check"
+        control={
+          <Button variant="outline" className="h-[30px] px-2.5 text-small" disabled={checking || !isTauri} onClick={() => void check()} data-about-check>
+            {checking ? "Checking…" : "Check now"}
+          </Button>
+        }
+      >
+        {err && <div className="text-small text-err-text">{err}</div>}
+      </Row>
+    );
+  }
   const go = async () => {
     setErr(null);
     setBusy(true);
