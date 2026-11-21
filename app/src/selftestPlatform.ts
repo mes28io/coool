@@ -2,14 +2,16 @@
 // real app with the stand-in CLIs of app/scripts/readme-shots (no model, no network, no account), set up by
 // app/scripts/platform-e2e.sh. The debug build's COOOL_PLATFORM_TEST_KEY stands in for the Keychain (an invented key,
 // sk-ant-api03-…TEST), and the app runs with an invented CLAUDE_CODE_OAUTH_TOKEN in its environment, which an API-key
-// chat must not get. The stand-in says how it is logged in with a boolean and the key's last four, never the key.
-// Run once with the chat host on (COOOL_CHAT_HOST_DIR: the key reaches the CLI through the host) and once without.
+// chat must not get. The stand-in says how it is logged in with the key's last four, its key source, and what a command
+// it ran sees (counts only), never the key. Run once with the chat host on (COOOL_CHAT_HOST_DIR: the CLI is the host's
+// child, and runs the helper from there) and once without.
 //
 //   1. Settings > Claude Platform: a key added through the form lists as its name and ••TEST; nothing the page gets
 //      holds the key.
 //   2. A chat on the subscription: no API key, the OAuth variable left alone, no badge.
-//   3. A chat on the key: the key in its environment and no other login, the header's API badge with the key's name,
-//      the turn's cost from the CLI's own count; the CLI's command line holds no key.
+//   3. A chat on the key: the CLI's `--settings` names coool's executable as its `apiKeyHelper`, the stand-in gets the
+//      key by running it, and neither its environment nor a command it runs holds the key (or another login); the
+//      header's API badge with the key's name, the turn's cost from the CLI's own count; the command line holds no key.
 //   4. A folder default: a chat started there with no choice runs on the key; the New session sheet shows it and can
 //      pick the subscription instead.
 //   5. Restart, and a resume after a stop, keep the key.
@@ -53,6 +55,8 @@ export function platformScenarios(k: PlatformKit): Record<string, () => Promise<
   const noKeyIn = (what: string, s: string) => {
     if (/sk-ant-/.test(s)) throw new Error(`${what} holds an API key`);
   };
+  // The key came from coool's helper, and neither the CLI's environment nor a command it runs holds it.
+  const viaHelper = /api key ••TEST, other logins: none, key source: apiKeyHelper, a command's env: ANTHROPIC_API_KEY×0, the key×0/;
 
   return {
     async platform() {
@@ -97,10 +101,10 @@ export function platformScenarios(k: PlatformKit): Record<string, () => Promise<
 
       let id = -1;
       let firstPid: number | null = null;
-      await k.step("platform: a chat on the key gets it (and no other login), shows the API badge and its cost", async () => {
+      await k.step("platform: a chat on the key gets it from coool's helper (none in its env, no other login), shows the API badge and its cost", async () => {
         id = await start(keyId);
         const r = await billing(id);
-        if (!/api key ••TEST, other logins: none/.test(r)) throw new Error(`the CLI says: ${r}`);
+        if (!viaHelper.test(r)) throw new Error(`the CLI says: ${r}`);
         const c = await k.waitFor("the chat's account", () => (useChats.getState().chats[id]?.account === keyId ? useChats.getState().chats[id] : null), 10_000);
         const badge = await k.waitFor("the header badge", () => $(`[data-platform-badge="${keyId}"]`), 10_000);
         if (!badge.textContent?.includes("Work e2e")) throw new Error(`the badge says ${badge.textContent}`);
@@ -108,6 +112,9 @@ export function platformScenarios(k: PlatformKit): Record<string, () => Promise<
         if (Math.abs(c.costUsd - 0.0125) > 1e-6 && Math.abs(useChats.getState().chats[id].costUsd - 0.0125) > 1e-6) throw new Error(`cost ${useChats.getState().chats[id].costUsd}`);
         const l = await launch(id);
         noKeyIn("the CLI's command line", l.ps + " " + l.args.join(" "));
+        const settings = l.args.find((a) => a.startsWith("--settings="));
+        const helper = settings ? (JSON.parse(settings.slice("--settings=".length)) as { apiKeyHelper?: string }).apiKeyHelper : undefined;
+        if (!helper || !helper.endsWith(` --coool-api-key ${keyId}`)) throw new Error(`no coool key helper on the command line: ${settings}`);
         firstPid = l.pid;
         if (items(id).some((i) => i.kind === "notice" && /Claude Platform/.test(i.text))) throw new Error("a key-source warning showed");
         await k.shot("platform-badge");
@@ -119,7 +126,7 @@ export function platformScenarios(k: PlatformKit): Record<string, () => Promise<
         const n = replies(id).length;
         await api().chatRestart(id, "billing check");
         const r = await billing(id, n);
-        if (!/api key ••TEST, other logins: none/.test(r)) throw new Error(`after the restart the CLI says: ${r}`);
+        if (!viaHelper.test(r)) throw new Error(`after the restart the CLI says: ${r}`);
         const l = await launch(id);
         if (l.pid === firstPid) throw new Error("the same CLI answered");
         if (useChats.getState().chats[id]?.account !== keyId) throw new Error("the chat lost its account");
@@ -138,7 +145,7 @@ export function platformScenarios(k: PlatformKit): Record<string, () => Promise<
         await k.waitFor("the resumed chat on the key", () => useChats.getState().chats[rid]?.account === keyId, 10_000);
         await api().chatSend(rid, "billing check");
         const r = await billing(rid);
-        if (!/api key ••TEST/.test(r)) throw new Error(`the resumed CLI says: ${r}`);
+        if (!viaHelper.test(r)) throw new Error(`the resumed CLI says: ${r}`);
         await api().chatStop(rid).catch(() => {});
         return `session ${sid.slice(0, 8)} resumed as chat ${rid}: ${r}`;
       });
@@ -148,7 +155,7 @@ export function platformScenarios(k: PlatformKit): Record<string, () => Promise<
         await loadPlatform();
         const fid = await start(undefined);
         const r = await billing(fid);
-        if (!/api key ••TEST/.test(r)) throw new Error(`the CLI says: ${r}`);
+        if (!viaHelper.test(r)) throw new Error(`the CLI says: ${r}`);
         await api().chatStop(fid).catch(() => {});
         useStore.getState().setSheet({ kind: "new", cwd: k.dir });
         const chip = await k.waitFor("the account chip on the folder default", () => $(`[data-ns-account="${keyId}"]`), 10_000);

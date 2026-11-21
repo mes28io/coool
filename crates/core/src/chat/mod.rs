@@ -866,22 +866,23 @@ impl Chat {
         {
             env.extend(crate::ladder::claude_env(l));
         }
-        // Claude Platform: the key, read from the Keychain now, rides in the CLI's environment only (never argv, a
-        // file, or the host's socket); spawn_into removes the other logins.
-        if opts.provider == Provider::Claude
-            && let Some(a) = &opts.account
-        {
-            match crate::platform::env_for(a) {
-                Ok(e) => env.extend(e),
+        // Claude Platform: the CLI gets an `apiKeyHelper` (coool's executable, which reads the Keychain) on its command
+        // line, never the key: not its environment (every command it runs would inherit it), argv, a file or the
+        // host's socket. spawn_into removes the other logins.
+        let account_args = match (&opts.account, opts.provider) {
+            (Some(a), Provider::Claude) => match crate::platform::cli_args(a) {
+                Ok(x) => x,
                 Err(e) => {
                     if let Some(p) = &mcp_file {
                         let _ = std::fs::remove_file(p);
                     }
                     return Err(e);
                 }
-            }
-        }
-        let (backend, program, args) = Self::launch(&opts, client_name, mcp, ladder_root, mcp_file.as_deref());
+            },
+            _ => Vec::new(),
+        };
+        let (backend, program, mut args) = Self::launch(&opts, client_name, mcp, ladder_root, mcp_file.as_deref());
+        args.extend(account_args);
         let r = Self::spawn_into(id, opts.provider, &opts.cwd, program, &args, &env, mcp_file.clone(), backend, reuse);
         if r.is_err()
             && let Some(p) = &mcp_file
@@ -967,8 +968,8 @@ impl Chat {
         }
         let mut cmd = Command::new(program);
         cmd.args(args).envs(env.iter().map(|(k, v)| (k, v))).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        // An API-key chat (Claude Platform): nothing else may decide where its bill goes.
-        if env.iter().any(|(k, _)| k == crate::platform::KEY_ENV) {
+        // An API-key chat (Claude Platform): nothing else may decide where its bill goes, and no key is inherited.
+        if crate::platform::uses_key(args) {
             for v in crate::platform::OTHER_AUTH {
                 cmd.env_remove(v);
             }
@@ -2116,11 +2117,11 @@ mod tests {
         assert_eq!(c.info().id, 7);
     }
 
-    /// Claude Platform: a CLI spawned with the key in its environment gets no other login (an OAuth token in coool's
-    /// own environment, a Bedrock switch, ...), and the key isn't on its command line. The fake CLI reports only
-    /// booleans and the last four characters.
+    /// Claude Platform: an API-key chat's CLI gets its key from the helper on its command line, and its environment
+    /// (inherited by every command it runs) holds no key and no other login: not a key or OAuth token coool itself was
+    /// started with, not a Bedrock switch. The fake CLI reports only booleans and last fours.
     #[test]
-    fn an_api_key_chat_gets_the_key_and_no_other_login() {
+    fn an_api_key_chat_gets_the_key_from_its_helper_and_no_key_in_its_env() {
         struct Lines;
         impl Backend for Lines {
             fn start(&mut self, _: &mut Out) {}
@@ -2144,22 +2145,28 @@ mod tests {
             }
             fn on_exit(&mut self, _: &mut Out) {}
         }
-        let script = r#"k="${ANTHROPIC_API_KEY:-}"; echo "key=${k#"${k%????}"} oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} token=${ANTHROPIC_AUTH_TOKEN:+set} bedrock=${CLAUDE_CODE_USE_BEDROCK:+set} other=${OTHER_VAR:-}""#;
-        let run = |env: Vec<(String, String)>| {
-            let c = Chat::spawn(11, Provider::Claude, "/", "/bin/sh", &["-c".into(), script.into()], &env, None, Box::new(Lines)).unwrap();
+        // Like Claude Code: the key comes from running the `apiKeyHelper` of its `--settings=` argument ($1 here); its
+        // environment (what every command it runs inherits) is reported as booleans, a key by its last four only.
+        let script = r#"h=$(printf '%s' "${1:-}" | sed -n 's/^--settings=.*"apiKeyHelper":"\([^"]*\)".*/\1/p'); hk=""; [ -n "$h" ] && hk=$(sh -c "$h"); k="${ANTHROPIC_API_KEY:-}"; echo "helper=${hk#"${hk%????}"} key=${k#"${k%????}"} oauth=${CLAUDE_CODE_OAUTH_TOKEN:+set} token=${ANTHROPIC_AUTH_TOKEN:+set} bedrock=${CLAUDE_CODE_USE_BEDROCK:+set} other=${OTHER_VAR:-}""#;
+        let run = |env: Vec<(String, String)>, extra: Vec<String>| {
+            let mut args = vec!["-c".to_string(), script.to_string(), "sh".to_string()];
+            args.extend(extra);
+            let c = Chat::spawn(11, Provider::Claude, "/", "/bin/sh", &args, &env, None, Box::new(Lines)).unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
             while c.is_running() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(20));
             }
             let (evs, _) = c.events_since(0);
-            assert!(!c.launch_args().iter().any(|a| a.contains("sk-ant")));
-            evs.iter().find_map(|e| if let ChatEventKind::Notice { text, .. } = &e.kind { text.starts_with("key=").then(|| text.clone()) } else { None }).unwrap()
+            assert!(!c.launch_args().iter().any(|a| a.contains("sk-ant-api03-COOOL")));
+            evs.iter().find_map(|e| if let ChatEventKind::Notice { text, .. } = &e.kind { text.starts_with("helper=").then(|| text.clone()) } else { None }).unwrap()
         };
-        let others = || vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "oauth-x".to_string()), ("ANTHROPIC_AUTH_TOKEN".into(), "t".into()), ("CLAUDE_CODE_USE_BEDROCK".into(), "1".into()), ("OTHER_VAR".into(), "kept".into())];
-        let mut with_key = others();
-        with_key.push((crate::platform::KEY_ENV.into(), "sk-ant-api03-TESTTESTTEST".into()));
-        assert_eq!(run(with_key), "key=TEST oauth= token= bedrock= other=kept");
-        assert_eq!(run(others()), "key= oauth=set token=set bedrock=set other=kept", "a subscription chat's environment is left alone");
+        // coool itself started with a key of its own and other logins: none of them reach an API-key chat's CLI.
+        let env = || vec![("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "oauth-x".to_string()), ("ANTHROPIC_AUTH_TOKEN".into(), "t".into()), ("CLAUDE_CODE_USE_BEDROCK".into(), "1".into()), ("OTHER_VAR".into(), "kept".into()), (crate::platform::KEY_ENV.into(), "sk-ant-api03-COOOLSOWNENV".into())];
+        // A stand-in helper (the real one is coool's executable) printing an invented key; the comment holds the flag.
+        let helper = vec![format!("--settings={}", serde_json::json!({ "apiKeyHelper": "printf %s sk-ant-api03-TESTHELP # --coool-api-key x" }))];
+        assert!(crate::platform::uses_key(&helper));
+        assert_eq!(run(env(), helper), "helper=HELP key= oauth= token= bedrock= other=kept");
+        assert_eq!(run(env(), vec![]), "helper= key=NENV oauth=set token=set bedrock=set other=kept", "a subscription chat's environment is left alone");
     }
 
     /// An API-key chat whose key is gone doesn't start (and says so without any key in the error).

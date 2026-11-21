@@ -2,6 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // Claude Platform: a chat's CLI runs coool's executable as its `apiKeyHelper` to get the chat's API key (printed
+    // on stdout, read from the Keychain); nothing else starts.
+    if std::env::args().nth(1).as_deref() == Some(coool_app_lib::API_KEY_HELPER_FLAG) {
+        std::process::exit(coool_app_lib::api_key_helper(std::env::args().nth(2).as_deref()));
+    }
     // A chat's CLI runs coool's executable as its `coool-device` MCP server: relay to the app and never start the UI.
     if std::env::args().nth(1).as_deref() == Some(coool_app_lib::DEVICE_MCP_FLAG) {
         std::process::exit(coool_app_lib::device_mcp_proxy());

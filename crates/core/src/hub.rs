@@ -763,9 +763,9 @@ impl Hub {
         let c = self.chat_mut(id).context("no such chat")?;
         let sid = c.session_id().context("the chat has no session yet")?;
         let (provider, cwd) = (c.provider, c.cwd.clone());
-        // Claude Platform: the terminal goes on billing the chat's key (the CLI's TUI may ask once whether to use it).
-        let env = match c.info().account.filter(|_| provider == Provider::Claude) {
-            Some(a) => crate::platform::env_for(&a)?,
+        // Claude Platform: the terminal goes on billing the chat's key, through the same helper as the chat.
+        let account_args = match c.info().account.filter(|_| provider == Provider::Claude) {
+            Some(a) => crate::platform::cli_args(&a)?,
             None => Vec::new(),
         };
         c.stop();
@@ -773,11 +773,12 @@ impl Hub {
         while self.chat(id).is_some_and(|c| c.is_running()) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(25));
         }
-        let args = match provider {
+        let mut args = match provider {
             Provider::Claude => vec!["--resume".to_string(), sid.clone()],
             Provider::Codex => vec!["resume".to_string(), sid.clone()],
         };
-        let m = Managed::spawn_env(provider, &args, &cwd, rows, cols, &env)?;
+        args.extend(account_args);
+        let m = Managed::spawn_env(provider, &args, &cwd, rows, cols, &[])?;
         self.managed.push(Some(m));
         let pty = self.managed.len() - 1;
         // The session id is known exactly: link the terminal to it now instead

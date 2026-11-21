@@ -1246,7 +1246,7 @@ impl Backend for Claude {
                     }
                     // Claude Platform: say so when the CLI didn't take the login this chat was started with.
                     if let Some(src) = v["apiKeySource"].as_str() {
-                        if self.api_key && src != crate::platform::KEY_ENV {
+                        if self.api_key && src != crate::platform::HELPER_SOURCE {
                             o.ev(ChatEventKind::notice(NoticeLevel::Warn, format!("This chat was started on a Claude Platform API key, but Claude Code says it uses {src} instead. Check the bill before relying on it.")));
                         } else if !self.api_key && src == crate::platform::KEY_ENV {
                             o.ev(ChatEventKind::notice(NoticeLevel::Info, "Claude Code found ANTHROPIC_API_KEY in coool's environment, so this chat is billed to that API key, not your subscription."));
@@ -1533,8 +1533,11 @@ mod tests {
 
         let mut c = Claude::new(&ChatOptions { account: Some("aaa111".into()), ..opts() });
         let mut o = Out::default();
-        c.on_line(&init("ANTHROPIC_API_KEY"), &mut o);
+        c.on_line(&init("apiKeyHelper"), &mut o);
         assert!(!warn(&o));
+        let mut o = Out::default();
+        c.on_line(&init("ANTHROPIC_API_KEY"), &mut o);
+        assert!(warn(&o), "a key from the environment is not the chat's helper");
         let mut o = Out::default();
         c.on_line(&result(0.25), &mut o);
         c.on_line(&result(0.75), &mut o);

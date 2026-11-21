@@ -7,10 +7,16 @@
 //! - [`Store`] (a small JSON file in the app's data folder) holds only what is safe to show: each key's id, name and
 //!   last four characters, the per-folder defaults, and which account each chat's session ran on (so a resume keeps
 //!   it). A key itself is never logged, serialized, persisted outside the Keychain or put into an error string.
-//! - A chat's [`crate::chat::ChatOptions::account`] names the key by id. The process that spawns the CLI (the app, or
-//!   the chat host for a hosted chat) reads the key from the Keychain right then ([`key`]) and hands it to the CLI in
-//!   its environment ([`KEY_ENV`]), with the variables that would make it use another login removed
-//!   ([`OTHER_AUTH`]). Nothing crosses the host's socket but the id.
+//! - A chat's [`crate::chat::ChatOptions::account`] names the key by id. The key never sits in the CLI's environment:
+//!   Claude Code passes its environment to every command it runs, so any Bash command, build script or SDK-using
+//!   project would read or bill it. Instead the CLI gets `--settings={"apiKeyHelper":"'<coool>' --coool-api-key <id>"}`
+//!   ([`cli_args`]): Claude Code runs that helper itself (at start, then again after 5 minutes or a 401), takes the key
+//!   from its stdout and keeps it in its own memory. The helper is coool's own executable ([`HELPER_FLAG`],
+//!   [`helper_main`]), which reads the Keychain item and prints it. Whoever spawns the CLI (the app, or the chat host
+//!   for a hosted chat) checks the item is there ([`check`], without reading it) and removes from the CLI's
+//!   environment any `ANTHROPIC_API_KEY` coool itself was started with (it would win over the helper) and the
+//!   variables that would make the CLI use another login ([`OTHER_AUTH`]). Nothing crosses the host's socket but the
+//!   id; the command line holds only the id and coool's path.
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -21,13 +27,19 @@ use std::path::{Path, PathBuf};
 pub const ASSIST_ID: &str = "assist";
 /// What the page sends for "the subscription" when it chose explicitly (as opposed to "use the default").
 pub const SUBSCRIPTION: &str = "subscription";
-/// The variable Claude Code reads the key from. In print mode (`claude -p`, how coool runs chats) the CLI uses it
-/// without the interactive "use this API key?" approval (observed in Claude Code 2.1.330: non-interactive sessions
-/// take `ANTHROPIC_API_KEY` as the key source, ahead of the claude.ai login).
+/// The variable Claude Code would read a key from. coool never sets it: an API-key chat's CLI has it removed (one in
+/// coool's own environment would take precedence over the chat's helper), and a subscription chat whose CLI reports
+/// it as its key source gets a notice.
 pub const KEY_ENV: &str = "ANTHROPIC_API_KEY";
-/// Variables removed from an API-key chat's environment: other credentials and providers the CLI would prefer or
-/// combine with the key, so the bill lands on the chosen key.
+/// `coool --coool-api-key <id>`: prints account `id`'s key on stdout (the CLI's `apiKeyHelper`, see [`helper_main`]).
+pub const HELPER_FLAG: &str = "--coool-api-key";
+/// The `apiKeySource` an API-key chat's CLI reports in its `system/init`.
+pub const HELPER_SOURCE: &str = "apiKeyHelper";
+/// Variables removed from an API-key chat's environment: a key coool itself was started with, other credentials and
+/// providers the CLI would prefer to (or combine with) the helper's key, and the host-managed mode that ignores a
+/// settings `apiKeyHelper` (read from Claude Code 2.1.330), so the bill lands on the chosen key.
 pub const OTHER_AUTH: &[&str] = &[
+    KEY_ENV,
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
@@ -37,6 +49,7 @@ pub const OTHER_AUTH: &[&str] = &[
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
     "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
 ];
 const SERVICE_PREFIX: &str = "coool-platform-key-";
 const NAME_MAX: usize = 40;
@@ -185,9 +198,98 @@ pub fn key(id: &str) -> Result<String> {
     bail!("the API key for this chat is no longer in the Keychain (Settings > Claude Platform); pick another account")
 }
 
-/// The environment an API-key chat's CLI gets on top of coool's own (see [`OTHER_AUTH`] for what is removed).
-pub fn env_for(id: &str) -> Result<Vec<(String, String)>> {
-    Ok(vec![(KEY_ENV.to_string(), key(id)?)])
+/// Whether account `id` still has its key, without reading the key, so a start fails early with a clear message when
+/// it doesn't. The CLI's helper reads it later, in its own process.
+pub fn check(id: &str) -> Result<()> {
+    if test_key().is_some() {
+        return Ok(());
+    }
+    if id == ASSIST_ID {
+        if crate::insights::has_api_key() {
+            return Ok(());
+        }
+        bail!("Assist's API key is gone (Settings > Assist); pick another account for this chat");
+    }
+    if !valid_id(id) {
+        bail!("unknown API key");
+    }
+    #[cfg(target_os = "macos")]
+    if crate::insights::keychain_has_in(&service(id)) {
+        return Ok(());
+    }
+    bail!("the API key for this chat is no longer in the Keychain (Settings > Claude Platform); pick another account")
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+static HELPER_EXE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The program the CLI runs as its key helper. Unset, the running executable: coool's own (the app and the chat host
+/// are the same executable, whose `main` handles [`HELPER_FLAG`] before anything else). Tests point it elsewhere.
+pub fn set_helper_exe(p: PathBuf) {
+    let _ = HELPER_EXE.set(p);
+}
+
+fn helper_exe() -> Result<PathBuf> {
+    if let Some(p) = HELPER_EXE.get() {
+        return Ok(p.clone());
+    }
+    std::env::current_exe().map_err(|e| anyhow::anyhow!("can't find coool's executable for the API key helper: {e}"))
+}
+
+/// `s` quoted for `sh` (the CLI runs `apiKeyHelper` through a shell).
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// The shell command the CLI runs for account `id`'s key: `'<coool>' --coool-api-key <id>`.
+pub fn helper_command(id: &str) -> Result<String> {
+    if !valid_id(id) {
+        bail!("unknown API key");
+    }
+    Ok(format!("{} {HELPER_FLAG} {id}", sh_quote(&helper_exe()?.to_string_lossy())))
+}
+
+const SETTINGS_ARG: &str = "--settings=";
+
+/// The arguments an API-key chat's CLI gets: Claude Code's `apiKeyHelper`, as one `--settings=<json>` argument (so
+/// [`uses_key`] can tell). Command-line settings sit above the user's and project's (only managed policy is above),
+/// and a helper set there runs without the workspace-trust check a project's settings need. Checks the key is there.
+pub fn cli_args(id: &str) -> Result<Vec<String>> {
+    check(id)?;
+    let settings = serde_json::json!({ "apiKeyHelper": helper_command(id)? });
+    Ok(vec![format!("{SETTINGS_ARG}{settings}")])
+}
+
+/// Whether `args` (a CLI's command line) are an API-key chat's (see [`cli_args`]): its spawner then removes
+/// [`OTHER_AUTH`] from the environment.
+pub fn uses_key(args: &[String]) -> bool {
+    args.iter().any(|a| a.starts_with(SETTINGS_ARG) && a.contains("\"apiKeyHelper\"") && a.contains(HELPER_FLAG))
+}
+
+/// `coool --coool-api-key <id>` (the CLI's `apiKeyHelper`): prints account `id`'s key, read from the Keychain now, on
+/// stdout and nothing else; an error goes to stderr without any of the key. Returns the exit code.
+pub fn helper_main(id: Option<&str>) -> i32 {
+    use std::io::Write;
+    let Some(id) = id else {
+        eprintln!("usage: coool {HELPER_FLAG} <key id>");
+        return 2;
+    };
+    match key(id) {
+        Ok(k) => {
+            let mut out = std::io::stdout().lock();
+            match out.write_all(k.as_bytes()).and_then(|_| out.write_all(b"\n")).and_then(|_| out.flush()) {
+                Ok(()) => 0,
+                Err(_) => 1,
+            }
+        }
+        Err(e) => {
+            eprintln!("coool: {e:#}");
+            1
+        }
+    }
 }
 
 impl Store {
@@ -418,6 +520,25 @@ mod tests {
         let e = key("doesnotexist000").unwrap_err().to_string();
         assert!(e.contains("Keychain"), "{e}");
         assert!(key("../evil").is_err());
+        let e = check("doesnotexist000").unwrap_err().to_string();
+        assert!(e.contains("Keychain"), "{e}");
+        assert!(check("../evil").is_err() && cli_args("doesnotexist000").is_err());
+    }
+
+    /// The CLI's settings name coool's helper by path and key id only (quoted for the shell it runs through), never a
+    /// key; an id that isn't one of coool's can't smuggle shell into it.
+    #[test]
+    fn the_helper_is_named_by_path_and_id_only() {
+        assert_eq!(sh_quote("/Apps/my coool.app/c'o"), r"'/Apps/my coool.app/c'\''o'");
+        let c = helper_command("abc123def456").unwrap();
+        assert!(c.ends_with("' --coool-api-key abc123def456"), "{c}");
+        assert!(helper_command("x; rm -rf ~").is_err() && helper_command("").is_err());
+        let args = vec![format!("{SETTINGS_ARG}{}", serde_json::json!({ "apiKeyHelper": c }))];
+        assert!(uses_key(&args));
+        let v: serde_json::Value = serde_json::from_str(&args[0][SETTINGS_ARG.len()..]).unwrap();
+        assert_eq!(v["apiKeyHelper"].as_str(), Some(c.as_str()));
+        assert!(!uses_key(&["--settings={}".into(), "--resume".into()]));
+        assert!(!args[0].contains("sk-ant"));
     }
 
     /// Round trip through the real login Keychain on a throwaway item with an invented key (never a real one); the item
@@ -433,10 +554,11 @@ mod tests {
         assert_eq!(m.last4, "TEST");
         assert!(crate::insights::keychain_has_in(&service(&m.id)));
         assert_eq!(key(&m.id).unwrap(), "sk-ant-api03-TESTTESTTEST");
-        assert_eq!(env_for(&m.id).unwrap(), vec![(KEY_ENV.to_string(), "sk-ant-api03-TESTTESTTEST".to_string())]);
+        assert!(check(&m.id).is_ok());
         s.remove(&m.id).unwrap();
         assert!(!crate::insights::keychain_has_in(&service(&m.id)));
         assert!(key(&m.id).is_err());
+        assert!(check(&m.id).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

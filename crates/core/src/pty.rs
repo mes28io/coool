@@ -72,7 +72,8 @@ impl Managed {
         Self::spawn_env(provider, args, cwd, rows, cols, &[])
     }
 
-    /// [`Self::spawn`] with `env` added; with the Claude Platform key among it, the other logins removed (as for a chat).
+    /// [`Self::spawn`] with `env` added; for a Claude Platform key's arguments ([`crate::platform::cli_args`]), any key
+    /// and the other logins removed from its environment (as for a chat).
     pub fn spawn_env(provider: Provider, args: &[String], cwd: &str, rows: u16, cols: u16, env: &[(String, String)]) -> Result<Self> {
         let pty = native_pty_system();
         let pair = pty
@@ -86,7 +87,7 @@ impl Managed {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        if env.iter().any(|(k, _)| k == crate::platform::KEY_ENV) {
+        if crate::platform::uses_key(args) {
             for v in crate::platform::OTHER_AUTH {
                 cmd.env_remove(v);
             }

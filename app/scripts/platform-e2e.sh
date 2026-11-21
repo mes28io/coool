@@ -2,7 +2,11 @@
 # Claude Platform (APP_SPEC "Claude Platform"; self-test scenario `platform`, app/src/selftestPlatform.ts): chats billed
 # to an API key instead of the subscription, in the real app with the stand-in CLIs of app/scripts/readme-shots (no
 # model, no network, no account). Two launches: the chats run inside coool (no chat host), then in a chat host of the
-# run's own (COOOL_CHAT_HOST_DIR), so the key must reach the CLI through the host.
+# run's own (COOOL_CHAT_HOST_DIR), whose CLIs run the key helper from there.
+#
+# The key reaches the CLI only through `--settings={"apiKeyHelper": "'<this run's coool>' --coool-api-key <id>"}`: the
+# stand-in runs that helper as Claude Code does and reports the key's last four, its key source, and what a command it
+# runs sees (how many ANTHROPIC_API_KEY variables, how many variables hold the key: both must be 0).
 #
 #   COOOL_BIN=<debug build with the current frontend> sh app/scripts/platform-e2e.sh
 #

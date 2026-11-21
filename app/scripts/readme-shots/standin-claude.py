@@ -144,22 +144,57 @@ def status_line():
     out({"type": "system", "subtype": "status", "status": "requesting", "session_id": SID, "uuid": str(uuid.uuid4())})
 
 
-# Claude Platform (the `platform` self-test): like the real CLI in print mode, an ANTHROPIC_API_KEY in the environment
-# is the key source, and each result reports what the process has cost so far. Only a boolean and the last four
-# characters of the key are ever said back, never the key.
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# Claude Platform (the `platform` self-test): like the real CLI, an `apiKeyHelper` from `--settings` is run through a
+# shell and its stdout is the key (coool's own executable in helper mode); without one, an ANTHROPIC_API_KEY in the
+# environment is the key source (the real CLI prefers the env variable, which is why coool removes it). Each result
+# reports what the process has cost so far. Only the last four characters of the key and counts are ever said back.
+def _settings():
+    for i, a in enumerate(ARGS):
+        raw = a[len("--settings="):] if a.startswith("--settings=") else (ARGS[i + 1] if a == "--settings" and i + 1 < len(ARGS) else None)
+        if raw is not None:
+            try:
+                return json.loads(raw)
+            except ValueError:
+                return {}
+    return {}
+
+
+def _api_key():
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return os.environ["ANTHROPIC_API_KEY"], "ANTHROPIC_API_KEY"
+    helper = _settings().get("apiKeyHelper")
+    if helper:
+        import subprocess
+        r = subprocess.run(helper, shell=True, capture_output=True, text=True, timeout=60)
+        k = r.stdout.strip()
+        return (k, "apiKeyHelper") if r.returncode == 0 and k else ("", f"apiKeyHelper failed (exit {r.returncode})")
+    return "", "none"
+
+
+API_KEY, KEY_SOURCE = _api_key()
 OTHER_AUTH = [v for v in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX") if os.environ.get(v)]
 COST = [0.0]
 
 
+def command_env():
+    """What a command the agent runs sees (the Bash tool inherits the CLI's environment): how many ANTHROPIC_API_KEY
+    variables, and how many variables hold the key. COOOL_PLATFORM_TEST_KEY is the debug build's stand-in for the
+    Keychain (the helper reads the invented key from it), so it is left out of the count."""
+    import subprocess
+    lines = subprocess.run("env", shell=True, capture_output=True, text=True).stdout.splitlines()
+    named = sum(1 for l in lines if l.startswith("ANTHROPIC_API_KEY="))
+    holds = sum(1 for l in lines if API_KEY and API_KEY in l and not l.startswith("COOOL_PLATFORM_TEST_KEY="))
+    return f"a command's env: ANTHROPIC_API_KEY×{named}, the key×{holds}"
+
+
 def auth_words():
     key = f"api key ••{API_KEY[-4:]}" if API_KEY else "no api key"
-    return f"{key}, other logins: {', '.join(OTHER_AUTH) if OTHER_AUTH else 'none'}"
+    return f"{key}, other logins: {', '.join(OTHER_AUTH) if OTHER_AUTH else 'none'}, key source: {KEY_SOURCE}, {command_env()}"
 
 
 def init_line():
     out({"type": "system", "subtype": "init", "cwd": str(CWD), "session_id": SID, "tools": ["Agent", "Bash", "Edit", "Glob", "Grep", "Read", "Write", "WebFetch", "TodoWrite"],
-         "mcp_servers": [], "model": MODEL, "permissionMode": MODE, "slash_commands": [c["name"] for c in COMMANDS], "apiKeySource": "ANTHROPIC_API_KEY" if API_KEY else "none", "claude_code_version": "2.9.0",
+         "mcp_servers": [], "model": MODEL, "permissionMode": MODE, "slash_commands": [c["name"] for c in COMMANDS], "apiKeySource": KEY_SOURCE if API_KEY else "none", "claude_code_version": "2.9.0",
          "output_style": "default", "agents": ["general-purpose", "Explore", "Plan"], "skills": [], "plugins": [], "uuid": str(uuid.uuid4())})
 
 
