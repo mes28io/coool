@@ -1,12 +1,13 @@
 // Composer for chat sessions: Enter sends, Shift+Enter newline, "/" opens the
 // command menu (fuzzy, keyboard driven), up-arrow recalls earlier prompts,
 // model and permission-mode chips open pickers, Stop interrupts the turn.
-// /model, /clear, /context, /status, /cost and /usage are handled here,
+// /model, /clear, /context, /status, /cost, /usage and /restart are handled here,
 // natively, and never sent to the CLI (CHAT_SPEC "Slash commands").
 
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { chatCall, newChat } from "../lib/actions";
+import { askRestart, chatCall, newChat } from "../lib/actions";
+import { parseRestart } from "../lib/restartRules";
 import { api } from "../lib/backend";
 import { type Chat, useChats } from "../lib/chat";
 import { score } from "../lib/fuzzy";
@@ -32,7 +33,7 @@ import { VoiceStrip } from "./voice/VoiceStrip";
 import { AttachButton, AttachTray } from "./Attachments";
 import { addFiles, listenDrops, readyAttachments, useAttach, useDrafts } from "../lib/attach";
 
-type Native = "model" | "clear" | "context" | "status" | "usage" | "mode" | "changes";
+type Native = "model" | "clear" | "context" | "status" | "usage" | "mode" | "changes" | "restart";
 /** Handled here and never sent (CHAT_SPEC "Slash commands"). `only`: for one provider. */
 const NATIVE: Record<string, { native: Native; description: string; only?: "claude" | "codex" }> = {
   model: { native: "model", description: "Choose the model for this chat" },
@@ -44,6 +45,8 @@ const NATIVE: Record<string, { native: Native; description: string; only?: "clau
   usage: { native: "usage", description: "Tokens used, by model and subagent" },
   changes: { native: "changes", description: "Files and commands the agent changed in this chat" },
   approvals: { native: "mode", description: "Choose what runs without asking", only: "codex" },
+  // CHAT_SPEC "Restart": `/restart continue` sends "continue" once the CLI is back.
+  restart: { native: "restart", description: "Restart the CLI on this conversation (it reads its settings, MCP and instructions again); add a message to send after" },
 };
 const nativeFor = (name: string, provider: string) => {
   const n = NATIVE[name];
@@ -220,6 +223,7 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     if (n === "model") setPop("model");
     else if (n === "mode") setPop("mode");
     else if (n === "clear") void newChat({ provider: chat.provider, cwd: chat.cwd, model: chat.model });
+    else if (n === "restart") askRestart(chat.id);
     else {
       setInfoTab(n === "usage" ? "usage" : n);
       setInfoTurn(null);
@@ -231,6 +235,14 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
     const t = (raw ?? text).trim();
     const { atts, reading } = raw === undefined ? readyAttachments(chat.id) : { atts: [], reading: false };
     if ((!t && !atts.length) || disabled || reading) return;
+    // `/restart [message]`: coool's own, also while a turn runs (asked first then).
+    const restart = atts.length ? null : parseRestart(t);
+    if (restart) {
+      hist.current = { i: null, draft: "" };
+      setText("");
+      askRestart(chat.id, restart.message);
+      return;
+    }
     const m = /^\/(\S+)\s*$/.exec(t);
     const native = m && !atts.length ? nativeByKey.get(m[1].toLowerCase()) : undefined;
     if (native) return runNative(native);
@@ -266,6 +278,8 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
   sendRef.current = () => send();
 
   const pick = (it: MenuItem, run: boolean) => {
+    // Tab completes `/restart ` so a message can follow it; Enter restarts.
+    if (it.native === "restart" && !run) return setText("/restart ");
     if (it.native) return runNative(it.native);
     // Commands that need arguments get completed, not run.
     if (run && !/^</.test(it.hint)) send(`/${it.name}`);

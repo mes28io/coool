@@ -779,6 +779,7 @@ fn build_view(events: &[ChatEvent], cwd: &str, since: Option<u64>) -> ChatView {
                 turn_start = None;
             }
             ChatEventKind::Exited { .. } => state = "ended",
+            ChatEventKind::Restarted => state = "idle",
             _ => {}
         }
     }

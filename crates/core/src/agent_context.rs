@@ -54,6 +54,11 @@ pub fn text(cli: Cli, c: &AgentContext, helpers: bool) -> String {
         Cli::Codex => " Approvals show your command's justification and a risk tag: say in it what the command does and why.",
     });
     s.push_str(" Attachments arrive as images or `<attachment path=…>` lines.");
+    // The CLI reads its settings, MCP config, permissions and instructions only at start: coool restarts it in place.
+    s.push_str(match cli {
+        Cli::Claude => " coool restarts this session in place (Restart button, `/restart`): when settings, MCP, permissions or CLAUDE.md need a restart, say \"press Restart (or type /restart continue)\", not \"restart Claude Code\".",
+        Cli::Codex => " coool restarts this session in place (Restart button, `/restart`): when config, MCP or AGENTS.md need a restart, say \"press Restart (or type /restart continue)\", not \"restart Codex\".",
+    });
     if c.any_device() {
         s.push_str("\n\nYour own devices, in coool's window (never the person's screen):");
         if c.browser {
@@ -99,6 +104,8 @@ mod tests {
         let bare = text(Cli::Claude, &AgentContext::default(), false);
         assert!(bare.starts_with("# coool\nYou run in coool"));
         assert!(bare.contains("`description`") && bare.contains("<attachment"));
+        assert!(bare.contains("press Restart (or type /restart continue)") && bare.contains("not \"restart Claude Code\""));
+        assert!(text(Cli::Codex, &AgentContext::default(), false).contains("not \"restart Codex\""));
         for absent in ["Browser panel", "iPhone", "Sandboxed Mac", "pilot_run", "Jobs panel", "phone"] {
             assert!(!bare.contains(absent), "{absent} in {bare}");
         }
@@ -117,8 +124,8 @@ mod tests {
     fn small() {
         let full = text(Cli::Claude, &all(), true);
         let bare = text(Cli::Claude, &AgentContext::default(), false);
-        assert!(approx_tokens(&full) < 300, "{} tokens", approx_tokens(&full));
-        assert!(approx_tokens(&bare) < 80, "{} tokens", approx_tokens(&bare));
+        assert!(approx_tokens(&full) < 340, "{} tokens", approx_tokens(&full));
+        assert!(approx_tokens(&bare) < 125, "{} tokens", approx_tokens(&bare));
     }
 
     #[test]

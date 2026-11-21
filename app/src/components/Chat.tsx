@@ -5,7 +5,8 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { answerPermission, answerQuestion, newChat } from "../lib/actions";
+import { answerPermission, answerQuestion, newChat, restartChat, useRestarting } from "../lib/actions";
+import { restartOffer } from "../lib/restartRules";
 import { type Chat, type ChatItem, chatTitle, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { permissionWhat, rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
@@ -44,7 +45,7 @@ import { RiskTag } from "./RiskTag";
 import { LaterBar, useFolded, useQuestionLater } from "./QuestionLater";
 import { digitPick, isTyping, keyQuestion } from "../lib/questionKeys";
 import { NoteRows } from "./SteerStrip";
-import { IAlert, IChevron, ICheck, IClose, IDiff, IFile, IGlobe, IMac, IPhone, IReturn, ITerminal } from "./icons";
+import { IAlert, IChevron, ICheck, IClose, IDiff, IFile, IGlobe, IMac, IPhone, IRefresh, IReturn, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
 import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot, TokenCount } from "./primitives";
@@ -413,6 +414,8 @@ export function ChatTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.items, chat.cwd, chat.permissionMode, liveText, liveThink]);
   const showRow = working && !awaiting;
+  // CHAT_SPEC "Restart": the agent's last reply asks for a restart of the CLI: one button does it and says "continue".
+  const offer = useMemo(() => restartOffer(chat.items), [chat.items]);
   // Precise: from event timestamps, never from HH:MM:SS.
   const idleSince = useMemo(() => {
     let t = chat.turnStart ?? chat.lastTs;
@@ -505,6 +508,7 @@ export function ChatTimeline({
           />
           </KeepScope.Provider>
         )}
+        {offer && !working && <RestartOffer chat={chat} />}
         <AnimatePresence>
           {showRow && (
             <motion.div key="thinking" initial={enter} animate={shown} exit={{ opacity: 0, transition: { duration: 0.15 } }} transition={{ duration: 0.3, ease }}>
@@ -521,6 +525,21 @@ export function ChatTimeline({
       <JumpToBottom away={away} fresh={fresh} needs={needs} onClick={() => toBottom(true)} />
     </div>
     <LaterBar chat={chat} compact={compact} />
+    </div>
+  );
+}
+
+/** Under a reply that asks the person to restart Claude Code / Codex: restart it here and send "continue". */
+function RestartOffer({ chat }: { chat: Chat }) {
+  const busy = useRestarting((s) => !!s.on[chat.id]);
+  const cli = chat.provider === "claude" ? "Claude Code" : "Codex";
+  return (
+    <div className="-mt-1 flex items-center gap-2.5" data-restart-offer={busy ? "busy" : "idle"}>
+      <Button variant="outline" className="h-[30px] gap-1.5 px-2.5 text-small" disabled={busy} onClick={() => void restartChat(chat.id, "continue")}>
+        <IRefresh size={13} className={busy ? "animate-spin" : undefined} />
+        {busy ? "Restarting…" : "Restart and continue"}
+      </Button>
+      <span className="text-small text-faint">Restarts {cli} on this conversation, then sends “continue”.</span>
     </div>
   );
 }

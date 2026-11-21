@@ -420,6 +420,27 @@ def long_reply_turn(prompt, start):
     result(start, turns=10)
 
 
+def settings_turn(prompt, start):
+    """Changes its own MCP config and asks for a restart, as agents do (the `restart` self-test, selftestRestart.ts)."""
+    tool("Read", {"file_path": str(CWD / ".mcp.json")}, "{}\n", pause=0.2)
+    text(f"I added the `notes` server to `.mcp.json` (stand-in pid {os.getpid()}, session {SID}). Claude Code reads MCP servers only at start, so restart Claude Code, then come back and type continue.")
+    title("Add the notes MCP server")
+    result(start, turns=2)
+
+
+def continue_turn(prompt, start):
+    """After a restart: says which process and session it is (the `restart` self-test checks both)."""
+    text(f"Continuing after the restart (stand-in pid {os.getpid()}, session {SID}): the notes server is connected.")
+    result(start)
+
+
+def slow_turn(prompt, start):
+    """A step that takes a while (a running turn for `/restart` to ask about)."""
+    tool("Bash", {"command": "sleep 40", "description": "Wait a while"}, "", pause=40)
+    text("Waited.")
+    result(start, turns=2)
+
+
 def generic_turn(prompt, start):
     text("Done.")
     result(start)
@@ -435,6 +456,12 @@ def run_turn(prompt):
     try:
         if "changes demo" in low:
             changes_turn(prompt, start)
+        elif "settings demo" in low:
+            settings_turn(prompt, start)
+        elif "slow demo" in low:
+            slow_turn(prompt, start)
+        elif low.strip() == "continue":
+            continue_turn(prompt, start)
         elif "long reply" in low:
             long_reply_turn(prompt, start)
         elif "march" in low:

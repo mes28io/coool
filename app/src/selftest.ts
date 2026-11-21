@@ -73,6 +73,7 @@ import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
 import { changesScenarios } from "./selftestChanges";
 import { typingScenarios } from "./selftestTyping";
+import { restartScenarios } from "./selftestRestart";
 import { historyScenarios } from "./selftestHistory";
 import { keepaliveScenarios } from "./selftestKeepalive";
 import { coverOf, launchTrace, useUpdates } from "./lib/update";
@@ -7866,6 +7867,10 @@ for (const n of ["changes", "changes-codex"]) {
 // `typing-steady` (selftestTyping.ts): the message list holds still while typing in the composer, with the stand-in CLIs
 // (app/scripts/typing-e2e.sh). No model calls. Not in `all`.
 scenarios["typing-steady"] = (c: Ctx) => typingScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })["typing-steady"]();
+
+// `restart` (selftestRestart.ts): a chat's Restart (the offer under a reply asking for it, `/restart` mid-turn), with
+// the stand-in CLIs, in the chat host and inside coool (app/scripts/restart-e2e.sh). No model calls. Not in `all`.
+scenarios.restart = (c: Ctx) => restartScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s), invoke: (cmd, a) => invoke(cmd, a) }).restart();
 
 // `history` (selftestHistory.ts): History over a few thousand invented sessions with the stand-in CLIs
 // (app/scripts/history-e2e.sh). No model calls. Not in `all`.

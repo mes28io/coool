@@ -164,6 +164,8 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   /** Answers to a `question` event: per question, in order, the picked labels and/or typed text. */
   chatRespondQuestion(id: number, requestId: string, answers: string[][]): Promise<void>;
   chatStop(id: number): Promise<void>;
+  /** Restart the chat's CLI on the same conversation, in the same chat (CHAT_SPEC "Restart"); `message` is sent once it is back. */
+  chatRestart(id: number, message?: string | null): Promise<void>;
   chatReplay(id: number): Promise<{ events: ChatEvent[]; seq: number }>;
   /** Opens the chat's session in a PTY via resume; returns the PTY id. */
   openInTerminal(id: number): Promise<number>;
@@ -628,6 +630,7 @@ async function tauriBackend(): Promise<Backend> {
     chatRespondPermission: (id, requestId, allow, always, remember) => soft("chat_respond_permission", { id, requestId, allow, always, remember: remember ?? null }),
     chatRespondQuestion: (id, requestId, answers) => soft("chat_respond_question", { id, requestId, answers }),
     chatStop: (id) => soft("chat_stop", { id }),
+    chatRestart: (id, message) => soft("chat_restart", { id, message: message?.trim() || null }),
     chatReplay: (id) => soft("chat_replay", { id }),
     openInTerminal: (id) => soft("open_in_terminal", { id }),
     onChatEvent: (cb) => sub<ChatBatch>("chat-event", cb),

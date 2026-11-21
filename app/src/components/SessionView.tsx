@@ -11,7 +11,7 @@ import { DevicePanel } from "./DevicePanel";
 import { MAC_UDID, MacPanel } from "./MacPanel";
 import { keysCaptured } from "../lib/macKeys";
 import { answerKeysCovered } from "../lib/answerKeys";
-import { answerPermission, chatCall, openChatInTerminal, resumeSession } from "../lib/actions";
+import { answerPermission, askRestart, chatCall, openChatInTerminal, resumeSession, useRestarting } from "../lib/actions";
 import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { cardRoles, useChatCross, useChatTiers } from "./LadderTally";
 import { api, isTauri } from "../lib/backend";
@@ -33,7 +33,7 @@ import { useChangeNotes } from "../lib/changeNotes";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IContext, IDiff, IMac, IPhone, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IContext, IDiff, IMac, IPhone, IRefresh, ITerminal } from "./icons";
 import { ContextPanelBody } from "./ContextPanel";
 import type { CtxTarget } from "../lib/chatContext";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
@@ -85,6 +85,7 @@ export function SessionView({
   const setMode = useStore((st) => st.setMode);
   // Not per streamed token: the timeline reads the live chat itself.
   const chat = useChatShell(r.chat);
+  const restarting = useRestarting((s) => (r.chat !== null ? !!s.on[r.chat] : false));
   const scanning = useStore((st) => !st.ready || st.loading);
 
   // The Agents panel: one card per subagent / child job; a pane at least 900px wide shows it beside the timeline.
@@ -482,6 +483,19 @@ export function SessionView({
           </div>
         </div>
         {hasTerm && <SegmentedMode mode={mode} chat={isChat} onChange={(m) => setMode(modeTarget, m)} compact={compact} />}
+        {chat && (
+          // CHAT_SPEC "Restart": the CLI starts again on this conversation, so it reads its settings, MCP config,
+          // permissions and instructions again (what "restart Claude Code" asks for), right here.
+          <span className="contents" data-restart-button={restarting ? "busy" : "idle"}>
+            <IconButton
+              title={restarting ? "Restarting…" : `Restart ${chat.provider === "claude" ? "Claude Code" : "Codex"} on this conversation: it reads its settings, MCP servers and ${chat.provider === "claude" ? "CLAUDE.md" : "AGENTS.md"} again (or type /restart)`}
+              onClick={() => askRestart(chat.id)}
+              disabled={restarting}
+            >
+              <IRefresh size={16} className={restarting ? "animate-spin" : undefined} />
+            </IconButton>
+          </span>
+        )}
         {panelKey && cwd && (
           <IconButton title={contextOpen ? "Hide this chat's context" : "This chat's context: folder, instructions, memory, skills, model"} active={contextOpen} onClick={onContext}>
             <IContext size={18} />

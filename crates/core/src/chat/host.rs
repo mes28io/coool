@@ -81,6 +81,10 @@ pub enum Call {
         request_id: String,
         note: String,
     },
+    /// Stop the chat's CLI and start it again on the same conversation, in the same chat (its events carry on, the
+    /// app's mirror with them). Answers the chat's [`Entry`] as it is now. A host from before this call answers "bad
+    /// call": the app then restarts the chat itself.
+    Restart,
 }
 
 /// Everything the app passed `Chat::start`: the host starts the chat exactly so.
@@ -269,12 +273,16 @@ impl Default for Timing {
 }
 
 /// How the host starts a chat (tests start stand-ins).
-pub(crate) type Spawner = Arc<dyn Fn(usize, &StartReq) -> Result<Chat> + Send + Sync>;
+/// The last argument: a restart, the chat to start the CLI again in (see [`Chat::start_into`]).
+pub(crate) type Spawner = Arc<dyn Fn(usize, &StartReq, Option<&ChatHandle>) -> Result<Chat> + Send + Sync>;
 
 struct HostChat {
     chat: Chat,
     opts: ChatOptions,
     mcp: Vec<McpServer>,
+    /// The rest of its start request, for a restart.
+    client_name: String,
+    ladder_root: Option<PathBuf>,
     meta: Value,
     started_ms: u64,
     idle_since: Option<Instant>,
@@ -558,9 +566,9 @@ impl Server {
                 }
                 let r: StartReq = serde_json::from_value(req["req"].clone()).context("bad start request")?;
                 let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-                let chat = (self.spawn)(id, &r)?;
+                let chat = (self.spawn)(id, &r, None)?;
                 let key = uuid_v4();
-                let hc = HostChat { chat, opts: r.opts, mcp: r.mcp, meta: r.meta, started_ms: now_ms(), idle_since: None, exited_at: None };
+                let hc = HostChat { chat, opts: r.opts, mcp: r.mcp, client_name: r.client_name, ladder_root: r.ladder_root, meta: r.meta, started_ms: now_ms(), idle_since: None, exited_at: None };
                 let e = hc.entry(&key);
                 self.chats.lock().unwrap_or_else(|e| e.into_inner()).insert(key, hc);
                 Ok(serde_json::to_value(e)?)
@@ -628,6 +636,8 @@ impl Server {
                 });
                 return Ok(json!(rid));
             }
+            // Waits for the CLI to exit: never with the map held (every other chat's events and calls need it).
+            Call::Restart => return self.restart(key),
             _ => {}
         }
         let mut chats = self.chats.lock().unwrap_or_else(|e| e.into_inner());
@@ -646,8 +656,37 @@ impl Server {
                 c.stop();
                 Ok(Value::Null)
             }
-            Call::Note { .. } | Call::Withdraw { .. } | Call::Ask { .. } => unreachable!("handled above"),
+            Call::Note { .. } | Call::Withdraw { .. } | Call::Ask { .. } | Call::Restart => unreachable!("handled above"),
         }
+    }
+
+    /// [`Call::Restart`]: stop the CLI, wait for it to exit, start it again resuming its conversation, in the same
+    /// chat (same key, events numbered on).
+    fn restart(&self, key: &str) -> Result<Value> {
+        let lock_chats = || self.chats.lock().unwrap_or_else(|e| e.into_inner());
+        let (handle, req, id) = {
+            let mut chats = lock_chats();
+            let hc = chats.get_mut(key).with_context(|| format!("no such chat {key}"))?;
+            let opts = hc.chat.restart_options(Some(&hc.opts))?;
+            hc.chat.stop();
+            let req = StartReq { opts, client_name: hc.client_name.clone(), mcp: hc.mcp.clone(), ladder_root: hc.ladder_root.clone(), meta: hc.meta.clone() };
+            (hc.chat.handle(), req, hc.chat.id)
+        };
+        wait_exit(&handle, || {
+            if let Some(hc) = lock_chats().get_mut(key) {
+                hc.chat.escalate_kill(Some(Duration::ZERO));
+            }
+        })?;
+        let chat = (self.spawn)(id, &req, Some(&handle))?;
+        let mut chats = lock_chats();
+        let hc = chats.get_mut(key).with_context(|| format!("no such chat {key}"))?;
+        let mut chat = chat;
+        chat.carry_over(&hc.chat);
+        hc.chat = chat;
+        hc.opts = req.opts;
+        hc.exited_at = None;
+        hc.idle_since = None;
+        Ok(serde_json::to_value(hc.entry(key))?)
     }
 }
 
@@ -656,11 +695,11 @@ pub fn run(dir: &Path, version: &str) -> i32 {
     let name = std::process::id().to_string();
     // A self-test's host can be told to take its time with each start (a slow or stuck host, debug builds only).
     let stall = std::env::var("COOOL_TEST_HOST_STALL_MS").ok().and_then(|v| v.parse::<u64>().ok()).filter(|_| cfg!(debug_assertions) && test_dir_ok(dir)).map(Duration::from_millis);
-    let spawn: Spawner = Arc::new(move |id, r: &StartReq| {
+    let spawn: Spawner = Arc::new(move |id, r: &StartReq, reuse: Option<&ChatHandle>| {
         if let Some(d) = stall {
             thread::sleep(d);
         }
-        Chat::start(id, r.opts.clone(), &r.client_name, &r.mcp, r.ladder_root.as_deref())
+        Chat::start_into(id, r.opts.clone(), &r.client_name, &r.mcp, r.ladder_root.as_deref(), reuse)
     });
     let srv = match Server::start(dir, &name, version, Timing::default(), spawn) {
         Ok(s) => s,
@@ -939,9 +978,9 @@ mod tests {
     /// to count; the backend's own first writes (initialize) go to its stdin.
     fn host(tag: &str, script: &'static str, t: Timing) -> (PathBuf, Arc<Server>) {
         let d = dir(tag);
-        let spawn: Spawner = Arc::new(move |id, r: &StartReq| {
+        let spawn: Spawner = Arc::new(move |id, r: &StartReq, reuse: Option<&ChatHandle>| {
             let b = Box::new(claude::Claude::new(&r.opts));
-            Chat::spawn(id, Provider::Claude, &r.opts.cwd, "/bin/sh", &["-c".to_string(), script.to_string()], &[], None, b)
+            Chat::spawn_into(id, Provider::Claude, &r.opts.cwd, "/bin/sh", &["-c".to_string(), script.to_string()], &[], None, b, reuse)
         });
         let s = Server::start(&d, "t", "9.9.9", t, spawn).unwrap();
         (d, s)
@@ -960,7 +999,7 @@ mod tests {
     #[test]
     fn a_slow_start_holds_up_nothing_else() {
         let d = dir("slow");
-        let spawn: Spawner = Arc::new(move |id, r: &StartReq| {
+        let spawn: Spawner = Arc::new(move |id, r: &StartReq, _: Option<&ChatHandle>| {
             if r.opts.cwd == "/private/tmp" {
                 thread::sleep(Duration::from_millis(2000));
             }
@@ -1216,6 +1255,47 @@ mod tests {
         wait_until("the idle chat is stopped and the host exits", || s.is_done());
         wait_until("the CLI is gone", || !pid_alive(pid));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Restart (a chat's Restart button, `/restart`): the host stops the CLI and starts it again in the same chat. The
+    /// old process is gone, the new one runs, and the app's mirror goes on with the same numbering; through the hub,
+    /// the chat keeps its id.
+    #[test]
+    fn a_restart_starts_the_cli_again_in_the_same_chat() {
+        let (d, s) = host("restart", "echo line-up-$$; sleep 30", timing());
+        let c = client(&s);
+        let e = c.start(&req()).unwrap();
+        let m = c.mirror(&e.key, &e.info);
+        let old = e.pid.unwrap();
+        wait_until("the first start", || lines(&m) == [format!("line-up-{old}")]);
+        let after: Entry = serde_json::from_value(c.call(&e.key, &Call::Restart).unwrap()).unwrap();
+        let new = after.pid.unwrap();
+        assert_eq!(after.key, e.key, "the same chat");
+        assert_ne!(old, new, "a new process");
+        assert!(!pid_alive(old), "the old CLI is gone");
+        wait_until("the new start in the same mirror", || lines(&m) == [format!("line-up-{old}"), format!("line-up-{new}")]);
+        {
+            let sh = lock(&m);
+            assert!(sh.running, "running again");
+            let kinds: Vec<&ChatEventKind> = sh.events.iter().map(|e| &e.kind).collect();
+            let exited = kinds.iter().position(|k| matches!(k, ChatEventKind::Exited { .. })).expect("the old CLI's exit");
+            let restarted = kinds.iter().position(|k| matches!(k, ChatEventKind::Restarted)).expect("restarted");
+            assert!(exited < restarted);
+        }
+        assert!(contiguous(&seqs(&m)), "no gap, no duplicate");
+        // Through the hub: the same chat id, its new process.
+        let hub = Arc::new(Mutex::new(crate::hub::Hub::for_test(&d.join("home"))));
+        hub.lock().unwrap().set_host(Some(c.clone()));
+        let id = crate::hub::Hub::start_chat_in(&hub, req().opts).unwrap();
+        let p1 = hub.lock().unwrap().chat(id).unwrap().pid.unwrap();
+        crate::hub::Hub::restart_chat_in(&hub, id).unwrap();
+        let h = hub.lock().unwrap();
+        let ch = h.chat(id).unwrap();
+        let p2 = ch.pid.unwrap();
+        assert!(ch.is_hosted() && ch.is_running() && p1 != p2 && !pid_alive(p1), "restarted in the host: {p1} -> {p2}");
+        assert!(!h.is_restarting(id));
+        drop(h);
+        cleanup(&d, &s);
     }
 
     #[test]

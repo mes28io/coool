@@ -9,7 +9,8 @@ import { displayTitle, previousTitles, titlePinned } from "../lib/format";
 import { registerOverlay } from "../lib/overlays";
 import type { Session } from "../lib/types";
 import { useStore } from "../store";
-import { IPencil, ISpark } from "./icons";
+import { IPencil, IRefresh, ISpark } from "./icons";
+import { askRestart } from "../lib/actions";
 import { cx } from "./primitives";
 
 /** Saves a name (or, blank / null, the automatic title again). */
@@ -136,6 +137,22 @@ export function TitleMenu({ s, at, onClose, onRename }: { s: Session; at: { x: n
           <IPencil size={14} className="text-dim" />
           Rename…
         </button>
+        {s.chat != null && s.status !== "ended" && (
+          <button
+            type="button"
+            role="menuitem"
+            className={item}
+            title="Starts the CLI again on this conversation: it reads its settings, MCP and instructions again"
+            data-title-menu-restart
+            onClick={() => {
+              onClose();
+              askRestart(s.chat!);
+            }}
+          >
+            <IRefresh size={14} className="text-dim" />
+            Restart
+          </button>
+        )}
         {pinned && (
           <button
             type="button"

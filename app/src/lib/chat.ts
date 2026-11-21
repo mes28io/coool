@@ -509,6 +509,13 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         c = { ...c, running: false, exitCode: e.code, state: "idle", turnStart: null, pendingPermission: null, pendingQuestion: null, stateSince: e.ts };
         break;
       }
+      case "restarted": {
+        // The exit was the restart's: no "process has ended" line (the notice that follows says what happened).
+        const i = findLast((x) => x.kind === "exited");
+        if (i >= 0 && i >= findLast((x) => x.kind === "prompt" || x.kind === "text")) its().splice(i, 1);
+        c = { ...c, running: true, exitCode: null, openFailed: null, state: "idle", stateSince: e.ts };
+        break;
+      }
     }
   }
   if (items) {

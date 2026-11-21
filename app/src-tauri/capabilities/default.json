@@ -27,7 +27,7 @@
     "allow-pty-replay", "allow-send-prompt", "allow-stop-session", "allow-stop-shell", "allow-shells-focus",
     "allow-start-chat", "allow-chat-send", "allow-chat-interrupt", "allow-chat-steer", "allow-chat-steer-cancel",
     "allow-chat-set-model", "allow-chat-set-permission-mode", "allow-chat-respond-permission",
-    "allow-chat-respond-question", "allow-chat-stop", "allow-chat-replay", "allow-open-in-terminal",
+    "allow-chat-respond-question", "allow-chat-stop", "allow-chat-restart", "allow-chat-replay", "allow-open-in-terminal",
     "allow-insights-status", "allow-insights-set-key", "allow-insights-clear-key", "allow-insights-set-enabled",
     "allow-explain-request", "allow-rename-session", "allow-set-show-automation", "allow-pilot-log-status",
     "allow-pilot-log-set-enabled", "allow-pilot-log-reveal", "allow-pilot-log-delete", "allow-usage-refresh",

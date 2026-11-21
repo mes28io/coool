@@ -1977,6 +1977,14 @@ export function mockBackend(): Backend {
       chats[id]?.stop(null);
       emitSessions();
     },
+    async chatRestart(id, message) {
+      const c = chats[id];
+      if (!c) throw new Error("no such chat");
+      await delay(160);
+      c.restart();
+      emitSessions();
+      if (message?.trim()) c.send(message.trim());
+    },
     async chatReplay(id) {
       const c = chats[id];
       return { events: c ? c.events.slice() : [], seq: c?.seq ?? 0 };

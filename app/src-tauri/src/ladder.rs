@@ -197,11 +197,12 @@ impl State {
         Some(HelperRow { parent: x.parent, depth: x.depth, model: x.model.clone(), title: x.title.clone(), worktree: x.worktree.as_ref().map(|w| w.0.clone()), done: x.done.is_some() })
     }
 
-    /// Stops helpers whose caller is gone (the person stopped it, or it exited): no orphan keeps spending.
+    /// Stops helpers whose caller is gone (the person stopped it, or it exited): no orphan keeps spending. A caller
+    /// being restarted isn't gone: its helpers keep running (Restart applies to that chat only).
     pub fn reap(&self, hub: &mut coool_core::hub::Hub) {
         let orphans: Vec<usize> = {
             let h = self.helpers.lock().unwrap();
-            h.iter().filter(|(id, x)| hub.chat(**id).is_some_and(|c| c.is_running()) && !hub.chat(x.parent).is_some_and(|p| p.is_running())).map(|(id, _)| *id).collect()
+            h.iter().filter(|(id, x)| hub.chat(**id).is_some_and(|c| c.is_running()) && !hub.chat(x.parent).is_some_and(|p| p.is_running()) && !hub.is_restarting(x.parent)).map(|(id, _)| *id).collect()
         };
         for id in orphans {
             if let Some(c) = hub.chat_mut(id) {
@@ -636,6 +637,10 @@ fn poll(core: &Core) {
     for (id, seq) in ids {
         let (evs, next, running) = {
             let hub = core.hub.lock().unwrap();
+            // The person is restarting this helper: its exit isn't its end (read on once it runs again).
+            if hub.is_restarting(id) {
+                continue;
+            }
             match hub.chat(id) {
                 Some(c) => {
                     let h = c.handle();
@@ -653,6 +658,8 @@ fn poll(core: &Core) {
                 ChatEventKind::AssistantMessage { text, parent_tool_id: None, .. } if !text.trim().is_empty() => h.last_text = text,
                 ChatEventKind::TurnEnd { ok, .. } => h.done = Some((ok, h.last_text.clone())),
                 ChatEventKind::Exited { .. } if h.done.is_none() => h.done = Some((false, format!("(the helper exited) {}", h.last_text))),
+                // The person restarted the helper itself (the exit and the restart read together): it goes on.
+                ChatEventKind::Restarted if h.done.as_ref().is_some_and(|d| d.1.starts_with("(the helper exited)")) => h.done = None,
                 _ => {}
             }
         }
