@@ -121,6 +121,15 @@ define_class!(
     }
 
     impl Target {
+        /// A click on the item: the menu opens with its top on the bottom of the menu bar. AppKit's own placement of a
+        /// status item's menu (`statusItem.menu`) put it about 36 pt lower on macOS 27 (the item's window there is
+        /// 65 pt tall on a 30 pt bar) and moved it back there on every change of the open menu's rows; a menu popped
+        /// up at a location stays at that location.
+        #[unsafe(method(click:))]
+        fn click(&self, _sender: &AnyObject) {
+            open_at_bar();
+        }
+
         #[unsafe(method(act:))]
         fn act(&self, sender: &NSMenuItem) {
             let tag = sender.tag();
@@ -131,6 +140,21 @@ define_class!(
         }
     }
 );
+
+/// Pops the menu up under the item, its top on the bottom of the bar of the item's screen. Blocks while the menu is
+/// open (AppKit's tracking loop); nothing of `UI` is borrowed meanwhile.
+fn open_at_bar() {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let got = UI.with(|u| u.borrow().as_ref().map(|u| (u.menu.clone(), u.item.button(mtm))));
+    let Some((menu, Some(btn))) = got else { return };
+    let Some(win) = btn.window() else { return };
+    let Some(screen) = win.screen() else { return };
+    let item_left = win.convertRectToScreen(btn.convertRect_toView(btn.bounds(), None)).origin.x;
+    let bar_bottom = top(screen.frame()) - bar_height(&screen);
+    let _: () = unsafe { msg_send![&*btn, highlight: true] };
+    menu.popUpMenuPositioningItem_atLocation_inView(None, NSPoint::new(item_left, bar_bottom), None);
+    let _: () = unsafe { msg_send![&*btn, highlight: false] };
+}
 
 impl Target {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
@@ -408,7 +432,17 @@ pub fn create(hidden: bool, test: bool) {
     menu.setMinimumWidth(MENU_WIDTH);
     let target = Target::new(mtm);
     menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
-    item.setMenu(Some(&menu));
+    if hidden {
+        // Self-tests drive the menu directly (`probe`); a hidden item is never clicked.
+        item.setMenu(Some(&menu));
+    } else if let Some(b) = item.button(mtm) {
+        // Opened by hand at the bar ([`open_at_bar`]) on mouse down, as a status menu opens.
+        unsafe {
+            b.setTarget(Some(target.as_ref()));
+            b.setAction(Some(sel!(click:)));
+            let _: isize = msg_send![&*b, sendActionOn: (1u64 << 1) | (1u64 << 3)];
+        }
+    }
     eprintln!("coool menubar: item created{}", if hidden { " (hidden)" } else { "" });
     UI.with(|u| *u.borrow_mut() = Some(Ui { item, menu, _target: target, rows: Vec::new(), acts: Vec::new(), last: Vec::new(), bar: None, test, text_x: TEXT_X, window: None, geometry: None, probing: false }));
 }
