@@ -754,6 +754,10 @@ fn start_chat(app: AppHandle, core: State<'_, Arc<Core>>, opts: ChatOptions) -> 
 /// Starts a chat (the page's New session, or coool Remote's `start`).
 fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize> {
     let mut opts = opts;
+    // Ladder: the lead knows its plans, usage, resets and the machine's load from the start (APP_SPEC "Ladder 2").
+    if let Some(l) = opts.ladder.as_mut() {
+        l.snapshot = ladder::snapshot(core, opts.provider, l);
+    }
     opts.cwd = private_alias(&expand_tilde(&opts.cwd));
     check_launch(opts.provider, &opts.cwd)?;
     if let Some(c) = opts.context.as_mut() {

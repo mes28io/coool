@@ -326,6 +326,19 @@ fn run_with(cmd: &mut Command, limit: Duration, stderr: bool) -> Option<String> 
     }
 }
 
+/// The policy's launch line: the accounts this chat can use (its own; the other when it has lanes), and the load.
+pub fn snapshot(core: &Core, provider: Provider, l: &Ladder) -> String {
+    let both = !l.cross.is_empty() || l.image.as_ref().is_some_and(|i| i.provider != provider);
+    let mut acc = Vec::new();
+    for p in [Provider::Claude, Provider::Codex] {
+        if p == provider || both {
+            acc.push((if p == Provider::Claude { "Claude" } else { "Codex" }, core.usage.get(p)));
+        }
+    }
+    let refs: Vec<(&str, Option<&coool_core::usage::PlanUsage>)> = acc.iter().map(|(n, u)| (*n, u.as_ref())).collect();
+    budget::snapshot(now_ms(), &refs, &load())
+}
+
 /// The machine's load now.
 fn load() -> Load {
     let mut avg = [0f64; 3];

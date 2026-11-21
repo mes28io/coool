@@ -180,6 +180,31 @@ fn models(i: &Inputs) -> Value {
     Value::Array(v)
 }
 
+/// One line of plans, usage, resets and load for the policy at launch ("Claude Max 5x: 5-hour 49% (resets in 2 h 0
+/// min), weekly 20%; Codex Plus: …; machine: load 3.1 on 12 cores"). Only the accounts the chat can use.
+pub fn snapshot(now_ms: u64, accounts: &[(&str, Option<&PlanUsage>)], load: &Load) -> String {
+    let mut parts: Vec<String> = accounts
+        .iter()
+        .filter_map(|(name, u)| {
+            let u = (*u)?;
+            let ws: Vec<String> = u
+                .windows
+                .iter()
+                .filter_map(|w| {
+                    let x = w.used_percent?;
+                    let reset = w.resets_ms.map(|r| format!(" (resets {})", until(now_ms, r))).unwrap_or_default();
+                    Some(format!("{} {x:.0}%{reset}", w.label))
+                })
+                .collect();
+            (!ws.is_empty()).then(|| format!("{name}{}: {}", u.plan.as_deref().map(|p| format!(" {p}")).unwrap_or_default(), ws.join(", ")))
+        })
+        .collect();
+    if load.cores > 0 {
+        parts.push(format!("machine: load {:.1} on {} cores{}", load.load1, load.cores, if load.strained() { " (busy)" } else { "" }));
+    }
+    parts.join("; ")
+}
+
 /// The `budget` tool's answer.
 pub fn report(i: &Inputs) -> Value {
     let img = preflight(i, Lane::Image);
@@ -464,6 +489,14 @@ mod tests {
         // Nothing secret: no tokens, emails or paths.
         let s = r.to_string();
         assert!(!s.contains('@') && !s.contains("/Users/"), "{s}");
+    }
+
+    #[test]
+    fn launch_snapshot() {
+        let i = inputs();
+        let s = snapshot(0, &[("Claude", i.usage_claude.as_ref()), ("Codex", i.usage_codex.as_ref())], &i.load);
+        assert_eq!(s, "Claude Max 5x: 5-hour 27% (resets in 3 h 0 min), Weekly 14% (resets in 3 days); Codex Plus: 5-hour 4% (resets in 3 h 0 min), Weekly 2% (resets in 3 days); machine: load 3.0 on 12 cores");
+        assert_eq!(snapshot(0, &[("Claude", None)], &Load::default()), "");
     }
 
     #[test]

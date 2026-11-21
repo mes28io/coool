@@ -163,6 +163,10 @@ pub struct Ladder {
     /// runs in Accept edits). Never lifts a chat that isn't in Bypass.
     #[serde(default)]
     pub bypass_helpers: bool,
+    /// The plans, usage, resets and load when the chat started (set by the app at launch, [`budget::snapshot`]);
+    /// empty: not known.
+    #[serde(default)]
+    pub snapshot: String,
 }
 
 fn default_max() -> u32 {
@@ -180,7 +184,7 @@ fn default_reserve() -> f64 {
 
 impl Default for Ladder {
     fn default() -> Self {
-        Self { lead: String::new(), tiers: Vec::new(), cross: Vec::new(), image: None, max_parallel: default_max(), verify_tests: true, depth: default_depth(), swarm: true, tools: false, helper: None, reserve: default_reserve(), bypass_helpers: false }
+        Self { lead: String::new(), tiers: Vec::new(), cross: Vec::new(), image: None, max_parallel: default_max(), verify_tests: true, depth: default_depth(), swarm: true, tools: false, helper: None, reserve: default_reserve(), bypass_helpers: false, snapshot: String::new() }
     }
 }
 
@@ -348,6 +352,13 @@ fn image_line(cli: Cli, l: &Ladder) -> String {
     }
 }
 
+fn snapshot_line(l: &Ladder) -> String {
+    if l.snapshot.is_empty() {
+        return String::new();
+    }
+    format!("\nAt launch: {}.{}", l.snapshot, if l.tools { " Call `budget` for the current numbers." } else { "" })
+}
+
 fn nest_line(l: &Ladder) -> String {
     let at = l.helper.map(|h| h.depth).unwrap_or(0);
     if l.depth > at + 1 {
@@ -432,7 +443,7 @@ pub fn policy(cli: Cli, l: &Ladder, cwd: &Path, playbook: Playbook) -> String {
         .replace("{{LEAD}}", &lead)
         .replace("{{TIERS}}", &tiers)
         .replace("{{CROSS}}", &cross_lines(cli, l))
-        .replace("{{CAPS}}", &format!("{}{}", image_line(cli, l), helper_line(l)))
+        .replace("{{CAPS}}", &format!("{}{}{}", image_line(cli, l), helper_line(l), snapshot_line(l)))
         .replace("{{MODEL_FIELD}}", field)
         .replace("{{SAME}}", if l.tiers.iter().any(|t| t.role == Role::Same) { " Use `same` only to run medium-high pieces in parallel, never by default." } else { "" })
         .replace("{{MAX}}", &l.max_parallel.max(1).to_string())
@@ -589,6 +600,14 @@ mod tests {
         assert!(!p.contains("{{"), "every placeholder filled: {p}");
         // Small enough to load in every chat (the playbook is on demand).
         assert!(approx_tokens(&p) < 1000, "{} tokens", approx_tokens(&p));
+    }
+
+    #[test]
+    fn the_launch_snapshot_reaches_the_policy() {
+        let l = Ladder { snapshot: "Claude Max 5x: 5-hour 49% (resets in 2 h 0 min)".into(), ..full() };
+        let p = policy(Cli::Claude, &l, Path::new("/nope"), Playbook::Skill);
+        assert!(p.contains("At launch: Claude Max 5x: 5-hour 49% (resets in 2 h 0 min). Call `budget` for the current numbers."), "{p}");
+        assert!(!policy(Cli::Claude, &full(), Path::new("/nope"), Playbook::Skill).contains("At launch"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ The project ("shelf", a bookshop inventory) is standard library only; `make test
   feature  - discount codes across four modules, specified by tests/test_discount.py (failing until done)
   fix      - one failing test caused by a bug in shelf/util.py
   rename   - rename calc_tot -> calculate_total in 12 modules and drop unused imports, checked by tests/test_names.py
-  multi    - four new independent modules (search, csvio, stats, receipt), each specified by its own failing test
+  multi    - six new independent modules (search, csvio, stats, receipt, dates, rules), each specified by its own failing test
              module: big enough, and split cleanly enough by file, that delegating (or swarm mode) should pay
 """
 import os
@@ -197,7 +197,7 @@ FILES["tests/test_names.py"] = '''
 TASKS = {
     "feature": "Add discount codes to shelf, as tests/test_discount.py specifies: a Discount model, Store.add_discount / apply_code / discount, pricing.total(lines, discount=None), and the Discount line in report.summary. Do not change the tests. Everything else must keep passing.",
     "fix": "tests/test_util.py has a failing test. Find the cause and fix the code (not the test). Everything else must keep passing.",
-    "multi": "Add four new modules to shelf, each specified by its own test file: shelf/search.py (tests/test_search.py), shelf/csvio.py (tests/test_csvio.py), shelf/stats.py (tests/test_stats.py) and shelf/receipt.py (tests/test_receipt.py). Do not change the tests. `make test` must pass at the end.",
+    "multi": "Add six new modules to shelf, each specified by its own test file: shelf/search.py (tests/test_search.py), shelf/csvio.py (tests/test_csvio.py), shelf/stats.py (tests/test_stats.py), shelf/receipt.py (tests/test_receipt.py), shelf/dates.py (tests/test_dates.py) and shelf/rules.py (tests/test_rules.py). Each function gets a docstring. Do not change the tests. `make test` must pass at the end.",
     "rename": "Rename the function calc_tot to calculate_total everywhere in shelf/ (definition and every use), and remove the unused `import os` lines in shelf/legacy/. Do not touch tests/. Then tests/test_names.py and the rest of the suite must pass.",
 }
 # The multi task: four new modules, each specified by its own test module.
@@ -285,7 +285,7 @@ FILES["tests/test_stats.py"] = '''
                 price_stats(Store())
 
         def test_histogram_buckets_sorted(self):
-            self.assertEqual(histogram(self.s, 500), {500: 2, 1000: 1, 1500: 1})
+            self.assertEqual(histogram(self.s, 500), {500: 3, 1000: 1, 1500: 1})
             self.assertEqual(list(histogram(self.s, 1000)), [0, 1000])
             with self.assertRaises(ValueError):
                 histogram(self.s, 0)
@@ -318,9 +318,65 @@ FILES["tests/test_receipt.py"] = '''
         def test_empty_cart(self):
             self.assertEqual(receipt(self.s, width=12), "-" * 12 + "\\nTotal  $0.00")
 '''
+FILES["tests/test_dates.py"] = '''
+    import datetime
+    import unittest
+    from shelf.dates import parse_range, business_days, format_span
+
+
+    class Dates(unittest.TestCase):
+        def test_parse_range_inclusive(self):
+            d = parse_range("2026-03-01..2026-03-04")
+            self.assertEqual(d, [datetime.date(2026, 3, i) for i in range(1, 5)])
+            self.assertEqual(parse_range("2026-03-01"), [datetime.date(2026, 3, 1)])
+            with self.assertRaises(ValueError):
+                parse_range("2026-03-05..2026-03-01")
+            with self.assertRaises(ValueError):
+                parse_range("yesterday")
+
+        def test_business_days_counts_weekdays_inclusive(self):
+            # 2026-03-02 is a Monday.
+            self.assertEqual(business_days(datetime.date(2026, 3, 2), datetime.date(2026, 3, 8)), 5)
+            self.assertEqual(business_days(datetime.date(2026, 3, 7), datetime.date(2026, 3, 8)), 0)
+            self.assertEqual(business_days(datetime.date(2026, 3, 6), datetime.date(2026, 3, 16)), 7)
+
+        def test_format_span(self):
+            self.assertEqual(format_span(0), "0 days")
+            self.assertEqual(format_span(1), "1 day")
+            self.assertEqual(format_span(6), "6 days")
+            self.assertEqual(format_span(7), "1 week")
+            self.assertEqual(format_span(17), "2 weeks 3 days")
+            self.assertEqual(format_span(15), "2 weeks 1 day")
+'''
+FILES["tests/test_rules.py"] = '''
+    import unittest
+    from shelf.rules import apply_rules, parse_rule
+
+
+    class Rules(unittest.TestCase):
+        def test_rules_apply_in_order(self):
+            self.assertEqual(apply_rules(1999, ["-10%"]), 1799)  # rounds down to the cent
+            self.assertEqual(apply_rules(1999, ["-10%", "round:50"]), 1750)
+            self.assertEqual(apply_rules(1000, ["-300", "-50%"]), 350)
+            self.assertEqual(apply_rules(1000, ["-50%", "-300"]), 200)
+            self.assertEqual(apply_rules(1000, ["-900", "min:500"]), 500)
+            self.assertEqual(apply_rules(1000, []), 1000)
+
+        def test_never_below_zero(self):
+            self.assertEqual(apply_rules(300, ["-500"]), 0)
+
+        def test_parse_rule(self):
+            self.assertEqual(parse_rule("-10%"), ("percent", 10))
+            self.assertEqual(parse_rule(" -250 "), ("minus", 250))
+            self.assertEqual(parse_rule("min:500"), ("min", 500))
+            self.assertEqual(parse_rule("round:50"), ("round", 50))
+            for bad in ["", "+10%", "-101%", "round:0", "min:-1", "half"]:
+                with self.assertRaises(ValueError, msg=bad):
+                    parse_rule(bad)
+'''
 
 # Which test modules must still fail on the untouched repo (sanity check of the setup) - others must pass.
-FAIL_AT_START = {"feature": ["tests.test_discount"], "fix": ["tests.test_util"], "rename": ["tests.test_names"], "multi": ["tests.test_search", "tests.test_csvio", "tests.test_stats", "tests.test_receipt"]}
+FAIL_AT_START = {"feature": ["tests.test_discount"], "fix": ["tests.test_util"], "rename": ["tests.test_names"], "multi": ["tests.test_search", "tests.test_csvio", "tests.test_stats", "tests.test_receipt", "tests.test_dates", "tests.test_rules"]}
 
 
 def main():
