@@ -78,7 +78,34 @@ def message(turn, text):
          {"type": "event_msg", "payload": {"type": "agent_message", "message": text}})
 
 
+def patch_turn(turn, prompt):
+    """The Changes view's self-test: one apply_patch that edits c.txt and adds d.txt, applied for real, recorded in the
+    rollout as Codex does (custom_tool_call + output) and streamed as a fileChange item."""
+    roll({"type": "event_msg", "payload": {"type": "task_started"}},
+         {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt}]}},
+         {"type": "event_msg", "payload": {"type": "user_message", "message": prompt}})
+    t0 = time.time()
+    notify("turn/started", {"turn": {"id": turn}})
+    c, d = Path(CWD) / "c.txt", Path(CWD) / "d.txt"
+    patch = "*** Begin Patch\n*** Update File: c.txt\n@@\n gamma\n-delta\n+DELTA\n epsilon\n*** Add File: d.txt\n+made by codex\n*** End Patch"
+    call = f"call_{uuid.uuid4().hex[:20]}"
+    iid = f"item_{uuid.uuid4().hex[:12]}"
+    changes = [{"path": str(c), "kind": {"type": "update", "move_path": None}, "diff": "@@ -2,3 +2,3 @@\n gamma\n-delta\n+DELTA\n epsilon\n"}, {"path": str(d), "kind": {"type": "add"}, "diff": "made by codex\n"}]
+    notify("item/started", {"turnId": turn, "item": {"id": iid, "type": "fileChange", "status": "inProgress", "changes": changes}})
+    roll({"type": "response_item", "payload": {"type": "custom_tool_call", "name": "apply_patch", "call_id": call, "input": patch}})
+    c.write_text(c.read_text().replace("delta\n", "DELTA\n", 1))
+    d.write_text("made by codex\n")
+    time.sleep(0.4)
+    roll({"type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": call, "output": "Success. Updated the following files:\nM c.txt\nA d.txt"}})
+    notify("item/completed", {"turnId": turn, "item": {"id": iid, "type": "fileChange", "status": "completed", "changes": changes}})
+    message(turn, "Changed delta in c.txt and added d.txt.")
+    notify("turn/completed", {"turn": {"id": turn, "status": "completed", "durationMs": int((time.time() - t0) * 1000)}})
+    roll({"type": "event_msg", "payload": {"type": "task_complete", "last_agent_message": ""}})
+
+
 def turn_run(turn, prompt):
+    if "changes demo" in prompt.lower():
+        return patch_turn(turn, prompt)
     roll({"type": "turn_context", "payload": {"model": MODEL, "cwd": CWD, "approval_policy": "on-request", "sandbox_policy": {"mode": "workspace-write"}}},
          {"type": "event_msg", "payload": {"type": "task_started"}},
          {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt}]}},

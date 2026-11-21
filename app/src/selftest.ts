@@ -37,6 +37,8 @@
 // Codex thread, no turn: the Model chip and menu). `attach` / `attach-codex` (selftestAttach.ts: images and a file
 // attached, the agent describes and quotes them, the message, lightbox and preview, then the reopened chat shows
 // them again from the transcript; not in `all`), `attach-steer` / `attach-steer-codex` (an image on a note mid-turn),
+// `changes` / `changes-codex` (selftestChanges.ts: the Changes view's undo, keep, stage and commit on a scratch git
+// repository, with the stand-in CLIs; run by app/scripts/changes-e2e.sh; not in `all`; no model use).
 // `attach-step-image` (the preview of an image the agent writes, and its refusals) and `attach-gestures` (drag events as
 // Tauri delivers them, a paste event, the PDF pages; no model use). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
@@ -68,6 +70,7 @@ import { ladder2Scenarios } from "./selftestLadder2";
 import { contextScenarios } from "./selftestContext";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
+import { changesScenarios } from "./selftestChanges";
 import { coverOf, launchTrace, useUpdates } from "./lib/update";
 
 interface Config {
@@ -7772,6 +7775,12 @@ scenarios.menubar = (c: Ctx) => menubarScenarios({ dir: c.cfg.dir, invoke: (cmd,
 // (app/scripts/readme-shots/film.sh). No model calls. Not in `all`.
 for (const n of ["film", "film-measure", "film-probe"]) {
   scenarios[n] = (c: Ctx) => filmScenarios({ dir: c.cfg.dir, site: c.cfg.site, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })[n]();
+}
+
+// `changes` / `changes-codex` (selftestChanges.ts): the Changes view on a scratch git repository with the stand-in CLIs
+// (app/scripts/changes-e2e.sh). No model calls. Not in `all`.
+for (const n of ["changes", "changes-codex"]) {
+  scenarios[n] = (c: Ctx) => changesScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })[n]();
 }
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each

@@ -9,7 +9,7 @@ import { answerPermission, answerQuestion, newChat } from "../lib/actions";
 import { type Chat, type ChatItem, chatTitle, useChats } from "../lib/chat";
 import { clockTime, fmtElapsed, folderName, homeShort, shortDetail, stripToolName } from "../lib/format";
 import { permissionWhat, rowText, toolChips, toolRow, type ToolRow } from "../lib/toolNames";
-import { patchFiles, patchLead } from "../lib/patch";
+import { patchFiles, patchLead, patchPairs } from "../lib/patch";
 import { agentFill, fillModel, handoffLine, taskPrompt } from "../lib/agentFill";
 import { FillBar, Handoff } from "./AgentFill";
 import { LadderTally, TierTag, tierWord, useChatTiers } from "./LadderTally";
@@ -33,6 +33,9 @@ import { LiveIndicator } from "./Activity";
 import { RailItem, RailList, reducedMotion, Reveal } from "./StepRail";
 import { deriveCheckpoints, type Checkpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
+import { openChangesAt } from "../lib/changes";
+import { turnFiles } from "../lib/changesRules";
+import { InlineDiff, editPairs } from "./InlineDiff";
 import { parsePlan, planForTurn } from "../lib/plan";
 import { buildBlocks, NO_KIDS, sameList, type Block, type Built, type Tool } from "../lib/chatBlocks";
 import { PlanCard } from "./PlanCard";
@@ -41,7 +44,7 @@ import { RiskTag } from "./RiskTag";
 import { LaterBar, useFolded, useQuestionLater } from "./QuestionLater";
 import { digitPick, isTyping, keyQuestion } from "../lib/questionKeys";
 import { NoteRows } from "./SteerStrip";
-import { IAlert, IChevron, ICheck, IClose, IFile, IGlobe, IMac, IPhone, IReturn, ITerminal } from "./icons";
+import { IAlert, IChevron, ICheck, IClose, IDiff, IFile, IGlobe, IMac, IPhone, IReturn, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
 import { Button, cx, ease, JumpToBottom, Kbd, LiveClock, ProviderMark, StatusDot, TokenCount } from "./primitives";
@@ -238,7 +241,20 @@ export function ChatTimeline({
   const showCps = cps.list.length >= 2;
   // Scroll the timeline to a turn's prompt (below the pinned card) and flash it.
   const jumpRef = useRef<(key: string) => void>(() => {});
-  const [jumpTo, openFiles] = useMemo(() => [(k: string) => jumpRef.current(k), (k: string) => openChanges(chat.id, k)], [chat.id]);
+  // A checkpoint's "N files": that turn in the Changes panel (the /changes list when the chat has no transcript yet).
+  const [jumpTo, openFiles] = useMemo(
+    () => [
+      (k: string) => jumpRef.current(k),
+      (k: string) => {
+        const c = useChats.getState().chats[chat.id];
+        const prompts = (c?.items ?? []).filter((i) => i.kind === "prompt") as Extract<ChatItem, { kind: "prompt" }>[];
+        const at = prompts.findIndex((p) => p.key === k);
+        if (!c?.sessionId || at < 0) return openChanges(chat.id, k);
+        openChangesAt(chat.id, { at: prompts[at].ts, prompt: prompts[at].text, ordinal: at + 1 });
+      },
+    ],
+    [chat.id],
+  );
   const jump = async (key: string) => {
     const el = scroller.current;
     if (!el) return;
@@ -1174,6 +1190,18 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
   const dev = deviceAsk(item);
   const who = chat.provider === "claude" ? "Claude" : "Codex";
   const quick = item.remember[0]?.scope === "chat" ? item.remember[0] : null;
+  // A file edit shows as its diff on the file as it is now, with context (the Changes panel's viewer).
+  const edit = dev ? null : editPairs(item.tool, item.input);
+  const patch = dev || edit ? null : patchFiles(item.input);
+  const editDiff = edit ? (
+    <InlineDiff path={edit.path} pairs={edit.pairs} root={chat.cwd} preview={{ tool: item.tool, input: item.input }} />
+  ) : patch ? (
+    <>
+      {patch.map((f) => (
+        <InlineDiff key={f.path} path={f.movePath ?? f.path} pairs={patchPairs(f)} root={chat.cwd} preview={{ tool: "apply_patch", input: { changes: [{ path: f.path, kind: f.kind, move_path: f.movePath, diff: f.diff }] } }} />
+      ))}
+    </>
+  ) : null;
   return (
     <AnimatePresence mode="wait" initial={false}>
       {item.answer === null && chat.running ? (
@@ -1200,7 +1228,13 @@ function Approval({ item, chat }: { item: Perm; chat: Chat }) {
             </span>
           </div>
           <div className="px-3.5">
-            <RedactedPre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90" title={d.full} text={homeShort(d.body)} />
+            {editDiff ? (
+              <div className="-mt-1.5" data-approval-diff>
+                {editDiff}
+              </div>
+            ) : (
+              <RedactedPre className="selectable max-h-[160px] overflow-auto whitespace-pre-wrap break-all rounded-[8px] border border-hairline bg-bg px-3 py-2 font-mono text-mono-small text-fg/90" title={d.full} text={homeShort(d.body)} />
+            )}
             {/* What it does and why (components/Explain.tsx): its own description, then the AI read when on. */}
             {dev ? d.note && <div className="mt-1.5 text-small text-dim">{d.note}</div> : <PermExplain perm={item} chat={chat} variant="compact" />}
           </div>
@@ -1526,6 +1560,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
       <div className="-mt-1 px-1" data-turn-end={item.failed ? "failed" : item.ok ? "done" : "stopped"}>
         <div className="flex items-center gap-1.5 text-small text-faint">{row}</div>
         <LadderTally chat={chat} item={item} />
+        <TurnFilesLine chat={chat} item={item} />
       </div>
     );
   return (
@@ -1544,6 +1579,7 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
         </motion.span>
       </button>
       <LadderTally chat={chat} item={item} />
+      <TurnFilesLine chat={chat} item={item} />
       <TurnBar b={b} className="mt-1.5" />
       <AnimatePresence initial={false}>
         {open && (
@@ -1553,6 +1589,40 @@ function TurnEnd({ item, chat }: { item: Extract<ChatItem, { kind: "turn" }>; ch
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** "3 files changed" under a turn that wrote files: opens that turn in the Changes panel. */
+function TurnFilesLine({ chat, item }: { chat: Chat; item: Extract<ChatItem, { kind: "turn" }> }) {
+  const items = chat.items;
+  const info = useMemo(() => {
+    const at = items.indexOf(item);
+    let i = at - 1;
+    const tools: Extract<ChatItem, { kind: "tool" }>[] = [];
+    while (i >= 0 && items[i].kind !== "prompt" && items[i].kind !== "turn") {
+      const it = items[i];
+      if (it.kind === "tool") tools.push(it);
+      i--;
+    }
+    const p = i >= 0 && items[i].kind === "prompt" ? (items[i] as Extract<ChatItem, { kind: "prompt" }>) : null;
+    const ordinal = p ? items.slice(0, i + 1).filter((x) => x.kind === "prompt").length : 0;
+    return { files: turnFiles(tools).length, p, ordinal };
+  }, [items, item]);
+  if (!info.files || !chat.sessionId) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => openChangesAt(chat.id, { at: info.p?.ts ?? item.ts, prompt: info.p?.text, ordinal: info.ordinal })}
+      className="-mx-1 mt-0.5 inline-flex items-center gap-1.5 rounded-[6px] px-1 text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
+      title="Review this turn's changes: diffs, keep and undo"
+      data-turn-files={info.files}
+    >
+      <IDiff size={13} />
+      <span>
+        <span className="tnum">{info.files}</span> {info.files === 1 ? "file" : "files"} changed
+      </span>
+      <IChevron size={10} className="opacity-60" />
+    </button>
   );
 }
 

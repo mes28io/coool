@@ -20,15 +20,19 @@ import { displayTitle, folderName, titleWas } from "../lib/format";
 import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
-import { BROWSER_CHAT_MIN, BROWSER_MIN, CONTEXT_MIN, DEVICE_MIN, MAC_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
+import { BROWSER_CHAT_MIN, BROWSER_MIN, CHANGES_MIN, CONTEXT_MIN, DEVICE_MIN, MAC_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
 import { liveTime, Timeline, ThinkingRow } from "./Activity";
 import { AgentsButton } from "./AgentsButton";
 import { AgentsBody } from "./AgentsPanel";
 import { RightPanel, type RightKind } from "./RightPanel";
+import { ChangesPanel } from "./ChangesPanel";
+import { changesTarget, useChanges, useChangesOpen } from "../lib/changes";
+import { nearestTurn, type Scope } from "../lib/changesRules";
+import { useChangeNotes } from "../lib/changeNotes";
 import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
-import { IActivity, IArrowUp, IClose, IContext, IMac, IPhone, ITerminal } from "./icons";
+import { IActivity, IArrowUp, IClose, IContext, IDiff, IMac, IPhone, ITerminal } from "./icons";
 import { ContextPanelBody } from "./ContextPanel";
 import type { CtxTarget } from "../lib/chatContext";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
@@ -117,6 +121,7 @@ export function SessionView({
   const browserFits = paneW >= BROWSER_MIN + (axisOf("browser") === "y" ? 0 : BROWSER_CHAT_MIN);
   const deviceFits = paneW >= DEVICE_MIN + (axisOf("device") === "y" ? 0 : BROWSER_CHAT_MIN);
   const macFits = axisOf("mac") === "y" ? paneW >= BROWSER_MIN : paneW >= MAC_MIN + BROWSER_CHAT_MIN;
+  const changesFits = axisOf("changes") === "y" ? paneW >= BROWSER_MIN : paneW >= CHANGES_MIN + BROWSER_CHAT_MIN;
   // The Context panel: beside a readable chat, or below it at any width.
   const contextFits = axisOf("context") === "y" || paneW >= CONTEXT_MIN + BROWSER_CHAT_MIN;
   const cards = useAgentCards(r.session, chat);
@@ -153,6 +158,8 @@ export function SessionView({
   }, [activeKind, chat, r.session]);
   const deviceWidth = useStore((st) => st.deviceWidth);
   const setDeviceWidth = useStore((st) => st.setDeviceWidth);
+  const changesWidth = useStore((st) => st.changesWidth);
+  const setChangesWidth = useStore((st) => st.setChangesWidth);
   const macWidth = useStore((st) => st.macWidth);
   const setMacWidth = useStore((st) => st.setMacWidth);
   const contextWidth = useStore((st) => st.contextWidth);
@@ -164,6 +171,8 @@ export function SessionView({
         ? "device"
         : panelState === "mac" && macFits
           ? "mac"
+          : panelState === "changes" && changesFits
+          ? "changes"
           : panelState === "context" && contextFits
           ? "context"
           : !wide
@@ -182,6 +191,7 @@ export function SessionView({
   const browserOpen = showing === "browser";
   const deviceOpen = showing === "device";
   const macOpen = showing === "mac";
+  const changesOpen = showing === "changes";
   const contextOpen = showing === "context";
   // The chat's agent driving its iPhone: the panel shows that device, and opens if no panel is showing (not again in the
   // same stretch of activity once the person closed it); when another panel is showing, the iPhone button lights up.
@@ -268,6 +278,8 @@ export function SessionView({
         ? Math.max(DEVICE_MIN, Math.min(deviceWidth, paneW - deviceChatMin))
         : k === "mac"
           ? Math.max(MAC_MIN, Math.min(macWidth, paneW - BROWSER_CHAT_MIN))
+          : k === "changes"
+            ? Math.max(CHANGES_MIN, Math.min(changesWidth, paneW - BROWSER_CHAT_MIN))
           : k === "context"
             ? Math.max(CONTEXT_MIN, Math.min(contextWidth, paneW - BROWSER_CHAT_MIN))
             : agentsWidth;
@@ -278,6 +290,8 @@ export function SessionView({
         ? setDeviceWidth(Math.min(w, paneW - deviceChatMin))
         : k === "mac"
           ? setMacWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
+          : k === "changes"
+            ? setChangesWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
           : k === "context"
             ? setContextWidth(Math.min(w, paneW - BROWSER_CHAT_MIN))
             : setAgentsWidth(w);
@@ -331,6 +345,39 @@ export function SessionView({
     if (!macFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the Mac with the chat" : "Make this pane wider to show the Mac beside the chat");
     setPanel("mac");
   };
+
+  // The Changes panel's data: loaded while the pane shows (the header's count), every 1.5 s while the agent works
+  // and the panel is open.
+  const [changesScope, setChangesScope] = useState<Scope>("pending");
+  const changesExternal = !!r.session && r.pty === null && r.chat === null;
+  const cTarget = useMemo(() => changesTarget(r.session, chat, changesExternal), [r.session, chat?.sessionId, chat?.provider, chat?.cwd, changesExternal]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cLive = chat ? chat.running && chat.state !== "idle" : r.session?.status === "busy";
+  // Open: every new step; closed (the header's count only): every finished turn or new transcript event.
+  const cTick = changesOpen ? `${chat?.items.length ?? 0}:${r.session?.last_event ?? 0}:${r.session?.agents.length ?? 0}` : `${chat?.items.filter((i) => i.kind === "turn").length ?? 0}:${chat ? 0 : (r.session?.last_event ?? 0)}`;
+  // Open: every 1.5 s while the agent works, every 4 s otherwise (a hand edit, a commit in a terminal).
+  const changes = useChanges(cTarget, changesScope, cTick, changesOpen ? (cLive ? 1500 : 4000) : null, !!cTarget);
+  useChangeNotes(chat ?? null, changes.data, cTarget);
+  const onChanges = () => {
+    if (!panelKey) return;
+    if (changesOpen) return setPanel("closed");
+    if (!changesFits) return useStore.getState().toast(layout === "stacked" ? "Make this pane bigger to show the changes with the chat" : "Make this pane wider to show the changes beside the chat");
+    setPanel("changes");
+  };
+  // "4 files changed" under a turn opens the panel at that turn.
+  const openReq = useChangesOpen((s) => (panelKey ? s.req[panelKey] : undefined));
+  const changeTurns = changes.data?.turns;
+  useEffect(() => {
+    if (!openReq || !panelKey) return;
+    const sc = openReq.scope;
+    if (typeof sc === "string") setChangesScope(sc);
+    else if (changeTurns) {
+      const n = nearestTurn(changeTurns, sc.at, sc.prompt, sc.ordinal);
+      setChangesScope(n ? `turn:${n}` : "chat");
+    } else setChangesScope("chat");
+    if (changesFits) setRightPanel(panelKey, "changes");
+    else useStore.getState().toast("Make this pane wider to show the changes beside the chat");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openReq?.n, changeTurns === undefined]);
 
   const { session, pty, starting, startingChat } = r;
   const ctxProvider: Provider = session?.provider ?? chat?.provider ?? startingChat?.provider ?? starting?.provider ?? "claude";
@@ -476,6 +523,26 @@ export function SessionView({
             )}
           </IconButton>
         )}
+        {panelKey && cTarget && (changesOpen || (changes.data?.total ?? 0) > 0) && (
+          <button
+            type="button"
+            onClick={onChanges}
+            title={changesOpen ? "Hide the changes" : `What the agent changed${changes.data ? `: ${changes.data.total} ${changes.data.total === 1 ? "file" : "files"}, ${changes.data.pending} not reviewed` : ""}`}
+            className={cx("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[8px] px-2 text-small font-medium transition-[background-color,color] duration-150 hover:bg-hover hover:text-fg", changesOpen ? "bg-hover text-fg" : "text-dim")}
+            data-changes-button={changes.data?.pending ?? ""}
+          >
+            <span className="relative">
+              <IDiff size={16} />
+              {changes.data?.busy && <span className="breathe absolute -right-[2px] -top-[2px] size-[6px] rounded-full bg-[var(--status-running)] ring-2 ring-[var(--bg)]" aria-hidden />}
+            </span>
+            {!compact && <span>Changes</span>}
+            {changes.data && (
+              <span className={cx("rounded-[5px] px-1 font-mono text-[10.5px] tnum", changes.data.pending > 0 ? "bg-[color-mix(in_oklab,var(--text)_12%,transparent)] text-fg" : "bg-[color-mix(in_oklab,var(--dim)_10%,transparent)] text-faint")}>
+                {changes.data.pending > 0 ? changes.data.pending : changes.data.total}
+              </span>
+            )}
+          </button>
+        )}
         {panelOn && panelKey && <AgentsButton cards={cards} shells={shells.length} open={agentsOpen} onToggle={() => toggleRight("agents")} compact={compact} />}
         {/* Model and context sit at the right end, after the Jobs and browser buttons. */}
         {session?.loaded === false && !chat ? (
@@ -550,7 +617,7 @@ export function SessionView({
           ) : null}
         </div>
         </AttachSource.Provider>
-        {(wide || browserFits || deviceFits || macFits || contextFits) && panelKey && (
+        {(wide || browserFits || deviceFits || macFits || changesFits || contextFits) && panelKey && (
           <RightPanel
             which={showing}
             width={panelWidth}
@@ -569,6 +636,8 @@ export function SessionView({
                 <DevicePanel panelKey={panelKey} chat={r.chat} active={active} onClose={() => setPanel("closed")} />
               ) : k === "mac" ? (
                 <MacPanel chat={r.chat} active={active} onClose={() => setPanel("closed")} />
+              ) : k === "changes" ? (
+                <ChangesPanel data={changes.data} error={changes.error} reload={changes.reload} target={cTarget} scope={changesScope} onScope={setChangesScope} chat={chat ?? null} width={panelAxisNow === "y" ? paneW : panelWidth("changes")} onClose={() => setPanel("closed")} />
               ) : k === "context" ? (
                 <ContextPanelBody
                   key={`${ctxTarget.provider}:${ctxTarget.cwd}:${ctxTarget.chat ?? ""}`}

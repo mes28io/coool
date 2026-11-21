@@ -71,8 +71,52 @@ pub fn open(id: &str, path: &str) -> Result<(), String> {
     if st.success() { Ok(()) } else { Err(format!("macOS couldn't open {path}")) }
 }
 
+/// The command line tool inside an editor's bundle that opens a file at a line, and its arguments; None for an app
+/// without one (it gets the file alone).
+pub fn line_command(id: &str, app: &Path, path: &str, line: u32) -> Option<(PathBuf, Vec<String>)> {
+    let at = format!("{path}:{line}");
+    let (tool, args): (&str, Vec<String>) = match id {
+        "vscode" => ("Contents/Resources/app/bin/code", vec!["--goto".into(), at]),
+        "cursor" => ("Contents/Resources/app/bin/cursor", vec!["--goto".into(), at]),
+        "windsurf" => ("Contents/Resources/app/bin/windsurf", vec!["--goto".into(), at]),
+        "zed" => ("Contents/MacOS/cli", vec![at]),
+        "sublime" => ("Contents/SharedSupport/bin/subl", vec![at]),
+        _ => return None,
+    };
+    let t = app.join(tool);
+    t.is_file().then_some((t, args))
+}
+
+/// Opens `path` at `line` with app `id` when it can go to a line, else opens the file as [`open`] does.
+pub fn open_at(id: &str, path: &str, line: u32) -> Result<(), String> {
+    let apps = installed();
+    if let Some(a) = apps.iter().find(|a| a.id == id)
+        && let Some((tool, args)) = line_command(id, Path::new(&a.path), path, line)
+    {
+        let st = std::process::Command::new(tool).args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map_err(|e| e.to_string())?;
+        if st.success() {
+            return Ok(());
+        }
+    }
+    open(id, path)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn line_commands_need_the_bundled_tool() {
+        let d = std::env::temp_dir().join(format!("coool-apps-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("Contents/Resources/app/bin")).unwrap();
+        assert!(super::line_command("vscode", &d, "/p/f.rs", 12).is_none());
+        std::fs::write(d.join("Contents/Resources/app/bin/code"), "").unwrap();
+        let (t, a) = super::line_command("vscode", &d, "/p/f.rs", 12).unwrap();
+        assert!(t.ends_with("bin/code"));
+        assert_eq!(a, ["--goto", "/p/f.rs:12"]);
+        assert!(super::line_command("xcode", &d, "/p/f.rs", 12).is_none());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
     use super::*;
 
     #[test]

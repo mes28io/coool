@@ -9,6 +9,17 @@ import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
 import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
+import type { ChangeSet, FileChange, Outcome } from "./changesRules";
+
+/** Which session's changes, and which part (crates/core/src/changes; `changes_load` and the rest). */
+export interface ChangesReq {
+  provider: Provider;
+  sessionId: string;
+  agents: string[];
+  cwd: string;
+  scope: string;
+  external: boolean;
+}
 import type { CtxCreate, CtxFile, CtxOverview, CtxSaveReply, CtxStamp, CtxTarget } from "./chatContext";
 
 export interface PtyChunk {
@@ -57,6 +68,20 @@ export interface Backend extends SettingsBackend {
   gitTrail(path: string): Promise<GitTrail>;
   /** What fills a session's (or one of its subagents') context window, for the open Models panel only (crates/core/src/context.rs). */
   contextMap(a: { provider: Provider; sessionId: string; agentId?: string | null; cwd?: string }): Promise<ContextMap>;
+  // ---- the Changes view (crates/core/src/changes, app/src-tauri/src/changes.rs) ----
+  changesLoad(t: ChangesReq): Promise<ChangeSet>;
+  /** Undo a hunk, a file, or (file null) every file of the scope. `force`: the person said "anyway". */
+  changesUndo(t: ChangesReq, file: string | null, hunk: string | null, force: boolean): Promise<Outcome>;
+  /** Keep (mark reviewed) a hunk, a file or every file of the scope; `stage` also runs `git add`; `unkeep` takes it back. */
+  changesKeep(t: ChangesReq, file: string | null, hunk: string | null, stage: boolean, unkeep: boolean): Promise<Outcome>;
+  /** The notes about files edited again after an undo were sent. */
+  changesTold(t: ChangesReq, paths: string[]): Promise<void>;
+  /** `git commit` of what is staged in the folder's repository (never pushes). */
+  changesCommit(cwd: string, message: string): Promise<Outcome>;
+  /** A pending edit (a permission request) as the diff it would make on the file now. */
+  changesPreview(cwd: string, tool: string, input: unknown): Promise<FileChange[]>;
+  /** Open a file of the folder at a line in the editor from Settings. */
+  changesOpen(cwd: string, path: string, line: number): Promise<void>;
   // ---- the Context panel (crates/core/src/chatctx: the lookup and the allow-list are there) ----
   /** What the chat's agent starts with: folder, instructions, memory, skills, what coool adds. */
   chatContext(target: CtxTarget): Promise<CtxOverview>;
@@ -625,6 +650,13 @@ async function tauriBackend(): Promise<Backend> {
     environment: () => invoke("environment"),
     gitTrail: (path) => invoke("git_trail", { path }),
     contextMap: ({ provider, sessionId, agentId, cwd }) => soft("context_map", { provider, sessionId, agentId: agentId ?? null, cwd: cwd ?? null }),
+    changesLoad: (target) => soft("changes_load", { target }),
+    changesUndo: (target, file, hunk, force) => soft("changes_undo", { target, file, hunk, force }),
+    changesKeep: (target, file, hunk, stage, unkeep) => soft("changes_keep", { target, file, hunk, stage, unkeep }),
+    changesTold: (target, paths) => soft("changes_told", { target, paths }),
+    changesCommit: (cwd, message) => soft("changes_commit", { cwd, message }),
+    changesPreview: (cwd, tool, input) => soft("changes_preview", { cwd, tool, input }),
+    changesOpen: (cwd, path, line) => soft("changes_open", { cwd, path, line }),
     chatContext: (target) => soft("chat_context", { target }),
     chatContextRead: (target, path) => soft("chat_context_read", { target, path }),
     chatContextSave: (target, path, text, stamp) => soft("chat_context_save", { target, path, text, stamp }),
