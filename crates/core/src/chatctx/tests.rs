@@ -265,7 +265,7 @@ fn the_launch_record_matches_the_real_launch() {
     assert!(incoool.text.as_deref().unwrap().starts_with("# coool\n") && !incoool.text.as_deref().unwrap().contains("# Ladder"));
     assert!(incoool.note.as_deref().unwrap().contains("Tell agents about coool"));
     let joined = appended_prompts(&args).concat();
-    assert_eq!(tokens(joined.len() as u64).abs_diff(ladder.tokens + incoool.tokens) <= 1, true, "the two parts cover the flag's text");
+    assert!(tokens(joined.len() as u64).abs_diff(ladder.tokens + incoool.tokens) <= 1, "the two parts cover the flag's text");
     let codex = ChatOptions { provider: Provider::Codex, ..opts };
     let (_, _, args) = Chat::launch(&codex, "coool", &[], None, None);
     let rec = Chat::launch_record(&codex, &args, &[]);

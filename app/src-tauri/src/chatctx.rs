@@ -32,8 +32,11 @@ pub struct Target {
 #[derive(Default)]
 pub struct ContextState {
     scans: Mutex<HashMap<PathBuf, (TranscriptScan, Instant)>>,
-    config: Mutex<HashMap<(Provider, String), (Instant, Vec<(String, PathBuf)>, Vec<UserMcp>)>>,
+    config: Mutex<HashMap<(Provider, String), Config>>,
 }
+
+/// When it was read, the enabled plugins (name, folder), the MCP servers.
+type Config = (Instant, Vec<(String, PathBuf)>, Vec<UserMcp>);
 
 const KEEP_SCANS: usize = 6;
 const CONFIG_TTL: Duration = Duration::from_secs(20);

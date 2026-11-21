@@ -305,7 +305,7 @@ function Overview({
             <span className="font-semibold">{model ? modelLabel(model) : ov.launch_model ? modelLabel(ov.launch_model) : `${cli}'s default model`}</span>
             {ov.effort && <span className="text-dim"> · {ov.effort} effort</span>}
           </div>
-          <div className="truncate text-small text-dim">{started ? `Started with ${modelLabel(started)}` : "Running now; it started with this model"}</div>
+          <div className="truncate text-small text-dim">{started ? `Started with ${modelLabel(started)}` : "Since the chat started"}</div>
         </div>
         {onChangeModel && (
           <Button variant="ghost" className="h-[28px] px-2 text-small" onClick={onChangeModel} title="Switch the model in the composer below">

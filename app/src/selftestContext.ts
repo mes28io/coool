@@ -55,7 +55,7 @@ export function contextScenarios(h: H): Record<string, (ctx: { cfg: { dir: strin
       await h.step("context: the panel opens from the chat's header, left of the browser", async () => {
         await h.waitFor("ready", () => useStore.getState().ready, 60_000);
         const before = new Set(Object.keys(useChats.getState().chats).map(Number));
-        await newChat({ provider: "claude", cwd: deep, model: "haiku", ladder: { on: true } });
+        await newChat({ provider: "claude", cwd: deep, model: "haiku", ladder: { on: true }, context: true });
         ({ id } = await h.waitFor("the chat", () => { const n = Object.keys(useChats.getState().chats).map(Number).find((i) => !before.has(i)); return n === undefined ? null : { id: n }; }, 15_000));
         await h.waitFor("ready", () => useChats.getState().chats[id]?.ready, 60_000);
         useStore.getState().open({ kind: "chat", id });
@@ -99,6 +99,7 @@ export function contextScenarios(h: H): Record<string, (ctx: { cfg: { dir: strin
         const order = o.items.filter((i) => i.group === "instructions").map((i) => norm(i.path ?? "").slice(norm(home).length));
         const coool = o.items.filter((i) => i.group === "coool").map((i) => `${i.label} ~${i.tokens}`);
         if (!coool.some((c) => c.startsWith("Ladder"))) throw h.fail(`no Ladder text: ${coool.join(", ")}`);
+        if (!coool.some((c) => c.startsWith("You are in coool"))) throw h.fail(`no coool context: ${coool.join(", ")}`);
         const launched = (await h.invoke("selftest_chat_launch", { chat: id })) as { args: string[] };
         const plugin = launched.args.some((a) => a.startsWith("--plugin-dir="));
         if (plugin && !o.items.some((i) => i.label === "coool-ladder:briefs")) throw h.fail("no Ladder plugin skill");
