@@ -266,10 +266,12 @@ export function keepaliveScenarios(h: H): Record<string, (ctx: { cfg: { dir: str
       await h.log("KA-QUIT ka-update");
       (document.querySelector("[data-about-update]") as HTMLButtonElement | null)?.click();
       // The restart: the update screen says the chats keep running, then the app exits.
-      for (let i = 0; i < 100; i++) {
-        const t = document.body.textContent ?? "";
-        if (/working chats? keeps? running/i.test(t)) {
-          await h.log(`KA-SCREEN ${/Your[^.]*keeps? running\./.exec(t)?.[0] ?? "keep running"}`);
+      for (let i = 0; i < 200; i++) {
+        // The update screen itself (not About's row): its title, and the line under it.
+        const screen = document.querySelector("[data-update-title]")?.parentElement;
+        const t = screen?.textContent ?? "";
+        if (/Restarting/.test(t) && /keeps? running/i.test(t)) {
+          await h.log(`KA-SCREEN ${t.replace(/\s+/g, " ").slice(0, 160)}`);
           break;
         }
         if (document.querySelector("[data-about-update-confirm]")) {

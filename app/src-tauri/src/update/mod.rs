@@ -1306,6 +1306,8 @@ fn launch_step(u: &Arc<Updater>, app: &AppHandle, core: &Arc<Core>) -> bool {
             && !u.gate.is_open()
             && h.join().unwrap_or(false)
             && core.running() == 0
+            // A self-test that doesn't restart must not swap its bundle either (it would stay on the old version).
+            && may_restart
             && let Some(b) = own_bundle()
             && let Ok(Some(_)) = apply_staged(&b, &from)
             && restart(&b)

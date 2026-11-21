@@ -160,7 +160,7 @@ for p in $HOSTS; do
   if [ -n "$p" ] && ps -o command= -p "$p" 2>/dev/null | grep -q -- "--coool-chat-host $ROOT/host"; then kill "$p" 2>/dev/null || true; fi
 done
 sleep 3
-left=$(ps -axo pid=,command= | grep -F "$ROOT" | grep -v grep || true)
+left=$(ps -axo pid=,command= | grep -F "$ROOT" | grep -v -e grep -e "tail -F" || true)
 for p in $CLIS; do alive "$p" && left="$left
 CLI $p: $(ps -o command= -p "$p" | cut -c1-80)"; done
 [ -z "$left" ] && ok "cleanup: nothing of this run is left running" || { bad "cleanup: still running:"; echo "$left"; }
