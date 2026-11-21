@@ -1,4 +1,4 @@
-// Settings > General > Updates: the running version with "Check now", and the two switches (coool itself; Claude Code
+// Settings > About > Updates: the running version with "Check now", and the two switches (coool itself; Claude Code
 // and Codex). The work is the backend's (app/src-tauri/src/update/); the rail's icon shows it while it happens.
 
 import { useState } from "react";
