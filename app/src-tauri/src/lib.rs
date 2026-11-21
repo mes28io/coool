@@ -1973,6 +1973,14 @@ pub fn chat_host(dir: &std::path::Path, version: Option<&str>) -> i32 {
 
 pub const CHAT_HOST_FLAG: &str = coool_core::chat::host::FLAG;
 
+/// `coool --coool-api-key <id>`: a Claude Platform chat's `apiKeyHelper` (APP_SPEC "Claude Platform"): prints key
+/// `id` from the Keychain for the CLI that runs it.
+pub fn api_key_helper(id: Option<&str>) -> i32 {
+    coool_core::platform::helper_main(id)
+}
+
+pub const API_KEY_HELPER_FLAG: &str = coool_core::platform::HELPER_FLAG;
+
 /// `coool --coool-pilot-eval <file>`: a pilot decision log's summary (device/pilot/dataset.rs).
 pub fn pilot_eval_report(file: &std::path::Path) -> String {
     device::pilot::dataset::report(file)
