@@ -601,9 +601,30 @@ impl Core {
         chathost::counts(self).0
     }
 
+    /// [`Core::running`] for the main thread (a quit, the window closing): it never waits long for the hub. When the
+    /// hub stays busy past a moment, it says 1, so the quit asks first rather than stopping what may run.
+    fn running_quick(&self) -> usize {
+        let until = Instant::now() + Duration::from_millis(250);
+        loop {
+            if let Some(n) = chathost::try_counts(self) {
+                return n.0;
+            }
+            if Instant::now() >= until {
+                return 1;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A call on chat `id`. A hosted chat's call waits for the host with the hub let go: a slow or stuck host holds
+    /// up only that call (which times out), never the refresher, the window or the other chats.
     fn with_chat<T>(&self, id: usize, f: impl FnOnce(&mut coool_core::chat::Chat) -> anyhow::Result<T>) -> Res<T> {
         let mut hub = self.hub.lock().unwrap();
         let c = hub.chat_mut(id).ok_or("no such chat")?;
+        if let Some(mut proxy) = c.host_proxy() {
+            drop(hub);
+            return f(&mut proxy).map_err(|e| format!("{e:#}"));
+        }
         f(c).map_err(|e| format!("{e:#}"))
     }
 }
@@ -651,7 +672,7 @@ fn check_launch(provider: Provider, dir: &str) -> Res<()> {
 // ---------- commands ----------
 
 /// The full state as last sent (same shape as the `sessions` event).
-#[tauri::command]
+#[tauri::command(async)]
 fn list_sessions(core: State<'_, Arc<Core>>) -> Box<RawValue> {
     let full = core.published.lock().unwrap().full(None);
     RawValue::from_string(full).unwrap_or_else(|_| RawValue::from_string("null".into()).expect("valid JSON"))
@@ -711,7 +732,7 @@ fn pty_resize(core: State<'_, Arc<Core>>, id: usize, rows: u16, cols: u16) -> Re
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn pty_replay(core: State<'_, Arc<Core>>, id: usize) -> Res<Replay> {
     let streams = core.streams.lock().unwrap();
     let s = streams.get(&id).ok_or("no such terminal")?;
@@ -785,13 +806,21 @@ fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize
     }
     update::hold(app, opts.provider);
     // With "Keep chats running when coool quits": the chat starts in the chat host (started now if needed).
-    chathost::ensure(app, core);
+    // When the host can't be reached or started, the chat starts inside coool, and says so (once per launch).
+    let fallback = chathost::ensure(app, core).err();
     let provider = opts.provider;
     let cwd = opts.cwd.clone();
+    // A start in the host waits for it with the hub let go (Hub::start_chat_in).
+    let id = Hub::start_chat_in(&core.hub, opts).map_err(|e| format!("couldn't start {}: {e:#}", provider.label()))?;
+    if let Some(why) = fallback {
+        let handle = core.hub.lock().unwrap().chat(id).map(|c| c.handle());
+        if let Some(h) = handle {
+            h.note(&why);
+        }
+    }
     let id = {
-        let mut hub = core.hub.lock().unwrap();
-        let id = hub.start_chat(opts).map_err(|e| format!("couldn't start {}: {e:#}", provider.label()))?;
-        let handle = hub.chat(id).expect("just started").handle();
+        let hub = core.hub.lock().unwrap();
+        let handle = hub.chat(id).ok_or("the chat ended as it started")?.handle();
         core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd), key: None, ask: None, quiet_until: 0 });
         core.pump_waker.kick();
         id
@@ -880,7 +909,7 @@ fn chat_stop(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
 }
 
 /// Everything the chat still holds, for a view that mounts late or a reloaded UI.
-#[tauri::command]
+#[tauri::command(async)]
 fn chat_replay(core: State<'_, Arc<Core>>, id: usize) -> Res<ChatReplay> {
     let chats = core.chats.lock().unwrap();
     let c = chats.get(&id).ok_or("no such chat")?;
@@ -1052,7 +1081,7 @@ fn pilot_log_delete(core: State<'_, Arc<Core>>, devices: State<'_, Arc<device::D
 
 /// Refresh one provider's plan usage now (a hidden CLI probe that runs no
 /// model turn); the result arrives with a later `sessions` payload.
-#[tauri::command]
+#[tauri::command(async)]
 fn usage_refresh(core: State<'_, Arc<Core>>, provider: Provider) {
     core.usage.refresh_now(provider);
     core.kick();
@@ -1111,7 +1140,7 @@ fn environment() -> Environment {
 }
 
 /// PTYs and chats coool is running (what quitting would stop).
-#[tauri::command]
+#[tauri::command(async)]
 fn running_count(core: State<'_, Arc<Core>>) -> usize {
     core.running()
 }
@@ -1123,7 +1152,7 @@ struct QuitCounts {
     keep: usize,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn quit_counts(core: State<'_, Arc<Core>>) -> QuitCounts {
     let (stop, keep) = chathost::counts(&core);
     QuitCounts { stop, keep }
@@ -1131,7 +1160,7 @@ fn quit_counts(core: State<'_, Arc<Core>>) -> QuitCounts {
 
 /// Called by the frontend's quit confirmation: stop what coool runs (hosted chats keep running when the setting
 /// says so), then exit.
-#[tauri::command]
+#[tauri::command(async)]
 fn quit_app(app: AppHandle, core: State<'_, Arc<Core>>) {
     core.allow_exit.store(true, Ordering::SeqCst);
     chathost::stop_for_quit(&core);
@@ -1139,7 +1168,7 @@ fn quit_app(app: AppHandle, core: State<'_, Arc<Core>>) {
 }
 
 /// "Stop all chats": every chat and terminal session, hosted ones too, without quitting.
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_all_chats(core: State<'_, Arc<Core>>) {
     core.hub.lock().unwrap().kill_all();
     core.kick();
@@ -1234,7 +1263,7 @@ fn onboarding_set_seen(core: State<'_, Arc<Core>>, seen: bool) -> Res<()> {
     settings::save(core.selftest.as_ref(), &s).map_err(err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn power_status(core: State<'_, Arc<Core>>) -> power::PowerStatus {
     core.power.lock().unwrap().status()
 }
@@ -1778,7 +1807,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
 /// Cmd+Q / the Quit menu item: ask first when PTYs or chats are running.
 fn request_quit(app: &AppHandle) {
     let core = app.state::<Arc<Core>>();
-    let running = core.running();
+    let running = core.running_quick();
     if running > 0 && !core.allow_exit.load(Ordering::SeqCst) && core.confirm_quit.load(Ordering::Relaxed) {
         let _ = app.emit("confirm-quit", running);
     } else {
@@ -1797,7 +1826,7 @@ fn stop_all_from_menubar(app: &AppHandle) {
 /// The menu bar item's Quit coool: as ⌘Q, with the window brought forward first when it is going to ask.
 fn quit_from_menubar(app: &AppHandle) {
     let core = app.state::<Arc<Core>>();
-    if core.running() > 0 && !core.allow_exit.load(Ordering::SeqCst) && core.confirm_quit.load(Ordering::Relaxed) {
+    if core.running_quick() > 0 && !core.allow_exit.load(Ordering::SeqCst) && core.confirm_quit.load(Ordering::Relaxed) {
         notify::open_from_menubar(None);
     }
     request_quit(app);
@@ -1852,12 +1881,31 @@ pub fn update_selftest(args: &[String]) -> i32 {
     update::selftest_cli(args)
 }
 
+/// The runtime Tauri runs commands on. Most of coool's commands do blocking work (locks, files, git, the chat host)
+/// on its workers; with Tauri's default of one worker per core, a handful of slow ones (a long session's changes, a
+/// chat host or CLI that doesn't answer) could take every worker and leave all other calls, sending a message
+/// included, waiting behind them. Many workers keep one part's slowness its own.
+fn command_runtime() {
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(COMMAND_WORKERS).thread_name("coool-command").enable_all().build();
+    match rt {
+        Ok(rt) => {
+            tauri::async_runtime::set(rt.handle().clone());
+            // It lives as long as the app.
+            std::mem::forget(rt);
+        }
+        Err(e) => eprintln!("coool: the command runtime didn't start ({e}); using Tauri's default"),
+    }
+}
+
+const COMMAND_WORKERS: usize = 64;
+
 pub fn run() {
     // A Finder-launched app gets a minimal PATH; adopt the login shell's so
     // `claude` / `codex` resolve. Must happen before any thread starts.
     perf::boot_mark("run");
     env::adopt_login_path();
     perf::boot_mark("path");
+    command_runtime();
 
     let selftest = selftest::SelfTest::from_env();
     let quiet = selftest.as_ref().is_some_and(|t| t.quiet_window());
@@ -2289,7 +2337,7 @@ pub fn run() {
             }
             if let WindowEvent::CloseRequested { api, .. } = ev {
                 let core = win.state::<Arc<Core>>();
-                let running = core.running();
+                let running = core.running_quick();
                 if !core.allow_exit.load(Ordering::SeqCst) && running > 0 && core.confirm_quit.load(Ordering::Relaxed) {
                     api.prevent_close();
                     let _ = win.emit("confirm-quit", running);
@@ -2307,7 +2355,7 @@ pub fn run() {
     app.run(move |handle, ev| match ev {
         RunEvent::ExitRequested { code, api, .. } => {
             let core = handle.state::<Arc<Core>>();
-            let running = core.running();
+            let running = core.running_quick();
             if code.is_none() && !core.allow_exit.load(Ordering::SeqCst) && running > 0 && core.confirm_quit.load(Ordering::Relaxed) {
                 api.prevent_exit();
                 let _ = handle.emit("confirm-quit", running);

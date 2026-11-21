@@ -40,20 +40,37 @@ export function useChanges(target: ChangesTarget | null, scope: Scope, tick: unk
   const t = useRef(target);
   t.current = target;
   const k = targetKey(target);
+  const sc = useRef(scope);
+  sc.current = scope;
   const seq = useRef(0);
+  // One load at a time: a reload asked for while one is on its way runs once after it (a slow load on a long session
+  // must never pile up calls that each hold one of the backend's threads).
+  const inFlight = useRef<Promise<void> | null>(null);
+  const again = useRef(false);
   const reload = useCallback(async () => {
-    const tg = t.current;
-    if (!tg) return;
-    const my = ++seq.current;
-    try {
-      const cs = await api().changesLoad({ ...tg, scope });
-      if (my === seq.current) {
-        setData(cs);
-        setError(null);
-      }
-    } catch (e) {
-      if (my === seq.current) setError(String(e instanceof Error ? e.message : e));
+    if (inFlight.current) {
+      again.current = true;
+      return inFlight.current;
     }
+    const run = async () => {
+      do {
+        again.current = false;
+        const tg = t.current;
+        if (!tg) return;
+        const my = ++seq.current;
+        try {
+          const cs = await api().changesLoad({ ...tg, scope: sc.current });
+          if (my === seq.current) {
+            setData(cs);
+            setError(null);
+          }
+        } catch (e) {
+          if (my === seq.current) setError(String(e instanceof Error ? e.message : e));
+        }
+      } while (again.current);
+    };
+    inFlight.current = run().finally(() => (inFlight.current = null));
+    return inFlight.current;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [k, scope]);
   useEffect(() => {

@@ -17,6 +17,12 @@ use tauri::{AppHandle, Manager};
 pub struct Hosts {
     dir: Mutex<Option<PathBuf>>,
     clients: Mutex<Vec<Arc<Client>>>,
+    /// Held while a host is being started (one at a time).
+    starting: Mutex<()>,
+    /// When the last start failed.
+    failed_at: Mutex<Option<std::time::Instant>>,
+    /// The person was told once that a chat runs inside coool because the host couldn't start.
+    told: std::sync::atomic::AtomicBool,
 }
 
 fn version(app: &AppHandle) -> String {
@@ -43,9 +49,25 @@ fn host_dir(app: &AppHandle, core: &Core) -> Option<PathBuf> {
 /// At launch: connects to every host in coool's folder and takes in their chats. A host of this version becomes the
 /// one new chats start in (with the setting on); one of another version is told to drain (it ends with its last
 /// chat). A host of a protocol this app doesn't speak is left alone.
-pub fn init(app: &AppHandle, core: &Core) {
+///
+/// It talks to the hosts on a thread of its own (a host that doesn't answer must never hold the window at launch);
+/// a chat started meanwhile waits for it (`starting`), bounded by the hosts' own timeouts.
+pub fn init(app: &AppHandle, core: &Arc<Core>) {
     let Some(dir) = host_dir(app, core) else { return };
     *core.hosts.dir.lock().unwrap() = Some(dir.clone());
+    let (app, core) = (app.clone(), core.clone());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _one = core.hosts.starting.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = tx.send(());
+        take_in(&app, &core, &dir);
+    });
+    // Holding `starting` before setup goes on, so no chat can start a second host meanwhile.
+    let _ = rx.recv_timeout(std::time::Duration::from_secs(2));
+}
+
+fn take_in(app: &AppHandle, core: &Core, dir: &std::path::Path) {
+    let dir = dir.to_path_buf();
     let mine = version(app);
     let mut current = None;
     for hf in host::hosts(&dir) {
@@ -100,29 +122,50 @@ fn adopt(app: &AppHandle, core: &Core, c: &Arc<Client>) {
 
 /// Before a chat starts with the setting on: the host new chats go to, started when there is none (or it is gone).
 /// None (the chat starts inside coool): the setting is off, there is no host folder, or the host can't start.
-pub fn ensure(app: &AppHandle, core: &Core) -> Option<Arc<Client>> {
+/// `Err`: the setting is on but no host could be reached or started; the chat starts inside coool, and the error is
+/// what it says about that (only the first time in a launch: later ones start inside coool quietly, and the host is
+/// tried again after a minute).
+pub fn ensure(app: &AppHandle, core: &Core) -> Result<Option<Arc<Client>>, String> {
     if !core.keep_chats.load(Ordering::Relaxed) {
         core.hub.lock().unwrap().set_host(None);
-        return None;
+        return Ok(None);
     }
     if let Some(h) = core.hub.lock().unwrap().host().filter(|h| h.is_alive()) {
-        return Some(h);
+        return Ok(Some(h));
     }
-    let dir = core.hosts.dir.lock().unwrap().clone()?;
-    let exe = std::env::current_exe().ok()?;
-    let started = host::spawn_host(&exe, &dir, &version(app)).and_then(|hf| Client::open(&dir, &hf, &format!("coool {}", version(app))));
+    let Some(dir) = core.hosts.dir.lock().unwrap().clone() else { return Ok(None) };
+    // One start at a time; after a failure, chats start inside coool for a minute before the host is tried again.
+    let _one = core.hosts.starting.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(h) = core.hub.lock().unwrap().host().filter(|h| h.is_alive()) {
+        return Ok(Some(h));
+    }
+    if core.hosts.failed_at.lock().unwrap().is_some_and(|t| t.elapsed() < RETRY_AFTER) {
+        return Ok(None);
+    }
+    let started = std::env::current_exe()
+        .map_err(anyhow::Error::from)
+        .and_then(|exe| host::spawn_host(&exe, &dir, &version(app)))
+        .and_then(|hf| Client::open(&dir, &hf, &format!("coool {}", version(app))));
     match started {
         Ok(c) => {
+            *core.hosts.failed_at.lock().unwrap() = None;
             core.hosts.clients.lock().unwrap().insert(0, c.clone());
             core.hub.lock().unwrap().set_host(Some(c.clone()));
-            Some(c)
+            Ok(Some(c))
         }
         Err(e) => {
             eprintln!("coool: chat host not started: {e:#}");
-            None
+            *core.hosts.failed_at.lock().unwrap() = Some(std::time::Instant::now());
+            if core.hosts.told.swap(true, Ordering::SeqCst) {
+                return Ok(None);
+            }
+            Err(format!("coool's chat host couldn't start ({e:#}), so this chat runs inside coool and stops if coool quits. Chats started later try the host again."))
         }
     }
 }
+
+/// After a failed host start, chats start inside coool this long before the host is tried again.
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The setting changed: off, new chats start inside coool (hosted ones keep running until they end or coool quits);
 /// on, the next chat starts in a host.
@@ -142,7 +185,16 @@ pub fn stop_for_quit(core: &Core) {
 
 /// (what a quit would stop, what keeps running).
 pub fn counts(core: &Core) -> (usize, usize) {
-    let hub = core.hub.lock().unwrap();
+    counts_of(&core.hub.lock().unwrap(), core)
+}
+
+/// [`counts`] when the hub is free right now.
+pub fn try_counts(core: &Core) -> Option<(usize, usize)> {
+    let hub = core.hub.try_lock().ok()?;
+    Some(counts_of(&hub, core))
+}
+
+fn counts_of(hub: &coool_core::hub::Hub, core: &Core) -> (usize, usize) {
     let all = hub.running_count() + hub.running_chats();
     let kept = if core.keep_chats.load(Ordering::Relaxed) { hub.running_hosted() } else { 0 };
     (all - kept, kept)

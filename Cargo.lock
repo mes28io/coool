@@ -794,6 +794,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tokio",
  "toml 1.2.1+spec-1.1.0",
  "ureq",
 ]
