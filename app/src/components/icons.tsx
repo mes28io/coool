@@ -325,3 +325,14 @@ export const ICopy = mk(
     <path d="M10.75 2.75v-.25a.75.75 0 00-.75-.75H2.5a.75.75 0 00-.75.75V10a.75.75 0 00.75.75h.25" />
   </>,
 );
+
+/** A favourite (pinned) folder: a five-point star, its tips rounded. */
+export const IStar = mk(<path d="M8 1.9l1.8 3.75 4.1.55-3 2.85.75 4.1L8 11.15l-3.65 2 .75-4.1-3-2.85 4.1-.55z" />);
+
+/** A folder with a plus: New folder. */
+export const IFolderPlus = mk(
+  <>
+    <path d="M14.25 8V5.25a1 1 0 00-1-1H8L6.5 2.5H2.75a1 1 0 00-1 1v8.75a1 1 0 001 1H8" />
+    <path d="M12 10.25v4M10 12.25h4" />
+  </>,
+);

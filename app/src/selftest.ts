@@ -68,6 +68,7 @@ import { voiceScenarios } from "./selftestVoice";
 import { ladderScenarios } from "./selftestLadder";
 import { ladder2Scenarios } from "./selftestLadder2";
 import { contextScenarios } from "./selftestContext";
+import { newSessionScenarios } from "./selftestNewSession";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
 import { changesScenarios } from "./selftestChanges";
@@ -6920,6 +6921,8 @@ Object.assign(scenarios, ladderScenarios({ step, shot: (n) => shot(n), sleep, wa
 Object.assign(scenarios, ladder2Scenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a) }));
 // `context` (selftestContext.ts): the Context panel on a throwaway HOME; no model calls. Not in `all`.
 Object.assign(scenarios, contextScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a) }));
+// `newsession` (selftestNewSession.ts): the New session sheet on a throwaway HOME (app/scripts/newsession-e2e.sh); no model calls. Not in `all`.
+Object.assign(scenarios, newSessionScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a) }));
 Object.assign(scenarios, attachScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a), say }, { claude: CLAUDE_MODEL, codex: CODEX_MODEL }));
 Object.assign(scenarios, remoteScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), invoke: (c, a) => invoke(c, a), startIn: (cwd, mode) => startIn(cwd, mode), send }));
 Object.assign(scenarios, voiceScenarios({ step, shot, log, sleep, waitFor, fail: (m) => new Fail(m) }, (cmd, args) => invoke(cmd, args)));
