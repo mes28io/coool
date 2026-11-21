@@ -1204,7 +1204,8 @@ impl Chat {
     fn with_backend(&mut self, call: Value, f: impl FnOnce(&mut dyn Backend, &mut Out) -> Result<()>) -> Result<()> {
         let Link::Proc(writer) = &self.link else { bail!("a hosted chat's calls go to its host") };
         let mut sh = lock(&self.shared);
-        if !sh.running {
+        // A restart's new CLI owns the chat now (its backend, its stdin): this one's calls would go to the old pipe.
+        if !sh.running || sh.epoch != self.epoch {
             bail!("the chat has ended");
         }
         sh.trace("api", call);
@@ -1462,6 +1463,14 @@ impl Chat {
         self.opts = Some(e.opts.clone());
         self.started = SystemTime::now();
         self.kill_requested = None;
+    }
+
+    /// A hosted chat this process took over (a restart its host couldn't do): its mirror stops hearing from the host,
+    /// so nothing the host says of it later (its exit when the host goes) lands in the chat that now runs here.
+    pub(crate) fn host_forget(&self) {
+        if let Link::Host(c, k) = &self.link {
+            c.forget(k);
+        }
     }
 
     /// A hosted chat's restart, run by its host (Some), or None for a chat of this process.
