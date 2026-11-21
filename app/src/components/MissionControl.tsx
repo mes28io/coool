@@ -11,6 +11,7 @@ import { ago, displayTitle, folderName, fmtElapsed, fmtTokens, headlineIsTitle, 
 import { stepParts } from "../lib/toolNames";
 import { useGitTrail } from "../lib/gitTrail";
 import { attention, liveJobs, sameAttention, useChatDigest, useUnseen, type Attention } from "../lib/live";
+import { crewLabel } from "../lib/agentState";
 import { committing, fanout, ledgerRows, overlaps, type Change, type OverlapEdit } from "../lib/mission";
 import { agentOf, publishOverlaps, useProjectChanges } from "../lib/projectChanges";
 import { AnimateScope, useMotion } from "../lib/motion";
@@ -378,7 +379,7 @@ const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
   const cur = busy && !thinking && s.current ? stepParts(s.current) : null;
   const running = att.agents;
   const jobs = liveJobs(s);
-  const crew = running.length ? `${running.length} ${running.length === 1 ? "agent" : "agents"}${jobs > 0 ? `, ${jobs} ${jobs === 1 ? "job" : "jobs"}` : ""} working` : null;
+  const crew = crewLabel(running.length, jobs);
   const turn = useMemo(() => turnTotals(s), [s]);
   const worked = turn.startMs !== null && turn.endMs !== null && turn.endMs > turn.startMs ? turn.endMs - turn.startMs : 0;
   const headline = s.insight?.headline && !headlineIsTitle(s) ? s.insight.headline : null;

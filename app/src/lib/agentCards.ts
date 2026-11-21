@@ -12,6 +12,7 @@ import { agentFill, fillModel, handoffLine, taskPrompt, type Fill } from "./agen
 import { toolRow, toolRowFromText } from "./toolNames";
 import { attention, useChatDigest, type ChatDigest } from "./live";
 import { isStopReason } from "./stopped";
+import { agentEnd, agentWorking } from "./agentState";
 import type { Activity, Agent, Provider, Session } from "./types";
 import { sessionKey } from "./types";
 
@@ -60,6 +61,8 @@ export interface AgentCardData {
   error: string | null;
   /** A "failed" card the person stopped (interrupted by user): shown neutral, as "Stopped". */
   stopped: boolean;
+  /** A stopped-looking card whose end was never recorded (lib/agentState.ts "quiet"): `error` says how long it has been silent. */
+  quiet?: boolean;
   /** Recency, epoch ms. */
   lastAt: number;
   /** A job coool itself runs: the Stop action applies. */
@@ -155,9 +158,9 @@ function fromTimeline(base: Pick<AgentCardData, "id" | "source" | "ref" | "provi
 }
 
 /** A subagent of a transcript-read session. */
-export function cardFromAgent(s: Session, a: Agent): AgentCardData {
-  const live = !a.finished && s.status !== "ended";
-  return fromTimeline(
+export function cardFromAgent(s: Session, a: Agent, now = Date.now()): AgentCardData {
+  const live = agentWorking(s, a);
+  const card = fromTimeline(
     {
       id: `agent:${a.id}`,
       source: "agent",
@@ -175,6 +178,18 @@ export function cardFromAgent(s: Session, a: Agent): AgentCardData {
     a.activity,
     { current: a.current, live },
   );
+  // How it ended, as its session recorded it (crates/core/src/subagents.rs): stopped, failed, or quiet.
+  const end = agentEnd(a, now);
+  if (!end) return card;
+  const failedText = card.state === "failed" && !card.stopped ? card.error : null;
+  return {
+    ...card,
+    state: "failed",
+    active: -1,
+    stopped: end.stopped,
+    quiet: end.quiet,
+    error: end.error ?? (end.stopped ? "Stopped" : failedText || "Failed"),
+  };
 }
 
 /** A child job: another session this one started. */
@@ -319,7 +334,8 @@ export function countsText(cards: AgentCardData[], shells = 0): string {
   const parts = [
     [n(isLive) + shells, "running"],
     [n((c) => c.state === "failed" && !c.stopped), "failed"],
-    [n((c) => c.state === "failed" && c.stopped), "stopped"],
+    [n((c) => c.state === "failed" && c.stopped && !c.quiet), "stopped"],
+    [n((c) => !!c.quiet), "quiet"],
     [n((c) => c.state === "done"), "done"],
   ] as const;
   return parts.filter(([k]) => k > 0).map(([k, w]) => `${k} ${w}`).join(" · ");

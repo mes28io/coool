@@ -144,7 +144,7 @@ function Card({ card, role, onOpen, onStop }: { card: AgentCardData; role?: stri
   const full = `${card.kind}${card.description ? ` · ${card.description}` : ""}`;
 
   return (
-    <div ref={el} className="overflow-hidden rounded-[14px] border border-hairline bg-bg shadow-card" data-agent-panel-card={card.id} data-state={card.stopped ? "stopped" : card.state} data-open={open}>
+    <div ref={el} className="overflow-hidden rounded-[14px] border border-hairline bg-bg shadow-card" data-agent-panel-card={card.id} data-state={card.quiet ? "quiet" : card.stopped ? "stopped" : card.state} data-open={open}>
       <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-start gap-2 px-3 pb-1 pt-2.5">
         <div className="min-w-0 flex-1">
           {/* The task is what tells agents apart, so it is the title; the model and kind sit under it. */}
@@ -235,7 +235,7 @@ export function Strip({ card }: { card: AgentCardData; fresh?: { current: boolea
         <span className="flex size-[13px] shrink-0 items-center justify-center">
           {card.state === "failed" ? <span className={cx("size-[7px] rounded-full", card.stopped ? "bg-faint" : "bg-err")} /> : <StatusDot status="needs" size={7} />}
         </span>
-        {card.stopped && <span className="shrink-0 font-medium text-fg">Stopped</span>}
+        {card.stopped && !card.quiet && <span className="shrink-0 font-medium text-fg">Stopped</span>}
         <span className={cx("min-w-0 flex-1 truncate", card.stopped ? "text-small text-dim" : "font-medium text-fg")} title={card.error ?? undefined}>
           {card.stopped ? (card.error && card.error !== "Stopped" ? card.error : "") : card.error || (card.state === "failed" ? "Failed" : "Needs you")}
         </span>
