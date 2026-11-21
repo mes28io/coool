@@ -191,7 +191,7 @@ pub fn hosts(dir: &Path) -> Vec<HostFile> {
         }
         out.push(hf);
     }
-    out.sort_by(|a, b| b.pid.cmp(&a.pid));
+    out.sort_by_key(|h| std::cmp::Reverse(h.pid));
     out
 }
 
