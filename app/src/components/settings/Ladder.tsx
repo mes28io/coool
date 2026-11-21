@@ -193,7 +193,7 @@ export function LadderSettings() {
           control={<Switch label="Helpers may use Bypass" on={prefs.bypassHelpers} onChange={(v) => setLadderPrefs({ bypassHelpers: v })} />}
         />
         <div className="py-3.5" data-setting="ladder-note">
-          <Note>Sent at launch as the CLI’s own per-chat instructions: about 650 to 800 tokens in a Claude Code chat with every lane on; the full playbook (about 2,700 tokens) loads only when the lead asks for it. Nothing in ~/.claude, ~/.codex or your project is changed. Chats you run in your own terminal are not changed.</Note>
+          <Note>Sent at launch as the CLI’s own per-chat instructions: about 1,050 tokens in a Claude Code chat with every lane on (measured with its context report; fewer with fewer lanes); the full playbook (about 3,500 tokens) loads only when the lead asks for it. Nothing in ~/.claude, ~/.codex or your project is changed. Chats you run in your own terminal are not changed.</Note>
         </div>
       </Group>
     </div>
