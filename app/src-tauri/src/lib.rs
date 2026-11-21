@@ -15,6 +15,7 @@ mod changes;
 mod artifact;
 mod browser;
 mod chatctx;
+mod chathost;
 mod device;
 mod env;
 mod folders;
@@ -76,6 +77,9 @@ struct ChatStream {
     key: Option<String>,
     /// Its latest permission request or question (request id, the needs-you words): what a lid stop names.
     ask: Option<(String, String)>,
+    /// A hosted chat taken in after a relaunch: events up to this seq happened while coool was closed (shown in the
+    /// timeline, not notified again).
+    quiet_until: u64,
 }
 
 struct Core {
@@ -105,6 +109,10 @@ struct Core {
     show_automation: AtomicBool,
     /// Settings > General: ask before quitting while agents run (persisted; on by default).
     confirm_quit: AtomicBool,
+    /// Settings > General: "Keep chats running when coool quits" (on by default; chathost.rs).
+    keep_chats: AtomicBool,
+    /// The chat hosts this app is connected to (chathost.rs).
+    hosts: chathost::Hosts,
     /// Settings > General: "Prevent sleep while agents are working" (see [`power`]).
     power: Mutex<power::Keeper>,
     /// Settings > General: "Keep working with the lid closed" (see [`lid`]).
@@ -316,6 +324,10 @@ struct ChatRow {
     pid: Option<u32>,
     /// A Ladder helper started by another chat's `spawn` (APP_SPEC "Ladder"): its caller, depth and model.
     helper: Option<ladder::HelperRow>,
+    /// The chat host runs it (APP_SPEC "Chats that outlive the app").
+    hosted: bool,
+    /// It keeps running when coool quits (hosted, and "Keep chats running when coool quits" is on).
+    kept: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -378,11 +390,14 @@ impl Core {
                 .collect();
             // Helpers whose caller is gone stop (no orphan keeps spending).
             self.ladder.reap(&mut hub);
+            let keep = self.keep_chats.load(Ordering::Relaxed);
             let chats: Vec<ChatRow> = hub
                 .chats()
                 .into_iter()
                 .map(|c| ChatRow {
                     pid: hub.chat(c.id).and_then(|x| x.pid),
+                    hosted: hub.chat(c.id).is_some_and(|x| x.is_hosted()),
+                    kept: keep && c.running && hub.chat(c.id).is_some_and(|x| x.is_hosted()),
                     id: c.id,
                     provider: c.provider,
                     project: coool_core::project::project_root(&c.cwd),
@@ -581,9 +596,9 @@ impl Core {
         Ok(id)
     }
 
+    /// What quitting would stop: PTYs and chats, less the hosted chats that keep running (chathost.rs).
     fn running(&self) -> usize {
-        let hub = self.hub.lock().unwrap();
-        hub.running_count() + hub.running_chats()
+        chathost::counts(self).0
     }
 
     fn with_chat<T>(&self, id: usize, f: impl FnOnce(&mut coool_core::chat::Chat) -> anyhow::Result<T>) -> Res<T> {
@@ -769,13 +784,15 @@ fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize
         fill_context(app, c);
     }
     update::hold(app, opts.provider);
+    // With "Keep chats running when coool quits": the chat starts in the chat host (started now if needed).
+    chathost::ensure(app, core);
     let provider = opts.provider;
     let cwd = opts.cwd.clone();
     let id = {
         let mut hub = core.hub.lock().unwrap();
         let id = hub.start_chat(opts).map_err(|e| format!("couldn't start {}: {e:#}", provider.label()))?;
         let handle = hub.chat(id).expect("just started").handle();
-        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd), key: None, ask: None });
+        core.chats.lock().unwrap().insert(id, ChatStream { handle, seq: 0, exit_sent: false, title: chat_title(provider, &cwd), key: None, ask: None, quiet_until: 0 });
         core.pump_waker.kick();
         id
     };
@@ -1099,12 +1116,33 @@ fn running_count(core: State<'_, Arc<Core>>) -> usize {
     core.running()
 }
 
-/// Called by the frontend's quit confirmation: stop what coool runs, then exit.
+/// What quitting (or an update's restart) would stop, and the working chats that keep running in the chat host.
+#[derive(Serialize)]
+struct QuitCounts {
+    stop: usize,
+    keep: usize,
+}
+
+#[tauri::command]
+fn quit_counts(core: State<'_, Arc<Core>>) -> QuitCounts {
+    let (stop, keep) = chathost::counts(&core);
+    QuitCounts { stop, keep }
+}
+
+/// Called by the frontend's quit confirmation: stop what coool runs (hosted chats keep running when the setting
+/// says so), then exit.
 #[tauri::command]
 fn quit_app(app: AppHandle, core: State<'_, Arc<Core>>) {
     core.allow_exit.store(true, Ordering::SeqCst);
-    core.hub.lock().unwrap().kill_all();
+    chathost::stop_for_quit(&core);
     app.exit(0);
+}
+
+/// "Stop all chats": every chat and terminal session, hosted ones too, without quitting.
+#[tauri::command]
+fn stop_all_chats(core: State<'_, Arc<Core>>) {
+    core.hub.lock().unwrap().kill_all();
+    core.kick();
 }
 
 // ---- Settings page (APP_SPEC "Settings") ----
@@ -1133,12 +1171,15 @@ struct AppPrefs {
     /// The menu bar item (Settings > General > Menu bar). Absent in a `prefs_set`: left as it is.
     #[serde(default)]
     menubar: Option<menubar::model::Prefs>,
+    /// "Keep chats running when coool quits" (chathost.rs). Absent in a `prefs_set`: left as it is.
+    #[serde(default)]
+    keep_chats: Option<bool>,
 }
 
 #[tauri::command(async)]
 fn prefs_get(core: State<'_, Arc<Core>>) -> AppPrefs {
     let s = settings::load(core.selftest.as_ref());
-    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with, building: s.building, lid: Some(s.lid), menubar: Some(s.menubar) }
+    AppPrefs { confirm_quit: s.confirm_quit, prevent_sleep: s.prevent_sleep, notify: s.notify, open_with: s.open_with, building: s.building, lid: Some(s.lid), menubar: Some(s.menubar), keep_chats: Some(s.keep_chats) }
 }
 
 /// Saves and applies them at once (the power assertion is taken or released right here, and so is the lid hold).
@@ -1163,6 +1204,10 @@ fn prefs_set(core: State<'_, Arc<Core>>, prefs: AppPrefs) -> Res<()> {
             menubar::apply(m.clone());
         }
         s.menubar = m;
+    }
+    if let Some(k) = prefs.keep_chats {
+        chathost::set_keep(&core, k);
+        s.keep_chats = k;
     }
     s.confirm_quit = prefs.confirm_quit;
     s.prevent_sleep = prefs.prevent_sleep;
@@ -1550,6 +1595,9 @@ mod settings {
         /// Settings > General > Menu bar: the item, and what it shows beside its glyph.
         #[serde(default)]
         pub menubar: crate::menubar::model::Prefs,
+        /// Settings > General: "Keep chats running when coool quits" (APP_SPEC "Chats that outlive the app").
+        #[serde(default = "yes")]
+        pub keep_chats: bool,
     }
 
     fn system() -> String {
@@ -1562,7 +1610,7 @@ mod settings {
 
     impl Default for Settings {
         fn default() -> Self {
-            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new(), update_checks: true, update_clis: false, menubar: Default::default() }
+            Settings { insights: false, show_automation: false, pilot_log: true, confirm_quit: true, prevent_sleep: false, lid: Default::default(), notify: Default::default(), open_with: system(), onboarded: false, building: Vec::new(), update_checks: true, update_clis: false, menubar: Default::default(), keep_chats: true }
         }
     }
 
@@ -1650,7 +1698,9 @@ fn spawn_pump(app: AppHandle, core: Arc<Core>) {
                         continue;
                     }
                     for e in &events {
-                        core.notifier.on_event(id, &c.title, c.key.as_deref(), &e.kind);
+                        if e.seq > c.quiet_until {
+                            core.notifier.on_event(id, &c.title, c.key.as_deref(), &e.kind);
+                        }
                         c.ask = notify::ask_of(&e.kind).or(c.ask.take());
                         remote_changed |= remote::on_chat_event(id, &e.kind);
                         match e.kind {
@@ -1737,6 +1787,13 @@ fn request_quit(app: &AppHandle) {
     }
 }
 
+/// The menu bar item's Stop all chats: every chat and terminal session, hosted ones too.
+fn stop_all_from_menubar(app: &AppHandle) {
+    let core = app.state::<Arc<Core>>();
+    core.hub.lock().unwrap().kill_all();
+    core.kick();
+}
+
 /// The menu bar item's Quit coool: as ⌘Q, with the window brought forward first when it is going to ask.
 fn quit_from_menubar(app: &AppHandle) {
     let core = app.state::<Arc<Core>>();
@@ -1767,6 +1824,15 @@ pub fn ladder_mcp_proxy() -> i32 {
 }
 
 pub const LADDER_MCP_FLAG: &str = ladder::PROXY_FLAG;
+
+/// `coool --coool-chat-host <dir>`: the chat host, which owns the CLIs of chats so they outlive the app (APP_SPEC
+/// "Chats that outlive the app"; chathost.rs starts it).
+/// `version`: the version of the app that started it (its bundle's), else this build's.
+pub fn chat_host(dir: &std::path::Path, version: Option<&str>) -> i32 {
+    coool_core::chat::host::run(dir, version.unwrap_or(env!("CARGO_PKG_VERSION")))
+}
+
+pub const CHAT_HOST_FLAG: &str = coool_core::chat::host::FLAG;
 
 /// `coool --coool-pilot-eval <file>`: a pilot decision log's summary (device/pilot/dataset.rs).
 pub fn pilot_eval_report(file: &std::path::Path) -> String {
@@ -1863,6 +1929,8 @@ pub fn run() {
         selftest,
         show_automation: AtomicBool::new(prefs.show_automation),
         confirm_quit: AtomicBool::new(prefs.confirm_quit),
+        keep_chats: AtomicBool::new(prefs.keep_chats),
+        hosts: chathost::Hosts::default(),
         power: Mutex::new(power::Keeper::new(power::system(), prefs.prevent_sleep)),
         lid: Mutex::new(lid),
         lid_fake,
@@ -1970,6 +2038,8 @@ pub fn run() {
             chatctx::chat_context_trash,
             chatctx::chat_context_reveal,
             running_count,
+            quit_counts,
+            stop_all_chats,
             quit_app,
             prefs_get,
             prefs_set,
@@ -2045,6 +2115,7 @@ pub fn run() {
             selftest::selftest_log,
             selftest::selftest_chat_launch,
             selftest::selftest_ladder,
+            selftest::selftest_keepalive,
             selftest::selftest_shot,
             selftest::film::selftest_film,
             selftest::selftest_window,
@@ -2179,6 +2250,8 @@ pub fn run() {
             }
             let lad = c.ladder.clone();
             c.hub.lock().unwrap().set_chat_mcp(Some(Box::new(move |id, opts| d.mcp.server_for(id, &opts.cwd, opts.provider).into_iter().chain(lad.server_for(id, opts)).collect())));
+            // Chats a chat host kept running while coool was closed (or across an update): taken in again.
+            chathost::init(&handle, &c);
             // Voice (APP_SPEC "Voice"): its folder (the self-test's own during a run) and the Fn key watcher.
             voice::init(&handle, c.selftest.as_ref().map(|t| t.dir()));
             // coool Remote (docs/REMOTE.md): off unless the person turned it on.
@@ -2242,7 +2315,7 @@ pub fn run() {
         }
         RunEvent::Exit => {
             menubar::shutdown();
-            core.hub.lock().unwrap().kill_all();
+            chathost::stop_for_quit(&core);
             // An update installed while coool ran goes in now, so it is what opens next time.
             update::on_exit(handle);
             let devices = handle.state::<Arc<device::Devices>>();

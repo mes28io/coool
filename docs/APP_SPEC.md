@@ -710,6 +710,84 @@ The model is loaded on first use or when the hold key goes down (`voice_preload`
 
 **Limits, plainly.** No test has used a real microphone: a test asking for it would put macOS's permission prompt on the owner's screen. Everything from the Core Audio callback onwards is tested with recorded and synthesized speech fed in at that boundary; the device itself (which input macOS picks, its real level, Bluetooth headsets switching rate when opened) is checked only by a person with Settings > Voice > Test your microphone. The keys work only while coool is the front app. The speech check is energy-based: loud non-speech sounds (music, a TV, typing right at the mic) do reach whisper, where the guard is the remaining defence. Whisper's translation of Turkish is serviceable, not polished (see the sample table in the 0.3.2 notes: brand names get misheard, "API" became "APU"); the words library now fixes names only after the fact, from memory, never by priming whisper.
 
+## Chats that outlive the app (the chat host)
+
+The owner's choice: keep chats alive across a quit, a restart for an update and a crash, by running the CLIs outside coool's process. Before this, every chat was a child of the app with its pipes in the app, so quitting ended every turn and its helpers, and the person resumed from the transcript.
+
+### Shape
+
+A **chat host**: a small, long-lived process per user, `coool --coool-chat-host <dir>` (coool's own executable, so nothing new is installed), which owns the CLI processes and their pipes. The app starts it when it needs one and talks to it over a private Unix socket. It is a **detached process**, not a LaunchAgent: a LaunchAgent would put macOS's "Background Items Added" notice on screen, needs a plist in `~/Library/LaunchAgents` that outlives an uninstall, and starts again on its own; a detached process (its own session via `setsid`, stdio to a 0600 log in its folder) survives the app quitting or crashing, is reparented to launchd, and is only ever started by coool. The app finds it again through its folder.
+
+- **Folder**: `<app local data>/chat-host/` (0700). A debug build may name another with `COOOL_CHAT_HOST_DIR`, accepted only under `/tmp/coool-host-…` (or `/private/tmp/coool-host-…`); a self-test uses a host only when that is set, so a test host and the person's never find each other.
+- **Per host** (named by its pid, so an old and a new host can live side by side while one drains): `host-<pid>.sock` (0600), `host-<pid>.token` (0600, 32 random bytes in hex, written before the socket is bound), `host-<pid>.json` (pid, coool version, protocol version), and `host.log`.
+- **Owns**: each CLI with its stdin, stdout and stderr, in its own process group, exactly as the app did (`chat::Chat::start`, unchanged). It keeps reading their output while no app is attached.
+
+### What stays in the app and what moves
+
+The protocol state machines (claude.rs, codex.rs: permission requests, questions, steering notes, model and mode switches, `open_failed`) **move into the host**: the host runs the very same `chat::Chat` the app ran. A dumb pipe plus journal would leave the CLI's own control requests unanswered while the app is away (the backends answer some of them on the spot), and rebuilding a backend by replaying raw lines can't reproduce the ids it made. With the backends in the host, a permission request the CLI asks while the app is closed is a `permission_request` event in the host's log, the backend remembers it, the CLI keeps waiting, and the answer sent after the app returns is matched as if nothing happened.
+
+The app keeps, per hosted chat, a **mirror**: the same event list (`seq`, `ts`, `type`, …) the host keeps, with the host's own sequence numbers, fed by the socket. Everything in the app that read a chat (`events_since`, `info`, its state, session id, the pump to the page, notifications, Remote, Ladder's `wait`) reads the mirror unchanged, so the frontend, Remote and the rest see no difference. Calls (`send`, `steer`, `interrupt`, `respond_permission`, …) go to the host and return its result.
+
+**Journal and replay.** The host keeps each chat's events (up to the same 50 000 as before). An app that attaches sends the last `seq` it has (0 after a launch) and gets every later event, then the live ones, in order, with no gap and no duplicate (the page already drops a `seq` it has). A slow reader only slows its own connection: each connection has its own writer, the CLI readers never wait on a socket, and the reader catches up from the log. Two apps (or an app and a test client) may attach to one chat at once; both get every event.
+
+### Protocol (app ↔ host), version 1
+
+Newline-delimited JSON on the socket. The first line must be `{"op":"hello","token":…,"protocol":1,"client":"coool 0.4.0"}`; anything else, a wrong token (compared in constant time) or a peer that isn't this user (`getpeereid`) gets one error line and the connection is closed. Requests carry an `id`; replies are `{"id","ok":true,"result"}` or `{"id","ok":false,"error"}`. Pushes carry `push` and no `id`.
+
+- `hello` → `{protocol, version, pid, draining}`.
+- `start {opts, client_name, mcp, ladder_root, meta}`: everything the app passed `Chat::start` (ChatOptions with Ladder and the coool context, the per-chat `coool-device` and `coool-ladder` servers with their tokens in their env) → `{chat, pid, args, launch}`. `chat` is the host's key for it (a UUID), stable across app launches.
+- `list` → every chat: key, pid, args, launch, options, MCP servers, `meta`, info, start time.
+- `attach {chat, since}` → replays, then streams `{"push":"events","chat","events":[…]}`; `detach {chat}`.
+- `call {chat, call}`, `call` being one of `send`, `steer`, `cancel_steer`, `interrupt`, `set_model`, `set_permission_mode`, `respond_permission`, `respond_permission_remember`, `respond_question`, `stop`, `note`, `ask`, `withdraw`, with the arguments of the `Chat` methods.
+- `ask` (coool's own permission requests: the device gate): the request shows in the chat like the CLI's; its answer is pushed to the connection that asked (`{"push":"answer","chat","request_id","answer"}`). When that connection goes (the app quit), the request is withdrawn with a note: the gate that asked went with the app.
+- `set_meta {chat, meta}`: a small JSON value the app keeps with the chat (Ladder's helper record: parent, depth, title, worktree), read back by `list` after a relaunch.
+- `drain`: no new chats; the host exits when its last chat has ended.
+
+**Versions.** The app speaks protocol 1 and uses a host whose protocol it knows. A host of another coool version keeps serving its own chats but gets `drain`, and new chats go to a host of the app's own version (started if there is none): an update never kills a chat, the old host just ends after its last chat. A host whose protocol the app doesn't know is left alone (its chats keep running; an app that knows it re-attaches later).
+
+### What a chat depends on in the app, one by one
+
+- **`coool-device` and `coool-ladder` MCP servers.** Already separate processes the CLI owns (`coool --coool-device-mcp`, `coool --coool-ladder-mcp`) relaying stdio to a socket of the app. They now **reconnect**: the socket path is stable per app data folder (`device.sock`, `ladder.sock`; the per-pid name only when another live coool holds the stable one), and when the app goes the proxy stays up for the CLI, answers each call made while it is away (and any call cut by the drop) with a tool error the agent can act on ("coool is restarting or was quit, so its devices and Ladder tools are away for a moment; try again in a few seconds"), and connects again once the socket answers. Tokens were per launch; the app now gets them back from the host's record of each chat's MCP servers and registers them for the re-attached chat, so the same proxy is accepted by the new app.
+- **Devices that need the app's window** (the Browser panel's webview, the simulator mirror, the Mac panel): can't work while the app is closed; the tool error says so, and after the relaunch they work again.
+- **Ladder's helpers**: helpers are chats, so they are hosted too and keep running. The app's helper table (parent, depth, title, worktree) is stored on each helper with `set_meta` and rebuilt after a relaunch; results are read again from the helper's own events, so the Jobs panel and `wait` see the same helpers. A `wait` cut by the restart returns the tool error; the agent calls it again.
+- **Attachment store**: files on disk; the host reads them when it sends a message. Unaffected.
+- **Project-file server for the Browser, artifact previews**: in the app, needed only while a window shows them; back with the app.
+- **coool Remote**: in the app (it reads the mirrors). While coool is closed the phone can't reach the chats; after the relaunch it can.
+- **Menu bar item**: in the app; gone while coool is closed, back with it.
+- **Notifications**: posted by the app as events arrive. What happened while coool was closed is not notified again after a relaunch (it is in the timeline).
+
+### Lifecycle and safety
+
+- The host runs as the person, never root, started only by coool. It listens only on its 0600 socket in a 0700 folder and refuses any connection without the token from its 0600 file, or from another user.
+- It exits by itself: after a minute with no chats and no app; when draining, once its last chat has ended. With no app attached, a chat that has sat **idle** for 30 minutes is stopped (resumable from its transcript like any ended chat), and one waiting on the person for 24 hours likewise, so a host never keeps CLIs around forever. A working chat is never stopped by the host.
+- Removal: delete coool.app; a host left running ends once its chats do and is never started again. `<app local data>/chat-host/` holds only sockets, tokens and a log, and is safe to delete. No LaunchAgent, no login item.
+- **Setting**: Settings > General > While agents run: **Keep chats running when coool quits** (on by default). On: new chats start in the host; quitting stops only what still runs inside coool (terminal sessions, chats started while it was off) and asks only when something will stop; the quit confirmation and the updater's restart say "N working chats keep running". Off: new chats start inside coool as before, and quitting stops every chat, hosted ones included, with today's confirmation. Stop on a chat, and the quit confirmation's Stop and quit, stop hosted chats too.
+
+### Updates
+
+- The updater's Restart (the panel, the launch update, and About's **Update and restart**) no longer warns that working chats will stop when the host keeps them: it says they keep running. The new version finds the running host at launch, attaches to every chat and carries on: a turn mid-way keeps streaming, notes stay queued, pending requests still wait.
+- The host itself is updated by draining (above), never by killing chats.
+- **CLI updates** (update/cli.rs) are held while a CLI process runs; that check counts processes with `ps`, so host-owned CLIs count too.
+
+### Crashes
+
+- **App crash** (a force quit, `kill -9`): the host sees the connection go, keeps the chats running and their events logged, and withdraws coool's own pending requests (the device gate) with a note. The next launch re-attaches.
+- **Host crash**: the CLIs' pipes go with it; Claude Code and Codex then end (stdin closed, stdout broken), as they did when the app quit. The app sees the socket close, marks those chats ended with "coool's chat host stopped unexpectedly; resume the chat from its transcript", and they are resumable as before. Keeping a CLI alive through a host crash would need a third process holding its pipes; not done.
+
+### Terminal sessions
+
+Unaffected: PTYs stay in the app and stop when it quits, as before.
+
+### Where it lives, and how it is tested
+
+`crates/core/src/chat/host.rs` (the host, the app's client and mirrors), `Hub::set_host` / `Hub::adopt` / `Hub::kill_local`, `app/src-tauri/src/chathost.rs` (finding, starting and draining hosts, what a quit stops), the reconnecting proxy and stable sockets in `device/mcp.rs`, `ladder::State::adopt` and the helper records. A host started by the app reports the app's version (`coool --coool-chat-host <dir> <version>`).
+
+- Unit (`cargo test -p coool-core chat::host`): replay from the start and from a cursor, then live; a lost connection with the CLI still running and every line kept; a slow reader that catches up with no gap; two apps on one chat, coool's own request asked by one and answered by the other, withdrawn when its asker goes; refusal without the token or with another protocol; a dying host ends its chats as resumable; draining; idle exit; the files' modes.
+- The proxy (`app/scripts/keepalive/proxy_test.py <coool>`): away answers with no app, a call cut by the drop answered, the token sent again on reconnect, a refusal retried.
+- Real app (`app/scripts/keepalive-e2e.sh chats` and `… update`, scenarios in `app/src/selftestKeepalive.ts`): see that file's header. `app/scripts/keepalive-chat-selftests.sh` runs the existing chat self-tests with every chat in a test host (`KA_NOHOST=1`: the same run inside the app, to compare).
+
+Limits: the host keeps the last 50 000 events of a chat, as the app did; a chat that streams more than that while no app is attached loses its oldest deltas from the replay (its transcript on disk is whole). Tool calls that need the app (devices, Ladder) fail with the "try again" error while it is away; a Ladder `wait` cut by a restart has to be called again.
+
 ## Engineering constraints
 
 - The frontend must also run in a plain browser (`pnpm dev`) with a built-in mock data source when Tauri is absent: realistic sessions that change over time (statuses flipping, steps arriving, a fake terminal stream). This is how the UI gets developed and screenshot-tested without the shell, and it is the demo for coool.sh later.

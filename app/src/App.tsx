@@ -209,7 +209,11 @@ function useBackendEvents() {
         const s = useStore.getState();
         const ptys = Object.values(s.ptys).filter((p) => p.running && !s.exited[p.id]).length;
         const chats = Object.values(useChats.getState().chats).filter((c) => c.running).length;
-        s.setSheet({ kind: "quit", running: Math.max(1, ptys + chats) });
+        // The backend knows which chats the chat host keeps running across the quit (APP_SPEC "Chats that outlive the app").
+        void b
+          .quitCounts()
+          .then((q) => s.setSheet({ kind: "quit", running: Math.max(1, q.stop), keep: q.keep }))
+          .catch(() => s.setSheet({ kind: "quit", running: Math.max(1, ptys + chats) }));
       }),
     ];
     // Dev-only scripted self-test (inert unless the backend says it is on).

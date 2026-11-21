@@ -18,6 +18,7 @@ use crate::pty::Managed;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long an exited PTY (final screen, raw log) stays around before its slot
@@ -58,6 +59,8 @@ pub struct Hub {
     shells: crate::shells::Shells,
     /// Live sessions as of the last refresh (id, pid, cwd, provider, background tasks), for [`Hub::stop_shell`].
     shell_targets: Vec<(String, u32, String, Provider, bool)>,
+    /// The chat host new chats start in (APP_SPEC "Chats that outlive the app"); None: inside this process.
+    host: Option<Arc<crate::chat::host::Client>>,
 }
 
 impl Hub {
@@ -91,7 +94,44 @@ impl Hub {
             ancestors: Default::default(),
             shells: Default::default(),
             shell_targets: Vec::new(),
+            host: None,
         }
+    }
+
+    /// Where new chats start: in the chat host `c` (they outlive this process), or here (None).
+    pub fn set_host(&mut self, c: Option<Arc<crate::chat::host::Client>>) {
+        self.host = c;
+    }
+
+    pub fn host(&self) -> Option<Arc<crate::chat::host::Client>> {
+        self.host.clone()
+    }
+
+    /// Takes in every chat host `c` runs that this hub doesn't hold yet (after a relaunch): their ids here, with what
+    /// the host knows of them (options, MCP servers with their tokens, the app's record).
+    pub fn adopt(&mut self, c: &Arc<crate::chat::host::Client>) -> Result<Vec<(usize, crate::chat::host::Entry)>> {
+        let mut out = Vec::new();
+        for e in c.list()? {
+            if self.chats.iter().flatten().any(|x| x.host_key() == Some(e.key.as_str())) {
+                continue;
+            }
+            // The id it had in the app that started it, when that slot is free here: what an agent was told about
+            // its helpers (Ladder's `spawn` returns the id) stays true.
+            let id = match e.meta["app_id"].as_u64().map(|i| i as usize) {
+                Some(i) if self.chats.get(i).is_none_or(|s| s.is_none()) => i,
+                _ => self.chats.len(),
+            };
+            let chat = Chat::hosted(id, c.clone(), &e);
+            if let Some(sid) = chat.session_id() {
+                self.own.record(chat.provider, &sid);
+            }
+            if self.chats.len() <= id {
+                self.chats.resize_with(id + 1, || None);
+            }
+            self.chats[id] = Some(chat);
+            out.push((id, e));
+        }
+        Ok(out)
     }
 
     /// Where the list of coool's own sessions is kept (default:
@@ -480,7 +520,21 @@ impl Hub {
         if let Some(l) = opts.ladder.as_mut() {
             l.tools = l.tools && mcp.iter().any(|m| m.name == crate::ladder::SERVER);
         }
-        let c = Chat::start(id, opts, &self.client_name, &mcp, self.ladder_root.as_deref())?;
+        let c = match self.host.clone().filter(|h| h.is_alive()) {
+            Some(h) => {
+                let req = crate::chat::host::StartReq { opts: opts.clone(), client_name: self.client_name.clone(), mcp: mcp.clone(), ladder_root: self.ladder_root.clone(), meta: serde_json::json!({ "app_id": id }) };
+                match h.start(&req) {
+                    Ok(e) => Chat::hosted(id, h, &e),
+                    // The host can't take it: the chat still starts, inside this process.
+                    Err(e) => {
+                        let c = Chat::start(id, opts, &self.client_name, &mcp, self.ladder_root.as_deref())?;
+                        c.handle().note(&format!("This chat runs inside coool and stops if coool quits (the chat host couldn't take it: {e:#})."));
+                        c
+                    }
+                }
+            }
+            None => Chat::start(id, opts, &self.client_name, &mcp, self.ladder_root.as_deref())?,
+        };
         // Claude chats know their session id up front: remember it before the
         // transcript exists, so a crash right away still leaves it marked.
         if let Some(sid) = c.session_id() {
@@ -555,6 +609,17 @@ impl Hub {
         self.chats.iter().flatten().filter(|c| c.is_running()).count()
     }
 
+    /// Running chats the chat host runs (they keep running when this process exits).
+    pub fn running_hosted(&self) -> usize {
+        self.chats.iter().flatten().filter(|c| c.is_running() && c.is_hosted()).count()
+    }
+
+    /// Stop the managed sessions and the chats of this process, and leave the hosted chats running (a quit with
+    /// "Keep chats running when coool quits" on). Blocks for at most about a second.
+    pub fn kill_local(&mut self) {
+        self.kill_where(|c| !c.is_hosted());
+    }
+
     /// Escalate unanswered stop requests, and free PTYs that exited a while ago.
     fn reap(&mut self) {
         let now = Instant::now();
@@ -588,13 +653,19 @@ impl Hub {
     /// Stop every managed session and chat: hang up, give them a moment to exit cleanly,
     /// then SIGKILL whatever is left. Blocks for at most about a second.
     pub fn kill_all(&mut self) {
+        self.kill_where(|_| true);
+    }
+
+    fn kill_where(&mut self, which: impl Fn(&Chat) -> bool) {
         for m in self.managed.iter_mut().flatten() {
             m.kill();
         }
         for c in self.chats.iter_mut().flatten() {
-            c.stop();
+            if which(c) {
+                c.stop();
+            }
         }
-        let chats_running = |h: &Self| h.chats.iter().flatten().any(|c| c.is_running());
+        let chats_running = |h: &Self| h.chats.iter().flatten().any(|c| which(c) && c.is_running());
         let deadline = Instant::now() + Duration::from_millis(1000);
         while Instant::now() < deadline && (self.running_count() > 0 || chats_running(self)) {
             std::thread::sleep(Duration::from_millis(25));

@@ -718,6 +718,8 @@ pub struct Launch {
     pub timed_out: bool,
     /// Why it failed (for the log; the screen says one plain line).
     pub detail: Option<String>,
+    /// At the restart: the working chats the chat host keeps running across it (APP_SPEC "Chats that outlive the app").
+    pub kept: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -816,7 +818,7 @@ impl Updater {
     /// The screen goes up: `to` is being installed and coool will restart into it.
     fn begin_launch(&self, app: &AppHandle, to: &str, stage: LaunchStage) {
         let from = app.package_info().version.to_string();
-        self.set_launch(app, |l| *l = Some(Launch { from, to: to.into(), stage, progress: None, timed_out: false, detail: None }));
+        self.set_launch(app, |l| *l = Some(Launch { from, to: to.into(), stage, progress: None, timed_out: false, detail: None, kept: 0 }));
     }
 
     /// Steps aside with the plain line. Only from a stage still on screen ("Start coool now" stays as it is).
@@ -869,6 +871,7 @@ fn marker_path(core: &Core) -> Option<PathBuf> {
 /// `false` (nothing exits) when the relaunch can't be started. A self-test exits without relaunching.
 fn restart_into(u: &Updater, app: &AppHandle, core: &Core, bundle: &Path, from: &str, to: &str) -> bool {
     let selftest = core.selftest.as_ref();
+    let kept = crate::chathost::counts(core).1;
     if let Some(p) = marker_path(core) {
         let _ = marker::write(&p, from, to);
     }
@@ -876,18 +879,19 @@ fn restart_into(u: &Updater, app: &AppHandle, core: &Core, bundle: &Path, from: 
         return false;
     }
     u.set_launch(app, |l| {
-        let l = l.get_or_insert_with(|| Launch { from: from.into(), to: to.into(), stage: LaunchStage::Restarting, progress: None, timed_out: false, detail: None });
+        let l = l.get_or_insert_with(|| Launch { from: from.into(), to: to.into(), stage: LaunchStage::Restarting, progress: None, timed_out: false, detail: None, kept: 0 });
         l.stage = LaunchStage::Restarting;
         l.progress = None;
+        l.kept = kept;
     });
     let t = std::time::Instant::now();
     u.wait_ui();
     std::thread::sleep(RESTART_MOMENT);
     if let Some(t0) = selftest {
-        t0.log_line(&format!("UPDATE exiting {} ms after \"Restarting\" ({from} -> {to}, installed {})", t.elapsed().as_millis(), bundle_version(bundle).unwrap_or_default()));
+        t0.log_line(&format!("UPDATE exiting {} ms after \"Restarting\" ({from} -> {to}, installed {}, {kept} working chats kept running)", t.elapsed().as_millis(), bundle_version(bundle).unwrap_or_default()));
     }
     core.allow_exit.store(true, AtOrd::SeqCst);
-    core.hub.lock().unwrap().kill_all();
+    crate::chathost::stop_for_quit(core);
     app.exit(0);
     true
 }
@@ -1302,6 +1306,8 @@ fn launch_step(u: &Arc<Updater>, app: &AppHandle, core: &Arc<Core>) -> bool {
             && !u.gate.is_open()
             && h.join().unwrap_or(false)
             && core.running() == 0
+            // A self-test that doesn't restart must not swap its bundle either (it would stay on the old version).
+            && may_restart
             && let Some(b) = own_bundle()
             && let Ok(Some(_)) = apply_staged(&b, &from)
             && restart(&b)

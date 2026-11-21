@@ -1,3 +1,4 @@
+import { keepLine } from "../lib/updateView";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, type ReactNode } from "react";
 import { api } from "../lib/backend";
@@ -42,7 +43,7 @@ export function Sheets() {
 
 function SheetBody({ sheet, close }: { sheet: NonNullable<Sheet>; close: () => void }) {
   if (sheet.kind === "new") return <NewSession initialCwd={sheet.cwd} initialProvider={sheet.provider} close={close} />;
-  if (sheet.kind === "quit") return <QuitConfirm running={sheet.running} close={close} />;
+  if (sheet.kind === "quit") return <QuitConfirm running={sheet.running} keep={sheet.keep ?? 0} close={close} />;
   return <StopConfirm label={sheet.label} managed={sheet.managed} pid={sheet.pid} chat={sheet.chat ?? null} close={close} />;
 }
 
@@ -75,11 +76,12 @@ function Confirm({ title, body, action, danger, onConfirm, close }: { title: str
   );
 }
 
-function QuitConfirm({ running, close }: { running: number; close: () => void }) {
+function QuitConfirm({ running, keep, close }: { running: number; keep: number; close: () => void }) {
+  const kept = keepLine(keep);
   return (
     <Confirm
       title="Quit coool?"
-      body={`${running} ${running === 1 ? "session is" : "sessions are"} running inside coool and will be stopped. Their transcripts stay on disk, so you can resume them later.`}
+      body={`${running} ${running === 1 ? "session is" : "sessions are"} running inside coool and will be stopped. Their transcripts stay on disk, so you can resume them later.${kept ? ` ${kept}` : ""}`}
       action="Stop and quit"
       danger
       onConfirm={() => api().quit()}

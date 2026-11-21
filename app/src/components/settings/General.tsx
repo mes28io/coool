@@ -189,6 +189,17 @@ export function General() {
           control={<Switch label="Confirm before quitting" on={!!prefs?.confirm_quit} disabled={off} onChange={(v) => save({ confirm_quit: v })} />}
         />
         <Row
+          attr="keep-chats"
+          label="Keep chats running when coool quits"
+          desc={
+            prefs?.keep_chats === false
+              ? "Off: quitting, or restarting for an update, stops every chat. Their transcripts stay, so you can resume them."
+              : "Chats keep working while coool is closed, restarting or updating, and are right where they were when it opens again. Terminal sessions still stop."
+          }
+          k="quit restart update background host keep alive survive chats running"
+          control={<Switch label="Keep chats running when coool quits" on={prefs?.keep_chats !== false} disabled={off} onChange={(v) => save({ keep_chats: v })} />}
+        />
+        <Row
           attr="prevent-sleep"
           label="Prevent sleep while agents are working"
           desc="Keeps the Mac awake only while a chat or terminal session is mid-turn, then lets it sleep again. The display can still turn off."

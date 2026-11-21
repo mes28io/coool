@@ -73,6 +73,7 @@ import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
 import { changesScenarios } from "./selftestChanges";
 import { historyScenarios } from "./selftestHistory";
+import { keepaliveScenarios } from "./selftestKeepalive";
 import { coverOf, launchTrace, useUpdates } from "./lib/update";
 
 interface Config {
@@ -7790,6 +7791,9 @@ for (const n of ["changes", "changes-codex"]) {
 // `history` (selftestHistory.ts): History over a few thousand invented sessions with the stand-in CLIs
 // (app/scripts/history-e2e.sh). No model calls. Not in `all`.
 scenarios.history = (c: Ctx) => historyScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) }).history();
+// `ka-*` (selftestKeepalive.ts): chats that outlive the app, across quits, a kill and an update's restart
+// (app/scripts/keepalive-e2e.sh). Real model calls on the cheapest models. Not in `all`.
+Object.assign(scenarios, keepaliveScenarios({ step, shot: (n) => shot(n), sleep, waitFor, fail: (m) => new Fail(m), log, invoke: (c, a) => invoke(c, a) }));
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

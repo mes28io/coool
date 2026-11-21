@@ -439,6 +439,10 @@ pub fn rows(r: &Reading) -> Vec<Row> {
     out.push(Row::Sep);
     out.push(Row::Action { id: "open".into(), title: "Open coool".into() });
     out.push(Row::Action { id: "new".into(), title: "New session…".into() });
+    // Chats can keep running after coool quits (the chat host): stopping them all stays one click away.
+    if a.working + a.needs + a.done > 0 {
+        out.push(Row::Action { id: "stop_all".into(), title: "Stop all chats".into() });
+    }
     out.push(Row::Sep);
     out.push(Row::Action { id: "quit".into(), title: "Quit coool".into() });
     out

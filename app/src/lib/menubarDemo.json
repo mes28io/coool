@@ -185,6 +185,11 @@
         "title": "New session…"
       },
       {
+        "kind": "action",
+        "id": "stop_all",
+        "title": "Stop all chats"
+      },
+      {
         "kind": "sep"
       },
       {
@@ -406,6 +411,11 @@
         "kind": "action",
         "id": "new",
         "title": "New session…"
+      },
+      {
+        "kind": "action",
+        "id": "stop_all",
+        "title": "Stop all chats"
       },
       {
         "kind": "sep"
@@ -649,6 +659,11 @@
         "kind": "action",
         "id": "new",
         "title": "New session…"
+      },
+      {
+        "kind": "action",
+        "id": "stop_all",
+        "title": "Stop all chats"
       },
       {
         "kind": "sep"
