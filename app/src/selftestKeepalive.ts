@@ -21,7 +21,8 @@
 
 import { newChat } from "./lib/actions";
 import { api } from "./lib/backend";
-import { useChats, type Chat, type ChatItem } from "./lib/chat";
+import { chatNeeds, chatStatus, useChats, type Chat, type ChatItem } from "./lib/chat";
+import { attention } from "./lib/live";
 import { sessionKey, type ChatEvent } from "./lib/types";
 import { useStore } from "./store";
 
@@ -40,7 +41,7 @@ type Perm = Extract<ChatItem, { kind: "permission" }>;
 interface Pids {
   app: number;
   hosts: number[];
-  chats: { id: number; pid: number | null; hosted: boolean; running: boolean; cwd: string; session_id: string | null }[];
+  chats: { id: number; pid: number | null; hosted: boolean; running: boolean; state?: string; cwd: string; session_id: string | null }[];
   keep: boolean;
 }
 
@@ -49,6 +50,10 @@ const STEPS =
 const PERM = "Run the shell command `sleep 9; echo ka-waited`. When it has finished, run the shell command `touch ka-perm.txt` (one call each, nothing else). Then reply with only the word DONE.";
 const HELPER = "Run these two shell commands one at a time, as two separate tool calls: `sleep 8; echo ka-helper-1`, then `sleep 8; echo ka-helper-2`. Then reply with only the words HELPER DONE.";
 const CODEX_MODEL = "gpt-5.6-luna";
+/** ka-idle: the chats left idle across the restart, and the one left mid-turn (the stand-in's step lasts this long). */
+const IDLE_CHATS = ["ka-idle-a", "ka-idle-b", "ka-idle-c"];
+const IDLE_BUSY = "ka-idle-busy";
+const IDLE_BUSY_SECS = 75;
 
 const chat = (id: number): Chat | undefined => useChats.getState().chats[id];
 const tools = (id: number) => (chat(id)?.items ?? []).filter((i): i is Tool => i.kind === "tool" && !i.parent);
@@ -372,6 +377,139 @@ export function keepaliveScenarios(h: H): Record<string, (ctx: { cfg: { dir: str
       }
       await h.step("ka-ended: the window still answers (a backend round trip)", async () => `${await responsive("at the end")}ms`);
       await h.shot("ka-ended-after");
+    },
+    // Idle hosted chats across an update's restart (keepalive-idle-e2e.sh, stand-in CLIs, no model): every chat whose
+    // CLI is idle shows idle after the relaunch, everywhere (the chat, its row, the title bar's "working" count), and
+    // still does after a message's turn ends; the one mid-turn shows working, then idle when its turn ends.
+    async "ka-idle-seed"(ctx) {
+      const made: Record<string, number> = {};
+      // KA_REAL=1: the real Claude Code on Haiku, two idle chats, one turn each (a check against the CLI itself).
+      const real = !!(await noteGet<boolean>("ka-idle-real"));
+      for (const name of real ? IDLE_CHATS.slice(0, 2) : IDLE_CHATS) {
+        await h.step(`${name}: a hosted chat, its first turn over`, async () => {
+          const before = ids();
+          if (!(await within("newChat", newChat({ provider: "claude", cwd: folder(ctx.cfg.dir, name), model: "haiku", prompt: real ? "Reply with only the word OK." : `hello from ${name}` })))) throw h.fail("couldn't start the chat");
+          const { id } = await h.waitFor("the new chat", () => {
+            const i = [...ids()].find((x) => !before.has(x));
+            return i === undefined ? null : { id: i };
+          }, 30_000);
+          await h.waitFor("its turn to end, idle", () => turns(id) >= 1 && chat(id)?.state === "idle", 60_000);
+          if (!real) {
+            // A second exchange, typed the way the composer sends while idle. The first chat's reply streams in more
+            // pieces than a chat keeps for replay (the person's long chats); in the last one an Agent call is cut off
+            // (denied after its subagent began), and from then on its transcript is written as `claude -p` writes
+            // it, with no turn end record (the person's chat whose row kept spinning).
+            const second = name === IDLE_CHATS[0] ? "flood 60000" : name === IDLE_CHATS[2] ? "cut an agent off" : "and again";
+            await within("chatSend", api().chatSend(id, second));
+            await h.waitFor("the second turn, idle", () => turns(id) >= 2 && chat(id)?.state === "idle", 120_000);
+          }
+          made[name] = id;
+          const c = (await pids()).chats.find((x) => x.id === id);
+          if (!c?.hosted) throw h.fail("not hosted");
+          return `chat ${id}, CLI ${c.pid}, state ${c.state}`;
+        });
+      }
+      await h.step(`${IDLE_BUSY}: a hosted chat mid-turn`, async () => {
+        const before = ids();
+        if (!(await within("newChat", newChat({ provider: "claude", cwd: folder(ctx.cfg.dir, IDLE_BUSY), model: "haiku", prompt: real ? `Run the shell command \`sleep ${IDLE_BUSY_SECS - 20}\` once, in the foreground (not in the background), then reply with only the word DONE.` : `work slowly ${IDLE_BUSY_SECS}` })))) throw h.fail("couldn't start the chat");
+        const { id } = await h.waitFor("the new chat", () => {
+          const i = [...ids()].find((x) => !before.has(x));
+          return i === undefined ? null : { id: i };
+        }, 30_000);
+        await h.waitFor("its step under way", () => tools(id).length > 0 && chat(id)?.state === "working", 60_000);
+        made[IDLE_BUSY] = id;
+        return `chat ${id}`;
+      });
+      // What the title bar counts before the restart (a build without the fix counts the chat with the cut-off agent
+      // too: the seed can be an older coool, so this only reports).
+      await h.step("ka-idle: before the restart, the title bar's count", async () => {
+        await h.sleep(3_000);
+        return `running pill ${document.querySelector("[data-running-pill]")?.getAttribute("data-running-pill") ?? "none"} (the chat mid-turn makes 1/0)`;
+      });
+      const p = await pids();
+      await noteSet("ka-idle", { ids: made, quit_at: Date.now(), hosts: p.hosts });
+      await h.log(`KA-PIDS ka-idle app=${p.app} cli=${p.chats.map((c) => c.pid).join(",")} hosts=${p.hosts.join(",")}`);
+      await h.log("KA-QUIT ka-idle");
+      await h.sleep(300);
+      await h.invoke("quit_app");
+    },
+    async "ka-idle-after"(ctx) {
+      const idle: Record<string, number> = {};
+      const real = !!(await noteGet<boolean>("ka-idle-real"));
+      for (const name of [...(real ? IDLE_CHATS.slice(0, 2) : IDLE_CHATS), IDLE_BUSY]) {
+        const cwd = folder(ctx.cfg.dir, name);
+        const { id } = await h.waitFor(`${name}: taken in from the host`, () => {
+          const c = Object.values(useChats.getState().chats).find((x) => sameDir(x.cwd, cwd) && x.replayed);
+          return c ? { id: c.id } : null;
+        }, 60_000);
+        idle[name] = id;
+      }
+      const busy = idle[IDLE_BUSY];
+      delete idle[IDLE_BUSY];
+      /** How a chat shows: its own state, its row's status (the sidebar's and the title bar's), the backend's. */
+      const shows = async (id: number) => {
+        const c = chat(id);
+        const s = useStore.getState().sessions.find((x) => x.chat === id);
+        const be = (await pids()).chats.find((x) => x.id === id)?.state ?? null; // null: an older build (its `pids` has no state)
+        const needs = c ? chatNeeds(c) : null;
+        const att = s && c ? attention(s, { status: { [id]: chatStatus(c) }, needs: needs ? { [id]: needs } : {} }).status : "no row";
+        return { chat: c?.state ?? "none", row: att, backend: be };
+      };
+      const allIdle = async (list: number[]) => {
+        const out: string[] = [];
+        for (const id of list) {
+          const v = await shows(id);
+          if (v.chat !== "idle" || v.row !== "idle" || (v.backend ?? "idle") !== "idle") out.push(`chat ${id}: ${JSON.stringify(v)}`);
+        }
+        return out;
+      };
+      const pill = () => document.querySelector("[data-running-pill]")?.getAttribute("data-running-pill") ?? "none";
+      await h.step("ka-idle: after the restart, every chat whose CLI is idle shows idle", async () => {
+        // The rows link to their chats with the first refreshes.
+        await h.sleep(4_000);
+        const bad = await allIdle(Object.values(idle));
+        if (bad.length) throw h.fail(bad.join("; "));
+        return Object.entries(idle).map(([n, id]) => `${n}=${id}`).join(" ");
+      });
+      await h.step(`${IDLE_BUSY}: the chat mid-turn still shows working`, async () => {
+        const v = await shows(busy);
+        if (v.chat !== "working" || v.row !== "busy" || (v.backend ?? "working") !== "working") throw h.fail(JSON.stringify(v));
+        if (pill() !== "1/0") throw h.fail(`running pill ${pill()}`);
+        return `${JSON.stringify(v)}, pill ${pill()}`;
+      });
+      if (!real)
+        await h.step(`${IDLE_CHATS[2]}: the Agent call cut off in it is not running (its CLI is idle)`, async () => {
+          const s = useStore.getState().sessions.find((x) => x.chat === idle[IDLE_CHATS[2]]);
+          const agents = s?.agents.map((a) => a.state) ?? [];
+          if (!agents.length) throw h.fail("no subagent on its row");
+          if (agents.includes("running")) throw h.fail(`agents ${agents.join(",")}`);
+          return agents.join(",");
+        });
+      await h.shot("ka-idle-after-restart");
+      for (const [name, id] of Object.entries(idle)) {
+        await h.step(`${name}: a message's turn ends, and the chat shows idle again`, async () => {
+          const n = turns(id);
+          const c = chat(id);
+          // As the composer sends it: a note while the chat looks busy, else a message.
+          const ask = real ? "Reply with only the word PONG." : "why are you working?";
+          if (c && c.state !== "idle") await within("chatSteer", api().chatSteer(id, ask, false));
+          else await within("chatSend", api().chatSend(id, ask));
+          await h.waitFor("the turn to end", () => turns(id) > n, 90_000);
+          await h.sleep(2_500);
+          const bad = await allIdle([id]);
+          if (bad.length) throw h.fail(bad.join("; "));
+          return `turns ${n} -> ${turns(id)}`;
+        });
+      }
+      await h.step(`${IDLE_BUSY}: its turn ends, then it shows idle too, and the title bar counts nothing`, async () => {
+        await h.waitFor("the slow turn to end", () => turns(busy) >= 1, (IDLE_BUSY_SECS + 60) * 1000);
+        await h.sleep(2_500);
+        const bad = await allIdle([busy, ...Object.values(idle)]);
+        if (bad.length) throw h.fail(bad.join("; "));
+        if (pill() !== "none") throw h.fail(`running pill ${pill()}`);
+        return "all idle";
+      });
+      await h.shot("ka-idle-after-end");
     },
     async "ka-update-after"(ctx) {
       const { getVersion } = await import("@tauri-apps/api/app");

@@ -73,6 +73,8 @@ answers: dict[str, dict] = {}
 answered = threading.Condition(LOCK)
 parent_uuid = None
 title_written = False
+# The transcript as `claude -p` writes it (no `turn_duration` record), from a "cut an agent" turn on.
+PRINT_LIKE = False
 
 
 def iso(t=None):
@@ -151,7 +153,10 @@ def init_line():
 def result(start, turns=1):
     out({"type": "result", "subtype": "success", "is_error": False, "duration_ms": int((time.time() - start) * 1000), "duration_api_ms": int((time.time() - start) * 800), "num_turns": turns,
          "result": "", "stop_reason": "end_turn", "session_id": SID, "total_cost_usd": 0.0, "usage": usage(), "uuid": str(uuid.uuid4())})
-    record({"type": "system", "subtype": "turn_duration", "durationMs": int((time.time() - start) * 1000), "isMeta": False})
+    if PRINT_LIKE:
+        record({"type": "system", "subtype": "stop_hook_summary", "hookCount": 0, "hookInfos": [], "hookErrors": [], "preventedContinuation": False, "stopReason": "", "hasOutput": False, "level": "suggestion"})
+    else:
+        record({"type": "system", "subtype": "turn_duration", "durationMs": int((time.time() - start) * 1000), "isMeta": False})
     registry("idle")
 
 
@@ -420,6 +425,53 @@ def long_reply_turn(prompt, start):
     result(start, turns=10)
 
 
+def slow_turn(prompt, start):
+    """A turn still running a while later ("slowly <seconds>"): a chat mid-turn across a restart (keepalive-idle-e2e.sh)."""
+    words = prompt.split()
+    secs = next((float(w) for w in words[words.index("slowly") + 1:][:1] if w.replace(".", "", 1).isdigit()), 60.0) if "slowly" in words else 60.0
+    tool("Bash", {"command": f"sleep {secs:g}", "description": "Wait"}, "", pause=secs)
+    text("Done, slowly.")
+    result(start)
+
+
+def cut_agent_turn(prompt, start):
+    """An Agent call cut off after its subagent began ("cut an agent"): denied, so nothing records its end and its
+    meta.json is never `finished`. From then on the transcript is written as `claude -p` writes it, with no
+    `turn_duration` record (what every coool chat's real transcript looks like): keepalive-idle-e2e.sh."""
+    global PRINT_LIKE
+    PRINT_LIKE = True
+    tid = f"toolu_{uuid.uuid4().hex[:24]}"
+    agent = f"a{uuid.uuid4().hex[:16]}"
+    assistant([{"type": "tool_use", "id": tid, "name": "Agent", "input": {"description": "Look around", "prompt": "Look around the folder.", "subagent_type": "general-purpose"}}])
+    sub = TRANSCRIPT.parent / SID / "subagents"
+    sub.mkdir(parents=True, exist_ok=True)
+    (sub / f"agent-{agent}.meta.json").write_text(json.dumps({"agentType": "general-purpose", "description": "Look around", "toolUseId": tid, "requestShape": "foreground", "model": "haiku"}))
+    with open(sub / f"agent-{agent}.jsonl", "a") as f:
+        for _ in range(2):
+            m = {"model": MODEL, "id": f"msg_{uuid.uuid4().hex[:24]}", "type": "message", "role": "assistant", "content": [{"type": "text", "text": "Looking."}], "usage": usage()}
+            f.write(json.dumps({"type": "assistant", "isSidechain": True, "agentId": agent, "sessionId": SID, "cwd": str(CWD), "message": m, "uuid": str(uuid.uuid4()), "timestamp": iso()}) + "\n")
+            time.sleep(0.2)
+    time.sleep(0.5)
+    tool_result(tid, "User rejected tool use", error=True)
+    text("Stopped there.")
+    result(start)
+
+
+def flood_turn(prompt, start):
+    """A reply streamed in many pieces ("flood <pieces>"): more events than a chat keeps for replay (keepalive-idle-e2e.sh)."""
+    words = prompt.split()
+    n = next((int(w) for w in words[words.index("flood") + 1:][:1] if w.isdigit()), 1000) if "flood" in words else 1000
+    mid = f"msg_{uuid.uuid4().hex[:24]}"
+    ev = lambda e: out({"type": "stream_event", "event": e, "parent_tool_use_id": None, "session_id": SID, "uuid": str(uuid.uuid4())})
+    ev({"type": "message_start", "message": {"id": mid, "model": MODEL}})
+    ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+    for i in range(n):
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x" if i % 80 else "\n"}})
+    msg = {"model": MODEL, "id": mid, "type": "message", "role": "assistant", "content": [{"type": "text", "text": "flooded"}], "stop_reason": None, "usage": usage()}
+    out({"type": "assistant", "message": msg, "parent_tool_use_id": None, "session_id": SID, "uuid": str(uuid.uuid4())})
+    result(start)
+
+
 def generic_turn(prompt, start):
     text("Done.")
     result(start)
@@ -445,8 +497,14 @@ def run_turn(prompt):
             mac_turn(prompt, start)
         elif "iphone" in low:
             iphone_turn(prompt, start)
+        elif "cut an agent" in low:
+            cut_agent_turn(prompt, start)
         elif "agent" in low:
             fanout_turn(prompt, start)
+        elif "flood" in low:
+            flood_turn(prompt, start)
+        elif "slowly" in low:
+            slow_turn(prompt, start)
         else:
             generic_turn(prompt, start)
     except BrokenPipeError:
