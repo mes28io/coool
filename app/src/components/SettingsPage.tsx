@@ -8,7 +8,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 import { LADDER, LADDER_LINE } from "../lib/ladderTiers";
 import { SETTINGS_SECTIONS, useStore, type SettingsSection } from "../store";
 import { remoteApi } from "../lib/remote";
-import { IBack, IBell, IBranch, IClose, ICommand, IDisk, IGauge, IGear, IInfo, IPhone, IPlug, ISearch, ISpark, ISun, ITerminal } from "./icons";
+import { IBack, IBell, IBranch, IClose, ICommand, IDisk, IGauge, IGear, IInfo, ILock, IPhone, IPlug, ISearch, ISpark, ISun, ITerminal } from "./icons";
+import { PlatformSettings } from "./settings/Platform";
 import { cx, ease, Kbd } from "./primitives";
 import { LadderSettings } from "./settings/Ladder";
 import { Appearance, Shortcuts } from "./settings/Appearance";
@@ -29,6 +30,7 @@ const META: Record<SettingsSection, { label: string; icon: ReactNode; desc: stri
   appearance: { label: "Appearance", icon: <ISun size={16} />, desc: "How coool looks and moves.", body: () => <Appearance /> },
   shortcuts: { label: "Keyboard shortcuts", icon: <ICommand size={16} />, desc: "Every shortcut coool has.", body: () => <Shortcuts /> },
   providers: { label: "Providers", icon: <ITerminal size={16} />, desc: "The Claude Code and Codex CLIs coool runs.", body: () => <Providers /> },
+  platform: { label: "Claude Platform", icon: <ILock size={16} />, desc: "Run Claude Code chats on an Anthropic API key instead of your subscription, per folder or per chat.", body: () => <PlatformSettings /> },
   devices: { label: "Devices", icon: <IPhone size={16} />, desc: "The Browser and iPhone panels agents drive, and the device pilot.", body: () => <Devices /> },
   remote: { label: "Remote", icon: <IPhone size={16} />, desc: "Watch and steer coool from a paired iPhone, end-to-end encrypted.", body: () => <RemoteSettings /> },
   git: { label: "Git & worktrees", icon: <IBranch size={16} />, desc: "A project’s repository and the worktrees agents made in it.", body: () => <Git /> },

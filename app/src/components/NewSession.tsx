@@ -37,6 +37,8 @@ import { useLadderStatus } from "../lib/ladder";
 import { modelColor, modelLabel } from "../lib/models";
 import { getChatDefaults, getDefaultCli, useSeenModels } from "../lib/prefs";
 import { useOverlaps } from "../lib/projectChanges";
+import { accountLabel, folderDefault, keyOf, keyTail, loadPlatform, SUBSCRIPTION, usePlatform } from "../lib/platform";
+import { AccountMenu } from "./Platform";
 import { modeWords, startProvider } from "../lib/startModes";
 import { estimateSize } from "../lib/termlite";
 import type { Provider, Session } from "../lib/types";
@@ -216,7 +218,16 @@ export function NewSession({ initialCwd, initialProvider, close }: { initialCwd?
   const modeNow = mode === undefined ? defaults.mode : mode;
   // "Opus · Ask me before each change": what the chat starts with (the self-tests read it).
   const starts = [modelNow ? modelLabel(modelNow) : null, modeWords(provider, modeNow)].filter(Boolean).join(" · ");
-  const [pop, setPop] = useState<null | "model" | "mode">(null);
+  const [pop, setPop] = useState<null | "model" | "mode" | "account">(null);
+  // Claude Platform: which bill this chat lands on. undefined: the folder's default (Settings, or the menu below).
+  const pkeys = usePlatform((s) => s.keys);
+  const pfolders = usePlatform((s) => s.folders);
+  useEffect(() => void loadPlatform(), []);
+  const [account, setAccount] = useState<string | undefined>(undefined);
+  const fdef = target ? folderDefault(target, pfolders) : null;
+  const folderAccount = fdef && keyOf(fdef.account, pkeys) ? fdef.account : SUBSCRIPTION;
+  const accountNow = account !== undefined && (account === SUBSCRIPTION || keyOf(account, pkeys)) ? account : folderAccount;
+  const showAccount = provider === "claude" && pkeys.length > 0;
   const ladder = useSheetLadder(provider);
   const [worktree, setWorktree] = useState(false);
   const [withContext, setWithContext] = useState(false);
@@ -335,6 +346,7 @@ export function NewSession({ initialCwd, initialProvider, close }: { initialCwd?
           prompt,
           model: model === undefined ? undefined : model,
           permissionMode: mode === undefined ? undefined : mode,
+          account: showAccount && account !== undefined ? accountNow : undefined,
           ladder: ladder.choice,
           attachments: atts,
           started: withContext ? (id) => useStore.getState().setRightPanel(chatPanelKey(id), "context") : undefined,
@@ -717,6 +729,38 @@ export function NewSession({ initialCwd, initialProvider, close }: { initialCwd?
                 />
               </Popover>
             </div>
+            {showAccount && (
+              <div className="relative">
+                <Chip
+                  active={pop === "account"}
+                  onClick={() => setPop(pop === "account" ? null : "account")}
+                  disabled={terminal}
+                  title={terminal ? "The terminal starts on the CLI's own login" : accountNow === SUBSCRIPTION ? "Billed to your Claude subscription. Pick a Claude Platform API key instead" : `Billed to the API key “${accountLabel(accountNow, pkeys)}” ${keyTail(keyOf(accountNow, pkeys))}, not your subscription`}
+                >
+                  <span className={cx("size-[6px] rounded-full", terminal ? "bg-faint" : accountNow === SUBSCRIPTION ? "bg-accent-text" : "bg-busy-text")} />
+                  <span data-ns-account={terminal ? "" : accountNow}>{accountNow === SUBSCRIPTION ? "Subscription" : `API · ${accountLabel(accountNow, pkeys)}`}</span>
+                  <Caret />
+                </Chip>
+                <Popover open={pop === "account"} onClose={() => setPop(null)} side="top" width={320}>
+                  <AccountMenu
+                    current={accountNow}
+                    folderName={target ? baseName(fdef?.folder ?? target) : null}
+                    folderAccount={folderAccount}
+                    onPick={(id) => (setAccount(id), setPop(null))}
+                    onMakeDefault={(id) => {
+                      if (!target) return;
+                      const where = fdef && fdef.account !== SUBSCRIPTION ? fdef.folder : target;
+                      void api()
+                        .platformSetFolder(where, id === SUBSCRIPTION ? null : id)
+                        .then(loadPlatform)
+                        .then(() => toast(id === SUBSCRIPTION ? `New chats in ${baseName(where)} use the subscription` : `New chats in ${baseName(where)} use “${accountLabel(id, pkeys)}”`))
+                        .catch((e) => toast(String(e).replace(/^Error: /, ""), "error"));
+                      setPop(null);
+                    }}
+                  />
+                </Popover>
+              </div>
+            )}
             {canWorktree && (
               <Chip active={worktree} onClick={() => setWorktree(!worktree)} title={"Start in a new git worktree of this repository: a copy of its own on a new branch (coool/…), so this chat's edits never collide with another agent's.\nIt goes in .coool/worktrees/ and shows in Settings > Git."}>
                 <IBranch size={13} />

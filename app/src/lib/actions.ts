@@ -27,7 +27,8 @@ function place(target: { kind: "chat"; id: number } | { kind: "pty"; id: number 
 /** `draft`: text put in the new chat's composer, not sent. */
 /** `context`: this chat's coool context, over Settings' default (APP_SPEC "coool context"). */
 /** `attachments`: sent with the first prompt (the New session sheet's tray). `started`: the new chat's id, once it exists. */
-export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; draft?: string; leaf?: string; model?: string | null; permissionMode?: string | null; ladder?: ChatLadder; context?: boolean; attachments?: Attachment[]; started?: (id: number) => void }): Promise<boolean> {
+/** `account`: Claude Platform (APP_SPEC "Claude Platform"): a key's id or "subscription"; absent: the folder's default. */
+export async function newChat(a: { provider: Provider; cwd: string; prompt?: string; draft?: string; leaf?: string; model?: string | null; permissionMode?: string | null; ladder?: ChatLadder; context?: boolean; attachments?: Attachment[]; account?: string | null; started?: (id: number) => void }): Promise<boolean> {
   try {
     // Settings > General: what a new chat starts with, unless the caller chose.
     const d = getChatDefaults()[a.provider];
@@ -36,7 +37,7 @@ export async function newChat(a: { provider: Provider; cwd: string; prompt?: str
     // Settings > Ladder (or the sheet's own choice): the tier table from the models this CLI reported.
     const ladder = ladderOptions(a.provider, model ?? null, seenModelsNow(), a.ladder);
     const context = contextOptions(a.context);
-    const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: model ?? null, permission_mode: mode ?? null, ladder, context });
+    const id = await api().startChat({ provider: a.provider, cwd: a.cwd, model: model ?? null, permission_mode: mode ?? null, ladder, context, account: a.account ?? null });
     noteLaunched(id, ladder);
     noteContextLaunched(id, !!context);
     // The sheet's own choice is this chat's from now on (its chip shows it; a resume keeps it once the session is known).

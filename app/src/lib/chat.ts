@@ -168,6 +168,10 @@ export interface Chat {
   /** Parent of the most recent assistant output, to attribute the next `usage`. */
   lastParent: string | null;
   replayed: boolean;
+  /** Claude Platform: the id of the API key it runs on (null: the subscription). */
+  account: string | null;
+  /** Claude Platform: what its turns cost so far, in USD, by the CLI's count (API-key chats only). */
+  costUsd: number;
 }
 
 const AGENT_TOOLS = /^(task|agent|subagent|spawn_agent)$/i;
@@ -212,6 +216,8 @@ export function emptyChat(id: number, info?: Partial<ChatInfo>): Chat {
     cancelled: [],
     lastParent: null,
     replayed: false,
+    account: info?.account ?? null,
+    costUsd: 0,
   };
 }
 
@@ -479,6 +485,9 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
       case "compacting":
         c = { ...c, compacting: e.active };
         break;
+      case "cost":
+        c = { ...c, costUsd: c.costUsd + (Number.isFinite(e.usd) ? e.usd : 0) };
+        break;
       case "notice":
         its().push({ kind: "notice", key, level: e.level, text: e.text, needsTerminal: e.needs_terminal, ts: e.ts });
         break;
@@ -601,8 +610,9 @@ export const useChats = create<ChatStore>((set) => ({
         model: cur.model ?? info.model,
         permissionMode: cur.permissionMode ?? info.permission_mode ?? null,
         running: cur.running && info.running,
+        account: info.account === undefined ? cur.account : info.account,
       };
-      if (next.running === cur.running && next.sessionId === cur.sessionId && next.model === cur.model && next.cwd === cur.cwd && next.permissionMode === cur.permissionMode) return s;
+      if (next.running === cur.running && next.sessionId === cur.sessionId && next.model === cur.model && next.cwd === cur.cwd && next.permissionMode === cur.permissionMode && next.account === cur.account) return s;
       return { chats: { ...s.chats, [info.id]: next } };
     }),
   apply: (id, events) =>
@@ -615,7 +625,7 @@ export const useChats = create<ChatStore>((set) => ({
     set((s) => {
       const cur = s.chats[id];
       const later = cur ? liveTail(cur, seq) : [];
-      let next = applyEvents({ ...emptyChat(id, info ?? (cur ? { provider: cur.provider, cwd: cur.cwd, session_id: cur.sessionId, model: cur.model } : undefined)) }, events);
+      let next = applyEvents({ ...emptyChat(id, info ?? (cur ? { provider: cur.provider, cwd: cur.cwd, session_id: cur.sessionId, model: cur.model, account: cur.account } : undefined)) }, events);
       if (later.length) next = applyEvents(next, later);
       return { chats: { ...s.chats, [id]: { ...next, replayed: true } } };
     }),

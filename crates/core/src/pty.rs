@@ -69,6 +69,11 @@ pub struct Managed {
 
 impl Managed {
     pub fn spawn(provider: Provider, args: &[String], cwd: &str, rows: u16, cols: u16) -> Result<Self> {
+        Self::spawn_env(provider, args, cwd, rows, cols, &[])
+    }
+
+    /// [`Self::spawn`] with `env` added; with the Claude Platform key among it, the other logins removed (as for a chat).
+    pub fn spawn_env(provider: Provider, args: &[String], cwd: &str, rows: u16, cols: u16, env: &[(String, String)]) -> Result<Self> {
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -78,6 +83,14 @@ impl Managed {
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        if env.iter().any(|(k, _)| k == crate::platform::KEY_ENV) {
+            for v in crate::platform::OTHER_AUTH {
+                cmd.env_remove(v);
+            }
+        }
         let child = pair.slave.spawn_command(cmd).with_context(|| format!("spawn `{}`", provider.binary()))?;
         drop(pair.slave);
 

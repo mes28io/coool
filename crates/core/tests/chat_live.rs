@@ -92,7 +92,7 @@ fn live_claude() {
     let mut hub = Hub::new(Duration::from_secs(600));
     hub.set_own_sessions_file(None);
     hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
-    let opts = |m: &str| ChatOptions { provider: Provider::Claude, cwd: cwd.clone(), resume: None, model: Some(m.into()), permission_mode: None, ladder: None, context: None };
+    let opts = |m: &str| ChatOptions { provider: Provider::Claude, cwd: cwd.clone(), resume: None, model: Some(m.into()), permission_mode: None, ladder: None, context: None, account: None };
 
     // 1. Permissions (allow once, deny, always) and a subagent.
     let id = start(&mut hub, "claude_permission_subagent", opts("haiku"));
@@ -193,7 +193,7 @@ fn steer_state(e: &ChatEventKind, note: &str) -> Option<(SteerState, Option<Stri
 fn live_steer(provider: Provider, model: &str, trace: &str) {
     let (mut hub, cwd) = plans_hub();
     let mode = (provider == Provider::Codex).then(|| "never".to_string());
-    let id = start(&mut hub, trace, ChatOptions { provider, cwd, resume: None, model: Some(model.into()), permission_mode: mode, ladder: None, context: None });
+    let id = start(&mut hub, trace, ChatOptions { provider, cwd, resume: None, model: Some(model.into()), permission_mode: mode, ladder: None, context: None, account: None });
     let mut w = Watch::new();
     w.until(&hub, id, 60, "ready", is_ready);
     let step = |w: &mut Watch, hub: &Hub| match w.until(hub, id, 120, "a step", |e| matches!(e, ChatEventKind::ToolStart { parent_tool_id: None, .. })) {
@@ -267,7 +267,7 @@ fn answer_all(w: &mut Watch, hub: &mut Hub, id: usize) {
 #[ignore]
 fn live_claude_tasks() {
     let (mut hub, cwd) = plans_hub();
-    let opts = ChatOptions { provider: Provider::Claude, cwd, resume: None, model: Some("claude-haiku-4-5-20251001".into()), permission_mode: None, ladder: None, context: None };
+    let opts = ChatOptions { provider: Provider::Claude, cwd, resume: None, model: Some("claude-haiku-4-5-20251001".into()), permission_mode: None, ladder: None, context: None, account: None };
     let id = start(&mut hub, "claude_tasks", opts);
     let mut w = Watch::new();
     w.until(&hub, id, 60, "ready", is_ready);
@@ -284,7 +284,7 @@ fn live_claude_tasks() {
 #[ignore]
 fn live_claude_plan_mode() {
     let (mut hub, cwd) = plans_hub();
-    let opts = ChatOptions { provider: Provider::Claude, cwd, resume: None, model: Some("haiku".into()), permission_mode: Some("plan".into()), ladder: None, context: None };
+    let opts = ChatOptions { provider: Provider::Claude, cwd, resume: None, model: Some("haiku".into()), permission_mode: Some("plan".into()), ladder: None, context: None, account: None };
     let id = start(&mut hub, "claude_plan_mode", opts);
     let mut w = Watch::new();
     w.until(&hub, id, 60, "ready", is_ready);
@@ -318,7 +318,7 @@ fn live_claude_plan_mode() {
 #[ignore]
 fn live_codex_plan() {
     let (mut hub, cwd) = plans_hub();
-    let opts = ChatOptions { provider: Provider::Codex, cwd, resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("never".into()), ladder: None, context: None };
+    let opts = ChatOptions { provider: Provider::Codex, cwd, resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("never".into()), ladder: None, context: None, account: None };
     let id = start(&mut hub, "codex_plan", opts);
     let mut w = Watch::new();
     w.until(&hub, id, 60, "ready", is_ready);
@@ -337,7 +337,7 @@ fn live_codex() {
     let mut hub = Hub::new(Duration::from_secs(600));
     hub.set_own_sessions_file(None);
     hub.set_client_name(coool_core::origin::TEST_CLIENT_NAME);
-    let opts = ChatOptions { provider: Provider::Codex, cwd: cwd.clone(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()), ladder: None, context: None };
+    let opts = ChatOptions { provider: Provider::Codex, cwd: cwd.clone(), resume: None, model: Some("gpt-5.6-luna".into()), permission_mode: Some("untrusted".into()), ladder: None, context: None, account: None };
     let id = start(&mut hub, "codex_approval_interrupt_model", opts);
     let mut w = Watch::new();
     w.until(&hub, id, 60, "ready", is_ready);

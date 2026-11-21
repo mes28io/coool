@@ -541,6 +541,12 @@ pub fn call(core: &Arc<Core>, chat: usize, name: &str, a: &Value) -> Result<Valu
     }
 }
 
+/// Claude Platform: a helper bills the same account as the chat that started it ("subscription" for none).
+fn launched_account(core: &Core, chat: usize) -> Option<String> {
+    let a = core.hub.lock().unwrap().chat(chat).and_then(|c| c.info().account);
+    Some(a.unwrap_or_else(|| coool_core::platform::SUBSCRIPTION.to_string()))
+}
+
 fn spawn(core: &Arc<Core>, chat: usize, a: &Value) -> Result<Value, String> {
     let st = &core.ladder;
     let brief = a["brief"].as_str().unwrap_or("").trim().to_string();
@@ -562,7 +568,7 @@ fn spawn(core: &Arc<Core>, chat: usize, a: &Value) -> Result<Value, String> {
     let worktree = if a["worktree"].as_bool() == Some(true) { Some(make_worktree(st, &launched.cwd, chat, n)?) } else { None };
     let cwd = worktree.as_ref().map(|w| w.0.clone()).unwrap_or_else(|| launched.cwd.clone());
     let ladder = child_ladder(&launched, &plan, chat);
-    let opts = ChatOptions { provider: plan.provider, cwd, resume: None, model: Some(plan.model.clone()), permission_mode: Some(plan.permission_mode.clone()), ladder: Some(ladder), context: launched.context.clone() };
+    let opts = ChatOptions { provider: plan.provider, cwd, resume: None, model: Some(plan.model.clone()), permission_mode: Some(plan.permission_mode.clone()), ladder: Some(ladder), context: launched.context.clone(), account: launched_account(core, chat) };
     let app = st.app.get().ok_or("coool-ladder: not ready")?;
     let id = crate::start_chat_with(app, core, opts)?;
     st.helpers.lock().unwrap().insert(id, Helper { parent: chat, depth: plan.depth, provider: plan.provider, model: plan.model.clone(), title: title.clone(), worktree: worktree.clone(), started: Instant::now(), seq: 0, sent: false, last_text: String::new(), done: None, collected: false });
@@ -744,7 +750,7 @@ mod tests {
     }
 
     fn opts(tools: bool) -> ChatOptions {
-        ChatOptions { provider: Provider::Claude, cwd: "/p".into(), resume: None, model: Some("sonnet".into()), permission_mode: None, ladder: Some(Ladder { tools, ..Default::default() }), context: None }
+        ChatOptions { provider: Provider::Claude, cwd: "/p".into(), resume: None, model: Some("sonnet".into()), permission_mode: None, ladder: Some(Ladder { tools, ..Default::default() }), context: None, account: None }
     }
 
     #[test]

@@ -443,7 +443,7 @@ impl coool_remote::Host for AppHost {
         // The mode is the one the rules chose (never Bypass or full access); Ladder stays off; the coool context as
         // Settings say (the app fills in what the chat has).
         let context = (!view(|v| v.context_off)).then(coool_core::agent_context::AgentContext::default);
-        let opts = coool_core::chat::ChatOptions { provider, cwd: s.project.path.clone(), resume: None, model, permission_mode: Some(s.mode.to_string()), ladder: None, context };
+        let opts = coool_core::chat::ChatOptions { provider, cwd: s.project.path.clone(), resume: None, model, permission_mode: Some(s.mode.to_string()), ladder: None, context, account: None };
         let id = crate::start_chat_with(&self.app, &core, opts)?;
         self.note(&core, id, &format!("Started from {by}"));
         core.with_chat(id, |c| c.send_with(&s.text, &atts))?;

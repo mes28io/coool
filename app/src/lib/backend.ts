@@ -3,7 +3,7 @@
 
 import { type DeltaWire, type FullWire, SessionsMerge, type Trace } from "./sessionsMerge";
 import type { ExplainReply, ExplainRequest } from "./explain";
-import type { ChatEvent, ChatOptions, ContextMap, Environment, GitTrail, InsightsStatus, Provider, ResetOutcome, Snapshot } from "./types";
+import type { ChatEvent, ChatOptions, ContextMap, Environment, GitTrail, InsightsStatus, PlatformStatus, Provider, ResetOutcome, Snapshot } from "./types";
 import type { MotionHints } from "./motion";
 import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
@@ -170,6 +170,17 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   /** Opens the chat's session in a PTY via resume; returns the PTY id. */
   openInTerminal(id: number): Promise<number>;
   onChatEvent(cb: (b: ChatBatch) => void): Unlisten;
+
+  // ---- Claude Platform (APP_SPEC "Claude Platform") ----
+  platformStatus(): Promise<PlatformStatus>;
+  /** Stores the key in the Keychain; only its name and last four come back. */
+  platformAddKey(name: string, key: string): Promise<{ id: string; name: string; last4: string }>;
+  platformRenameKey(id: string, name: string): Promise<void>;
+  platformRemoveKey(id: string): Promise<void>;
+  /** `account`: a key's id, or null to have the folder use the subscription. */
+  platformSetFolder(folder: string, account: string | null): Promise<void>;
+  /** The account a chat started in `cwd` (resuming `resume`) gets with no choice made; null: the subscription. */
+  platformDefault(cwd: string, resume?: string | null): Promise<string | null>;
 
   // ---- AI insights (CHAT_SPEC "AI insights") ----
   insightsStatus(): Promise<InsightsStatus>;
@@ -614,7 +625,7 @@ async function tauriBackend(): Promise<Backend> {
     kind: "tauri",
     startChat: (o) =>
       soft("start_chat", {
-        opts: { provider: o.provider, cwd: o.cwd, resume: o.resume ?? null, model: o.model ?? null, permission_mode: o.permission_mode ?? null, ladder: o.ladder ?? null, context: o.context ?? null },
+        opts: { provider: o.provider, cwd: o.cwd, resume: o.resume ?? null, model: o.model ?? null, permission_mode: o.permission_mode ?? null, ladder: o.ladder ?? null, context: o.context ?? null, account: o.account ?? null },
       }),
     chatSend: (id, text, attachments) => soft("chat_send", { id, text, attachments: attachments?.length ? attachments : null }),
     attachPaths: (paths) => invoke("attach_paths", { paths }),
@@ -634,6 +645,26 @@ async function tauriBackend(): Promise<Backend> {
     chatReplay: (id) => soft("chat_replay", { id }),
     openInTerminal: (id) => soft("open_in_terminal", { id }),
     onChatEvent: (cb) => sub<ChatBatch>("chat-event", cb),
+    platformStatus: async () => {
+      try {
+        return await soft<PlatformStatus>("platform_status");
+      } catch (e) {
+        if (isNotAvailable(e)) return { keys: [], folders: {} };
+        throw e;
+      }
+    },
+    platformAddKey: (name, key) => soft("platform_add_key", { name, key }),
+    platformRenameKey: (id, name) => soft("platform_rename_key", { id, name }),
+    platformRemoveKey: (id) => soft("platform_remove_key", { id }),
+    platformSetFolder: (folder, account) => soft("platform_set_folder", { folder, account }),
+    platformDefault: async (cwd, resume) => {
+      try {
+        return await soft<string | null>("platform_default", { cwd, resume: resume ?? null });
+      } catch (e) {
+        if (isNotAvailable(e)) return null;
+        throw e;
+      }
+    },
     insightsStatus: async () => {
       try {
         return { ...(await soft<InsightsStatus>("insights_status")), available: true };

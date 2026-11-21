@@ -93,6 +93,9 @@ struct Core {
     streams: Mutex<HashMap<usize, Stream>>,
     chats: Mutex<HashMap<usize, ChatStream>>,
     insights: Mutex<Insights>,
+    /// APP_SPEC "Claude Platform": the API keys' names (the keys are in the Keychain), folder defaults, and which
+    /// account each chat's session ran on.
+    platform: Mutex<coool_core::platform::Store>,
     /// The AI reads of permission requests, by request id (CHAT_SPEC "What this does and why").
     reads: Mutex<explain::Reads>,
     /// CHAT_SPEC "Session titles": the shown title of every session, and the names the person gave.
@@ -328,6 +331,9 @@ struct ChatRow {
     hosted: bool,
     /// It keeps running when coool quits (hosted, and "Keep chats running when coool quits" is on).
     kept: bool,
+    /// APP_SPEC "Claude Platform": the id of the API key it is billed to; None: the subscription.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -408,8 +414,21 @@ impl Core {
                     state: c.state,
                     running: c.running,
                     helper: self.ladder.helper_row(c.id),
+                    account: c.account,
                 })
                 .collect();
+            // Claude Platform: remember which account each chat's session runs on (a resume keeps it).
+            {
+                let mut pf = self.platform.lock().unwrap();
+                for c in &chats {
+                    if c.provider == Provider::Claude
+                        && let Some(sid) = &c.session_id
+                        && pf.session_account(sid) != c.account.as_deref()
+                    {
+                        pf.note_session(sid, c.account.as_deref());
+                    }
+                }
+            }
             // A Ladder helper's session is its caller's (History and the lists say so after both ended).
             for c in &chats {
                 if let Some(h) = &c.helper {
@@ -807,6 +826,13 @@ fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize
     }
     opts.cwd = private_alias(&expand_tilde(&opts.cwd));
     check_launch(opts.provider, &opts.cwd)?;
+    // Claude Platform: the page's choice (an id, "subscription", or none: the session's own account on a resume, else
+    // the folder's default). Codex chats have no such choice.
+    opts.account = if opts.provider == Provider::Claude {
+        core.platform.lock().unwrap().resolve(opts.account.as_deref(), &opts.cwd, opts.resume.as_deref()).map_err(|e| format!("{e:#}"))?
+    } else {
+        None
+    };
     if let Some(c) = opts.context.as_mut() {
         fill_context(app, c);
     }
@@ -975,6 +1001,43 @@ fn open_in_terminal(app: AppHandle, core: State<'_, Arc<Core>>, id: usize) -> Re
     };
     core.publish(&app);
     Ok(pty)
+}
+
+// ---- Claude Platform (APP_SPEC "Claude Platform") ----
+// The page sees names, ids and last four characters only; a key goes in once (platform_add_key) and never comes back.
+
+#[tauri::command(async)]
+fn platform_status(core: State<'_, Arc<Core>>) -> coool_core::platform::Status {
+    core.platform.lock().unwrap().status()
+}
+
+#[tauri::command(async)]
+fn platform_add_key(core: State<'_, Arc<Core>>, name: String, key: String) -> Res<coool_core::platform::KeyMeta> {
+    core.platform.lock().unwrap().add(&name, &key).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command(async)]
+fn platform_rename_key(core: State<'_, Arc<Core>>, id: String, name: String) -> Res<()> {
+    core.platform.lock().unwrap().rename(&id, &name).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command(async)]
+fn platform_remove_key(core: State<'_, Arc<Core>>, id: String) -> Res<()> {
+    core.platform.lock().unwrap().remove(&id).map_err(|e| format!("{e:#}"))
+}
+
+/// `account`: a key's id, or null / "subscription" to clear the folder's default.
+#[tauri::command(async)]
+fn platform_set_folder(core: State<'_, Arc<Core>>, folder: String, account: Option<String>) -> Res<()> {
+    let folder = private_alias(&expand_tilde(&folder));
+    core.platform.lock().unwrap().set_folder(&folder, account.as_deref()).map_err(|e| format!("{e:#}"))
+}
+
+/// What a chat started in `cwd` (resuming `resume`) runs on with no choice made: an id, or null for the subscription.
+#[tauri::command(async)]
+fn platform_default(core: State<'_, Arc<Core>>, cwd: String, resume: Option<String>) -> Option<String> {
+    let cwd = private_alias(&expand_tilde(&cwd));
+    core.platform.lock().unwrap().resolve(None, &cwd, resume.as_deref()).ok().flatten()
 }
 
 // ---- AI insights (CHAT_SPEC "AI insights") ----
@@ -2012,6 +2075,11 @@ pub fn run() {
         streams: Mutex::new(HashMap::new()),
         chats: Mutex::new(HashMap::new()),
         insights: Mutex::new(ins),
+        // A self-test keeps its keys' names in its throwaway folder (and, in a debug build, its one test key in env).
+        platform: Mutex::new(coool_core::platform::Store::load(&match &selftest {
+            Some(t) => t.dir().join(".coool-platform.json"),
+            None => dirs::config_dir().map(|d| d.join("coool")).unwrap_or_else(std::env::temp_dir).join("platform.json"),
+        })),
         reads: Mutex::new(explain::Reads::default()),
         // A self-test keeps its names in its throwaway folder, never in the person's file.
         titles: Mutex::new(coool_core::titles::Titles::at(match &selftest {
@@ -2104,6 +2172,12 @@ pub fn run() {
             chat_replay,
             open_in_terminal,
             insights_status,
+            platform_status,
+            platform_add_key,
+            platform_rename_key,
+            platform_remove_key,
+            platform_set_folder,
+            platform_default,
             insights_set_key,
             insights_clear_key,
             insights_set_enabled,
