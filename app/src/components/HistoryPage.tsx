@@ -28,12 +28,12 @@ export function HistoryPage() {
   const [f, setF] = useState<HistoryFilters>(() => ({ ...NO_FILTERS, ...req?.filters }));
   // A new open (another project's "Show N more") applies its filters to the page already up.
   const [seq, setSeq] = useState(req?.seq);
+  const [text, setText] = useState(f.text);
   if (req && req.seq !== seq) {
     setSeq(req.seq);
     setF({ ...NO_FILTERS, ...req.filters });
+    setText(req.filters.text ?? "");
   }
-  const [text, setText] = useState(f.text);
-  if (text !== f.text && document.activeElement?.getAttribute("data-history-search") === null) setText(f.text);
   const [page, setPage] = useState<Page | null>(null);
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [busy, setBusy] = useState(true);
@@ -151,10 +151,14 @@ export function HistoryPage() {
   }, [close]);
 
   const searching = f.text.trim().length > 0;
-  const groups = useMemo(() => (searching ? [{ day: "Best matches", rows }] : byDay(rows)), [rows, searching]);
+  // Each group with the list index of its first row (↑ ↓ move through them all).
+  const groups = useMemo(() => {
+    const g = searching ? [{ day: "Best matches", rows }] : byDay(rows);
+    let n = 0;
+    return g.map((x) => ({ ...x, base: (n += x.rows.length) - x.rows.length }));
+  }, [rows, searching]);
   const st = page?.status;
   const nOn = filtersOn(f);
-  let index = 0;
 
   return (
     <motion.div
@@ -266,8 +270,8 @@ export function HistoryPage() {
                 {g.day}
                 {searching && page && <span className="ml-1.5 font-normal text-faint tnum">{page.total.toLocaleString()}</span>}
               </div>
-              {g.rows.map((r) => {
-                const i = index++;
+              {g.rows.map((r, k) => {
+                const i = g.base + k;
                 return <Row key={r.key} r={r} i={i} on={i === sel} live={live.get(r.key)} searching={searching} opening={opening === r.key} reduce={reduce} onHover={() => setSel(i)} onOpen={(nt) => void open(r, nt)} />;
               })}
             </section>

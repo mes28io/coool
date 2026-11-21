@@ -38,6 +38,7 @@ const backslash = (e: KeyEventLike) => key(e) === "\\" || e.code === "Backslash"
 export const SHORTCUTS: Shortcut[] = [
   { id: "palette", group: "General", label: "Search and commands", keys: ["⌘", "K"], terms: "palette jump find", match: (e) => mod(e) && key(e) === "k" },
   { id: "new", group: "General", label: "New session", keys: ["⌘", "T"], terms: "chat start", match: plain("t") },
+  { id: "sessions-history", group: "General", label: "History: every past session", keys: ["⌘", "Y"], terms: "search past sessions transcripts old terminal", match: plain("y") },
   { id: "settings", group: "General", label: "Settings", keys: ["⌘", ","], terms: "preferences", match: plain(",") },
   { id: "theme", group: "General", label: "Switch light and dark theme", keys: ["⌘", "⇧", "L"], terms: "appearance dark light", match: (e) => mod(e) && e.shiftKey && key(e) === "l" },
   { id: "sidebar", group: "General", label: "Show or hide the sidebar", keys: ["⌘", "B"], match: plain("b"), hiddenBySettings: true },

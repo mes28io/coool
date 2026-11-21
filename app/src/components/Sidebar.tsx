@@ -20,6 +20,7 @@ import { SidebarSkeleton } from "./Skeletons";
 import { reducedMotion } from "./StepRail";
 import { AnimateScope } from "../lib/motion";
 import { countRender, markOnce } from "../lib/perfCount";
+import { useHistoryCounts } from "../lib/history";
 
 export interface Project {
   cwd: string;
@@ -163,8 +164,6 @@ function useSelectedKey(): string | null {
 
 /** Rows a project shows at rest (live ones always show, even past this). */
 const REST = 5;
-/** Ended chats each "Show N more" reveals. */
-const PAGE = 10;
 
 export function Sidebar() {
   countRender("Sidebar");
@@ -225,6 +224,10 @@ export function Sidebar() {
               <br />
               <button className="mt-1 font-medium text-fg hover:underline" onClick={() => setSheet({ kind: "new" })}>
                 Start one
+              </button>
+              <span className="text-faint"> or </span>
+              <button className="font-medium text-fg hover:underline" onClick={() => useStore.getState().openHistory()} data-sidebar-history>
+                open History
               </button>
             </div>
             <OtherToolsLine />
@@ -298,9 +301,17 @@ function OtherToolsLine() {
   const runs = n === 1 ? "run" : "runs";
   return (
     <div className="mt-2 flex h-[28px] items-center gap-1 px-2.5 text-small text-faint" data-other-tools={show ? "shown" : "hidden"}>
-      <span className="tnum min-w-0 truncate">
+      {/* The count opens History on them (every one, any age); "Show" lists them here too. */}
+      <button
+        type="button"
+        data-nav
+        data-other-tools-history
+        onClick={() => useStore.getState().openHistory({ wheres: ["automation"] })}
+        title="See runs by other tools in History (⌘Y)"
+        className="tnum min-w-0 truncate rounded-[6px] px-1 -ml-1 text-left transition-colors duration-150 hover:bg-hover hover:text-fg"
+      >
         {n} {runs} by other tools {show ? "shown" : "hidden"}
-      </span>
+      </button>
       <span aria-hidden>·</span>
       <button
         type="button"
@@ -374,7 +385,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
   const onlyEnded = p.live.length + p.starting.length + p.startingChats.length === 0;
   const Folder = collapsed ? IFolder : IFolderOpen;
 
-  // Live rows always show; ended ones fill the rest of the resting cap, then pages of PAGE.
+  // Live rows always show; ended ones fill the rest of the resting cap (more, and older ones, are in History).
   const liveRows = p.startingChats.length + p.starting.length + live.length;
   const endedSlots = Math.max(0, REST - liveRows) + revealed;
   // The open chat stays visible; for an open child run, its parent's row does.
@@ -383,7 +394,10 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
     return null;
   }, [p.children, selected]);
   const ended = p.ended.filter((s, i) => i < endedSlots || sessionKey(s) === selected || s.id === pinnedParent);
-  const more = p.ended.length - ended.length;
+  // "Show N more" opens History on this project: every session it ever had, not just the last day's.
+  const inHistory = useHistoryCounts().get(p.cwd) ?? 0;
+  const shownRows = live.length + ended.length;
+  const more = Math.max(p.ended.length - ended.length, inHistory - shownRows);
   // One flat list of rows (a session, then its nested child runs), each in its own slot.
   const sessionRows = (s: Session): Item[] => {
     const att = attention(s, digest);
@@ -458,7 +472,14 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
               {(more > 0 || revealed > 0) && (
                 <div className="flex pt-px">
                   {more > 0 && (
-                    <button type="button" data-nav data-show-more onClick={() => setRevealed(p.cwd, revealed + PAGE)} className={cx(disclosure, "min-w-0 flex-1 pl-[38px]")}>
+                    <button
+                      type="button"
+                      data-nav
+                      data-show-more
+                      onClick={() => useStore.getState().openHistory({ project: p.cwd })}
+                      title={`Every session in ${p.name}, in History (⌘Y)`}
+                      className={cx(disclosure, "min-w-0 flex-1 pl-[38px]")}
+                    >
                       Show {more} more
                     </button>
                   )}

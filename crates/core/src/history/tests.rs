@@ -389,10 +389,13 @@ fn real_history_numbers() {
     let q = Instant::now();
     let all = find(&mut h, Query::default());
     eprintln!(
-        "real: {} sessions, {} transcripts, {} MB words, built in {:.1} s; searches (ms, hits): {:?}; list {:.1} ms ({} rows)",
+        "real: {} sessions, {} transcripts ({} MB read), {} KB words ({} with words, {} prompts), built in {:.1} s; searches (ms, hits): {:?}; list {:.1} ms ({} rows)",
         s.sessions,
         s.transcripts,
-        s.text_bytes / (1 << 20),
+        h.docs.iter().map(|d| d.offset).sum::<u64>() >> 20,
+        s.text_bytes >> 10,
+        h.docs.iter().filter(|d| d.text > 0).count(),
+        h.docs.iter().map(|d| d.meta.prompts as u64).sum::<u64>(),
         built.as_secs_f64(),
         times,
         q.elapsed().as_secs_f64() * 1000.0,
