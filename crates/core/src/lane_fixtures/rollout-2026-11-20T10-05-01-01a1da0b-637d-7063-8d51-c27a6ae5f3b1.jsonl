@@ -1,0 +1,8 @@
+{"timestamp":"2026-11-20T10:05:01.000Z","type":"session_meta","payload":{"id":"01a1da0b-637d-7063-8d51-c27a6ae5f3b1","timestamp":"2026-11-20T10:05:01.000Z","cwd":"/w/wt/b","originator":"codex_exec","cli_version":"0.171.0","source":"exec","model_provider":"openai"}}
+{"timestamp":"2026-11-20T10:05:01.000Z","type":"turn_context","payload":{"cwd":"/w/wt/b","model":"gpt-6.2-sol","effort":"medium"}}
+{"timestamp":"2026-11-20T10:05:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+{"timestamp":"2026-11-20T10:05:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Do the brief."}]}}
+{"timestamp":"2026-11-20T10:05:10.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c1","arguments":"{\"cmd\": \"ls test\"}"}}
+{"timestamp":"2026-11-20T10:05:11.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"Process exited with code 0"}}
+{"timestamp":"2026-11-20T10:06:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9000,"cached_input_tokens":4500,"output_tokens":400},"last_token_usage":{"input_tokens":2250}}}}
+{"timestamp":"2026-11-20T10:08:59.000Z","type":"event_msg","payload":{"type":"error","message":"stream disconnected"}}

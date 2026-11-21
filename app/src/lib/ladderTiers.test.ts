@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { budgetLine, candidates, crossTable, imageLane, laneOf, modelRank, roleOf, sameTier, tallyChecks, tallyModels, tallyProviders, tierRows, tierTable, turnTally, untilWords, type TallyItem } from "./ladderTiers.ts";
+import { budgetLine, candidates, crossTable, imageLane, itemsAfter, laneOf, modelRank, roleOf, sameTier, tallyChecks, tallyModels, tallyProviders, tierRows, tierTable, turnTally, untilWords, type TallyItem } from "./ladderTiers.ts";
 
 // What Claude Code 2.1.329 reported in `initialize.models` (aliases first, then ids), trimmed.
 const CLAUDE = [
@@ -132,7 +132,7 @@ test("the tally counts what ran, on which model, and what the lead checked after
     ],
   );
   assert.equal(t.onLead, 0);
-  assert.deepEqual(t.checks, { tests: 2, images: 0, testsPassed: 1, testsFailed: 1, diffs: 1, reads: 1 });
+  assert.deepEqual(t.checks, { tests: 2, images: 0, testsPassed: 1, testsFailed: 1, diffs: 1, reads: 1, outputs: 0, builds: 0, pending: false });
   assert.equal(t.delegateTests, 1);
   assert.equal(tallyChecks(t), "tests run 2× (1 passed, 1 failed), 1 diff read, 1 file reread");
   assert.equal(tallyModels(t, tiers), "2 small on Haiku 5.5, 1 mid on Sonnet 5.5");
@@ -256,4 +256,58 @@ test("the budget line: plan, fullest window, reset, tight and reserve", () => {
   assert.equal(budgetLine(null, 10, now, null).text, "usage not read yet");
   assert.equal(untilWords(0, 3 * 86400_000), "in 3 days");
   assert.equal(untilWords(0, 59 * 60_000), "in 59 min");
+});
+
+test("the tally counts each shell launch once, takes background helpers' real ends, and counts the lead's real checks after they return", () => {
+  const lead = "claude-opus-5-5";
+  const tiers = tierTable("claude", "opus", CLAUDE);
+  const cross = crossTable("claude", lead, CODEX6);
+  const ACK = "Async agent launched successfully.\nagentId: a7 (internal ID)";
+  const loop = 'for p in tasks bench; do (codex exec -m gpt-6.2-sol -C /tmp/wt/$p -o /tmp/s/report-$p.txt "go" > /tmp/s/log-$p.txt 2>&1) & done';
+  const turn: TallyItem[] = [
+    { ...tool("r", "Agent", { model: "sonnet", description: "Research", run_in_background: true }, 10, { endTs: 10 }), output: ACK } as TallyItem,
+    { ...tool("h", "Agent", { model: "haiku", description: "Summarise", run_in_background: true }, 11, { endTs: 11 }), output: ACK } as TallyItem,
+    tool("b", "Agent", { model: "sonnet", description: "Build", run_in_background: true }, 12, { endTs: 12 }),
+    tool("L", "Bash", { command: loop, run_in_background: true }, 13),
+    tool("p", "Bash", { command: 'pgrep -fl "codex exec"' }, 14),
+  ];
+  const running = { provider: "codex" as const, model: "gpt-6.2-sol", image: false, state: "running", ended: null, tokens: 0 };
+  // While every helper still runs: nothing of theirs to check yet.
+  const early = turnTally(turn, {}, { provider: "claude", lead, tiers, cross }, { lanes: { L: [running, running] }, returned: { r: { end: null, ok: null, model: "claude-sonnet-5-5" }, h: { end: null, ok: null, model: "claude-haiku-5-5" } } });
+  assert.equal(early.delegates.length, 5, "3 Claude agents and both Codex launches of the loop");
+  assert.deepEqual(early.delegates.map((d) => d.ok), [null, null, null, null, null], "a launch acknowledgement is not a return");
+  assert.equal(tallyProviders(early, "claude"), "3 Claude, 2 Codex");
+  assert.equal(tallyModels(early, tiers, cross, "claude"), "2 mid on Sonnet 5.5, 1 small on Haiku 5.5, 2 exec on GPT-6.2-Sol (Codex)");
+  assert.equal(tallyChecks(early), "helpers still running", "the progress check is not a check of their work");
+  // Later turns, up to the next helper launch: the research agent returned at 20; the lead read a Codex helper's log,
+  // typechecked, ran the tests and looked at the diff.
+  const later: TallyItem[] = [
+    tool("x1", "Bash", { command: "tail -c 300 /tmp/s/log-bench.txt" }, 25),
+    tool("x2", "Bash", { command: "pnpm -C app tsc --noEmit" }, 26),
+    tool("x3", "Bash", { command: "pnpm test" }, 27),
+    tool("x4", "Bash", { command: "git -C /tmp/wt/bench diff --stat" }, 28),
+    tool("x5", "BashOutput", { bash_id: "b1" }, 29),
+    tool("n1", "Agent", { model: "haiku", prompt: "next" }, 30),
+    tool("x6", "Bash", { command: "pnpm test" }, 31),
+  ];
+  const all = [...turn, { kind: "turn" } as TallyItem, ...later];
+  const after = itemsAfter(all, turn.length);
+  assert.equal(after.length, 5, "stops at the next helper launch");
+  const t = turnTally(turn, {}, { provider: "claude", lead, tiers, cross }, {
+    lanes: { L: [{ ...running, state: "done", ended: 40, tokens: 242_000 }, { ...running, tokens: 120_000 }] },
+    returned: { r: { end: 20, ok: true, model: "claude-sonnet-5-5", tokens: 100_000 }, h: { end: 22, ok: true, model: "claude-haiku-5-5", tokens: 50_000 } },
+    after,
+  });
+  assert.deepEqual(t.delegates.map((d) => d.ok), [true, true, null, true, null]);
+  assert.equal(t.delegates.reduce((n, d) => n + d.tokens, 0), 512_000);
+  assert.deepEqual(t.checks, { tests: 1, images: 0, testsPassed: 1, testsFailed: 0, diffs: 1, reads: 0, outputs: 2, builds: 1, pending: false });
+  assert.equal(tallyChecks(t), "tests run 1× (1 passed), build or typecheck run 1×, 1 diff read, 2 helper outputs read");
+  // Without the session's records a loop is one launch (as before), and its model comes from the command.
+  assert.equal(turnTally(turn, {}, { provider: "claude", lead, tiers, cross }).delegates.filter((d) => d.provider === "codex").length, 1);
+});
+
+test("a Codex lead's claude -p helpers are counted per launch", () => {
+  const items: TallyItem[] = [tool("c7", "exec_command", { cmd: 'claude -p --model haiku "Summarise the README"' }, 1, { endTs: 40 })];
+  const t = turnTally(items, {}, { provider: "codex", lead: "gpt-6.2-sol", tiers: null, cross: crossTable("codex", "gpt-6.2-sol", CLAUDE) }, { lanes: { c7: [{ provider: "claude", model: "claude-haiku-5-5", image: false, state: "done", ended: 40, tokens: 220 }] } });
+  assert.deepEqual(t.delegates.map((d) => [d.provider, d.model, d.role, d.ok, d.tokens]), [["claude", "claude-haiku-5-5", "bulk", true, 220]]);
 });

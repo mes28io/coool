@@ -52,6 +52,12 @@ struct ParseState {
     /// Lifecycle records of the subagents this transcript started (see [`crate::subagents`]).
     #[serde(default)]
     agents: HashMap<String, crate::subagents::Marks>,
+    /// Helpers started from the shell (`codex exec`, `claude -p`; see [`crate::lanes`]).
+    #[serde(default)]
+    lanes: Vec<crate::lanes::Lane>,
+    /// Oldest real event, epoch ms (when a helper's own transcript began).
+    #[serde(default)]
+    first_event: Option<u64>,
 }
 
 /// When a transcript line is a real conversation event: a user entry, an
@@ -81,6 +87,17 @@ pub(crate) struct Parsed {
 }
 
 impl Parsed {
+    /// The lanes, each ended by its background shell's notification when one came (and it was not detached).
+    fn lanes(&self) -> Vec<crate::lanes::Lane> {
+        let mut out = self.p.lanes.clone();
+        for l in out.iter_mut().filter(|l| l.end.is_none() && !l.detached) {
+            if let Some(end) = l.task.as_ref().and_then(|t| self.p.agents.get(t)).and_then(|m| m.end) {
+                l.end = Some(end);
+            }
+        }
+        out
+    }
+
     pub(crate) fn line(&mut self, l: &str) {
         let s = self;
         parse_line(l, &mut s.p, &mut s.title, &mut s.cwd, &mut s.model, &mut s.last_prompt, &mut s.current, &mut s.tokens, &mut s.activity);
@@ -105,6 +122,8 @@ impl Parsed {
             in_turn: self.p.turn_open,
             agent_marks: Arc::new(self.p.agents.clone()),
             in_tool: !self.p.open_tools.is_empty(),
+            lanes: self.lanes(),
+            first_event: self.p.first_event,
             ..View::default()
         }
     }
@@ -302,6 +321,36 @@ impl ClaudeSource {
         out
     }
 
+    /// Helpers a session (or one of its subagents) started from the shell, oldest first (see [`crate::lanes`]).
+    pub(crate) fn lanes(&self, id: &str) -> Vec<crate::lanes::Lane> {
+        let Some(e) = self.entries.get(id) else { return Vec::new() };
+        let mut out = e.slot.view().lanes.clone();
+        for a in &e.agents {
+            out.extend(a.slot.view().lanes.clone());
+        }
+        out.sort_by_key(|l| (l.at, l.index));
+        out
+    }
+
+    /// What [`crate::lanes::assign`] needs of a session that may be a helper (`claude -p`): its turn closed is
+    /// its end (a print run has one turn).
+    pub(crate) fn child(&self, s: &Session) -> crate::lanes::Child {
+        let v = self.entries.get(&s.id).map(|e| e.slot.view()).unwrap_or_default();
+        let busy = s.status == Status::Busy || v.in_turn;
+        let last = v.last_event.or(s.last_event);
+        let failed = s.activity.last().is_some_and(|a| a.kind == ActivityKind::Error && !a.step);
+        crate::lanes::Child {
+            provider: Some(Provider::Claude),
+            cwd: s.cwd.clone(),
+            model: s.model.clone(),
+            started: v.first_event,
+            last,
+            busy,
+            end: (!busy).then_some(last).flatten().map(|t| (t, if failed { AgentState::Failed } else { AgentState::Done })),
+            gone: s.status == Status::Ended,
+        }
+    }
+
     /// Live sessions from the registry. Each file is parsed again only when it
     /// changed; whether its process is (still) alive is checked every time.
     fn read_registry(&mut self, listed: &mut HashSet<PathBuf>) -> HashMap<String, Live> {
@@ -443,6 +492,8 @@ fn session(id: &str, e: &Entry) -> Session {
         background_tasks: e.live.as_ref().is_some_and(|r| r.shell),
         waiting_for: e.live.as_ref().and_then(|r| r.waiting_for.clone()),
         shells: Vec::new(),
+        lane: None,
+        lanes: Vec::new(),
         title_facts: v.title_facts.clone(),
         name: None,
     }
@@ -576,6 +627,7 @@ fn parse_line(
     }
     if let Some(t) = event_ms(&v) {
         st.last_event = st.last_event.max(Some(t));
+        st.first_event = Some(st.first_event.map_or(t, |f| f.min(t)));
         if v["type"] == "system" {
             st.turn_open = false;
         } else if !st.turn_open {
@@ -664,6 +716,12 @@ fn parse_line(
                             if let Some(id) = item["tool_use_id"].as_str() {
                                 st.open_tools.retain(|(t, _)| t != id);
                                 bash_result(st, id, &item["content"]);
+                                if st.lanes.iter().any(|l| l.tool == id) {
+                                    let r = &v["toolUseResult"];
+                                    let at = v["timestamp"].as_str().and_then(parse_rfc3339_ms).unwrap_or(0);
+                                    let task = r["backgroundTaskId"].as_str();
+                                    crate::lanes::call_result(&mut st.lanes, id, at, item["is_error"].as_bool() != Some(true), r["interrupted"].as_bool() == Some(true), task);
+                                }
                                 if item["is_error"].as_bool() != Some(true) {
                                     artifact_result(st, id, &item["content"], &v["toolUseResult"], activity);
                                 }
@@ -759,6 +817,8 @@ fn parse_line(
                                     done: false,
                                 };
                                 st.bash.retain(|c| c.id != id);
+                                let lanes = crate::lanes::lanes_of(id, cmd, v["cwd"].as_str(), call.background, call.at);
+                                crate::lanes::push(&mut st.lanes, lanes);
                                 crate::shells::push_call(&mut st.bash, call);
                             }
                             if crate::artifact::is_publish(name, &item["input"])
