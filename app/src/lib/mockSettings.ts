@@ -185,6 +185,7 @@ export function mockSettings(sim: { shutdown(udid: string): Promise<void> }): Se
   const storage: StorageStatus = {
     items: [
       { id: "transcripts", label: "Transcript cache", desc: "Parsed transcripts, so the sidebar loads fast. Rebuilt from the CLIs' own files.", path: `${HOME}/Library/Caches/coool`, bytes: 96_400_000, files: 1312, clearable: true, clear_label: "Clear cache" },
+      { id: "history", label: "Search index", desc: "What History searches: titles and words of past sessions. Your transcripts stay where the CLIs keep them; nothing is copied.", path: `${HOME}/Library/Application Support/coool/history`, bytes: 6_900_000, files: 3, clearable: true, clear_label: "Clear index" },
       { id: "webcache", label: "Web view cache", desc: "The app's own web view cache.", path: `${HOME}/Library/Caches/coool/WebKit`, bytes: 18_200_000, files: 210, clearable: false, clear_label: null },
       { id: "pilot_memory", label: "Pilot memory", desc: "Learned routes and muscle memory for the device pilot.", path: `${HOME}/Library/Application Support/sh.coool.app/pilot`, bytes: 61_440, files: 3, clearable: true, clear_label: "Forget learned routes" },
       { id: "pilot_log", label: "Pilot decision log", desc: "The pilot's decision log, kept for training.", path: `${HOME}/Library/Application Support/sh.coool.app/pilot`, bytes: 184_320, files: 1, clearable: true, clear_label: "Delete log" },

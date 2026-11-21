@@ -19,6 +19,7 @@ mod device;
 mod env;
 mod folders;
 mod glass;
+mod history;
 mod ladder;
 mod lid;
 mod login;
@@ -1441,8 +1442,8 @@ fn worktree_remove(project: String, path: String) -> Res<prefs::worktrees::Workt
     Ok(prefs::worktrees::list(&root))
 }
 
-fn storage_paths(devices: &device::Devices) -> prefs::storage::Paths {
-    prefs::storage::Paths { cache: dirs::cache_dir().map(|d| d.join("coool")), data: devices.data_dir(), config: dirs::config_dir().map(|d| d.join("coool")) }
+fn storage_paths(devices: &device::Devices, history: &history::HistoryState) -> prefs::storage::Paths {
+    prefs::storage::Paths { cache: dirs::cache_dir().map(|d| d.join("coool")), data: devices.data_dir(), config: dirs::config_dir().map(|d| d.join("coool")), history: history.dir() }
 }
 
 #[derive(Serialize)]
@@ -1467,22 +1468,27 @@ fn own_simulator() -> Option<SimInfo> {
     Some(SimInfo { bytes: prefs::storage::simulator_size(&d.udid), udid: d.udid, name: d.name, state: d.state, runtime: d.runtime, device_type: d.device_type })
 }
 
-fn storage_of(devices: &device::Devices) -> Storage {
-    let paths = storage_paths(devices);
+fn storage_of(devices: &device::Devices, history: &history::HistoryState) -> Storage {
+    let paths = storage_paths(devices, history);
     let sim = thread::spawn(own_simulator);
     let items = prefs::storage::items(&paths);
     Storage { items, simulator: sim.join().ok().flatten() }
 }
 
 #[tauri::command(async)]
-fn storage_status(devices: State<'_, Arc<device::Devices>>) -> Storage {
-    storage_of(&devices)
+fn storage_status(devices: State<'_, Arc<device::Devices>>, history: State<'_, Arc<history::HistoryState>>) -> Storage {
+    storage_of(&devices, &history)
 }
 
 #[tauri::command(async)]
-fn storage_clear(devices: State<'_, Arc<device::Devices>>, id: String) -> Res<Storage> {
-    prefs::storage::clear(&storage_paths(&devices), &id)?;
-    Ok(storage_of(&devices))
+fn storage_clear(devices: State<'_, Arc<device::Devices>>, history: State<'_, Arc<history::HistoryState>>, id: String) -> Res<Storage> {
+    // History's index is held open by its thread: it forgets it itself (and starts over from the transcripts).
+    if id == "history" {
+        history.clear();
+    } else {
+        prefs::storage::clear(&storage_paths(&devices, &history), &id)?;
+    }
+    Ok(storage_of(&devices, &history))
 }
 
 /// Settings > Devices > iPhone: erase coool's own simulator (shut down first). Refuses any other device.
@@ -1831,6 +1837,12 @@ pub fn run() {
     };
     let lid = lid::Lid::new(lid_parts.0, lid_parts.1, lid_dir, prefs.lid.clone(), lid::now_ms());
     let changes_dir = changes::state_dir(selftest.as_ref());
+    // History (history.rs): the index in coool's data folder (a self-test's in its own), and the sessions opened from it.
+    let history_state = Arc::new(match &selftest {
+        Some(t) => history::HistoryState::new(Some(t.dir().join(".coool-history")), Some(t.own_sessions_path())),
+        None => history::HistoryState::new(history::HistoryState::default_dir(), coool_core::origin::OwnSessions::default_path()),
+    });
+    hub.set_pinned(&history_state.pins_for_hub());
     let core = Arc::new(Core {
         hub: Mutex::new(hub),
         published: Mutex::new(Published::new()),
@@ -1894,6 +1906,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
         .manage(core.clone())
+        .manage(history_state.clone())
         .manage(devices.clone())
         .manage(chatctx::ContextState::default())
         .manage(Arc::new(voice::Voice::new()))
@@ -2021,6 +2034,12 @@ pub fn run() {
             folders::worktree_create,
             storage_status,
             storage_clear,
+            history::history_query,
+            history::history_status,
+            history::history_open,
+            history::history_earlier,
+            history::history_folder,
+            history::history_make_folder,
             sim_erase,
             selftest::selftest_config,
             selftest::selftest_log,
@@ -2165,6 +2184,7 @@ pub fn run() {
             // coool Remote (docs/REMOTE.md): off unless the person turned it on.
             remote::init(&handle, &c);
             spawn_refresher(handle.clone(), c.clone());
+            app.state::<Arc<history::HistoryState>>().inner().spawn();
             // Updates of coool and the CLIs, before any chat starts (update/mod.rs).
             update::spawn_launch(handle.clone());
             motion::spawn_watch(handle.clone());
@@ -2228,6 +2248,7 @@ pub fn run() {
             let devices = handle.state::<Arc<device::Devices>>();
             device::mcp::cleanup(&devices);
             ladder::cleanup(&core);
+            handle.state::<Arc<history::HistoryState>>().save();
             devices.shutdown_all();
         }
         _ => {}

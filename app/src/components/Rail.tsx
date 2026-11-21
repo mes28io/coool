@@ -4,7 +4,7 @@ import { useNow } from "../lib/clock";
 import { registerOverlay } from "../lib/overlays";
 import type { PlanUsages, Provider, UsageWindow } from "../lib/types";
 import { useStore } from "../store";
-import { IBell, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
+import { IBell, IClock, IGauge, IGear, IHome, IMoon, ICompose, ISearch, ISun } from "./icons";
 import { cx, ease, ProviderMark } from "./primitives";
 import { useNeedsYou } from "./needs/useNeedsYou";
 import { resetText, toneColor, usageHighest, usageTone, useUsageProviders } from "./Usage";
@@ -325,6 +325,9 @@ export function Rail() {
   const sheet = useStore((s) => s.sheet);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const needsPage = useStore((s) => s.needsPage);
+  const historyOn = useStore((s) => s.history !== null);
+  const openHistory = useStore((s) => s.openHistory);
+  const closeHistory = useStore((s) => s.closeHistory);
   const settings = useStore((s) => s.settings);
   const openSettings = useStore((s) => s.openSettings);
   const closeSettings = useStore((s) => s.closeSettings);
@@ -334,13 +337,17 @@ export function Rail() {
     <nav data-tauri-drag-region aria-label="coool" className="relative z-20 flex w-[56px] shrink-0 flex-col items-center gap-1.5 pb-3 pt-1">
       <RailButton
         label="Home"
-        active={settings === null && activeTab === null && !needsPage}
+        active={settings === null && activeTab === null && !needsPage && !historyOn}
         onClick={() => activate(null)}
       >
         <IHome size={20} />
       </RailButton>
       <RailButton label="Search" shortcut="⌘K" onClick={() => setPalette(true)}>
         <ISearch size={20} />
+      </RailButton>
+      {/* Every past session, wherever it ran (HistoryPage.tsx). */}
+      <RailButton label="History" shortcut="⌘Y" active={historyOn} onClick={() => (historyOn ? closeHistory() : openHistory())}>
+        <IClock size={20} />
       </RailButton>
       <NeedsYou />
       {/* While the panel is open its "New session" row is the one entry point; the rail takes over when it is collapsed. */}

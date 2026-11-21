@@ -23,6 +23,7 @@ const PRESENCE_PROMPTS = {
 import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
 import { mockMac } from "./mockMac";
+import { mockHistory } from "./mockHistory";
 import { mockName, mockRename } from "./mockTitles";
 import { CTX_DEMO_ID, ctxAgentMap, ctxCompacting, ctxDemoMap } from "./mockContext";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, LaneInfo, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
@@ -1333,6 +1334,26 @@ export function mockBackend(): Backend {
   // `?away=demo`: the person left 2h 14m ago (the store's seen marks say so), and a chat in pocket-ledger did
   // four turns meanwhile: one failed, one committed and pushed. Mission control shows "While you were away"
   // under Needs you; opening the chat shows the card where the person left (components/Away.tsx).
+  // `?historyPage=1` (lib/mockHistory.ts): the History page at load; `&historyq=` searches, `&historyProject=` filters,
+  // `&historyOpen=<n>` then opens the n-th row (its session view), `&historyLong=1` the first long one.
+  if (/[?&]historyPage=1\b/.test(location.search)) {
+    const p = new URLSearchParams(location.search);
+    const text = p.get("historyq") ?? "";
+    const project = p.get("historyProject");
+    void import("../store").then(({ useStore }) =>
+      setTimeout(() => useStore.getState().openHistory({ text, project: project ? `${HOME}/code/${project}` : null }), 700),
+    );
+    const nth = p.get("historyOpen");
+    if (nth !== null || p.get("historyLong"))
+      setTimeout(() => {
+        void import("./history").then(async ({ openHistoryRow }) => {
+          const { api } = await import("./backend");
+          const page = await api().historyQuery({ text, project: project ? `${HOME}/code/${project}` : null, limit: 400 });
+          const r = p.get("historyLong") ? page.rows.find((x) => x.prompts > 30) : page.rows[Number(nth) || 0];
+          if (r) await openHistoryRow(r);
+        });
+      }, 1800);
+  }
   if (location.search.includes("away=demo")) {
     const left = Date.now() - (2 * 60 + 14) * 60_000;
     const ch = newChat("claude", `${HOME}/code/pocket-ledger`, {}, 0);
@@ -1643,6 +1664,11 @@ export function mockBackend(): Backend {
 
   return {
     kind: "mock",
+    // History (lib/mockHistory.ts): opening a past session lists it, as the backend's pin does.
+    ...mockHistory(HOME, (r, activity) => {
+      if (!live.some((l) => l.s.provider === r.provider && l.s.id === r.id)) add(session({ provider: r.provider, id: r.id, cwd: r.cwd, project: r.project, title: r.title, status: "ended", updated: r.last_ms, model: r.model, loaded: true, last_prompt: r.prompt, activity, origin: r.where === "coool" ? "coool" : r.where === "automation" ? "automation" : "user" }), "");
+      emitSessions();
+    }),
     listSessions: async () => snapshot(),
     async spawnSession({ provider, cwd, args }) {
       await delay(120);

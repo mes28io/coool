@@ -12,6 +12,7 @@ import { AgentMark } from "./AgentMark";
 import { MoodGlyph } from "./MoodGlyph";
 import { Shimmer } from "./Shimmer";
 import { useStore, type Since } from "../store";
+import { api } from "../lib/backend";
 import { useClock } from "../lib/clock";
 import { turnTotals } from "../lib/turn";
 import { liveJobs } from "../lib/live";
@@ -157,7 +158,9 @@ export const liveTime = (since: Since | undefined, fallback: number, activity?: 
 
 export function Timeline({ session, compact, live }: { session: Session; compact?: boolean; live?: LiveTime }) {
   countRender("Activity.Timeline");
-  const blocks = useBlocks(session.activity);
+  const earlier = useEarlier(session);
+  const list = useMemo(() => (earlier.entries.length ? [...earlier.entries, ...session.activity] : session.activity), [earlier.entries, session.activity]);
+  const blocks = useBlocks(list);
   const groupAgents = useGroupAgents(blocks, session.agents);
   const initial = useRef<Set<string> | null>(null);
   if (initial.current === null) initial.current = new Set(blocks.map((b) => b.key));
@@ -176,6 +179,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
   useKeepReadingPlace(scroller, stick);
   const win = useRef<WindowApi | null>(null);
   const seenPrompt = useRef<string | null>(null);
+  const lastKey = useRef<string | null>(null);
   const lastTop = useRef(0);
   const [away, setAway] = useState(false);
   const [fresh, setFresh] = useState(false);
@@ -198,6 +202,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
     // Only once per prompt: the newest block stays that prompt for a while, and re-pinning on every later
     // re-run would drag a reader who scrolled up back down.
     const newest = blocks[blocks.length - 1];
+    const tailSig = `${newest?.key}|${session.activity.length}|${thinking}`;
     const promptArrived = newest?.type === "prompt" && !initial.current!.has(newest.key) && seenPrompt.current !== newest.key;
     if (promptArrived) {
       seenPrompt.current = newest.key;
@@ -209,7 +214,9 @@ export function Timeline({ session, compact, live }: { session: Session; compact
       const smooth = initial.current!.size !== blocks.length && !reducedMotion();
       if (smooth) win.current?.hold(700);
       el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-    } else setFresh(true);
+    } else if (tailSig !== lastKey.current) setFresh(true);
+    // Earlier history added at the top is not news below: only a change at the end is.
+    lastKey.current = tailSig;
   }, [blocks.length, session.activity.length, thinking]);
   useEffect(() => {
     const el = scroller.current;
@@ -247,6 +254,7 @@ export function Timeline({ session, compact, live }: { session: Session; compact
       }}
     >
       <div className={cx("mx-auto flex max-w-[700px] flex-col pb-[40px] pt-6", compact ? "gap-3 px-4" : "gap-4 px-8")}>
+        <EarlierBar e={earlier} scroller={scroller} stick={stick} />
         <KeepScope.Provider value={`session:${sessionKey(session)}`}>
           <Windowed
             scroller={scroller}
@@ -315,6 +323,79 @@ export function Timeline({ session, compact, live }: { session: Session; compact
       />
     </div>
     </div>
+  );
+}
+
+/** Entries a listed session's timeline keeps, its newest (crates/core `MAX_ACTIVITY`): a longer one has earlier history. */
+export const TIMELINE_CAP = 300;
+
+type Earlier = { key: string; entries: Activity[]; start: number | null; loading: boolean; failed: boolean };
+
+/**
+ * A long session's earlier history: the listed timeline holds only its newest entries; the rest are read from the
+ * transcript on request (`history_earlier`), a few hundred at a time, and go above them.
+ */
+function useEarlier(session: Session) {
+  const key = sessionKey(session);
+  const [st, setSt] = useState<Earlier>({ key, entries: [], start: null, loading: false, failed: false });
+  const cur: Earlier = st.key === key ? st : { key, entries: [], start: null, loading: false, failed: false };
+  if (st.key !== key) setSt(cur);
+  const capped = session.activity.length >= TIMELINE_CAP && !!session.id;
+  const more = capped && !cur.failed && (cur.start === null || cur.start > 0);
+  const busy = useRef(false);
+  const load = () => {
+    if (busy.current || !more) return;
+    busy.current = true;
+    setSt((s) => ({ ...s, loading: true }));
+    const first = session.activity[0];
+    api()
+      .historyEarlier({
+        provider: session.provider,
+        sessionId: session.id,
+        keep: session.activity.length,
+        before: cur.start,
+        first: cur.start === null && first ? { ts: first.ts, kind: first.kind, text: first.text } : null,
+        limit: 400,
+      })
+      .then((r) => setSt((s) => (s.key !== key ? s : { ...s, entries: [...r.entries, ...s.entries], start: r.start, loading: false })))
+      .catch(() => setSt((s) => ({ ...s, loading: false, failed: true })))
+      .finally(() => (busy.current = false));
+  };
+  return { entries: cur.entries, start: cur.start, loading: cur.loading, capped, more, load };
+}
+
+/** Above a long timeline: its earlier history, loaded when the reader scrolls up to it (or clicks), then "the start". */
+function EarlierBar({ e, scroller, stick }: { e: ReturnType<typeof useEarlier>; scroller: React.RefObject<HTMLDivElement | null>; stick: { current: boolean } }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const load = useRef(e.load);
+  load.current = e.load;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !e.more) return;
+    // Only once the reader has scrolled up (a timeline opens at its end).
+    const io = new IntersectionObserver((ents) => ents.some((x) => x.isIntersecting) && !stick.current && load.current(), { root: scroller.current, rootMargin: "400px 0px 0px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [e.more, e.entries.length, scroller, stick]);
+  if (!e.capped) return null;
+  if (!e.more) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-1 text-small text-faint" data-earlier="start">
+        {e.start === 0 ? "The start of this session" : null}
+      </div>
+    );
+  }
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={e.load}
+      disabled={e.loading}
+      data-earlier="more"
+      className="mx-auto flex h-[30px] items-center gap-1.5 rounded-[9px] px-3 text-small text-dim transition-colors duration-150 hover:bg-hover hover:text-fg"
+    >
+      {e.loading ? "Loading earlier history…" : e.start ? `Show earlier history (${e.start.toLocaleString()} more steps)` : "Show earlier history"}
+    </button>
   );
 }
 

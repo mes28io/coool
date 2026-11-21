@@ -11,10 +11,12 @@ import { IFolder, IGauge, IGear, IGrid, IMoon, ISpark, IPlus, ISearch, ISplitDow
 import { cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
 import { askStop } from "./SessionView";
 import { score } from "../lib/fuzzy";
+import { dayLabel, openHistoryRow, type HistoryRow } from "../lib/history";
+import { IClock } from "./icons";
 
 interface Item {
   id: string;
-  group: "Sessions" | "Projects" | "Actions";
+  group: "Sessions" | "History" | "Projects" | "Actions";
   label: string;
   hint?: string;
   /** Other names it is found by: a session's previous titles (CHAT_SPEC "Session titles"). */
@@ -52,6 +54,26 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const list = useRef<HTMLDivElement>(null);
   const st = useStore();
   const openWith = useOpenWithName();
+  // Past sessions found by their words (lib/history.ts): any age, wherever they ran.
+  const [hist, setHist] = useState<HistoryRow[]>([]);
+  useEffect(() => {
+    const t = q.trim();
+    if (t.length < 2) {
+      setHist([]);
+      return;
+    }
+    let dead = false;
+    const timer = setTimeout(() => {
+      api()
+        .historyQuery({ text: t, limit: 6 })
+        .then((p) => !dead && setHist(p.rows))
+        .catch(() => {});
+    }, 120);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+    };
+  }, [q]);
 
   const items = useMemo<Item[]>(() => {
     const done = (f: () => void) => () => {
@@ -103,6 +125,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     const r = resolveTarget(leaf?.target ?? null, st);
     out.push(
       { id: "a:new", group: "Actions", label: "New session", icon: <IPlus size={16} />, keys: ["⌘", "T"], run: done(() => st.setSheet({ kind: "new" })) },
+      { id: "a:history", group: "Actions", label: "History", hint: "Every past session, wherever it ran", icon: <IClock size={16} />, keys: ["⌘", "Y"], run: done(() => st.openHistory()) },
       { id: "a:usage", group: "Actions", label: "Show usage", icon: <IGauge size={16} />, run: done(() => st.openSettings("usage")) },
       { id: "a:home", group: "Actions", label: "Home", icon: <IGrid size={16} />, run: done(() => st.activate(null)) },
       { id: "a:onboarding", group: "Actions", label: "Show onboarding again", hint: "Project folder, notifications, open at login", icon: <ISpark size={16} />, run: done(openOnboarding) },
@@ -150,10 +173,33 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       })
       .filter((x) => x.s > 0);
     if (q) scored.sort((a, b) => b.s - a.s);
-    const order = { Sessions: 0, Actions: 1, Projects: 2 } as const;
+    const order = { Sessions: 0, History: 1, Actions: 2, Projects: 3 } as const;
     const res = q ? scored.map((x) => x.it) : scored.map((x) => x.it).sort((a, b) => order[a.group] - order[b.group]);
-    return res.slice(0, 40);
-  }, [items, q]);
+    if (!q.trim()) return res.slice(0, 40);
+    // Then what the words find in past sessions (those not listed above already), and the full search.
+    const listed = new Set(useStore.getState().sessions.map((s) => sessionKey(s)));
+    const done = (f: () => void) => () => {
+      onClose();
+      f();
+    };
+    const past: Item[] = hist
+      .filter((r) => !listed.has(r.key))
+      .map((r) => ({
+        id: `h:${r.key}`,
+        group: "History" as const,
+        label: r.title,
+        hint: `${folderName(r.project || r.cwd)} · ${dayLabel(r.last_ms)}`,
+        icon: (
+          <span className="flex items-center gap-1.5">
+            <IClock size={12} className="text-faint" />
+            <ProviderMark provider={r.provider} size={13} />
+          </span>
+        ),
+        run: done(() => void openHistoryRow(r)),
+      }));
+    const all: Item = { id: "h:all", group: "History", label: `Search all history for “${q.trim()}”`, icon: <ISearch size={16} />, run: done(() => useStore.getState().openHistory({ text: q.trim() })) };
+    return [...res.slice(0, 40 - past.length - 1), ...past, all];
+  }, [items, q, hist, onClose]);
 
   useEffect(() => setSel(0), [q]);
   useEffect(() => {
@@ -175,7 +221,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
           autoFocus
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Jump to a session or project, or run a command…"
+          placeholder="Jump to a session or project, search history, or run a command…"
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
@@ -198,7 +244,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       <div ref={list} className="scroll min-h-0 flex-1 p-1.5">
         {shown.length === 0 && <div className="px-3 py-8 text-center text-base text-dim">Nothing matches “{q}”</div>}
         {shown.map((it, i) => {
-          const header = !q && it.group !== lastGroup;
+          const header = (!q || it.group === "History") && it.group !== lastGroup;
           lastGroup = it.group;
           return (
             <div key={it.id}>

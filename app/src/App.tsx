@@ -27,6 +27,7 @@ import { RunningPill } from "./components/RunningPill";
 import { HoverCards } from "./components/HoverCard";
 import { SettingsPage } from "./components/SettingsPage";
 import { NeedsPage } from "./components/needs/NeedsPage";
+import { HistoryPage } from "./components/HistoryPage";
 import { cx } from "./components/primitives";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar, Workspace } from "./components/Workspace";
@@ -61,6 +62,8 @@ function runShortcut(id: string, e: KeyboardEvent) {
       return st.toggleSidebar();
     case "home":
       return st.activate(null);
+    case "sessions-history":
+      return st.history ? st.closeHistory() : st.openHistory();
     case "tab":
       return st.activateIndex(Number(e.key) - 1);
     case "close":
@@ -225,7 +228,8 @@ export default function App() {
   const fullscreen = useFullscreen();
   const barHidden = useOnboarding((s) => s.open) || settingsOpen;
   const needsOpen = useStore((s) => s.needsPage);
-  const covered = settingsOpen || needsOpen;
+  const historyOpen = useStore((s) => s.history !== null);
+  const covered = settingsOpen || needsOpen || historyOpen;
   useShortcuts();
   useBackendEvents();
   useMarkSeen();
@@ -291,6 +295,8 @@ export default function App() {
             <AnimatePresence>{settingsOpen && <SettingsPage key="settings" />}</AnimatePresence>
             {/* The Needs you page (the rail's bell) lies over the sheet the same way; the title bar's tabs stay. */}
             <AnimatePresence>{needsOpen && !settingsOpen && <NeedsPage key="needs" />}</AnimatePresence>
+            {/* History (the rail's clock, ⌘Y) lies over it the same way. */}
+            <AnimatePresence>{historyOpen && !settingsOpen && !needsOpen && <HistoryPage key="history" />}</AnimatePresence>
           </div>
         </div>
       </div>

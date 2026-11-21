@@ -72,6 +72,7 @@ import { newSessionScenarios } from "./selftestNewSession";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
 import { changesScenarios } from "./selftestChanges";
+import { historyScenarios } from "./selftestHistory";
 import { coverOf, launchTrace, useUpdates } from "./lib/update";
 
 interface Config {
@@ -7785,6 +7786,10 @@ for (const n of ["film", "film-measure", "film-probe"]) {
 for (const n of ["changes", "changes-codex"]) {
   scenarios[n] = (c: Ctx) => changesScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) })[n]();
 }
+
+// `history` (selftestHistory.ts): History over a few thousand invented sessions with the stand-in CLIs
+// (app/scripts/history-e2e.sh). No model calls. Not in `all`.
+scenarios.history = (c: Ctx) => historyScenarios({ dir: c.cfg.dir, invoke: (cmd, a) => invoke(cmd, a), log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s) }).history();
 
 // React StrictMode (dev server) mounts effects twice; two runs would race each
 // other in the same window and click each other's cards.

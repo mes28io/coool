@@ -23,6 +23,8 @@ pub struct Paths {
     pub data: Option<PathBuf>,
     /// `~/Library/Application Support/coool`.
     pub config: Option<PathBuf>,
+    /// History's search index (inside `config` unless a self-test put it elsewhere).
+    pub history: Option<PathBuf>,
 }
 
 /// One row on the Storage page.
@@ -150,11 +152,19 @@ pub fn items(paths: &Paths) -> Vec<Item> {
             v.push(item("vm", "Mac sandbox", "The Mac sandbox's disk.", &vm, dir_size(&vm, BUDGET), None));
         }
     }
+    let history = paths.history.as_ref().filter(|h| h.exists()).map(|h| (h, dir_size(h, BUDGET)));
+    if let Some((h, size)) = &history {
+        let desc = "What History searches: titles and words of past sessions. Your transcripts stay where the CLIs keep them; nothing is copied.";
+        v.push(item("history", "Search index", desc, h, *size, Some("Clear index")));
+    }
     if let Some(config) = &paths.config
         && config.exists()
     {
         let desc = "Your coool preferences and the list of sessions coool started.";
-        v.push(item("settings", "Settings", desc, config, dir_size(config, BUDGET), None));
+        // The search index has its own row: not counted twice.
+        let inside = history.as_ref().filter(|(h, _)| h.starts_with(config)).map(|(_, s)| s.unwrap_or((0, 0))).unwrap_or((0, 0));
+        let size = dir_size(config, BUDGET).map(|(b, f)| (b.saturating_sub(inside.0), f.saturating_sub(inside.1)));
+        v.push(item("settings", "Settings", desc, config, size, None));
     }
     v
 }
@@ -236,7 +246,7 @@ mod tests {
     #[test]
     fn items_and_clear() {
         let root = tmp("items");
-        let paths = Paths { cache: Some(root.join("cache")), data: Some(root.join("data")), config: Some(root.join("config")) };
+        let paths = Paths { cache: Some(root.join("cache")), data: Some(root.join("data")), config: Some(root.join("config")), history: Some(root.join("config/history")) };
         write(&root.join("cache/transcripts-v3/x.json"), "abc");
         write(&root.join("cache/transcripts-v4/y.json"), "abc");
         write(&root.join("cache/other/keep.txt"), "keep");
@@ -244,8 +254,14 @@ mod tests {
         write(&root.join("data/pilot/run.decisions.2026-11.jsonl"), "{}\n");
         write(&root.join("data/vm/disk.img"), "disk");
         write(&root.join("config/prefs.json"), "{}");
+        write(&root.join("config/history/catalog.json"), &"x".repeat(50_000));
 
         let v = items(&paths);
+        let h = get(&v, "history").unwrap();
+        assert!(h.clearable && h.files == Some(1) && h.bytes.unwrap() >= 50_000);
+        assert!(get(&v, "settings").unwrap().bytes.unwrap() < 50_000, "the index is not counted under Settings too");
+        // Cleared by History itself (its thread holds it open), never here.
+        assert!(clear(&paths, "history").is_err());
         let t = get(&v, "transcripts").unwrap();
         assert_eq!(t.files, Some(2));
         assert!(t.clearable && t.clear_label.as_deref() == Some("Clear cache"));

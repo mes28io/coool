@@ -16,7 +16,8 @@ import { isLive, useAgentCards, type AgentCardData } from "../lib/agentCards";
 import { cardRoles, useChatCross, useChatTiers } from "./LadderTally";
 import { api, isTauri } from "../lib/backend";
 import { chatModels, chatTitle, pendingPermission, useChatShell, type Chat } from "../lib/chat";
-import { displayTitle, folderName, titleWas } from "../lib/format";
+import { displayTitle, folderName, homeShort, titleWas } from "../lib/format";
+import type { HistoryFolder } from "../lib/history";
 import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
@@ -719,7 +720,23 @@ function SegmentedMode({ mode, chat, onChange, compact }: { mode: ViewMode; chat
 function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: string; compact: boolean }) {
   const ended = session.status === "ended";
   const model = session.model ? modelLabel(session.model) : null;
-  const canType = ended && !!session.id && !!session.cwd;
+  // A session from long ago may have lost its folder (moved or deleted): the history still reads, and continuing
+  // says what is possible (Codex continues in another folder; Claude Code only where it ran).
+  const [folder, setFolder] = useState<HistoryFolder | null>(null);
+  const [elsewhere, setElsewhere] = useState<string | null>(null);
+  useEffect(() => {
+    if (!ended || !session.cwd) return;
+    let dead = false;
+    api()
+      .historyFolder(session.cwd)
+      .then((f) => !dead && setFolder(f))
+      .catch(() => {});
+    return () => {
+      dead = true;
+    };
+  }, [ended, session.cwd]);
+  const gone = folder?.exists === false && !elsewhere;
+  const canType = ended && !!session.id && !!session.cwd && !gone;
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const cli = session.provider === "codex" ? "Codex" : "Claude";
@@ -729,7 +746,7 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
     if (!t || busy || !canType) return;
     setBusy(true);
     try {
-      const id = await resumeSession(session, leaf);
+      const id = await resumeSession(elsewhere ? { ...session, cwd: elsewhere } : session, leaf);
       if (id !== undefined) {
         await api().chatSend(id, t);
         setText("");
@@ -738,6 +755,7 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
       setBusy(false);
     }
   };
+  if (ended && gone && folder) return <FolderGone session={session} folder={folder} compact={compact} onMade={() => setFolder({ exists: true, moved_to: [] })} onElsewhere={setElsewhere} />;
   // Clicking the empty box (or pressing a key in it) with nothing typed yet is enough to bring the full composer back.
   return (
     <div className={cx("composer-dock shrink-0 pb-3", compact ? "px-3" : "px-6")}>
@@ -759,7 +777,7 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
                 void send();
               }
             }}
-            placeholder={busy ? "Reopening the chat…" : `Message ${cli}… (continues this chat)`}
+            placeholder={busy ? "Reopening the chat…" : elsewhere ? `Message ${cli}… (continues this chat in ${homeShort(elsewhere)})` : `Message ${cli}… (continues this chat)`}
             className="block max-h-[200px] min-h-[26px] w-full resize-none bg-transparent px-0.5 text-prose text-fg outline-none placeholder:text-faint [field-sizing:content]"
           />
         ) : (
@@ -786,6 +804,68 @@ function ExternalNotice({ session, leaf, compact }: { session: Session; leaf: st
           >
             <IArrowUp size={17} strokeWidth={1.9} />
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The ended-session box when the session's folder is gone: the history above still reads; continuing depends on the
+ * CLI. Codex resumes a thread in any folder (a folder of the same name other sessions ran in is offered first);
+ * Claude Code continues a conversation only in the folder it ran in, so the box offers to make that folder again.
+ */
+function FolderGone({ session, folder, compact, onMade, onElsewhere }: { session: Session; folder: HistoryFolder; compact: boolean; onMade: () => void; onElsewhere: (cwd: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const where = homeShort(session.cwd);
+  const codex = session.provider === "codex";
+  const pick = async () => {
+    const p = await api()
+      .pickFolder()
+      .catch(() => null);
+    if (p) onElsewhere(p);
+  };
+  const make = async () => {
+    setBusy(true);
+    try {
+      await api().historyMakeFolder(session.cwd);
+      onMade();
+    } catch (e) {
+      useStore.getState().toast(String(e instanceof Error ? e.message : e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const btn = "inline-flex h-[30px] items-center rounded-[9px] px-3 text-small font-medium transition-colors duration-150";
+  return (
+    <div className={cx("composer-dock shrink-0 pb-3", compact ? "px-3" : "px-6")}>
+      <div className="mx-auto max-w-[700px] rounded-[20px] border border-line bg-raised/80 px-4 pb-3 pt-3.5 shadow-card" data-folder-gone={session.provider}>
+        <div className="text-base text-fg">
+          This session ran in <span className="font-mono text-mono-small">{where}</span>, which isn't there any more.
+        </div>
+        <div className="mt-1 text-small text-dim">
+          {codex
+            ? "Its history is all here. Codex can continue it in another folder: the files it worked on are not carried over."
+            : "Its history is all here. Claude Code continues a conversation only in the folder it ran in: put the folder back (or make it again, empty) to continue."}
+        </div>
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          {codex &&
+            folder.moved_to.map((m) => (
+              <button key={m} type="button" onClick={() => onElsewhere(m)} className={cx(btn, "bg-fg text-bg hover:opacity-90")} data-folder-moved={m}>
+                Continue in {homeShort(m)}
+              </button>
+            ))}
+          {codex && (
+            <button type="button" onClick={() => void pick()} className={cx(btn, folder.moved_to.length ? "text-dim hover:bg-hover hover:text-fg" : "bg-fg text-bg hover:opacity-90")} data-folder-pick>
+              Choose a folder…
+            </button>
+          )}
+          {!codex && (
+            <button type="button" disabled={busy} onClick={() => void make()} className={cx(btn, "bg-fg text-bg hover:opacity-90")} data-folder-make>
+              {busy ? "Making it…" : "Make the folder again"}
+            </button>
+          )}
+          {!codex && folder.moved_to.length > 0 && <span className="text-small text-faint">It may have moved to {homeShort(folder.moved_to[0])}.</span>}
         </div>
       </div>
     </div>

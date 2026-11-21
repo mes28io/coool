@@ -11,6 +11,7 @@ pub mod context;
 pub mod explain;
 pub mod folders;
 pub mod gitlog;
+pub mod history;
 pub mod claude;
 pub mod codex;
 pub mod hub;
