@@ -56,8 +56,8 @@ pub fn text(cli: Cli, c: &AgentContext, helpers: bool) -> String {
     s.push_str(" Attachments arrive as images or `<attachment path=…>` lines.");
     // The CLI reads its settings, MCP config, permissions and instructions only at start: coool restarts it in place.
     s.push_str(match cli {
-        Cli::Claude => " coool restarts this session in place (Restart button, `/restart`): when settings, MCP, permissions or CLAUDE.md need a restart, say \"press Restart (or type /restart continue)\", not \"restart Claude Code\".",
-        Cli::Codex => " coool restarts this session in place (Restart button, `/restart`): when config, MCP or AGENTS.md need a restart, say \"press Restart (or type /restart continue)\", not \"restart Codex\".",
+        Cli::Claude => " Restart is rare: only if your next step needs a settings, MCP or permissions change you made reloaded, say \"press Restart (or type /restart continue)\" once, not \"restart Claude Code\"; never for builds or releases.",
+        Cli::Codex => " Restart is rare: only if your next step needs the session to reload a config or MCP change you made, say \"press Restart (or type /restart continue)\" once, not \"restart Codex\"; never for builds or releases.",
     });
     if c.any_device() {
         s.push_str("\n\nYour own devices, in coool's window (never the person's screen):");
