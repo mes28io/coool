@@ -26,7 +26,7 @@ import { mockMac } from "./mockMac";
 import { mockHistory } from "./mockHistory";
 import { mockName, mockRename } from "./mockTitles";
 import { CTX_DEMO_ID, ctxAgentMap, ctxCompacting, ctxDemoMap } from "./mockContext";
-import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
+import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, LaneInfo, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
 
 const HOME = "/Users/you";
 const enc = new TextEncoder();
@@ -962,6 +962,23 @@ export function mockBackend(): Backend {
     { pid: 40620, command: "cargo watch -x 'test -p rig'", description: "Re-run the rig tests on change", started: now - 143_000, cpu: 14, background: true, output: tmpTasks(lightId, "b4k2"), tail: ["   Compiling rig v0.3.1 (/Users/you/code/project-3d/rig)", "    Finished `test` profile [unoptimized] in 4.21s", "test result: ok. 48 passed; 0 failed; 0 ignored"] },
     { pid: 40624, command: "until [ -f probes/attic.exr ]; do sleep 5; done; echo attic baked", description: "Wait for the attic probe", started: now - 312_000, cpu: 0, idle_loop: true, background: true, output: tmpTasks(lightId, "b9q1"), tail: [] },
   ];
+  // `?agents=jobs&lanes=demo`: helpers the lighting lead started from its shell (crates/core/src/lanes.rs): a loop of
+  // two `codex exec` builders in their own worktrees (one running, one done), a `claude -p` that kept no session file,
+  // and the background shell that waits on the builders' logs.
+  if (typeof location !== "undefined" && location.search.includes("lanes=demo")) {
+    const wt = `${HOME}/code/project-3d-wt`;
+    const lane = (o: Partial<LaneInfo>): LaneInfo => ({
+      parent: lightId, tool: "toolu_lanes_loop", index: 0, provider: "codex", model: "gpt-6.2-sol", cwd: `${wt}/bench`, brief: "Read the brief at /tmp/p3d/brief-bench.md and carry it out exactly.",
+      background: true, detached: true, image: false, at: now - 6 * 60_000, started: now - 6 * 60_000 + 700, ended: null, state: "running", session: null, ...o,
+    });
+    const bench = lane({ session: "lanejob1" });
+    const tasks = lane({ index: 1, cwd: `${wt}/tasks`, brief: "Read the brief at /tmp/p3d/brief-tasks.md and carry it out exactly.", session: "lanejob2", state: "done", started: now - 6 * 60_000 + 900, ended: now - 75_000 });
+    const sum = lane({ tool: "toolu_lanes_sum", provider: "claude", model: "haiku", cwd: p3d, brief: "Summarise the render log in five lines", background: false, detached: false, state: "done", at: now - 3 * 60_000, started: now - 3 * 60_000, ended: now - 3 * 60_000 + 2_400 });
+    add(session({ provider: "codex", id: "lanejob1", cwd: `${wt}/bench`, project: p3d, origin: "automation", parent: lightId, title: "Read the brief at /tmp/p3d/brief-bench.md", model: "gpt-6.2-sol", status: "busy", current: "exec_command · pnpm -C packages/bench test", tokens: tok(180_000, 9_800, 40_000), activity: history("p3d", ["Read the brief at /tmp/p3d/brief-bench.md and carry it out exactly."], now - 3000, 1, 6), updated: now - 3000, lane: bench }), "p3d", 2);
+    add(session({ provider: "codex", id: "lanejob2", cwd: `${wt}/tasks`, project: p3d, origin: "automation", parent: lightId, title: "Read the brief at /tmp/p3d/brief-tasks.md", model: "gpt-6.2-sol", status: "ended", tokens: tok(120_000, 7_100, 30_000), activity: history("p3d", ["Read the brief at /tmp/p3d/brief-tasks.md and carry it out exactly."], now - 75_000, 1, 5), updated: now - 75_000, lane: tasks }), "p3d");
+    lightSession.lanes = [bench, tasks, sum];
+    lightSession.shells = [...(lightSession.shells ?? []), { pid: 40630, command: "until grep -q '^exit' /tmp/p3d/log-tasks.txt && grep -q '^exit' /tmp/p3d/log-bench.txt; do sleep 20; done", description: "Wait until both Codex helpers finish", label: "waiting for 2 Codex helpers", started: now - 5 * 60_000, cpu: 0, idle_loop: true, background: true }];
+  }
   const shellsId = AGENTS_SHELLS_ID;
   const docs = add(
     session({
@@ -1408,6 +1425,7 @@ export function mockBackend(): Backend {
   }
   if (location.search.includes("attach=")) void import("./mockAttach").then((m) => m.runAttachDemo(newChat("claude", `${HOME}/code/invoices`, {}, 0))); // see mockAttach.ts
   if (location.search.includes("md=demo")) void import("./mockPlan").then((m) => m.runMdDemo(newChat("claude", coool, {}, 0))); // see mockPlan.ts
+  if (location.search.includes("newsession=")) void import("./mockFolders").then((m) => m.runNewSessionDemo()); // see mockFolders.ts
 
   // `?presence=iphone|mac|browser`: an agent drives that panel on a loop (lib/mockPresence.ts).
   const presence = presenceDemo();
@@ -1716,6 +1734,13 @@ export function mockBackend(): Backend {
       await delay(200);
       return `${HOME}/code/new-project`;
     },
+    // The New session sheet's folder finder: an invented file system (mockFolders.ts).
+    foldersIndex: (extra, refresh) => import("./mockFolders").then((m) => m.mockFolders.index(extra, refresh)),
+    foldersList: (path, hidden, allow) => import("./mockFolders").then((m) => m.mockFolders.list(path, hidden, allow)),
+    foldersComplete: (input, allow) => import("./mockFolders").then((m) => m.mockFolders.complete(input, allow)),
+    foldersSummary: (path, provider, allow) => import("./mockFolders").then((m) => m.mockFolders.summary(path, provider, allow)),
+    foldersCreate: (parent, name, git) => import("./mockFolders").then((m) => m.mockFolders.create(parent, name, git)),
+    worktreeCreate: (project, name) => import("./mockFolders").then((m) => m.mockFolders.worktree(project, name)),
     async gitTrail(path) {
       await delay(80 + Math.random() * 120);
       return git.trail(path);

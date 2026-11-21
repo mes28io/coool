@@ -298,6 +298,7 @@ impl Hub {
                 .filter(|p| *p != s.id);
         }
         self.ancestors.retain(|p| live_pids.contains_key(&p) || all.iter().any(|s| s.pid == Some(p)));
+        self.link_lanes(all);
         let mut live: HashMap<String, u32> = HashMap::new();
         for s in all.iter().filter(|s| s.status != Status::Ended) {
             if let Some(p) = &s.parent {
@@ -306,6 +307,67 @@ impl Hub {
         }
         for s in all.iter_mut() {
             s.live_children = live.get(&s.id).copied().unwrap_or(0);
+        }
+    }
+
+    /// Helpers started from a session's shell (`codex exec`, `claude -p`; see [`crate::lanes`]): each is paired with
+    /// the session it writes (by CLI, folder, model and start time), which then counts as that session's child even
+    /// when its process left the parent's tree (`( codex exec … ) &`). Sets `lane` on the helper, `lanes` on the parent.
+    fn link_lanes(&mut self, all: &mut [Session]) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let codex = self.codex.views();
+        let lanes_of = |s: &Session| match s.provider {
+            Provider::Claude => self.claude.lanes(&s.id),
+            Provider::Codex => codex.get(&s.id).map(|v| v.lanes.clone()).unwrap_or_default(),
+        };
+        // (parent index, lane)
+        let lanes: Vec<(usize, crate::lanes::Lane)> = all.iter().enumerate().flat_map(|(i, s)| lanes_of(s).into_iter().map(move |l| (i, l))).collect();
+        if lanes.is_empty() {
+            return;
+        }
+        let kids: Vec<usize> = (0..all.len()).filter(|&i| all[i].origin == Origin::Automation).collect();
+        let facts: Vec<crate::lanes::Child> = kids
+            .iter()
+            .map(|&i| {
+                let s = &all[i];
+                match s.provider {
+                    Provider::Claude => self.claude.child(s),
+                    Provider::Codex => codex.get(&s.id).map(|v| CodexSource::child(s, v)).unwrap_or_default(),
+                }
+            })
+            .collect();
+        let refs: Vec<(&str, &crate::lanes::Lane)> = lanes.iter().map(|(p, l)| (all[*p].cwd.as_str(), l)).collect();
+        let pairs = crate::lanes::assign(&refs, &facts, |li, ci| {
+            let (p, k) = (&all[lanes[li].0], &all[kids[ci]]);
+            p.id != k.id && k.parent.as_ref().is_none_or(|x| *x == p.id)
+        });
+        let mut matched: HashMap<usize, usize> = HashMap::new();
+        for (li, ci) in pairs {
+            matched.insert(li, ci);
+        }
+        let mut infos: Vec<Vec<crate::lanes::LaneInfo>> = vec![Vec::new(); all.len()];
+        for (li, (pi, l)) in lanes.iter().enumerate() {
+            let parent_live = all[*pi].status != Status::Ended;
+            let pid = all[*pi].id.clone();
+            let info = match matched.get(&li) {
+                Some(&ci) => {
+                    let ki = kids[ci];
+                    let info = crate::lanes::LaneInfo::new(&pid, l, Some((&all[ki].id, &facts[ci])), parent_live, now);
+                    let provider = all[ki].provider;
+                    let kid_id = all[ki].id.clone();
+                    if all[ki].parent.is_none() {
+                        self.own.record_parent(provider, &kid_id, &pid);
+                    }
+                    all[ki].parent = Some(pid.clone());
+                    all[ki].lane = Some(info.clone());
+                    info
+                }
+                None => crate::lanes::LaneInfo::new(&pid, l, None, parent_live, now),
+            };
+            infos[*pi].push(info);
+        }
+        for (s, v) in all.iter_mut().zip(infos) {
+            s.lanes = v;
         }
     }
 
@@ -329,6 +391,15 @@ impl Hub {
                 (Status::Ended, _) | (_, None) => Vec::new(),
                 (_, Some(pid)) => found.get(&pid).cloned().unwrap_or_default(),
             };
+            if !s.shells.is_empty() && !s.lanes.is_empty() {
+                let lanes = match s.provider {
+                    Provider::Claude => self.claude.lanes(&s.id),
+                    Provider::Codex => self.codex.views().get(&s.id).map(|v| v.lanes.clone()).unwrap_or_default(),
+                };
+                for sh in &mut s.shells {
+                    sh.label = crate::lanes::shell_label(&sh.command, &lanes);
+                }
+            }
         }
     }
 
@@ -809,6 +880,126 @@ mod tests {
         let all = until_loaded(&mut h2);
         let child = all.iter().find(|s| s.id == "live-child").unwrap();
         assert_eq!((child.status, child.parent.as_deref()), (Status::Ended, Some(live_parent)));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Helpers a lead starts from its shell become its children, each with its state and span: a foreground
+    /// `codex exec` (done), a background one whose shell failed, a detached loop of two (one running, one done),
+    /// one with no session file, and a `claude -p` a Codex lead started (record shapes of real sessions, invented
+    /// content; crates/core/src/lane_fixtures).
+    #[test]
+    fn shell_helpers_link_to_their_lead_with_state_and_span() {
+        let d = tmpdir("lanes");
+        let proj = d.join("claude/projects/-w-lead");
+        fs::create_dir_all(&proj).unwrap();
+        let day = d.join("codex/sessions").join(crate::codex::date_path(std::time::SystemTime::now()));
+        fs::create_dir_all(&day).unwrap();
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lane_fixtures");
+        for e in fs::read_dir(&fx).unwrap() {
+            let p = e.unwrap().path();
+            let name = p.file_name().unwrap().to_owned();
+            let to = if name.to_string_lossy().starts_with("rollout-") { day.join(name) } else { proj.join(name) };
+            // Written, not copied: a copy keeps the fixture's old mtime, and a Codex rollout untouched for 10 min has ended.
+            fs::write(to, fs::read(&p).unwrap()).unwrap();
+        }
+        let mut h = hub(&d, false);
+        let all = until_loaded(&mut h);
+        let get = |id: &str| all.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("{id} listed"));
+        let u = |n: u8| format!("01a1da0b-637d-7063-8d51-c27a6ae5f3{n:02x}");
+        let ms = |s: &str| crate::util::parse_rfc3339_ms(s).unwrap();
+        let lead = get("lead");
+        let lanes: Vec<(&str, u32, Option<&str>, AgentState)> = lead.lanes.iter().map(|l| (l.tool.as_str(), l.index, l.session.as_deref(), l.state)).collect();
+        let (a, b, c, dd) = (u(0xa1), u(0xb1), u(0xc1), u(0xd1));
+        assert_eq!(
+            lanes,
+            vec![
+                ("t_fg", 0, Some(a.as_str()), AgentState::Done),
+                ("t_bg", 0, Some(b.as_str()), AgentState::Failed),
+                ("t_loop", 0, Some(c.as_str()), AgentState::Running),
+                ("t_loop", 1, Some(dd.as_str()), AgentState::Done),
+                ("t_img", 0, None, AgentState::Done),
+            ],
+            "the progress check (`pgrep -fl \"codex exec\"`) is not a launch"
+        );
+        for id in [&a, &b, &c, &dd] {
+            assert_eq!(get(id).parent.as_deref(), Some("lead"), "{id}");
+        }
+        assert_eq!(get(&u(0xe1)).parent, None, "a later run in the same folder is not the loop's");
+        let la = get(&a).lane.clone().unwrap();
+        assert_eq!((la.model.as_deref(), la.cwd.as_deref(), la.brief.as_str()), (Some("gpt-6.2-sol"), Some("/w/wt/a"), "Fix the date parser in src/date.ts and run its tests."));
+        assert_eq!((la.started, la.ended), (ms("2026-11-20T10:00:01Z"), Some(ms("2026-11-20T10:02:58Z"))), "its session's own span");
+        let lc = get(&c).lane.clone().unwrap();
+        assert!(lc.detached && lc.background && lc.ended.is_none());
+        assert_eq!(lc.brief, "Read /w/out/brief-c.md and do it.");
+        let ld = get(&dd).lane.clone().unwrap();
+        assert_eq!(ld.ended, Some(ms("2026-11-20T10:14:10Z")), "not the shell's end two seconds in");
+        // A Codex lead's `claude -p`.
+        let x = get(&u(0xf1));
+        assert_eq!(x.lanes.len(), 1);
+        assert_eq!((x.lanes[0].provider, x.lanes[0].model.as_deref(), x.lanes[0].session.as_deref(), x.lanes[0].state), (Provider::Claude, Some("haiku"), Some("kid"), AgentState::Done));
+        assert_eq!(get("kid").parent.as_deref(), Some(u(0xf1).as_str()));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Read-only check against a real session on this machine: `COOOL_REAL_SESSION=<claude session id> cargo test
+    /// -p coool-core real_session_helpers -- --ignored --nocapture`. Reads ~/.claude and ~/.codex (nothing is written
+    /// there: no cache, own-sessions in a temp folder) and prints only counts, states, models and durations.
+    #[test]
+    #[ignore]
+    fn real_session_helpers() {
+        let Ok(id) = std::env::var("COOOL_REAL_SESSION") else { return eprintln!("set COOOL_REAL_SESSION") };
+        let home = dirs::home_dir().unwrap();
+        let w = Duration::from_secs(12 * 3600);
+        let d = tmpdir("real");
+        let mut h = Hub::with_sources(ClaudeSource::with_root(home.join(".claude"), w), CodexSource::with_root(home.join(".codex"), w), None, 3);
+        h.set_own_sessions_file(Some(d.join("own-sessions.json")));
+        let all = until_loaded(&mut h);
+        let s = all.iter().find(|s| s.id == id).expect("session listed");
+        let secs = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => format!("{}s", b.saturating_sub(a) / 1000),
+            _ => "-".into(),
+        };
+        println!("lead: provider {:?}, status {:?}, {} subagents, {} shell lanes, {} shells", s.provider, s.status, s.agents.len(), s.lanes.len(), s.shells.len());
+        for a in &s.agents {
+            // HH:MM:SS of one day, as ms.
+            let hms = |t: &str| -> Option<u64> {
+                let v: Vec<u64> = t.split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+                (v.len() == 3).then(|| (v[0] * 3600 + v[1] * 60 + v[2]) * 1000)
+            };
+            let ts: Vec<u64> = a.activity.iter().filter_map(|x| hms(&x.ts)).collect();
+            println!(
+                "  agent: model {}, state {:?}, {} steps, {} tokens, active {} (first to last step)",
+                a.model,
+                a.state,
+                a.activity.iter().filter(|x| x.kind == ActivityKind::Tool).count(),
+                a.tokens.total,
+                secs(ts.iter().min().copied(), ts.iter().max().copied())
+            );
+        }
+        for l in &s.lanes {
+            let kid = l.session.as_ref().and_then(|k| all.iter().find(|x| x.id == *k));
+            println!(
+                "  lane: {:?} {}, call #{}.{}, background {}, detached {}, state {:?}, {} , session found {}, child status {:?}, child model {}, child output tokens {}, child steps {}",
+                l.provider,
+                l.model.as_deref().unwrap_or("default"),
+                s.lanes.iter().position(|x| x.tool == l.tool).unwrap_or(0),
+                l.index,
+                l.background,
+                l.detached,
+                l.state,
+                if l.ended.is_some() { format!("ran {}", secs(Some(l.started), l.ended)) } else { format!("running for {}", secs(Some(l.started), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64))) },
+                kid.is_some(),
+                kid.map(|k| k.status),
+                kid.map(|k| k.model.as_str()).unwrap_or("-"),
+                kid.map(|k| k.tokens.output).unwrap_or(0),
+                kid.map(|k| k.activity.iter().filter(|x| x.kind == ActivityKind::Tool).count()).unwrap_or(0),
+            );
+        }
+        for sh in &s.shells {
+            println!("  shell: background {}, idle loop {}, label {:?}", sh.background, sh.idle_loop, sh.label);
+        }
+        let kids = all.iter().filter(|k| k.parent.as_deref() == Some(id.as_str())).count();
+        println!("children linked to it: {kids}");
         let _ = fs::remove_dir_all(&d);
     }
 
