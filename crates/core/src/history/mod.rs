@@ -626,6 +626,9 @@ impl History {
         }
         // Caught up: nothing more until the file changes again.
         d.caught = end;
+        if let Some(e) = sink.head {
+            d.meta.head_words = (d.text + e) as u32;
+        }
         d.used_prompt += pl - sink.prompt_left;
         d.used_reply += rl - sink.reply_left;
         self.dirty = true;

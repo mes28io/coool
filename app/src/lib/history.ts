@@ -118,17 +118,6 @@ export interface HistoryBackend {
   historyMakeFolder(cwd: string): Promise<void>;
 }
 
-export function historyTauri(soft: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>): HistoryBackend {
-  return {
-    historyQuery: (query) => soft("history_query", { query }),
-    historyStatus: () => soft("history_status"),
-    historyOpen: (provider, id) => soft("history_open", { provider, id }),
-    historyEarlier: (a) => soft("history_earlier", { provider: a.provider, sessionId: a.sessionId, keep: a.keep, before: a.before ?? null, first: a.first ?? null, limit: a.limit }),
-    historyFolder: (cwd) => soft("history_folder", { cwd }),
-    historyMakeFolder: (cwd) => soft("history_make_folder", { cwd }),
-  };
-}
-
 /** The New session sheet's "recent here": the newest sessions in a folder (and below it), any age, any CLI. */
 export function recentInFolder(cwd: string, limit = 5): Promise<HistoryRow[]> {
   return api()

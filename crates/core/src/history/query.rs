@@ -213,6 +213,8 @@ impl History {
                 let prompt = m.first_prompt.to_ascii_lowercase();
                 let place = format!("{} {}", m.cwd, m.edits.join(" ")).to_ascii_lowercase();
                 let words = texts.get(c.i).map(Vec::as_slice).unwrap_or_default();
+                // A title that is the first prompt already shows it: the snippet looks for a hit past it.
+                let skip = if prompt.starts_with(title.trim_end_matches('…').trim_end()) { m.head_words as usize } else { 0 };
                 let mut score = 0.0;
                 for &k in &by_len {
                     let t = &terms[k];
@@ -221,10 +223,14 @@ impl History {
                     let in_place = place.contains(t.as_str());
                     let mut n = 0usize;
                     let mut first = None;
+                    let mut later = None;
                     let mut whole = false;
                     for at in finders[k].find_iter(words).take(8) {
                         if first.is_none() {
                             first = Some(at);
+                        }
+                        if later.is_none() && at >= skip {
+                            later = Some(at);
                         }
                         whole |= word_start(words, at);
                         n += 1;
@@ -245,7 +251,7 @@ impl History {
                         score += (1.0 + (n as f64).ln()) * if whole { 1.3 } else { 1.0 };
                     }
                     if c.hit.is_none()
-                        && let Some(at) = first
+                        && let Some(at) = later.or(first)
                     {
                         c.hit = Some((at, t.len()));
                     }

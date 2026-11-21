@@ -183,7 +183,11 @@ export function HistoryPage() {
         </button>
         <div data-tauri-drag-region className="ml-auto flex min-w-0 items-baseline gap-2 px-2">
           <h2 className="truncate text-base font-semibold text-fg">History</h2>
-          {page && <span className="shrink-0 text-small text-dim tnum">{st?.sessions.toLocaleString()} sessions</span>}
+          {page && (
+            <span className="shrink-0 text-small text-dim tnum" data-history-count>
+              {searching || nOn ? `${page.total.toLocaleString()} of ${(st?.sessions ?? 0).toLocaleString()}` : (st?.sessions ?? 0).toLocaleString()} sessions
+            </span>
+          )}
         </div>
       </div>
 
@@ -239,7 +243,7 @@ export function HistoryPage() {
         <div className="mt-2 flex shrink-0 items-start gap-1.5 px-0.5 text-small text-faint" data-history-note>
           <IInfo size={13} className="mt-[2px] shrink-0" />
           <span className="min-w-0">
-            Read from the CLIs' own files (~/.claude, ~/.codex) where they are: nothing is copied or changed, and your history stays there.
+            Read in place from ~/.claude and ~/.codex: nothing is copied or changed, your history stays where it is.
             {st && !st.ready && (
               <span className="text-dim" data-history-indexing>
                 {" "}
@@ -247,7 +251,6 @@ export function HistoryPage() {
               </span>
             )}
           </span>
-          {page && searching && <span className="ml-auto shrink-0 tnum" data-history-took>{page.total.toLocaleString()} found · {page.took_ms < 1 ? "<1" : Math.round(page.took_ms)} ms</span>}
         </div>
 
         {/* Results */}
@@ -268,7 +271,11 @@ export function HistoryPage() {
             <section key={g.day} className="mb-3" data-history-day={g.day}>
               <div className="sticky top-0 z-[1] -mx-2 flex h-[30px] items-center bg-bg px-3 text-small font-medium text-dim">
                 {g.day}
-                {searching && page && <span className="ml-1.5 font-normal text-faint tnum">{page.total.toLocaleString()}</span>}
+                {searching && page && (
+                  <span className="ml-auto font-normal text-faint tnum" data-history-took>
+                    {page.total.toLocaleString()} found · {page.took_ms < 1 ? "<1" : Math.round(page.took_ms)} ms
+                  </span>
+                )}
               </div>
               {g.rows.map((r, k) => {
                 const i = g.base + k;

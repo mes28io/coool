@@ -402,3 +402,19 @@ fn real_history_numbers() {
         all.total
     );
 }
+
+#[test]
+fn snippet_looks_past_a_first_prompt_the_title_already_shows() {
+    let home = Home::new("snippet");
+    let now = now_ms();
+    let prompt = format!("needle in the opening words {}", "and some more padding words ".repeat(12));
+    home.claude_session("s", "/w/a", now, &[(&prompt, "the reply mentions the needle too, near the fix")], "");
+    let mut h = History::open(home.mem());
+    run(&mut h);
+    let p = find(&mut h, text("needle"));
+    let r = &p.rows[0];
+    assert_eq!(r.title, crate::util::one_line(&prompt, 60), "the title is the first prompt");
+    let s: String = r.snippet.iter().map(|x| x.t.as_str()).collect();
+    assert!(s.contains("the reply mentions the needle"), "{s}");
+    assert!(!s.starts_with("needle in the opening"), "{s}");
+}

@@ -10,7 +10,7 @@ import { countIpc } from "./perfCount";
 import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
 import type { ChangeSet, FileChange, Outcome } from "./changesRules";
-import { historyTauri, type HistoryBackend } from "./history";
+import type { HistoryBackend } from "./history";
 
 /** Which session's changes, and which part (crates/core/src/changes; `changes_load` and the rest). */
 export interface ChangesReq {
@@ -632,7 +632,13 @@ async function tauriBackend(): Promise<Backend> {
     worktreeRemove: (project, path) => soft("worktree_remove", { project, path }),
     storageStatus: () => soft("storage_status"),
     storageClear: (id) => soft("storage_clear", { id }),
-    ...historyTauri(soft),
+    // History (lib/history.ts, app/src-tauri/src/history.rs).
+    historyQuery: (query) => soft("history_query", { query }),
+    historyStatus: () => soft("history_status"),
+    historyOpen: (provider, id) => soft("history_open", { provider, id }),
+    historyEarlier: (a) => soft("history_earlier", { provider: a.provider, sessionId: a.sessionId, keep: a.keep, before: a.before ?? null, first: a.first ?? null, limit: a.limit }),
+    historyFolder: (cwd) => soft("history_folder", { cwd }),
+    historyMakeFolder: (cwd) => soft("history_make_folder", { cwd }),
     simErase: (udid) => soft("sim_erase", { udid }),
     listSessions: async () => merge.full(await invoke<FullWire>("list_sessions")) ?? merge.snapshot(),
     spawnSession: (req) => invoke("spawn_session", { req }),

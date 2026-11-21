@@ -125,9 +125,12 @@ function terms(text: string): string[] {
   return [...new Set(out)];
 }
 
-function snippet(words: string, ts: string[]): HistorySeg[] {
+function snippet(words: string, ts: string[], skip: number): HistorySeg[] {
   const low = words.toLowerCase();
-  const at = Math.max(0, Math.min(...ts.map((t) => low.indexOf(t)).filter((i) => i >= 0)));
+  // Like the backend: a title that is the first prompt already shows it, so a hit past it is preferred.
+  const hits = ts.flatMap((t) => [low.indexOf(t), low.indexOf(t, skip)]).filter((i) => i >= 0);
+  const later = hits.filter((i) => i >= skip);
+  const at = Math.max(0, Math.min(...(later.length ? later : hits)));
   const a = Math.max(0, at - 50);
   const text = words.slice(a, at + 150).replace(/\s+/g, " ");
   const segs: HistorySeg[] = [];
@@ -196,7 +199,7 @@ export function mockHistory(home: string, open: (r: HistoryRow, activity: Activi
       });
       hits = scored.filter((x) => x.s >= 0).sort((a, b) => b.s - a.s || b.d.row.last_ms - a.d.row.last_ms).map((x) => x.d);
       const off = q.offset ?? 0;
-      const rows = hits.slice(off, off + (q.limit || 100)).map((d) => (ts.length ? { ...d.row, snippet: snippet(d.words, ts) } : d.row));
+      const rows = hits.slice(off, off + (q.limit || 100)).map((d) => (ts.length ? { ...d.row, snippet: snippet(d.words, ts, d.row.prompt.length + 1) } : d.row));
       return {
         rows,
         total: hits.length,

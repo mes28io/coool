@@ -56,6 +56,9 @@ pub struct Meta {
     pub edits: Vec<String>,
     #[serde(default)]
     pub edits_n: u32,
+    /// Bytes of the words taken by the first prompt (a snippet looks past it when the title is that prompt).
+    #[serde(default)]
+    pub head_words: u32,
 }
 
 impl Meta {
@@ -89,6 +92,9 @@ impl Meta {
         }
         self.last_prompt = line;
         sink.prompt(t);
+        if self.prompts == 1 {
+            sink.head = Some(sink.out.len());
+        }
     }
 }
 
@@ -96,13 +102,15 @@ impl Meta {
 #[derive(Default)]
 pub struct Sink {
     pub out: String,
+    /// Where the first prompt ends in `out`, when this pass saw it.
+    pub head: Option<usize>,
     pub prompt_left: usize,
     pub reply_left: usize,
 }
 
 impl Sink {
     pub fn new(prompt_left: usize, reply_left: usize) -> Self {
-        Self { out: String::new(), prompt_left, reply_left }
+        Self { out: String::new(), head: None, prompt_left, reply_left }
     }
 
     pub fn full(&self) -> bool {
