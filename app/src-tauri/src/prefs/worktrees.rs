@@ -221,9 +221,100 @@ pub fn remove(project: &Path, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A name a branch and a folder can both carry: lowercase letters, digits and dashes (at most 40), "chat" if none.
+pub fn slug(name: &str) -> String {
+    let mut s = String::new();
+    for c in name.trim().chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            s.push(c);
+        } else if !s.ends_with('-') && !s.is_empty() {
+            s.push('-');
+        }
+    }
+    let s: String = s.trim_end_matches('-').chars().take(40).collect();
+    let s = s.trim_end_matches('-').to_string();
+    if s.is_empty() { "chat".into() } else { s }
+}
+
+/// A new worktree for a chat to start in (the New session sheet's "Start in a new worktree"): `.coool/worktrees/<slug>`
+/// in the main repository, on a new branch `coool/<slug>` from the folder's HEAD (a number added when either is taken).
+/// `.coool/` goes into the repository's `info/exclude` so it never shows as untracked. Returns (path, branch); the
+/// path is the same folder inside the worktree when `project` is a folder inside the repository.
+pub fn create(project: &Path, name: &str) -> Result<(String, String), String> {
+    let top = git(Some(project), &["rev-parse", "--show-toplevel"]).map_err(|_| "Not in a git repository".to_string())?.trim().to_string();
+    git(Some(project), &["rev-parse", "-q", "--verify", "HEAD"]).map_err(|_| "The repository has no commits yet: commit once, then start in a worktree".to_string())?;
+    let common = git(Some(project), &["rev-parse", "--path-format=absolute", "--git-common-dir"])?.trim().to_string();
+    let main = Path::new(&common).parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(&top));
+    let sub = canonical(project).strip_prefix(canonical(Path::new(&top))).map(Path::to_path_buf).unwrap_or_default();
+    let base = slug(name);
+    let mut n = 1;
+    let (path, branch) = loop {
+        let s = if n == 1 { base.clone() } else { format!("{base}-{n}") };
+        let path = main.join(".coool").join("worktrees").join(&s);
+        let branch = format!("coool/{s}");
+        let taken = path.exists() || git(Some(project), &["rev-parse", "-q", "--verify", &format!("refs/heads/{branch}")]).is_ok();
+        if !taken {
+            break (path, branch);
+        }
+        n += 1;
+        if n > 99 {
+            return Err("Couldn't find a free worktree name".into());
+        }
+    };
+    let exclude = Path::new(&common).join("info").join("exclude");
+    let cur = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if !cur.lines().any(|l| matches!(l.trim(), ".coool/" | ".coool" | "/.coool/" | "/.coool")) {
+        let _ = std::fs::create_dir_all(exclude.parent().unwrap_or(Path::new(".")));
+        let sep = if cur.is_empty() || cur.ends_with('\n') { "" } else { "\n" };
+        let _ = std::fs::write(&exclude, format!("{cur}{sep}# coool's chat worktrees\n.coool/\n"));
+    }
+    git(Some(project), &["worktree", "add", "-q", "-b", &branch, path.to_str().ok_or("path isn't UTF-8")?, "HEAD"])?;
+    let inside = path.join(&sub);
+    let out = if inside.is_dir() { inside } else { path };
+    Ok((out.display().to_string(), branch))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slugs() {
+        assert_eq!(slug("Fix the login bug!"), "fix-the-login-bug");
+        assert_eq!(slug("  "), "chat");
+        assert_eq!(slug("--a__b--"), "a-b");
+        assert!(slug(&"x".repeat(80)).len() <= 40);
+    }
+
+    #[test]
+    fn create_a_chat_worktree() {
+        if crate::env::which("git").is_none() {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("coool-wtc-{}-{:?}", std::process::id(), std::time::Instant::now()));
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        let repo = canonical(&base);
+        run(&repo, &["init", "-q", "-b", "main"]);
+        assert!(create(&repo, "x").unwrap_err().contains("no commits"));
+        std::fs::write(repo.join("sub/f.txt"), "1").unwrap();
+        run(&repo, &["add", "."]);
+        run(&repo, &["commit", "-qm", "init"]);
+        let (p, b) = create(&repo, "Fix login").unwrap();
+        assert_eq!(b, "coool/fix-login");
+        assert_eq!(Path::new(&p), repo.join(".coool/worktrees/fix-login"));
+        assert!(Path::new(&p).join("sub/f.txt").is_file());
+        // Taken: a number is added. From a folder inside: the same folder inside the new worktree.
+        let (p2, b2) = create(&repo.join("sub"), "fix login").unwrap();
+        assert_eq!(b2, "coool/fix-login-2");
+        assert_eq!(Path::new(&p2), repo.join(".coool/worktrees/fix-login-2/sub"));
+        // Excluded once, so the main checkout stays clean; both list as agent worktrees.
+        let ex = std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
+        assert_eq!(ex.matches(".coool/").count(), 1);
+        assert!(git(Some(&repo), &["status", "--porcelain"]).unwrap().trim().is_empty());
+        assert_eq!(list(&repo).list.iter().filter(|w| w.agent).count(), 2);
+        assert!(create(&base.join("nope"), "x").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn porcelain() {
