@@ -71,6 +71,10 @@ pub struct Shell {
     /// The transcript marks the call `run_in_background` (else: a long foreground command).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub background: bool,
+    /// What it does for the session's helpers, in plain words ("waiting for 2 Codex helpers", "running 1 Codex
+    /// helper"), when its command only waits on helpers' output files or starts helpers (see [`crate::lanes`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// A Bash tool call as the transcript records it (see `claude::ParseState`).
@@ -727,7 +731,7 @@ impl Shells {
                 let key = (p.pid, p.start_ms);
                 alive.insert(key);
                 let e = self.seen.entry(key).or_insert_with(|| Seen {
-                    shell: Shell { pid: p.pid, command: cmd.clone(), description: None, started: p.start_ms, cpu: 0, output: None, tail: Vec::new(), idle_loop: false, background: false },
+                    shell: Shell { pid: p.pid, command: cmd.clone(), description: None, started: p.start_ms, cpu: 0, output: None, tail: Vec::new(), idle_loop: false, background: false, label: None },
                     session_pid: t.pid,
                     session_pgid,
                     pgid: p.pgid,
@@ -1017,7 +1021,7 @@ mod tests {
         assert!(s.hot("a", 10, false) && !s.hot("b", 11, false));
         assert!(s.wants("a", 10, false), "coming on screen: walked at once");
         assert!(!s.wants("b", 11, false), "cold and walked just now");
-        let shell = Shell { pid: 99, command: "sleep 9".into(), description: None, started: 1, cpu: 0, output: None, tail: Vec::new(), idle_loop: false, background: true };
+        let shell = Shell { pid: 99, command: "sleep 9".into(), description: None, started: 1, cpu: 0, output: None, tail: Vec::new(), idle_loop: false, background: true, label: None };
         s.seen.insert((99, 1), Seen { shell, session_pid: 11, session_pgid: 0, pgid: 99, cpu: HashMap::new(), low_since: None, tail_key: None });
         assert!(s.hot("b", 11, false), "had a shell at the last walk");
         // A pass that walks nothing keeps the other sessions' shells.

@@ -2267,6 +2267,8 @@ mod tests {
             background_tasks: false,
             waiting_for: None,
             shells: Vec::new(),
+            lane: None,
+            lanes: Vec::new(),
             title_facts: Default::default(),
             name: None,
         }

@@ -16,6 +16,7 @@ pub mod hub;
 pub mod insights;
 pub mod agent_context;
 pub mod ladder;
+pub mod lanes;
 pub mod lineage;
 mod loader;
 pub mod model;
