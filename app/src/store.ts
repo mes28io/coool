@@ -45,7 +45,7 @@ export interface BrowserTabs {
   tabs: BrowserTab[];
   active: number;
 }
-export type RightPanelKind = "agents" | "models" | "browser" | "device" | "mac" | "context";
+export type RightPanelKind = "agents" | "models" | "browser" | "device" | "mac" | "context" | "changes";
 
 /** The full-screen Settings page's categories, in order (components/SettingsPage.tsx). */
 export const SETTINGS_SECTIONS = ["general", "ladder", "notifications", "voice", "appearance", "shortcuts", "providers", "devices", "remote", "git", "connections", "storage", "usage", "insights", "about"] as const;
@@ -124,6 +124,10 @@ const MAC_DEFAULT = 640;
 /** The Mac panel's narrowest (the chat keeps `BROWSER_CHAT_MIN` beside it too). */
 export const MAC_MIN = 420;
 const clampMac = (w: number) => Math.round(Math.min(1600, Math.max(MAC_MIN, w)));
+const CHANGES_DEFAULT = 620;
+/** The Changes panel's narrowest (the chat keeps `BROWSER_CHAT_MIN` beside it). */
+export const CHANGES_MIN = 400;
+const clampChanges = (w: number) => Math.round(Math.min(1600, Math.max(CHANGES_MIN, w)));
 
 function readSettingsLast(): SettingsSection {
   try {
@@ -285,6 +289,9 @@ interface State {
   /** Width of the Mac panel (persisted). The pane may clamp it. */
   macWidth: number;
   setMacWidth(w: number): void;
+  /** Width of the Changes panel beside the chat (persisted); a diff wants room, split view from ~760. */
+  changesWidth: number;
+  setChangesWidth(w: number): void;
   toggleCollapsed(project: string): void;
   setRevealed(project: string, n: number): void;
 
@@ -657,6 +664,14 @@ export const useStore = create<State>((set, get) => ({
       localStorage.setItem("coool.macWidth", String(v));
     } catch {}
     set({ macWidth: v });
+  },
+  changesWidth: clampChanges(readNum("coool.changesWidth", CHANGES_DEFAULT)),
+  setChangesWidth(w) {
+    const v = clampChanges(w);
+    try {
+      localStorage.setItem("coool.changesWidth", String(v));
+    } catch {}
+    set({ changesWidth: v });
   },
   toggleCollapsed(project) {
     const collapsed = { ...get().collapsed };

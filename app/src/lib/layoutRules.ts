@@ -8,7 +8,7 @@
 
 export type LayoutPref = "auto" | "wide" | "stacked";
 export type LayoutMode = "wide" | "stacked";
-export type PanelKind = "agents" | "models" | "browser" | "device" | "mac" | "context";
+export type PanelKind = "agents" | "models" | "browser" | "device" | "mac" | "context" | "changes";
 export type Axis = "x" | "y";
 
 export const LAYOUT_PREFS: readonly LayoutPref[] = ["auto", "wide", "stacked"];
@@ -50,7 +50,7 @@ export function panelAxis(mode: LayoutMode, kind: PanelKind, paneW: number, body
 }
 
 /** Each kind's share of the pane's body height when stacked below the chat, until the person drags the divider. */
-export const STACK_DEFAULT: Record<PanelKind, number> = { browser: 0.56, mac: 0.5, device: 0.56, agents: 0.36, models: 0.42, context: 0.48 };
+export const STACK_DEFAULT: Record<PanelKind, number> = { browser: 0.56, mac: 0.5, device: 0.56, agents: 0.36, models: 0.42, context: 0.48, changes: 0.55 };
 const STACK_MIN = 0.15;
 const STACK_MAX = 0.85;
 export const clampFrac = (f: number) => Math.min(STACK_MAX, Math.max(STACK_MIN, f));

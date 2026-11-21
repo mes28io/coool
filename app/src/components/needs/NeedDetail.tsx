@@ -196,14 +196,14 @@ function Payload({ n }: { n: Need }) {
   const i = (perm.input ?? {}) as Record<string, unknown>;
   const s = (k: string) => (typeof i[k] === "string" ? (i[k] as string) : "");
   const edit = n.kind === "edit" ? editPairs(perm.tool, perm.input) : null;
-  if (edit) return <InlineDiff path={edit.path} pairs={edit.pairs} root={projectOf(n.s) || cwd} tall />;
+  if (edit) return <InlineDiff path={edit.path} pairs={edit.pairs} root={projectOf(n.s) || cwd} tall preview={{ tool: perm.tool, input: perm.input }} />;
   // Codex's apply_patch: each file's change (lib/patch.ts), a created file as all new text.
   const patch = n.kind === "edit" ? patchFiles(perm.input) : null;
   if (patch)
     return (
       <div className="flex flex-col" data-needs-patch={patch.length}>
         {patch.map((f) => (
-          <InlineDiff key={f.path} path={f.movePath ?? f.path} pairs={patchPairs(f)} root={projectOf(n.s) || cwd} tall />
+          <InlineDiff key={f.path} path={f.movePath ?? f.path} pairs={patchPairs(f)} root={projectOf(n.s) || cwd} tall preview={{ tool: "apply_patch", input: { changes: [{ path: f.path, kind: f.kind, move_path: f.movePath, diff: f.diff }] } }} />
         ))}
       </div>
     );
