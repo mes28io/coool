@@ -537,12 +537,6 @@ export function ChatComposer({ chat, compact, focused }: { chat: Chat; compact?:
             <FixCount target={voiceId} ta={ta} />
             </div>
             <div className="flex h-[34px] shrink-0 items-center gap-1" data-composer-actions>
-            {!compact && !working && !disabled && (
-              <span className="mr-1 hidden shrink-0 items-center gap-1 whitespace-nowrap text-small text-faint @min-[520px]:flex">
-                <Kbd>⇧</Kbd>
-                <Kbd>↵</Kbd> newline
-              </span>
-            )}
             <AnimatePresence initial={false} mode="popLayout">
               {working && (
                 <motion.button

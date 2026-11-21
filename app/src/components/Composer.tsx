@@ -4,7 +4,7 @@ import { api } from "../lib/backend";
 import { fitTextarea } from "../lib/fitTextarea";
 import { useStore } from "../store";
 import { IArrowUp } from "./icons";
-import { cx, Kbd } from "./primitives";
+import { cx } from "./primitives";
 import { useVoiceField } from "./voice/VoiceHost";
 
 export function Composer({ pty, provider, disabled, compact }: { pty: number; provider: string; disabled?: boolean; compact?: boolean }) {
@@ -59,13 +59,6 @@ export function Composer({ pty, provider, disabled, compact }: { pty: number; pr
           className="selectable max-h-[180px] min-h-[22px] flex-1 resize-none bg-transparent py-[3px] text-prose outline-none placeholder:text-faint"
         />
         <div className="flex items-center gap-2 pb-[1px]">
-          {!compact && (
-            <span className="hidden items-center gap-1 text-small text-faint sm:flex">
-              <Kbd>⇧</Kbd>
-              <Kbd>↵</Kbd>
-              <span>newline</span>
-            </span>
-          )}
           <motion.button
             type="button"
             onClick={send}
