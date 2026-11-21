@@ -75,7 +75,7 @@ export function hmsToMs(ts: string, now = Date.now()): number | null {
  */
 export function timelineTimes(list: { ts: string }[], last: number | null | undefined, now = Date.now()): (number | null)[] {
   if (!last) return list.map((a) => hmsToMs(a.ts, now));
-  const out: (number | null)[] = new Array(list.length).fill(null);
+  const out: (number | null)[] = list.map(() => null);
   let anchor = last + 1000;
   for (let i = list.length - 1; i >= 0; i--) {
     const m = /^(\d\d):(\d\d):(\d\d)$/.exec(list[i].ts);
