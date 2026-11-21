@@ -172,6 +172,8 @@ pub struct ClaudeSource {
     /// For [`ClaudeSource::refresh`]: parses everything inline.
     own_pool: Option<Pool>,
     memo: Memos,
+    /// Transcripts listed whatever their age (opened from History, see [`crate::hub::Hub::pin`]).
+    pinned: HashSet<PathBuf>,
 }
 
 impl ClaudeSource {
@@ -180,7 +182,7 @@ impl ClaudeSource {
     }
 
     pub(crate) fn with_root(root: PathBuf, recent_window: Duration) -> Self {
-        Self { root, entries: HashMap::new(), recent_window, own_pool: None, memo: Memos::default() }
+        Self { root, entries: HashMap::new(), recent_window, own_pool: None, memo: Memos::default(), pinned: HashSet::new() }
     }
 
     /// Re-scan and parse everything new, synchronously; returns all sessions.
@@ -218,7 +220,7 @@ impl ClaudeSource {
                 let id = p.file_stem().unwrap().to_string_lossy().to_string();
                 let mtime = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                 let recent = now.duration_since(mtime).map(|d| d < self.recent_window).unwrap_or(true);
-                if recent || live.contains_key(&id) {
+                if recent || live.contains_key(&id) || self.pinned.contains(&p) {
                     wanted.insert(id, (p, m));
                 }
             }
@@ -277,6 +279,11 @@ impl ClaudeSource {
     /// Sessions as currently known (cheap facts for what isn't parsed yet).
     pub(crate) fn sessions(&self) -> Vec<Session> {
         self.entries.iter().map(|(id, e)| session(id, e)).collect()
+    }
+
+    /// Lists these transcripts whatever their age.
+    pub(crate) fn set_pinned(&mut self, paths: HashSet<PathBuf>) {
+        self.pinned = paths;
     }
 
     /// The transcript of a session, or of one of its subagents.

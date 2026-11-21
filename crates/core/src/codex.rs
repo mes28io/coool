@@ -149,6 +149,8 @@ pub struct CodexSource {
     own_pool: Option<Pool>,
     /// Recent day folders' listings, re-read only when the folder changed.
     dirs: StatMemo<Vec<PathBuf>>,
+    /// Rollouts listed whatever their age (opened from History, see [`crate::hub::Hub::pin`]).
+    pinned: HashSet<PathBuf>,
 }
 
 impl CodexSource {
@@ -170,6 +172,7 @@ impl CodexSource {
             walked: false,
             own_pool: None,
             dirs: StatMemo::default(),
+            pinned: HashSet::new(),
         }
     }
 
@@ -185,6 +188,11 @@ impl CodexSource {
     /// When the Codex session `id` started (from its session_meta), if known.
     pub fn session_started(&self, id: &str) -> Option<SystemTime> {
         self.entries.values().map(|e| e.slot.view()).find(|v| v.id == id)?.started
+    }
+
+    /// Lists these rollouts whatever their age.
+    pub(crate) fn set_pinned(&mut self, paths: HashSet<PathBuf>) {
+        self.pinned = paths;
     }
 
     /// The rollout of session (or subagent thread) `id`.
@@ -272,6 +280,7 @@ impl CodexSource {
         }
         self.dirs.retain(|p| recent_dirs.iter().any(|d| d == p));
         candidates.extend(self.old_recent.iter().cloned());
+        candidates.extend(self.pinned.iter().cloned());
         candidates.extend(self.entries.keys().cloned());
         candidates.sort();
         candidates.dedup();
@@ -283,7 +292,7 @@ impl CodexSource {
                 let t = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                 Some((p, m, t))
             })
-            .filter(|(_, _, t)| self.is_recent(now, *t))
+            .filter(|(p, _, t)| self.is_recent(now, *t) || self.pinned.contains(p))
             .collect();
         wanted.sort_by_key(|(_, _, t)| std::cmp::Reverse(*t));
 

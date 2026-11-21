@@ -306,10 +306,28 @@ pub struct Session {
 
 pub const MAX_ACTIVITY: usize = 300;
 
+thread_local! {
+    /// Set while [`uncapped`] runs on this thread.
+    static UNCAPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with [`push_activity`] keeping everything on this thread: every entry, every full text (a whole
+/// transcript's history, read once for the "earlier" part of a long timeline).
+pub fn uncapped<T>(f: impl FnOnce() -> T) -> T {
+    UNCAPPED.with(|u| u.set(true));
+    let r = f();
+    UNCAPPED.with(|u| u.set(false));
+    r
+}
+
 /// Appends to a timeline: keeps its newest [`MAX_ACTIVITY`] entries, and full
 /// texts on the newest [`FULL_RECENT`] that have one (an older entry keeps its
 /// one line and is marked `shortened`).
 pub fn push_activity(list: &mut Vec<Activity>, a: Activity) {
+    if UNCAPPED.with(|u| u.get()) {
+        list.push(a);
+        return;
+    }
     let has_full = a.full.is_some();
     list.push(a);
     if has_full

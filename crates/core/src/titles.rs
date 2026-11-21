@@ -234,6 +234,13 @@ impl Titles {
         self.save();
     }
 
+    /// The title coool last showed for a session (the person's name for it, else the one resolved last), if it
+    /// has seen it: what History shows for a session that is no longer in the sidebar.
+    pub fn shown(&self, provider: Provider, id: &str) -> Option<&str> {
+        let r = self.map.get(&key(provider, id))?;
+        r.manual.as_deref().or(Some(r.shown.as_str()).filter(|s| !s.is_empty()))
+    }
+
     pub fn manual(&self, provider: Provider, id: &str) -> Option<&str> {
         self.map.get(&key(provider, id)).and_then(|r| r.manual.as_deref())
     }

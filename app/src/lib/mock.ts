@@ -23,6 +23,7 @@ const PRESENCE_PROMPTS = {
 import { MockGit } from "./mockGit";
 import { committing, relPath } from "./mission";
 import { mockMac } from "./mockMac";
+import { mockHistory } from "./mockHistory";
 import { mockName, mockRename } from "./mockTitles";
 import { CTX_DEMO_ID, ctxAgentMap, ctxCompacting, ctxDemoMap } from "./mockContext";
 import type { Activity, ActivityKind, Agent, ArtifactInfo, ChatEvent, InsightsStatus, PlanUsage, Provider, Session, Snapshot, Tokens, UsageWindow } from "./types";
@@ -1625,6 +1626,11 @@ export function mockBackend(): Backend {
 
   return {
     kind: "mock",
+    // History (lib/mockHistory.ts): opening a past session lists it, as the backend's pin does.
+    ...mockHistory(HOME, (r, activity) => {
+      if (!live.some((l) => l.s.provider === r.provider && l.s.id === r.id)) add(session({ provider: r.provider, id: r.id, cwd: r.cwd, project: r.project, title: r.title, status: "ended", updated: r.last_ms, model: r.model, loaded: true, last_prompt: r.prompt, activity, origin: r.where === "coool" ? "coool" : r.where === "automation" ? "automation" : "user" }), "");
+      emitSessions();
+    }),
     listSessions: async () => snapshot(),
     async spawnSession({ provider, cwd, args }) {
       await delay(120);

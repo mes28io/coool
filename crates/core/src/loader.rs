@@ -612,6 +612,24 @@ fn preview(path: &Path, kind: Kind, len: u64) -> Option<Parsed> {
     Some(p)
 }
 
+/// Every timeline entry of a transcript, parsed as a session's is but uncapped (see [`crate::model::uncapped`]).
+pub(crate) fn full_activity(path: &Path, kind: Kind) -> std::io::Result<Vec<crate::model::Activity>> {
+    use std::io::BufRead;
+    let f = File::open(path)?;
+    let mut p = Parsed::new(kind);
+    crate::model::uncapped(|| -> std::io::Result<()> {
+        for line in std::io::BufReader::with_capacity(1 << 20, f).split(b'\n') {
+            let line = line?;
+            let line = line.strip_suffix(b"\r").unwrap_or(&line);
+            if !line.is_empty() {
+                p.line(&String::from_utf8_lossy(line));
+            }
+        }
+        Ok(())
+    })?;
+    Ok(Arc::unwrap_or_clone(p.view().activity))
+}
+
 fn feed(bytes: &[u8], p: &mut Parsed) {
     for line in bytes.split(|&b| b == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);

@@ -362,6 +362,29 @@ impl Hub {
         }
     }
 
+    /// Lists these transcripts as sessions whatever their age: sessions opened from History, so their session
+    /// view, Changes and Context work as for any other. Replaces the earlier set.
+    pub fn set_pinned(&mut self, pins: &[(Provider, PathBuf)]) {
+        let of = |want: Provider| pins.iter().filter(|(p, _)| *p == want).map(|(_, x)| x.clone()).collect();
+        self.claude.set_pinned(of(Provider::Claude));
+        self.codex.set_pinned(of(Provider::Codex));
+    }
+
+    /// Whether coool started or drove this session, now or before.
+    pub fn is_own(&self, provider: Provider, id: &str) -> bool {
+        self.own.contains(provider, id)
+    }
+
+    /// Every timeline entry of a transcript, uncapped: a long session's earlier history (a listed session keeps
+    /// only its newest [`MAX_ACTIVITY`] entries). Reads the whole file: call it off the Hub's lock.
+    pub fn full_activity(provider: Provider, path: &Path) -> std::io::Result<Vec<Activity>> {
+        let kind = match provider {
+            Provider::Claude => crate::loader::Kind::Claude,
+            Provider::Codex => crate::loader::Kind::Codex,
+        };
+        crate::loader::full_activity(path, kind)
+    }
+
     /// Launch a provider CLI in a new PTY. Returns its managed index.
     pub fn spawn(&mut self, provider: Provider, args: &[String], cwd: &str, rows: u16, cols: u16) -> Result<usize> {
         let m = Managed::spawn(provider, args, cwd, rows, cols)?;
@@ -644,6 +667,47 @@ mod tests {
         // Without a cache the result is the same.
         let mut h = hub(&d, false);
         assert_eq!(summary(&until_loaded(&mut h)), want);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A session from long ago (opened from History) is listed while pinned, with its whole history readable.
+    #[test]
+    fn pinned_old_sessions_are_listed_and_read_in_full() {
+        let d = tmpdir("pinned");
+        let proj = d.join("claude/projects/-w");
+        fs::create_dir_all(&proj).unwrap();
+        let old = proj.join("old.jsonl");
+        fs::write(&old, claude_transcript(400, 10)).unwrap();
+        let year_ago = std::time::SystemTime::now() - Duration::from_secs(365 * 86400);
+        fs::File::options().write(true).open(&old).unwrap().set_modified(year_ago).unwrap();
+        let day = d.join("codex/sessions/2025/01/02");
+        fs::create_dir_all(&day).unwrap();
+        let rollout = day.join("rollout-2025-01-02T08-00-00-01a1da0b-637d-7063-8d51-c27a6ae5f35b.jsonl");
+        fs::write(&rollout, codex_transcript(5, 10)).unwrap();
+        fs::File::options().write(true).open(&rollout).unwrap().set_modified(year_ago).unwrap();
+        let mut h = hub(&d, false);
+        assert!(until_loaded(&mut h).is_empty(), "older than the window: not listed");
+        h.set_pinned(&[(Provider::Claude, old.clone()), (Provider::Codex, rollout.clone())]);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let s = loop {
+            let s = until_loaded(&mut h);
+            if s.len() == 2 && s.iter().all(|s| s.loaded && !s.activity.is_empty()) || Instant::now() > deadline {
+                break s;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(s.len(), 2, "{:?}", s.iter().map(|s| &s.id).collect::<Vec<_>>());
+        let c = s.iter().find(|s| s.id == "old").unwrap();
+        assert_eq!(c.status, Status::Ended);
+        assert_eq!(c.activity.len(), MAX_ACTIVITY, "the listed timeline keeps the newest entries");
+        // The whole history: every entry, and the listed ones are its end.
+        let full = Hub::full_activity(Provider::Claude, &old).unwrap();
+        assert!(full.len() > MAX_ACTIVITY);
+        let tail: Vec<&str> = full[full.len() - MAX_ACTIVITY..].iter().map(|a| a.text.as_str()).collect();
+        assert_eq!(tail, c.activity.iter().map(|a| a.text.as_str()).collect::<Vec<_>>());
+        assert!(full[0].text.starts_with("prompt 0 "), "{}", full[0].text);
+        h.set_pinned(&[]);
+        assert!(until_loaded(&mut h).is_empty());
         let _ = fs::remove_dir_all(&d);
     }
 

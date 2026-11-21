@@ -7,6 +7,7 @@ import type { ChatInfo, Environment, PlanUsages, Provider, PtyInfo, Session, Sna
 import { sessionKey } from "./lib/types";
 import { api, isTauri } from "./lib/backend";
 import type { Away } from "./lib/away";
+import type { HistoryFilters } from "./lib/history";
 import { markOnce } from "./lib/perfCount";
 import { layoutMode, useLayout } from "./lib/layout";
 import { SIDEBAR_DEFAULT, sidebarKeys, type LayoutMode } from "./lib/layoutRules";
@@ -192,6 +193,14 @@ interface State {
   needsPick: string | null;
   openNeeds(pick?: string | null): void;
   closeNeeds(): void;
+  /**
+   * The History page (components/HistoryPage.tsx): every past session on this Mac, searchable. It lies over the sheet
+   * like the Needs you page. `filters` are applied when it opens (`seq` changes with every open, so a second open with
+   * other filters, e.g. a project's "Show N more", applies them to the page already up). Opening a session closes it.
+   */
+  history: { filters: Partial<HistoryFilters>; seq: number } | null;
+  openHistory(filters?: Partial<HistoryFilters>): void;
+  closeHistory(): void;
   /**
    * The full-screen Settings page, open on this category; null = the app (sidebar and panes stay mounted underneath,
    * untouched). Opening a session or switching tabs closes it.
@@ -502,7 +511,10 @@ export const useStore = create<State>((set, get) => ({
   usage: { claude: null, codex: null },
   needsPage: false,
   needsPick: null,
-  openNeeds: (pick) => set({ needsPage: true, needsPick: pick ?? null, settings: null }),
+  openNeeds: (pick) => set({ needsPage: true, needsPick: pick ?? null, settings: null, history: null }),
+  history: null,
+  openHistory: (filters) => set((s) => ({ history: { filters: filters ?? {}, seq: (s.history?.seq ?? 0) + 1 }, settings: null, needsPage: false, palette: false })),
+  closeHistory: () => set({ history: null }),
   closeNeeds: () => set({ needsPage: false, needsPick: null }),
   settings: null,
   settingsLast: readSettingsLast(),
@@ -514,7 +526,7 @@ export const useStore = create<State>((set, get) => ({
       } catch {}
       set({ settingsLast: v });
     }
-    set({ settings: v, needsPage: false });
+    set({ settings: v, needsPage: false, history: null });
   },
   closeSettings: () => set({ settings: null }),
   chatInfos: {},
@@ -781,7 +793,7 @@ export const useStore = create<State>((set, get) => ({
   markExited: (id) => set((s) => ({ exited: { ...s.exited, [id]: true } })),
 
   open(t, opts) {
-    if (get().settings || get().needsPage) set({ settings: null, needsPage: false });
+    if (get().settings || get().needsPage || get().history) set({ settings: null, needsPage: false, history: null });
     const { tabs, activeTab } = get();
     let target = t;
     if (t.kind === "pty" && get().ptyOwner[t.id]) target = { kind: "session", key: get().ptyOwner[t.id] };
@@ -848,11 +860,11 @@ export const useStore = create<State>((set, get) => ({
     if (tab.root.type === "split") get().closePane(tab.focus);
     else get().closeTab(tab.id);
   },
-  activate: (tab) => set({ activeTab: tab, settings: null, needsPage: false }),
+  activate: (tab) => set({ activeTab: tab, settings: null, needsPage: false, history: null }),
   activateIndex(i) {
     const { tabs } = get();
     const t = i === 8 ? tabs[tabs.length - 1] : tabs[i];
-    if (t) set({ activeTab: t.id, settings: null, needsPage: false });
+    if (t) set({ activeTab: t.id, settings: null, needsPage: false, history: null });
   },
   reorder(ids) {
     const by = new Map(get().tabs.map((t) => [t.id, t]));

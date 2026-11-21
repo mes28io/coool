@@ -10,6 +10,7 @@ import { countIpc } from "./perfCount";
 import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
 import type { ChangeSet, FileChange, Outcome } from "./changesRules";
+import { historyTauri, type HistoryBackend } from "./history";
 
 /** Which session's changes, and which part (crates/core/src/changes; `changes_load` and the rest). */
 export interface ChangesReq {
@@ -46,7 +47,7 @@ export interface ChatBatch {
 }
 
 /** The Settings page's calls are in settingsTypes.ts. */
-export interface Backend extends SettingsBackend {
+export interface Backend extends SettingsBackend, HistoryBackend {
   kind: "tauri" | "mock";
   listSessions(): Promise<Snapshot>;
   spawnSession(a: { provider: Provider; cwd: string; args?: string[]; rows: number; cols: number }): Promise<number>;
@@ -631,6 +632,7 @@ async function tauriBackend(): Promise<Backend> {
     worktreeRemove: (project, path) => soft("worktree_remove", { project, path }),
     storageStatus: () => soft("storage_status"),
     storageClear: (id) => soft("storage_clear", { id }),
+    ...historyTauri(soft),
     simErase: (udid) => soft("sim_erase", { udid }),
     listSessions: async () => merge.full(await invoke<FullWire>("list_sessions")) ?? merge.snapshot(),
     spawnSession: (req) => invoke("spawn_session", { req }),
