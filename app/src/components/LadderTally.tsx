@@ -5,7 +5,12 @@ import { useMemo, useState } from "react";
 import type { Chat, ChatItem } from "../lib/chat";
 import { fmtTokens } from "../lib/format";
 import { useLaunchedLadder } from "../lib/ladder";
-import { LADDER, roleOf, tallyChecks, tallyModels, tallyProviders, turnTally, type LadderTier, type TierRole } from "../lib/ladderTiers";
+import { itemsAfter, LADDER, roleOf, tallyChecks, tallyModels, tallyProviders, turnTally, type LadderTier, type TallyExtra, type TierRole } from "../lib/ladderTiers";
+import { agentForCall, isBackgroundCall, lanesByCall } from "../lib/helperCards";
+import { stateOf } from "../lib/agentState";
+import { tsToMs } from "../lib/format";
+import { useStore } from "../store";
+import type { Session } from "../lib/types";
 import { modelLabel } from "../lib/models";
 import { turnItems } from "../lib/turnBreakdown";
 import type { Provider } from "../lib/types";
@@ -17,17 +22,23 @@ export function useChatTiers(chatId: number | null | undefined): LadderTier[] | 
   return l?.tiers?.length ? l.tiers : null;
 }
 
+/** The other CLI's lanes a running chat was launched with (`codex exec` / `claude -p` tiers; null: none). */
+export function useChatCross(chatId: number | null | undefined): LadderTier[] | null {
+  const l = useLaunchedLadder(chatId ?? -1);
+  return l?.cross?.length ? l.cross : null;
+}
+
 /** "small" for a delegate model on the chat's table, else null. */
 export function tierWord(tiers: LadderTier[] | null, model: string | null | undefined, provider: Provider): TierRole | null {
   return roleOf(tiers, model, provider);
 }
 
-/** Card id -> role for Mission control's fan-out (only for chats launched with Ladder tiers). */
-export function cardRoles(tiers: LadderTier[] | null, cards: { id: string; model: string | null; provider: Provider }[]): Record<string, string> | undefined {
-  if (!tiers) return undefined;
+/** Card id -> role for Mission control's fan-out (only for chats launched with Ladder tiers); a helper on the other CLI takes its lane's role ("exec"). */
+export function cardRoles(tiers: LadderTier[] | null, cards: { id: string; model: string | null; provider: Provider }[], cross?: LadderTier[] | null): Record<string, string> | undefined {
+  if (!tiers && !cross) return undefined;
   const out: Record<string, string> = {};
   for (const c of cards) {
-    const r = roleOf(tiers, c.model, c.provider);
+    const r = roleOf(tiers, c.model, c.provider) ?? roleOf(cross, c.model, c.provider);
     if (r) out[c.id] = r;
   }
   return Object.keys(out).length ? out : undefined;
@@ -43,6 +54,33 @@ export function TierTag({ role, className }: { role: TierRole | "image" | null; 
   );
 }
 
+/**
+ * What the session adds to a turn's tally: each shell launch with its session's model, state and tokens (`kids`: the
+ * helper sessions' model and tokens by id); when each of the turn's background helpers returned; the items after the turn.
+ */
+function tallyExtra(chat: Chat, at: number, session: Session | null, kids: Record<string, { model: string; tokens: number }>): TallyExtra {
+  const lanes: NonNullable<TallyExtra["lanes"]> = {};
+  for (const [tool, ls] of Object.entries(lanesByCall(session?.lanes)))
+    lanes[tool] = ls.map((l) => {
+      const kid = l.session ? kids[l.session] : undefined;
+      return { provider: l.provider, model: kid?.model || l.model, image: l.image, state: l.state, ended: l.ended, tokens: kid?.tokens ?? 0 };
+    });
+  const returned: NonNullable<TallyExtra["returned"]> = {};
+  if (session?.agents.length) {
+    const claimed = new Set<string>();
+    const firstAt = (a: Session["agents"][number]) => (a.activity.length ? tsToMs(a.activity[0].ts) : null);
+    for (const it of turnItems(chat.items, at)) {
+      if (it.kind !== "tool" || !it.agent || it.parent || !isBackgroundCall(it.input, it.output)) continue;
+      const a = agentForCall({ input: it.input, output: it.output, ts: it.ts }, session.agents, claimed, firstAt);
+      if (!a) continue;
+      claimed.add(a.id);
+      const st = stateOf(a);
+      returned[it.id] = { end: st === "running" ? null : (a.last_event ?? it.ts), ok: st === "running" ? null : st === "done", model: a.model || null, tokens: a.tokens.total || 0 };
+    }
+  }
+  return { lanes, returned, after: itemsAfter(chat.items as never, at) };
+}
+
 export function LadderTally({ chat, item }: { chat: Chat; item: Extract<ChatItem, { kind: "turn" }> }) {
   const launched = useLaunchedLadder(chat.id);
   const tiers = launched?.tiers?.length ? launched.tiers : null;
@@ -56,9 +94,22 @@ export function LadderTally({ chat, item }: { chat: Chat; item: Extract<ChatItem
     }
     return chat.model;
   }, [chat.items, chat.model, at]);
+  // The chat's own session (its transcript): background helpers' ends and the shell helpers' launches and sessions.
+  const session = useStore((st) => st.sessions.find((s) => s.chat === chat.id && s.provider === chat.provider) ?? null);
+  // The helper sessions' model and tokens only (not the whole list: this row must not redo its sums on every refresh).
+  const kidKey = useStore((st) => {
+    const ids = new Set((session?.lanes ?? []).map((l) => l.session).filter(Boolean));
+    if (!ids.size) return "";
+    return st.sessions
+      .filter((s) => ids.has(s.id))
+      .map((s) => `${s.id}\t${s.model}\t${s.tokens.input + s.tokens.cached + s.tokens.output}`)
+      .join("\n");
+  });
+  const kids = useMemo(() => Object.fromEntries(kidKey.split("\n").filter(Boolean).map((r) => r.split("\t")).map(([id, model, n]) => [id, { model, tokens: Number(n) }])), [kidKey]);
+  const extra = useMemo(() => tallyExtra(chat, at, session, kids), [chat, at, session, kids]);
   const t = useMemo(
-    () => turnTally(turnItems(chat.items, at) as never, chat.agents as never, { provider: chat.provider, lead, tiers, cross }),
-    [chat.items, chat.agents, chat.provider, lead, tiers, cross, at],
+    () => turnTally(turnItems(chat.items, at) as never, chat.agents as never, { provider: chat.provider, lead, tiers, cross }, extra),
+    [chat.items, chat.agents, chat.provider, lead, tiers, cross, at, extra],
   );
   const [open, setOpen] = useState(false);
   const n = t.delegates.length;

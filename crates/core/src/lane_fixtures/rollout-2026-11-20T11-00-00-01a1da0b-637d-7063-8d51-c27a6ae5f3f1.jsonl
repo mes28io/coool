@@ -1,0 +1,7 @@
+{"timestamp":"2026-11-20T11:00:00.000Z","type":"session_meta","payload":{"id":"01a1da0b-637d-7063-8d51-c27a6ae5f3f1","timestamp":"2026-11-20T11:00:00.000Z","cwd":"/w/x","originator":"codex_cli_rs","cli_version":"0.171.0","source":"cli","model_provider":"openai"}}
+{"timestamp":"2026-11-20T11:00:00.000Z","type":"turn_context","payload":{"cwd":"/w/x","model":"gpt-6.2-sol","effort":"medium"}}
+{"timestamp":"2026-11-20T11:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+{"timestamp":"2026-11-20T11:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Do the brief."}]}}
+{"timestamp":"2026-11-20T11:00:01.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c7","arguments":"{\"cmd\": \"claude -p --model haiku --output-format json \\\"Summarise the README in five lines.\\\"\"}"}}
+{"timestamp":"2026-11-20T11:00:40.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c7","output":"Process exited with code 0\n{\"result\":\"...\"}"}}
+{"timestamp":"2026-11-20T11:00:50.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","last_agent_message":"Done."}}

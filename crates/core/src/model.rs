@@ -295,6 +295,13 @@ pub struct Session {
     /// filled by [`crate::hub::Hub::refresh`]. Left out of the JSON when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shells: Vec<crate::shells::Shell>,
+    /// A helper another session started from its shell (`codex exec`, `claude -p`): how it was started and how it
+    /// stands (see [`crate::lanes`]); filled by [`crate::hub::Hub::refresh`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane: Option<crate::lanes::LaneInfo>,
+    /// The helpers this session started from its shell, with the session each runs as when one was found.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lanes: Vec<crate::lanes::LaneInfo>,
     /// What the transcript says about naming (see [`crate::titles`]); not sent.
     #[serde(skip)]
     pub title_facts: crate::titles::Facts,

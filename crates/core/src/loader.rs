@@ -77,6 +77,12 @@ pub(crate) struct View {
     pub agent_marks: std::sync::Arc<std::collections::HashMap<String, crate::subagents::Marks>>,
     /// Claude: it ends inside a tool call (one with no result yet).
     pub in_tool: bool,
+    /// Helpers it started from the shell (see [`crate::lanes`]).
+    pub lanes: Vec<crate::lanes::Lane>,
+    /// Oldest real event, epoch ms (Claude).
+    pub first_event: Option<u64>,
+    /// Codex: the last turn's own end, epoch ms and how (task_complete, turn_aborted, an error).
+    pub end: Option<(u64, crate::model::AgentState)>,
 }
 
 /// Bytes read from the end of a file for [`tail_event`].

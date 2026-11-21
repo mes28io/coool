@@ -417,7 +417,9 @@ function ShellCard({ shell, onStop }: { shell: Shell; onStop?: (pid: number) => 
   const tail = shell.tail ?? [];
   const [open, toggle] = useFold(`shell:${shell.pid}:${shell.started}`, true, el);
   const expandable = tail.length > 0;
-  const described = !!shell.description;
+  // A plain label for a shell that only waits on (or starts) helpers: "waiting for 2 Codex helpers" (crates/core/src/lanes.rs).
+  const title = shell.label ?? shell.description;
+  const described = !!title;
   const meta = [`pid ${shell.pid}`, `${shell.cpu}% CPU`, shell.background ? null : "foreground"].filter(Boolean).join(" · ");
   return (
     <div ref={el} className="overflow-hidden rounded-[12px] border border-hairline bg-bg shadow-card" data-shell-card={shell.pid} data-open={expandable && open}>
@@ -432,8 +434,8 @@ function ShellCard({ shell, onStop }: { shell: Shell; onStop?: (pid: number) => 
         <MoodGlyph mood="run" size={13} className="mt-[2.5px] text-dim" />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className={cx("min-w-0 truncate leading-[18px] text-fg", described ? "text-base font-medium" : "font-mono text-mono-small")} title={shell.description ?? shell.command}>
-              {shell.description ?? shell.command}
+            <span className={cx("min-w-0 truncate leading-[18px] text-fg", described ? "text-base font-medium" : "font-mono text-mono-small")} title={shell.label ? `${shell.label}${shell.description ? ` · ${shell.description}` : ""}` : (shell.description ?? shell.command)} data-shell-label={shell.label ? "" : undefined}>
+              {title ?? shell.command}
             </span>
             {shell.idle_loop && (
               <span className="shrink-0 rounded-[5px] border border-hairline px-1 text-[11px] leading-[15px] text-faint" title="A polling loop that has been waiting at ~0% CPU" data-idle-loop>
