@@ -917,6 +917,44 @@ fn chat_stop(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
     })
 }
 
+/// Restart a chat (CHAT_SPEC "Restart"): its CLI stops and starts again on the same conversation, in the same chat
+/// (id, tab and history stay), so it reads its settings, MCP config, permissions and instructions again. `message`
+/// (e.g. "continue") is sent once it is back. A hosted chat restarts in its host while the keep-alive setting is on.
+#[tauri::command(async)]
+fn chat_restart(app: AppHandle, core: State<'_, Arc<Core>>, id: usize, message: Option<String>) -> Res<()> {
+    // The person asked for it: the old CLI's exit is no failure to notify about.
+    core.notifier.user_stopped(id);
+    let provider = core.hub.lock().unwrap().chat(id).map(|c| c.provider).ok_or("no such chat")?;
+    update::hold(&app, provider);
+    Hub::restart_chat_in(&core.hub, id).map_err(|e| format!("couldn't restart {}: {e:#}", provider.label()))?;
+    {
+        // The same events go on; the pump picks the chat up again (it stopped at the old CLI's exit), with the handle
+        // of the chat as it runs now (a hosted chat taken over by this process routes its notes here).
+        let hub = core.hub.lock().unwrap();
+        let c = hub.chat(id).ok_or("the chat ended as it restarted")?;
+        let handle = c.handle();
+        let cwd = c.cwd.clone();
+        let mut chats = core.chats.lock().unwrap();
+        match chats.get_mut(&id) {
+            Some(s) => {
+                s.handle = handle;
+                s.exit_sent = false;
+            }
+            None => {
+                let seq = handle.last_seq();
+                chats.insert(id, ChatStream { handle, seq, exit_sent: false, title: chat_title(provider, &cwd), key: None, ask: None, quiet_until: seq });
+            }
+        }
+    }
+    core.pump_waker.kick();
+    if let Some(m) = message.filter(|m| !m.trim().is_empty()) {
+        core.hub.lock().unwrap().note_typed(id);
+        core.with_chat(id, |c| c.send(m.trim()))?;
+    }
+    core.publish(&app);
+    Ok(())
+}
+
 /// Everything the chat still holds, for a view that mounts late or a reloaded UI.
 #[tauri::command(async)]
 fn chat_replay(core: State<'_, Arc<Core>>, id: usize) -> Res<ChatReplay> {
@@ -2062,6 +2100,7 @@ pub fn run() {
             chat_respond_permission,
             chat_respond_question,
             chat_stop,
+            chat_restart,
             chat_replay,
             open_in_terminal,
             insights_status,

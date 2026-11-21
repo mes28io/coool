@@ -302,6 +302,10 @@ pub enum ChatEventKind {
     Exited {
         code: Option<i32>,
     },
+    /// The person restarted the chat ([`Chat::restart_options`], `chat_restart`): the CLI that `exited` before this
+    /// was started again on the same conversation (its transcript, folder, model and mode), in the same chat. The chat
+    /// is running again; `ready` follows as for a new start.
+    Restarted,
     /// The CLI could not open (resume) or start the chat's conversation: the chat is over. The CLI is asked to
     /// exit, so `exited` follows; nothing sent to this chat reaches an agent any more (sends are refused).
     OpenFailed {
@@ -465,8 +469,11 @@ const KILL_GRACE: Duration = Duration::from_secs(3);
 /// Tool output kept per `tool_end`.
 pub(crate) const MAX_OUTPUT: usize = 4096;
 
-struct Shared {
+pub(crate) struct Shared {
     backend: Box<dyn Backend>,
+    /// Which start of the CLI owns this chat now: bumped by a restart, so the threads and the [`Chat`] of an earlier
+    /// process (and its Drop) leave the new one alone.
+    epoch: u64,
     events: VecDeque<ChatEvent>,
     next_seq: u64,
     /// What the UI was told (the backend's state, or `waiting_permission` while an outside request is pending).
@@ -533,6 +540,7 @@ impl Shared {
                 self.permission_mode = permission_mode.clone();
             }
             ChatEventKind::Exited { .. } => self.running = false,
+            ChatEventKind::Restarted => self.running = true,
             _ => {}
         }
         self.next_seq = e.seq;
@@ -611,6 +619,7 @@ impl Shared {
     fn mirror(info: &ChatInfo) -> Self {
         Shared {
             backend: Box::new(MirrorBackend),
+            epoch: 0,
             events: VecDeque::new(),
             next_seq: 0,
             state: info.state,
@@ -754,6 +763,26 @@ fn answer_external(shared: &Mutex<Shared>, request_id: &str, answer: impl FnOnce
     Some(Ok(()))
 }
 
+/// After a restart's `stop()`: waits for the chat's CLI to exit, up to the kill grace, then `kill` (SIGKILL) and a
+/// little longer. Err if it is still running.
+pub(crate) fn wait_exit(h: &ChatHandle, kill: impl FnOnce()) -> Result<()> {
+    let gone_within = |d: Duration| {
+        let t = Instant::now();
+        while h.is_running() && t.elapsed() < d {
+            thread::sleep(Duration::from_millis(20));
+        }
+        !h.is_running()
+    };
+    if gone_within(KILL_GRACE + Duration::from_millis(500)) {
+        return Ok(());
+    }
+    kill();
+    if gone_within(Duration::from_secs(3)) {
+        return Ok(());
+    }
+    bail!("the CLI didn't stop")
+}
+
 fn events_since(shared: &Mutex<Shared>, seq: u64) -> (Vec<ChatEvent>, u64) {
     let sh = lock(shared);
     // Events are in seq order: skip the old ones without cloning them.
@@ -788,12 +817,26 @@ pub struct Chat {
     /// The arguments the CLI was launched with (the self-test checks Ladder's flags against them).
     args: Vec<String>,
     launch: crate::chatctx::Launch,
+    /// The start of the CLI this is (see [`Shared::epoch`]).
+    epoch: u64,
+    /// What a restart starts the CLI with again: the options it was started with (model and mode as switched since)
+    /// and its MCP servers. None for a chat spawned directly (tests).
+    opts: Option<ChatOptions>,
+    mcp: Vec<McpServer>,
+    /// Codex: a sandbox mode switched to since the start (the options hold one mode, the approval policy).
+    sandbox: Option<String>,
 }
 
 impl Chat {
     /// `client_name`: how coool introduces itself to `codex app-server` (see [`crate::origin`]).
     /// `ladder_root`: where coool keeps its Claude Code plugin for Ladder (see [`crate::ladder`]).
     pub(crate) fn start(id: usize, opts: ChatOptions, client_name: &str, mcp: &[McpServer], ladder_root: Option<&std::path::Path>) -> Result<Self> {
+        Self::start_into(id, opts, client_name, mcp, ladder_root, None)
+    }
+
+    /// [`Self::start`]; with `reuse`, the CLI starts again in that chat (a restart, see [`Self::restart_options`]):
+    /// its events, numbering and readers carry on. The earlier process must have exited.
+    pub(crate) fn start_into(id: usize, opts: ChatOptions, client_name: &str, mcp: &[McpServer], ladder_root: Option<&std::path::Path>, reuse: Option<&ChatHandle>) -> Result<Self> {
         // MCP servers never ride on the command line (their env holds the chat's device token, and `ps` shows any
         // process's arguments to this user): Claude Code reads them from a private file, removed as soon as the CLI
         // has started (its first output) or exited; Codex gets the env values in its own environment.
@@ -812,7 +855,7 @@ impl Chat {
             env.extend(crate::ladder::claude_env(l));
         }
         let (backend, program, args) = Self::launch(&opts, client_name, mcp, ladder_root, mcp_file.as_deref());
-        let r = Self::spawn(id, opts.provider, &opts.cwd, program, &args, &env, mcp_file.clone(), backend);
+        let r = Self::spawn_into(id, opts.provider, &opts.cwd, program, &args, &env, mcp_file.clone(), backend, reuse);
         if r.is_err()
             && let Some(p) = &mcp_file
         {
@@ -820,6 +863,8 @@ impl Chat {
         }
         r.map(|mut c| {
             c.launch = Self::launch_record(&opts, &args, mcp, ladder_root);
+            c.opts = Some(opts);
+            c.mcp = mcp.to_vec();
             c
         })
     }
@@ -882,8 +927,14 @@ impl Chat {
         }
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn spawn(id: usize, provider: Provider, cwd: &str, program: &str, args: &[String], env: &[(String, String)], mcp_file: Option<std::path::PathBuf>, backend: Box<dyn Backend>) -> Result<Self> {
+        Self::spawn_into(id, provider, cwd, program, args, env, mcp_file, backend, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spawn_into(id: usize, provider: Provider, cwd: &str, program: &str, args: &[String], env: &[(String, String)], mcp_file: Option<std::path::PathBuf>, backend: Box<dyn Backend>, reuse: Option<&ChatHandle>) -> Result<Self> {
         if !std::path::Path::new(cwd).is_dir() {
             bail!("folder does not exist: {cwd}");
         }
@@ -897,8 +948,33 @@ impl Chat {
         let stdout = child.stdout.take().context("stdout")?;
         let stderr = child.stderr.take().context("stderr")?;
 
-        let shared = Arc::new(Mutex::new(Shared {
+        let shared = match reuse {
+            Some(h) => {
+                let mut sh = lock(&h.shared);
+                if sh.running {
+                    // Never two CLIs on one chat: the caller waits for the exit first (this one is ended again).
+                    drop(sh);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("the chat's CLI is still running");
+                }
+                sh.epoch += 1;
+                sh.backend = backend;
+                sh.running = true;
+                sh.open_failed = false;
+                sh.stderr_tail.clear();
+                for x in sh.external.drain(..) {
+                    let _ = x.tx.send(ExternalAnswer::Cancelled("the chat was restarted".into()));
+                }
+                sh.push(ChatEventKind::Restarted);
+                let name = if provider == Provider::Claude { "Claude Code" } else { "Codex" };
+                sh.push(ChatEventKind::notice(NoticeLevel::Info, format!("Restarted {name} on this conversation: it read its settings, MCP servers and instructions again.")));
+                drop(sh);
+                h.shared.clone()
+            }
+            None => Arc::new(Mutex::new(Shared {
             backend,
+            epoch: 0,
             events: VecDeque::new(),
             next_seq: 0,
             state: ChatState::Idle,
@@ -911,7 +987,9 @@ impl Chat {
             stderr_tail: VecDeque::new(),
             trace: std::env::var_os("COOOL_CHAT_TRACE").and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok()),
             open_failed: false,
-        }));
+        })),
+        };
+        let epoch = lock(&shared).epoch;
         let (writer, rx) = mpsc::channel::<WriterMsg>();
 
         // Writer: the caller never blocks on a child that is not reading.
@@ -954,6 +1032,10 @@ impl Chat {
                                 continue;
                             }
                             let mut sh = lock(&shared);
+                            if sh.epoch != epoch {
+                                // A restart took over (this process outlived its exit wait): its output is nobody's.
+                                break;
+                            }
                             if sh.trace.is_some() {
                                 sh.trace("out", Value::String(line.to_string()));
                             }
@@ -981,6 +1063,9 @@ impl Chat {
                                 continue;
                             }
                             let mut sh = lock(&shared);
+                            if sh.epoch != epoch {
+                                break;
+                            }
                             sh.stderr_tail.push_back(crate::util::truncate(&l, 400));
                             if sh.stderr_tail.len() > 12 {
                                 sh.stderr_tail.pop_front();
@@ -1002,6 +1087,9 @@ impl Chat {
                 // Something the CLI spawned may still hold stdout open; don't wait forever.
                 let _ = eof_rx.recv_timeout(Duration::from_secs(2));
                 let mut sh = lock(&shared);
+                if sh.epoch != epoch {
+                    return;
+                }
                 sh.running = false;
                 let mut o = Out::default();
                 sh.backend.on_exit(&mut o);
@@ -1023,7 +1111,22 @@ impl Chat {
             sh.backend.start(&mut o);
             apply(&mut sh, &writer, o);
         }
-        Ok(Self { id, provider, cwd: cwd.to_string(), pid, started: SystemTime::now(), shared, link: Link::Proc(writer), kill_requested: None, args: args.to_vec(), launch: crate::chatctx::Launch::default() })
+        Ok(Self {
+            id,
+            provider,
+            cwd: cwd.to_string(),
+            pid,
+            started: SystemTime::now(),
+            shared,
+            link: Link::Proc(writer),
+            kill_requested: None,
+            args: args.to_vec(),
+            launch: crate::chatctx::Launch::default(),
+            epoch,
+            opts: None,
+            mcp: Vec::new(),
+            sandbox: None,
+        })
     }
 
     /// A chat whose CLI the chat host runs (see [`host`]): its events arrive in a mirror; calls go to the host.
@@ -1041,6 +1144,10 @@ impl Chat {
             kill_requested: None,
             args: entry.args.clone(),
             launch: entry.launch.clone(),
+            epoch: 0,
+            opts: Some(entry.opts.clone()),
+            mcp: entry.mcp.clone(),
+            sandbox: None,
         }
     }
 
@@ -1064,6 +1171,10 @@ impl Chat {
             kill_requested: None,
             args: Vec::new(),
             launch: self.launch.clone(),
+            epoch: self.epoch,
+            opts: self.opts.clone(),
+            mcp: self.mcp.clone(),
+            sandbox: self.sandbox.clone(),
         })
     }
 
@@ -1169,17 +1280,32 @@ impl Chat {
     }
 
     pub fn set_model(&mut self, model: &str) -> Result<()> {
-        if let Some(r) = self.host_call(host::Call::SetModel { model: model.into() }) {
-            return r.map(|_| ());
+        let r = match self.host_call(host::Call::SetModel { model: model.into() }) {
+            Some(r) => r.map(|_| ()),
+            None => self.with_backend(json!({"call": "set_model", "model": model}), |b, o| b.set_model(model, o)),
+        };
+        if r.is_ok()
+            && let Some(o) = self.opts.as_mut()
+        {
+            o.model = Some(model.to_string());
         }
-        self.with_backend(json!({"call": "set_model", "model": model}), |b, o| b.set_model(model, o))
+        r
     }
 
     pub fn set_permission_mode(&mut self, mode: &str) -> Result<()> {
-        if let Some(r) = self.host_call(host::Call::SetPermissionMode { mode: mode.into() }) {
-            return r.map(|_| ());
+        let r = match self.host_call(host::Call::SetPermissionMode { mode: mode.into() }) {
+            Some(r) => r.map(|_| ()),
+            None => self.with_backend(json!({"call": "set_permission_mode", "mode": mode}), |b, o| b.set_permission_mode(mode, o)),
+        };
+        if r.is_ok() {
+            // A restart starts with it (Codex: an approval policy in the options, a sandbox mode beside them).
+            if self.provider == Provider::Codex && codex::is_sandbox_mode(mode) {
+                self.sandbox = Some(mode.to_string());
+            } else if let Some(o) = self.opts.as_mut() {
+                o.permission_mode = Some(mode.to_string());
+            }
         }
-        self.with_backend(json!({"call": "set_permission_mode", "mode": mode}), |b, o| b.set_permission_mode(mode, o))
+        r
     }
 
     /// Allow once, deny, or (`always`) allow and apply the request's first
@@ -1280,8 +1406,10 @@ impl Chat {
         }
     }
 
+    /// This start of the CLI is running (after a restart, an earlier start's [`Chat`] reads false).
     pub fn is_running(&self) -> bool {
-        lock(&self.shared).running
+        let sh = lock(&self.shared);
+        sh.running && sh.epoch == self.epoch
     }
 
     pub fn state(&self) -> ChatState {
@@ -1295,6 +1423,50 @@ impl Chat {
 
     pub fn session_id(&self) -> Option<String> {
         lock(&self.shared).session_id.clone()
+    }
+
+    /// What a restart starts the CLI with: the options it started with (`base` for a chat spawned without them),
+    /// resuming its conversation, with the model and mode as they are now (Claude Code's mode as it last said, which
+    /// also covers a switch the agent made itself).
+    pub fn restart_options(&self, base: Option<&ChatOptions>) -> Result<ChatOptions> {
+        let mut o = self.opts.clone().or_else(|| base.cloned()).context("this chat can't be restarted")?;
+        let sh = lock(&self.shared);
+        if let Some(sid) = sh.session_id.clone().filter(|s| !s.is_empty()) {
+            o.resume = Some(sid);
+        }
+        if self.provider == Provider::Claude && !sh.permission_mode.is_empty() {
+            o.permission_mode = Some(sh.permission_mode.clone());
+        }
+        Ok(o)
+    }
+
+    /// The MCP servers this chat started with (a restart gives them again).
+    pub fn mcp_servers(&self) -> &[McpServer] {
+        &self.mcp
+    }
+
+    /// After a restart into this chat: the mode switches the options can't hold (Codex's sandbox mode) apply again.
+    pub(crate) fn carry_over(&mut self, from: &Chat) {
+        if let Some(m) = from.sandbox.clone() {
+            if self.with_backend(json!({"call": "set_permission_mode", "mode": m}), |b, o| b.set_permission_mode(&m, o)).is_ok() {
+                self.sandbox = Some(m);
+            }
+        }
+    }
+
+    /// A hosted chat the host restarted (see [`host::Call::Restart`]): what it now runs.
+    pub(crate) fn hosted_restarted(&mut self, e: &host::Entry) {
+        self.pid = e.pid;
+        self.args = e.args.clone();
+        self.launch = e.launch.clone();
+        self.opts = Some(e.opts.clone());
+        self.started = SystemTime::now();
+        self.kill_requested = None;
+    }
+
+    /// A hosted chat's restart, run by its host (Some), or None for a chat of this process.
+    pub(crate) fn host_restart(&self) -> Option<Result<host::Entry>> {
+        self.host_call(host::Call::Restart).map(|r| r.and_then(|v| serde_json::from_value(v).context("the host's answer to restart")))
     }
 
     fn signal(&self, sig: libc::c_int) {
@@ -1331,9 +1503,14 @@ impl Drop for Chat {
         self.signal(libc::SIGTERM);
         let shared = self.shared.clone();
         let pid = self.pid.and_then(crate::util::valid_pid);
+        let epoch = self.epoch;
         thread::spawn(move || {
             thread::sleep(KILL_GRACE);
-            if lock(&shared).running
+            let ours = {
+                let sh = lock(&shared);
+                sh.running && sh.epoch == epoch
+            };
+            if ours
                 && let Some(p) = pid
             {
                 // SAFETY: as in `signal`; still unreaped, so the pid is still ours.
@@ -1709,6 +1886,54 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A restart in this process: the options resume the conversation with the mode as the CLI last said, the new CLI
+    /// takes over the same chat (events numbered on, `restarted` between the exit and the new start), and the earlier
+    /// start's `Chat` (dropped, or stopped again) leaves the new process alone.
+    #[test]
+    fn a_restart_takes_over_the_same_chat() {
+        let o = ChatOptions { model: Some("haiku".into()), permission_mode: Some("default".into()), ..ladder_opts(Provider::Claude, "/tmp", false) };
+        let script = "echo line-up-$$; sleep 30";
+        let start = |reuse: Option<&ChatHandle>| Chat::spawn_into(4, Provider::Claude, "/tmp", "/bin/sh", &["-c".to_string(), script.to_string()], &[], None, Box::new(claude::Claude::new(&o)), reuse).unwrap();
+        let mut a = start(None);
+        assert!(a.restart_options(None).is_err(), "no options: can't restart");
+        a.opts = Some(o.clone());
+        {
+            let mut sh = lock(&a.shared);
+            sh.session_id = Some("3f0c2d1e-0000-4000-8000-0000000000aa".into());
+            sh.permission_mode = "acceptEdits".into();
+        }
+        a.set_model("sonnet").unwrap(); // a switch since the start: a restart starts with it
+        let ro = a.restart_options(None).unwrap();
+        assert_eq!((ro.resume.as_deref(), ro.model.as_deref(), ro.permission_mode.as_deref()), (Some("3f0c2d1e-0000-4000-8000-0000000000aa"), Some("sonnet"), Some("acceptEdits")));
+        let h = a.handle();
+        let wait = |f: &dyn Fn() -> bool| {
+            let t = Instant::now();
+            while !f() {
+                assert!(t.elapsed() < Duration::from_secs(10));
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let ups = |h: &ChatHandle| h.events_since(0).0.into_iter().filter_map(|e| if let ChatEventKind::Notice { text, .. } = e.kind { text.starts_with("line-up-").then_some(text) } else { None }).collect::<Vec<_>>();
+        wait(&|| ups(&h).len() == 1);
+        let p1 = a.pid.unwrap();
+        a.stop();
+        wait_exit(&h, || a.escalate_kill(Some(Duration::ZERO))).unwrap();
+        let b = start(Some(&h));
+        let p2 = b.pid.unwrap();
+        assert!(b.is_running() && !a.is_running(), "the new start is the running one");
+        a.stop(); // the old start's stop reaches nothing
+        drop(a);
+        wait(&|| ups(&h).len() == 2);
+        assert_eq!(ups(&h), [format!("line-up-{p1}"), format!("line-up-{p2}")]);
+        thread::sleep(KILL_GRACE + Duration::from_millis(300));
+        assert!(b.is_running(), "dropping the earlier start didn't stop the new one");
+        let (evs, _) = h.events_since(0);
+        assert!(evs.windows(2).all(|w| w[1].seq == w[0].seq + 1), "numbered on");
+        let at = |f: fn(&ChatEventKind) -> bool| evs.iter().position(|e| f(&e.kind)).unwrap();
+        assert!(at(|k| matches!(k, ChatEventKind::Exited { .. })) < at(|k| matches!(k, ChatEventKind::Restarted)));
+        drop(b);
     }
 
     /// The device server's token never reaches either CLI's command line (`ps` shows it to any process of this user).

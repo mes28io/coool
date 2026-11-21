@@ -417,6 +417,8 @@ export type ChatEvent = Ev &
     | { type: "compacting"; active: boolean }
     | { type: "notice"; level: "info" | "warn" | "error"; text: string; needs_terminal: boolean }
     | { type: "exited"; code: number | null }
+    /** The person restarted the chat (CHAT_SPEC "Restart"): the CLI that exited runs again on the same conversation. */
+    | { type: "restarted" }
     | { type: "open_failed"; error: string; reason: OpenFailure; cli_version: string | null; resumed: boolean; unsent: { id: string; text: string }[] }
     | { type: "question"; request_id: string; questions: Question[] }
     | { type: "commands"; commands: CommandInfo[] }

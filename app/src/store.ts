@@ -28,7 +28,9 @@ export type Sheet =
   | null
   | { kind: "new"; cwd?: string; provider?: Provider }
   | { kind: "quit"; running: number; keep?: number }
-  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null };
+  | { kind: "stop"; label: string; managed: number | null; pid: number | null; chat?: number | null }
+  /** Restart a chat while its turn runs (CHAT_SPEC "Restart"): asked first. `message`: sent once it is back. */
+  | { kind: "restart"; chat: number; provider: Provider; message: string };
 
 /** What a browser tab shows (components/BrowserPanel.tsx). */
 export type BrowserPage =

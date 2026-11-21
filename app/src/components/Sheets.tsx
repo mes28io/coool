@@ -2,6 +2,8 @@ import { keepLine } from "../lib/updateView";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, type ReactNode } from "react";
 import { api } from "../lib/backend";
+import { restartChat } from "../lib/actions";
+import { restartAsk } from "../lib/restartRules";
 import { useStore, type Sheet } from "../store";
 import { NewSession } from "./NewSession";
 import { Button, cx } from "./primitives";
@@ -44,6 +46,7 @@ export function Sheets() {
 function SheetBody({ sheet, close }: { sheet: NonNullable<Sheet>; close: () => void }) {
   if (sheet.kind === "new") return <NewSession initialCwd={sheet.cwd} initialProvider={sheet.provider} close={close} />;
   if (sheet.kind === "quit") return <QuitConfirm running={sheet.running} keep={sheet.keep ?? 0} close={close} />;
+  if (sheet.kind === "restart") return <RestartConfirm chat={sheet.chat} provider={sheet.provider} message={sheet.message} close={close} />;
   return <StopConfirm label={sheet.label} managed={sheet.managed} pid={sheet.pid} chat={sheet.chat ?? null} close={close} />;
 }
 
@@ -85,6 +88,23 @@ function QuitConfirm({ running, keep, close }: { running: number; keep: number; 
       action="Stop and quit"
       danger
       onConfirm={() => api().quit()}
+      close={close}
+    />
+  );
+}
+
+function RestartConfirm({ chat, provider, message, close }: { chat: number; provider: string; message: string; close: () => void }) {
+  const t = restartAsk(provider);
+  return (
+    <Confirm
+      title={t.title}
+      body={t.body}
+      action="Restart"
+      danger
+      onConfirm={() => {
+        close();
+        void restartChat(chat, message);
+      }}
       close={close}
     />
   );

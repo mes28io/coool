@@ -431,6 +431,14 @@ export class MockChat {
     this.running = false;
     this.emit({ type: "exited", code });
   }
+  /** As the backend's restart: the CLI exits and starts again on the same conversation, in the same chat. */
+  restart() {
+    this.stop(null);
+    this.running = true;
+    this.emit({ type: "restarted" });
+    this.emit({ type: "notice", level: "info", text: `Restarted ${this.provider === "claude" ? "Claude Code" : "Codex"} on this conversation: it read its settings, MCP servers and instructions again.`, needs_terminal: false });
+    this.ready();
+  }
 
   /**
    * Like a Codex chat resumed from a thread the installed Codex can't read (real error text, codex-cli 0.145): the

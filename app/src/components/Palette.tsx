@@ -3,11 +3,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { displayTitle, folderName, homeShort, matchPrevious, previousTitles, projectOf } from "../lib/format";
 import { sessionKey } from "../lib/types";
 import { seenAt, isUnseen, leaves, resolveTarget, useStore } from "../store";
-import { openChatInTerminal } from "../lib/actions";
+import { askRestart, openChatInTerminal } from "../lib/actions";
 import { api } from "../lib/backend";
 import { useOpenWithName } from "../lib/prefs";
 import { openOnboarding } from "../lib/onboarding";
-import { IFolder, IGauge, IGear, IGrid, IMoon, ISpark, IPlus, ISearch, ISplitDown, ISplitRight, IStop, ISun, ITerminal } from "./icons";
+import { IFolder, IGauge, IGear, IGrid, IMoon, IRefresh, ISpark, IPlus, ISearch, ISplitDown, ISplitRight, IStop, ISun, ITerminal } from "./icons";
 import { cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
 import { askStop } from "./SessionView";
 import { score } from "../lib/fuzzy";
@@ -150,6 +150,8 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     if (r.chat !== null) {
       const chatId = r.chat;
       out.push({ id: "a:term", group: "Actions", label: `Open "${label}" in terminal`, icon: <ITerminal size={16} />, run: done(() => openChatInTerminal(chatId, r.session)) });
+      // CHAT_SPEC "Restart": the CLI starts again on this conversation (settings, MCP, instructions read again).
+      out.push({ id: "a:restart", group: "Actions", label: "Restart this chat", hint: "Starts the CLI again on this conversation: it reads its settings, MCP and instructions again", icon: <IRefresh size={16} />, run: done(() => askRestart(chatId)) });
     }
     if (live && (r.pty !== null || r.session?.pid || r.chat !== null)) {
       out.push({

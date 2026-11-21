@@ -69,6 +69,11 @@ fn approval_policy(mode: &str) -> &str {
 }
 const SANDBOX_MODES: &[&str] = &["read-only", "workspace-write", "danger-full-access"];
 
+/// A sandbox mode (else an approval policy): the two go through the same `set_permission_mode`.
+pub(crate) fn is_sandbox_mode(mode: &str) -> bool {
+    SANDBOX_MODES.contains(&mode)
+}
+
 pub(crate) fn args() -> Vec<String> {
     vec!["app-server".into()]
 }

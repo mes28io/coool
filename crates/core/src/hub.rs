@@ -65,6 +65,8 @@ pub struct Hub {
     host: Option<Arc<crate::chat::host::Client>>,
     /// Chat ids handed out to starts still waiting for the host (see [`Hub::start_chat_in`]).
     reserved: std::collections::HashSet<usize>,
+    /// Chats being restarted (see [`Hub::restart_chat_in`]): their CLI is down for a moment, nothing has ended.
+    restarting: std::collections::HashSet<usize>,
 }
 
 impl Hub {
@@ -110,6 +112,7 @@ impl Hub {
             typed_pending: Default::default(),
             host: None,
             reserved: Default::default(),
+            restarting: Default::default(),
         }
     }
 
@@ -564,6 +567,89 @@ impl Hub {
             }
         };
         Ok(h.place_chat(id, c))
+    }
+
+    /// Restart chat `id` (CHAT_SPEC "Restart"): stop its CLI and start it again resuming the same conversation, with
+    /// the same folder, options (model and mode as they are now), MCP servers and Ladder, in the same chat: its id,
+    /// events and tab stay. A hosted chat restarts in its host while new chats go to a host (the keep-alive setting);
+    /// otherwise, or when its host is from before restarts, it restarts inside this process. Its Ladder helpers are
+    /// left alone (see [`Hub::is_restarting`]). The hub is held only for the bookkeeping, never while the CLI exits.
+    pub fn restart_chat_in(hub: &std::sync::Mutex<Hub>, id: usize) -> Result<()> {
+        let lock = || hub.lock().unwrap_or_else(|e| e.into_inner());
+        let (hosted, keep, handle) = {
+            let mut h = lock();
+            if h.restarting.contains(&id) {
+                anyhow::bail!("this chat is already restarting");
+            }
+            let keep = h.host.as_ref().is_some_and(|c| c.is_alive());
+            let c = h.chat(id).context("no such chat")?;
+            let r = (c.host_proxy(), keep, c.handle());
+            h.restarting.insert(id);
+            r
+        };
+        let r = Self::restart_steps(hub, id, hosted, keep, &handle);
+        let mut h = lock();
+        h.restarting.remove(&id);
+        if r.is_ok() {
+            h.chat_exited_at.remove(&id);
+        }
+        r
+    }
+
+    fn restart_steps(hub: &std::sync::Mutex<Hub>, id: usize, hosted: Option<Chat>, keep: bool, handle: &crate::chat::ChatHandle) -> Result<()> {
+        let lock = || hub.lock().unwrap_or_else(|e| e.into_inner());
+        let mut moved: Option<String> = None;
+        if let Some(mut proxy) = hosted {
+            if keep {
+                match proxy.host_restart() {
+                    Some(Ok(e)) => {
+                        if let Some(c) = lock().chat_mut(id) {
+                            c.hosted_restarted(&e);
+                        }
+                        // The mirror hears of it a moment later: running again before a message goes to it.
+                        let t = Instant::now();
+                        while !handle.is_running() && t.elapsed() < Duration::from_secs(3) {
+                            std::thread::sleep(Duration::from_millis(15));
+                        }
+                        return Ok(());
+                    }
+                    // A host from before restarts ("bad call"), or one that is gone or lost the chat: this process
+                    // takes the chat over (below).
+                    Some(Err(e)) => {
+                        let e = format!("{e:#}");
+                        moved = Some(if e.contains("bad call") { "its chat host is from an earlier coool".into() } else { format!("its chat host couldn't restart it: {e}") });
+                    }
+                    None => {}
+                }
+            }
+            moved.get_or_insert_with(|| "“Keep chats running when coool quits” is off".into());
+            // Stop it in the host; the mirror says when it is gone.
+            proxy.stop();
+        } else if let Some(c) = lock().chat_mut(id) {
+            c.stop();
+        }
+        crate::chat::wait_exit(handle, || {
+            if let Some(c) = lock().chat_mut(id) {
+                c.escalate_kill(Some(Duration::ZERO));
+            }
+        })?;
+        let mut h = lock();
+        let (client_name, ladder_root) = (h.client_name.clone(), h.ladder_root.clone());
+        let old = h.chat(id).context("no such chat")?;
+        let opts = old.restart_options(None)?;
+        let mcp = old.mcp_servers().to_vec();
+        let mut new = Chat::start_into(id, opts, &client_name, &mcp, ladder_root.as_deref(), Some(handle))?;
+        new.carry_over(old);
+        if let Some(why) = moved {
+            new.handle().note(&format!("This chat now runs inside coool ({why}), so it stops if coool quits."));
+        }
+        h.place_chat(id, new);
+        Ok(())
+    }
+
+    /// Chat `id` is being restarted: its CLI is down only for a moment (its helpers keep running).
+    pub fn is_restarting(&self, id: usize) -> bool {
+        self.restarting.contains(&id)
     }
 
     /// The next free chat id (past the ones handed to starts still on their way).

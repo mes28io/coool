@@ -2,6 +2,7 @@
 // Every flow fails soft when the backend has no chat commands yet
 // (NotAvailable): it falls back to the PTY flow and says so.
 
+import { create } from "zustand";
 import { useStore } from "../store";
 import { api, isNotAvailable } from "./backend";
 import { useChats, type PermissionAnswer } from "./chat";
@@ -88,6 +89,59 @@ export async function resumeSession(s: Session, leaf?: string, opts?: { terminal
     place({ kind: "pty", id }, leaf);
   } catch (e) {
     toast(String(e), "error");
+  }
+}
+
+/** Chats whose restart is under way (the header's button shows it; a second press waits for the first). */
+export const useRestarting = create<{ on: Record<number, true>; set: (id: number, on: boolean) => void }>((set) => ({
+  on: {},
+  set: (id, on) =>
+    set((s) => {
+      const next = { ...s.on };
+      if (on) next[id] = true;
+      else delete next[id];
+      return { on: next };
+    }),
+}));
+
+/** Restart chat `id` (CHAT_SPEC "Restart"): its CLI stops and starts again on the same conversation, in the same chat
+ *  (tab, pane and history stay). Asks first while a turn runs. `message` ("continue") is sent once it is back. */
+export function askRestart(id: number, message = "") {
+  const c = useChats.getState().chats[id];
+  if (!c) return;
+  if (c.running && c.state !== "idle") {
+    useStore.getState().setSheet({ kind: "restart", chat: id, provider: c.provider, message });
+    return;
+  }
+  void restartChat(id, message);
+}
+
+export async function restartChat(id: number, message = ""): Promise<boolean> {
+  const r = useRestarting.getState();
+  if (r.on[id]) return false;
+  r.set(id, true);
+  try {
+    await api().chatRestart(id, message.trim() || null);
+    return true;
+  } catch (e) {
+    if (isNotAvailable(e)) {
+      useChats.getState().local(id, { level: "warn", text: "Restart isn't available in this build yet. Stop the chat, then send a message to resume it." });
+      return false;
+    }
+    // The backend no longer holds the chat (it ended a while ago): resume its session in this pane instead.
+    const c = useChats.getState().chats[id];
+    const s = c?.sessionId ? useStore.getState().sessions.find((x) => x.provider === c.provider && x.id === c.sessionId) : undefined;
+    if (/no such chat/i.test(String(e)) && s) {
+      const st = useStore.getState();
+      const tab = st.tabs.find((t) => t.id === st.activeTab);
+      const nid = await resumeSession(s, tab?.focus);
+      if (nid !== undefined && message.trim()) await chatCall(nid, () => api().chatSend(nid, message.trim()));
+      return nid !== undefined;
+    }
+    toast(String(e), "error");
+    return false;
+  } finally {
+    useRestarting.getState().set(id, false);
   }
 }
 
