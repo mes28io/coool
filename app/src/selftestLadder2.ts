@@ -20,7 +20,7 @@
 import { newChat } from "./lib/actions";
 import { api } from "./lib/backend";
 import { useChats, type Chat, type ChatItem } from "./lib/chat";
-import { launchedLadderNow } from "./lib/ladder";
+import { launchedLadderNow, ladderStatusNow } from "./lib/ladder";
 import { laneOf } from "./lib/ladderTiers";
 import { useStore } from "./store";
 
@@ -73,9 +73,19 @@ export function ladder2Scenarios(h: H): Record<string, (ctx: { cfg: { dir: strin
   const tool = (chatId: number, name: string, args: unknown = {}) => h.invoke("selftest_ladder", { action: "tool", chat: chatId, name, args }) as Promise<{ ok: boolean; value?: unknown; error?: string }>;
 
   async function lead(dir: string, prompt: string, ladder: { reserve?: number; depth?: number } = {}): Promise<number> {
+    // The tier table needs the CLIs' status (Codex installed and logged in, its models) as a real launch would have it.
+    await h.waitFor("the CLIs' status", () => ladderStatusNow()?.checked_ms, 60_000);
     const before = ids();
     await newChat({ provider: "claude", cwd: dir, model: "haiku", permissionMode: "acceptEdits", prompt, ladder: { on: true, ...ladder } });
-    const id = (await h.waitFor("the new chat", () => [...ids()].find((i) => !before.has(i)), 15_000)) as number;
+    // Wrapped: the first chat's id is 0.
+    const { id } = await h.waitFor(
+      "the new chat",
+      () => {
+        const i = [...ids()].find((x) => !before.has(x));
+        return i === undefined ? null : { id: i };
+      },
+      15_000,
+    );
     await h.waitFor("ready", () => chat(id)?.ready, 60_000);
     return id;
   }
@@ -102,6 +112,7 @@ export function ladder2Scenarios(h: H): Record<string, (ctx: { cfg: { dir: strin
         return `cross ${lo?.cross?.map((t) => `${t.role}=${t.model}`).join(", ")}; image ${lo?.image?.model}; env ${env.join(" ") || "(not visible to ps)"}`;
       });
       await h.step("ladder2: the lead reads budget before planning", async () => {
+        if (id < 0) throw h.fail("no chat");
         await turn(id, 180_000);
         const calls = toolsOf(id).filter((t) => isLadderTool(t, "budget"));
         if (!calls.length) throw h.fail(`no budget call; tools: ${toolsOf(id).map((t) => t.name).join(", ")}`);
@@ -151,7 +162,7 @@ export function ladder2Scenarios(h: H): Record<string, (ctx: { cfg: { dir: strin
       let kid = -1;
       await h.step("ladder2: one helper through spawn, shown as the lead's child, its result returned", async () => {
         id = await lead(ctx.cfg.dir, "Use your Ladder `spawn` tool once: model haiku, brief \"Reply with exactly the word PONG and nothing else.\" Then call `wait` for it and tell me, in one line, the helper's id and exactly what it replied.", { depth: 1 });
-        kid = (await h.waitFor("the helper chat", () => Object.values(useStore.getState().chatInfos).find((c) => c.helper?.parent === id)?.id, 180_000)) as number;
+        kid = (await h.waitFor("the helper chat", () => Object.values(useStore.getState().chatInfos).find((c) => c.helper?.parent === id), 180_000)).id;
         const info = useStore.getState().chatInfos[kid];
         if (info.helper?.depth !== 1) throw h.fail(`depth ${info.helper?.depth}`);
         await turn(id, 300_000);
@@ -199,9 +210,10 @@ export function ladder2Scenarios(h: H): Record<string, (ctx: { cfg: { dir: strin
         if (sent.length) throw h.fail(`codex exec ran anyway: ${cmdOf(sent[0])}`);
         const r = replyOf(id);
         if (!/usage|reserve|limit|reset/i.test(r)) throw h.fail(`the reply doesn't say why: ${r.slice(0, 300)}`);
-        if ((await files()).some((f) => f.path === "assets/refused-icon.png" && f.png)) throw h.fail("a PNG appeared");
+        // The lead may take the alternative `can` named (an SVG it draws itself, a placeholder): logged, not failed.
+        const own = (await files()).filter((f) => f.path.startsWith("assets/")).map((f) => f.path);
         await h.shot("ladder2-refuse");
-        return `can → ${said.replace(/\s+/g, " ").slice(0, 220)}; no codex exec; reply: ${r.replace(/\s+/g, " ").slice(0, 240)}`;
+        return `can → ${said.replace(/\s+/g, " ").slice(0, 220)}; no codex exec; the lead's own files: ${own.join(", ") || "none"}; reply: ${r.replace(/\s+/g, " ").slice(0, 240)}`;
       });
       await h.step("ladder2: spawn refused under the reserve (no model turn)", async () => {
         const r = await tool(id, "spawn", { model: "haiku", brief: "x" });

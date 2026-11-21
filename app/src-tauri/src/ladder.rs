@@ -263,8 +263,8 @@ fn cli_status(p: Provider) -> budget::Cli {
     let Some(v) = run(Command::new(bin).arg("--version"), Duration::from_secs(10)) else { return budget::Cli::default() };
     let version = v.split_whitespace().find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit())).map(str::to_string);
     let logged_in = match p {
-        // Prints "Logged in using ..." (exit 0) or "Not logged in" (exit 1).
-        Provider::Codex => Some(run(Command::new(bin).args(["login", "status"]), Duration::from_secs(10)).is_some_and(|o| o.contains("Logged in"))),
+        // Prints "Logged in using ..." (exit 0) or "Not logged in" (exit 1), on stderr (codex 0.171).
+        Provider::Codex => Some(run_both(Command::new(bin).args(["login", "status"]), Duration::from_secs(10)).is_some_and(|o| o.contains("Logged in"))),
         // JSON with `loggedIn`; only that field is read.
         Provider::Claude => run(Command::new(bin).args(["auth", "status"]), Duration::from_secs(10)).and_then(|o| serde_json::from_str::<Value>(&o).ok()).and_then(|v| v["loggedIn"].as_bool()),
     };
@@ -283,7 +283,23 @@ fn codex_models() -> Vec<ModelOption> {
 
 /// Runs a command with a time limit; its stdout when it exits 0.
 fn run(cmd: &mut Command, limit: Duration) -> Option<String> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    run_with(cmd, limit, false)
+}
+
+/// The same, with stderr appended to stdout (a CLI that prints its status on stderr).
+fn run_both(cmd: &mut Command, limit: Duration) -> Option<String> {
+    run_with(cmd, limit, true)
+}
+
+fn run_with(cmd: &mut Command, limit: Duration, stderr: bool) -> Option<String> {
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(if stderr { Stdio::piped() } else { Stdio::null() }).spawn().ok()?;
+    let err = child.stderr.take().map(|mut e| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = std::io::Read::read_to_string(&mut e, &mut s);
+            s
+        })
+    });
     let mut out = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut s = String::new();
@@ -294,7 +310,10 @@ fn run(cmd: &mut Command, limit: Duration) -> Option<String> {
     loop {
         match child.try_wait() {
             Ok(Some(st)) => {
-                let s = reader.join().unwrap_or_default();
+                let mut s = reader.join().unwrap_or_default();
+                if let Some(e) = err {
+                    s.push_str(&e.join().unwrap_or_default());
+                }
                 return st.success().then_some(s);
             }
             Ok(None) if t0.elapsed() < limit => std::thread::sleep(Duration::from_millis(50)),
