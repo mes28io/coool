@@ -299,19 +299,24 @@ fn filters() {
     assert_eq!(ids(find(&mut h, Query { cwd: Some("/w/atlas/sub".into()), ..Query::default() })), vec!["a2".to_string()]);
     assert_eq!(ids(find(&mut h, Query { providers: vec![Provider::Codex], ..Query::default() })), vec![C1.to_string()]);
     assert_eq!(ids(find(&mut h, Query { wheres: vec![Where::Ide], ..Query::default() })), vec!["v1".to_string()]);
-    assert_eq!(ids(find(&mut h, Query { wheres: vec![Where::Automation], ..Query::default() })), vec!["p1".to_string()]);
+    // A `claude -p` run is listed only on asking (agents' sessions).
+    assert_eq!(ids(find(&mut h, Query { wheres: vec![Where::Automation], ..Query::default() })), Vec::<String>::new());
+    assert_eq!(ids(find(&mut h, Query { wheres: vec![Where::Automation], agents: true, ..Query::default() })), vec!["p1".to_string()]);
     assert_eq!(ids(find(&mut h, Query { has_changes: true, ..Query::default() })), vec!["a1".to_string()]);
-    assert_eq!(ids(find(&mut h, Query { from_ms: Some(now - 10 * DAY), to_ms: Some(now - 2 * DAY + 5000), ..Query::default() })), vec![C1.to_string(), "b1".into(), "p1".into(), "v1".into()]);
-    // The project facet counts what the other filters leave, whatever project is picked.
+    assert_eq!(ids(find(&mut h, Query { from_ms: Some(now - 10 * DAY), to_ms: Some(now - 2 * DAY + 5000), agents: true, ..Query::default() })), vec![C1.to_string(), "b1".into(), "p1".into(), "v1".into()]);
+    // The project facet counts what the other filters leave, whatever project is picked (agents' runs only on asking).
     let p = find(&mut h, Query { providers: vec![Provider::Claude], project: Some("/w/beacon".into()), ..Query::default() });
-    assert_eq!(p.total, 3);
+    assert_eq!((p.total, p.agents), (2, 1));
     let facet: HashMap<String, usize> = p.projects.iter().map(|f| (f.project.clone(), f.count)).collect();
-    assert_eq!(facet.get("/w/beacon"), Some(&3));
+    assert_eq!(facet.get("/w/beacon"), Some(&2));
+    let p = find(&mut h, Query { providers: vec![Provider::Claude], project: Some("/w/beacon".into()), agents: true, ..Query::default() });
+    assert_eq!(p.total, 3);
+    assert_eq!(p.projects.iter().find(|f| f.project == "/w/beacon").map(|f| f.count), Some(3));
     assert_eq!(facet.get("/w/atlas"), Some(&1));
     assert_eq!(facet.get("/w/atlas/sub"), Some(&1));
     // A scope (the self-test's folder) hides everything else.
     let only: &dyn Fn(&str) -> bool = &|c: &str| c.starts_with("/w/beacon");
-    assert_eq!(h.query(&Query::default(), &no_names, Some(only)).total, 3);
+    assert_eq!(h.query(&Query::default(), &no_names, Some(only)).total, 2);
     // coool's name for a session is its title, and is searched.
     let named = |_: Provider, id: &str| (id == "b1").then(|| "Billing export".to_string());
     let p = h.query(&text("billing"), &named, None);
@@ -417,4 +422,125 @@ fn snippet_looks_past_a_first_prompt_the_title_already_shows() {
     let s: String = r.snippet.iter().map(|x| x.t.as_str()).collect();
     assert!(s.contains("the reply mentions the needle"), "{s}");
     assert!(!s.starts_with("needle in the opening"), "{s}");
+}
+
+/// A Claude transcript from raw records: each `(entrypoint, extra fields, prompt)` is one user record and a reply.
+fn claude_raw(home: &Home, id: &str, cwd: &str, at: u64, recs: &[(&str, &str, &str)]) {
+    let dir = home.claude().join("projects").join(cwd.replace(['/', '.'], "-"));
+    fs::create_dir_all(&dir).unwrap();
+    let mut s = String::new();
+    for (k, (entry, extra, prompt)) in recs.iter().enumerate() {
+        let t = iso(at - (recs.len() - 1 - k) as u64 * 60_000);
+        let ep = if entry.is_empty() { String::new() } else { format!(",\"entrypoint\":\"{entry}\"") };
+        s += &format!("{{\"type\":\"user\",\"timestamp\":\"{t}\"{ep}{extra},\"cwd\":\"{cwd}\",\"sessionId\":\"{id}\",\"message\":{{\"content\":{}}}}}\n", serde_json::to_string(prompt).unwrap());
+        s += &format!("{{\"type\":\"assistant\",\"timestamp\":\"{t}\",\"message\":{{\"model\":\"claude-opus-5-5\",\"content\":[{{\"type\":\"text\",\"text\":\"ok\"}}]}}}}\n");
+    }
+    fs::write(dir.join(format!("{id}.jsonl")), s).unwrap();
+}
+
+const P1: &str = "aaaaaaaa-1111-4111-8111-111111111111";
+const LANE: &str = "bbbbbbbb-2222-4222-8222-222222222222";
+const HELPER: &str = "cccccccc-3333-4333-8333-333333333333";
+const SCRATCH: &str = "dddddddd-4444-4444-8444-444444444444";
+
+/// Who started each kind of session (`origin::started_by`), from invented transcripts and coool's own records:
+/// the person's are listed, searched and counted; agents' only on asking, nested under their session when known.
+#[test]
+fn person_and_agent_sessions() {
+    let home = Home::new("starter");
+    let now = now_ms();
+    let human = ",\"promptSource\":\"typed\",\"turnOrigin\":\"human\",\"origin\":{\"kind\":\"human\"}";
+    let sdk = ",\"promptSource\":\"sdk\",\"turnOrigin\":\"sdk\"";
+    // The person's: a terminal session, an IDE session, a coool chat, a headless run continued in a terminal,
+    // a phone session through the SDK.
+    claude_raw(&home, P1, "/w/app", now - DAY, &[("cli", human, "plan the alpacaroo release")]);
+    claude_raw(&home, "ide", "/w/app", now - DAY, &[("claude-vscode", "", "ide work")]);
+    claude_raw(&home, "chat", "/w/app", now - DAY, &[("sdk-cli", sdk, "a coool chat")]);
+    claude_raw(&home, "resumed", "/w/app", now - DAY, &[("sdk-cli", sdk, "headless first"), ("cli", "", "then by hand")]);
+    claude_raw(&home, "phone", "/w/app", now - DAY, &[("sdk-cli", human, "from the phone")]);
+    // Agents': `claude -p` (no parent known), a sidechain, a lane of P1 (a link coool saw live), a Ladder helper chat
+    // of P1 (a coool chat with a parent), a run in P1's scratch folder; and a helper the person then typed into.
+    claude_raw(&home, "print", "/w/app", now - DAY, &[("sdk-cli", sdk, "headless wombatique run")]);
+    claude_raw(&home, "side", "/w/app", now - DAY, &[("sdk-cli", ",\"isSidechain\":true", "side work")]);
+    claude_raw(&home, LANE, "/w/app", now - DAY, &[("sdk-cli", sdk, "lane wombatique brief")]);
+    claude_raw(&home, HELPER, "/w/app", now - DAY, &[("sdk-cli", sdk, "helper brief")]);
+    claude_raw(&home, SCRATCH, &format!("/private/tmp/claude-501/-w-app/{P1}/scratchpad"), now - DAY, &[("sdk-cli", sdk, "scratch run")]);
+    claude_raw(&home, "taken", "/w/app", now - DAY, &[("sdk-cli", sdk, "helper the person took over")]);
+    // Undecided: no entrypoint at all, an unknown client. Listed.
+    claude_raw(&home, "bare", "/w/app", now - DAY, &[("", "", "no entrypoint")]);
+    claude_raw(&home, "novel", "/w/app", now - DAY, &[("something-new", "", "a new client")]);
+    // Codex: the TUI, the desktop app, a coool chat (the person's); `codex exec`, an exec lane of P1, a self-test (agents').
+    home.codex_session(C1, "/w/app", now - DAY, "tui", "x", "codex_cli_rs", "cli");
+    home.codex_session(C2, "/w/app", now - DAY, "desktop", "x", "Codex Desktop", "vscode");
+    home.codex_session(C3, "/w/app", now - DAY, "coool chat", "x", "coool", "vscode");
+    let exec = "44444444-4444-4444-8444-444444444444";
+    let exec_lane = "55555555-5555-4555-8555-555555555555";
+    let test = "66666666-6666-4666-8666-666666666666";
+    home.codex_session(exec, "/w/app", now - DAY, "exec wombatique", "x", "codex_exec", "exec");
+    home.codex_session(exec_lane, "/w/app", now - DAY, "exec lane", "x", "codex_exec", "exec");
+    home.codex_session(test, "/w/app", now - DAY, "self-test", "x", "coool-selftest", "vscode");
+
+    let own_file = home.root.join("own-sessions.json");
+    let mut own = crate::origin::OwnSessions::at(Some(own_file.clone()));
+    for id in ["chat", HELPER, "taken"] {
+        own.record(Provider::Claude, id);
+    }
+    own.record_parent(Provider::Claude, LANE, P1);
+    own.record_parent(Provider::Claude, HELPER, P1);
+    own.record_parent(Provider::Claude, "taken", P1);
+    own.record_typed(Provider::Claude, "taken");
+    own.record_parent(Provider::Codex, exec_lane, P1);
+    let mut h = History::open(Options { own_sessions: Some(own_file), ..home.mem() });
+    run(&mut h);
+
+    let by = |p: &Page| -> HashMap<String, Starter> { p.rows.iter().map(|r| (r.id.clone(), r.by)).collect() };
+    let p = find(&mut h, Query::default());
+    let shown = by(&p);
+    let mut ids: Vec<&str> = shown.keys().map(String::as_str).collect();
+    ids.sort();
+    let mut want = vec![P1, "ide", "chat", "resumed", "phone", "taken", "bare", "novel", C1, C2, C3];
+    want.sort();
+    assert_eq!(ids, want);
+    for id in ["bare", "novel"] {
+        assert_eq!(shown[id], Starter::Unknown, "{id}");
+    }
+    for id in [P1, "ide", "chat", "resumed", "phone", "taken", C1, C2, C3] {
+        assert_eq!(shown[id], Starter::Person, "{id}");
+    }
+    assert!(p.rows.iter().all(|r| r.helpers.is_empty()), "no helpers listed unless asked");
+    assert_eq!((p.total, p.agents), (11, 8));
+    let st = h.status();
+    assert_eq!((st.sessions, st.agents), (11, 8));
+    assert_eq!(p.projects.iter().find(|f| f.project == "/w/app").map(|f| f.count), Some(11), "the sidebar's Show N more counts the person's");
+
+    // Asked for: P1's lane, helper, scratch run and exec lane are listed under it; the rest on their own.
+    let p = find(&mut h, Query { agents: true, ..Query::default() });
+    let p1 = p.rows.iter().find(|r| r.id == P1).unwrap();
+    let mut kids: Vec<&str> = p1.helpers.iter().map(|x| x.id.as_str()).collect();
+    kids.sort();
+    let mut want = vec![LANE, HELPER, SCRATCH, exec_lane];
+    want.sort();
+    assert_eq!(kids, want);
+    let rows = by(&p);
+    for id in ["print", "side", exec, test] {
+        assert_eq!(rows.get(id), Some(&Starter::Agent), "{id}");
+    }
+    for id in [LANE, HELPER, SCRATCH, exec_lane] {
+        assert!(!rows.contains_key(id), "{id} is under its session, not a row");
+    }
+    assert_eq!((p.total, p.agents), (15, 8));
+
+    // Searching without them never finds them; with them, a helper that matches alone is a row of its own (its
+    // parent doesn't match).
+    let s = find(&mut h, text("wombatique"));
+    assert_eq!((s.total, s.agents), (0, 3));
+    let s = find(&mut h, Query { agents: true, ..text("wombatique") });
+    let mut found: Vec<String> = s.rows.iter().map(|r| r.id.clone()).collect();
+    found.sort();
+    let mut want = vec!["print".to_string(), LANE.to_string(), exec.to_string()];
+    want.sort();
+    assert_eq!(found, want);
+    let s = find(&mut h, Query { agents: true, ..text("alpacaroo") });
+    assert_eq!(s.rows.len(), 1);
+    assert!(s.rows[0].helpers.is_empty());
 }

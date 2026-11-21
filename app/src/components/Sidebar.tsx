@@ -20,7 +20,7 @@ import { SidebarSkeleton } from "./Skeletons";
 import { reducedMotion } from "./StepRail";
 import { AnimateScope } from "../lib/motion";
 import { countRender, markOnce } from "../lib/perfCount";
-import { useHistoryCounts } from "../lib/history";
+import { byAgent, useHistoryCounts } from "../lib/history";
 
 export interface Project {
   cwd: string;
@@ -290,11 +290,11 @@ function ResizeHandle({ width, onChange, onDragging }: { width: number; onChange
   );
 }
 
-/** "12 runs by other tools hidden · Show": nothing the setting hides vanishes without a trace. */
+/** "12 runs started by agents or other tools hidden · Show": nothing the setting hides vanishes without a trace. */
 function OtherToolsLine() {
   const hidden = useStore((s) => s.hiddenAutomation);
   const show = useStore((s) => s.showAutomation);
-  const shown = useStore((s) => (s.showAutomation ? s.sessions.filter((x) => x.origin === "automation").length : 0));
+  const shown = useStore((s) => (s.showAutomation ? s.sessions.filter(byAgent).length : 0));
   const setShow = useStore((s) => s.setShowAutomation);
   const n = show ? shown : hidden;
   if (n === 0) return null;
@@ -306,11 +306,11 @@ function OtherToolsLine() {
         type="button"
         data-nav
         data-other-tools-history
-        onClick={() => useStore.getState().openHistory({ wheres: ["automation"] })}
-        title="See runs by other tools in History (⌘Y)"
+        onClick={() => useStore.getState().openHistory({ agents: true })}
+        title="See them in History, under the sessions that started them (⌘Y)"
         className="tnum min-w-0 truncate rounded-[6px] px-1 -ml-1 text-left transition-colors duration-150 hover:bg-hover hover:text-fg"
       >
-        {n} {runs} by other tools {show ? "shown" : "hidden"}
+        {n} {runs} started by agents or other tools {show ? "shown" : "hidden"}
       </button>
       <span aria-hidden>·</span>
       <button

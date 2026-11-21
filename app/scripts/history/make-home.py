@@ -11,7 +11,10 @@ Sessions the self-test looks for by a word only they contain:
   earlier history), with edits to files that exist;
 - "quokkafold": a Claude session in proj/old-site, a folder that doesn't exist (deleted);
 - "pangolink": a Codex session in proj/archive/billing (gone), while proj/billing exists (moved);
-- "narwhalize": a Claude session compacted twice.
+- "narwhalize": a Claude session compacted twice;
+- "yakfluff": the person's session in proj/relay from half an hour ago and the nine sessions it started (lanes, a
+  Ladder helper), linked in coool's own-sessions file (<out>/proj/.coool-selftest-own-sessions.json);
+- "marmotide": an old person's session in proj/ledger and three old `claude -p` runs with the same word.
 
     python3 -I app/scripts/history/make-home.py --out /private/tmp/coool-history-e2e [--sessions 3000] [--seed 11]
 """
@@ -155,6 +158,46 @@ def main():
     codex(proj / "archive" / "billing", now - 120 * DAY, 5, "codex_cli_rs", "cli", "Reconcile the pangolink invoices. " + sentence())
     codex(proj / "billing", now - 10 * DAY, 3, "codex_cli_rs", "cli", "Tidy the billing README. " + sentence())
     claude(proj / "relay", now - 40 * DAY, 30, "cli", "Narwhalize the relay queue retries. " + sentence(), compact=2)
+
+    # Sessions agents started (History lists them only on asking; the sidebar nests the ones whose session it lists):
+    # - "yakfluff": the person's terminal session in proj/relay from half an hour ago (LEAD), and what it started:
+    #   six `claude -p` lanes, two `codex exec` lanes and a Ladder helper chat (a coool chat), linked to it in coool's
+    #   own-sessions file as coool would have seen them live;
+    # - three recent runs nobody's session is known for (a script's `claude -p`, `codex exec`): hidden in the sidebar;
+    # - "marmotide": an old person's session, and three old agents' runs with the same word (⌘K finds one).
+    sdk = {"promptSource": "sdk", "turnOrigin": "sdk"}
+    human = {"promptSource": "typed", "turnOrigin": "human", "origin": {"kind": "human"}}
+
+    def claude_as(cwd, end, turns, entry, first, extra):
+        sid = claude(cwd, end, turns, entry, first)
+        p = home / ".claude" / "projects" / str(cwd).replace("/", "-").replace(".", "-") / f"{sid}.jsonl"
+        rows = [json.loads(l) for l in p.read_text().splitlines()]
+        for r in rows:
+            if r.get("type") == "user" and isinstance(r.get("message", {}).get("content"), str):
+                r.update(extra)
+        p.write_text("\n".join(json.dumps(r, separators=(",", ":")) for r in rows) + "\n")
+        os.utime(p, (end, end))
+        return sid
+
+    relay = proj / "relay"
+    lead = claude_as(relay, now - 1800, 4, "cli", "Lead the yakfluff refactor of the relay queue. " + sentence(), human)
+    parents = []
+    for k in range(6):
+        sid = claude_as(relay, now - 1500 + k * 60, 2, "sdk-cli", f"Yakfluff lane {k + 1}: read the brief and carry it out. " + sentence(), sdk)
+        parents.append(("claude", sid))
+    for k in range(2):
+        parents.append(("codex", codex(relay, now - 1100 + k * 60, 2, "codex_exec", "exec", f"Yakfluff exec lane {k + 1}. " + sentence())))
+    helper = claude_as(relay, now - 900, 3, "sdk-cli", "Yakfluff helper: write the migration tests. " + sentence(), sdk)
+    parents.append(("claude", helper))
+    claude_as(relay, now - 1300, 1, "sdk-cli", "Nightly lint of the relay repo. " + sentence(), sdk)
+    claude_as(relay, now - 1250, 1, "sdk-cli", "Nightly dependency check of the relay repo. " + sentence(), sdk)
+    codex(relay, now - 1200, 1, "codex_exec", "exec", "Nightly changelog draft for relay. " + sentence())
+    claude_as(proj / "ledger", now - 90 * DAY, 5, "cli", "Plan the marmotide ledger export. " + sentence(), human)
+    for k in range(3):
+        claude_as(proj / "ledger", now - 90 * DAY + (k + 1) * 600, 1, "sdk-cli", f"Marmotide export check {k + 1}. " + sentence(), sdk)
+    own = {"v": 1, "sessions": [{"provider": "claude", "id": helper, "seen": int(now)}],
+           "parents": [{"provider": p, "id": i, "parent": lead, "seen": int(now)} for p, i in parents], "typed": []}
+    (proj / ".coool-selftest-own-sessions.json").write_text(json.dumps(own))
 
     (home / ".codex").mkdir(parents=True, exist_ok=True)
     (home / ".codex" / "session_index.jsonl").write_text("".join(json.dumps(n) + "\n" for n in names))

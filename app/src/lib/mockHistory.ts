@@ -4,7 +4,7 @@
 // `?historyPage=1` opens the page at load (`&historyq=<words>` types a search, `&historyProject=<name>` filters).
 
 import type { Activity, Provider } from "./types";
-import type { HistoryBackend, HistoryPage, HistoryQuery, HistoryRow, HistorySeg, Where } from "./history";
+import type { HistoryBackend, HistoryHelper, HistoryPage, HistoryQuery, HistoryRow, HistorySeg, Where } from "./history";
 
 const PROJECTS = ["atlas-api", "notes-ios", "pixelforge", "relay", "relay-docs", "pocket-ledger", "coool", "blender-addon", "harbor", "invoices"];
 const GONE = new Set(["harbor"]);
@@ -112,10 +112,17 @@ function build(home: string, n: number, now: number): Doc[] {
       bytes: Math.floor(prompts * (20_000 + r() * 80_000)),
       missing: GONE.has(project),
       archived: provider === "codex" && r() < 0.05,
+      by: where === "automation" ? "agent" : "person",
     };
     docs.push({ row, words: `${task}\n${reply}\n${FILES.slice(0, edits).join(" ")}` });
   }
   docs.sort((a, b) => b.row.last_ms - a.row.last_ms);
+  // Most agents' runs belong to a person's session in the same project a little before them (a lane, a helper).
+  docs.forEach((d, i) => {
+    if (d.row.by !== "agent" || r() < 0.3) return;
+    const p = docs.slice(i + 1, i + 40).find((x) => x.row.by === "person" && x.row.project === d.row.project);
+    if (p) d.row.parent = p.row.id;
+  });
   return docs;
 }
 
@@ -149,7 +156,8 @@ export function mockHistory(home: string, open: (r: HistoryRow, activity: Activi
   const started = Date.now();
   const status = () => {
     const pending = knob === "indexing" ? Math.max(0, docs.length - Math.floor((Date.now() - started) / 40)) : 0;
-    return { sessions: docs.length - pending, transcripts: docs.length, pending, text_bytes: docs.length * 9_000, log_bytes: docs.length * 11_000, ready: pending === 0 };
+    const agents = docs.filter((d) => d.row.by === "agent").length;
+    return { sessions: docs.length - pending - agents, agents, transcripts: docs.length, pending, text_bytes: docs.length * 9_000, log_bytes: docs.length * 11_000, ready: pending === 0 };
   };
   const timeline = (r: HistoryRow, long: boolean): Activity[] => {
     const out: Activity[] = [];
@@ -180,10 +188,12 @@ export function mockHistory(home: string, open: (r: HistoryRow, activity: Activi
         if (q.to_ms != null && r.last_ms > q.to_ms) return false;
         if (q.has_changes && !r.edits) return false;
         if (q.cwd && r.cwd !== q.cwd && !r.cwd.startsWith(q.cwd + "/")) return false;
-        const f = facets.get(r.project) ?? { count: 0, last_ms: 0 };
-        f.count++;
-        f.last_ms = Math.max(f.last_ms, r.last_ms);
-        facets.set(r.project, f);
+        if (r.by !== "agent" || q.agents) {
+          const f = facets.get(r.project) ?? { count: 0, last_ms: 0 };
+          f.count++;
+          f.last_ms = Math.max(f.last_ms, r.last_ms);
+          facets.set(r.project, f);
+        }
         return !q.project || r.project === q.project;
       });
       const scored = hits.map((d) => {
@@ -198,11 +208,29 @@ export function mockHistory(home: string, open: (r: HistoryRow, activity: Activi
         return { d, s: s * (1 + 1 / (1 + (now - d.row.last_ms) / 86_400_000 / 14)) };
       });
       hits = scored.filter((x) => x.s >= 0).sort((a, b) => b.s - a.s || b.d.row.last_ms - a.d.row.last_ms).map((x) => x.d);
+      // Agents' runs: counted; listed only on asking, under their session when it is listed (as the backend does).
+      const agents = hits.filter((d) => d.row.by === "agent").length;
+      const under = new Map<string, HistoryHelper[]>();
+      if (!q.agents) hits = hits.filter((d) => d.row.by !== "agent");
+      else {
+        const ids = new Set(hits.map((d) => d.row.id));
+        hits = hits.filter((d) => {
+          const p = d.row.by === "agent" ? d.row.parent : undefined;
+          if (!p || !ids.has(p)) return true;
+          const { key, provider, id, cwd, title, model, where, via, last_ms, prompts, edits } = d.row;
+          under.set(p, [...(under.get(p) ?? []), { key, provider, id, cwd, title, model, where, via, last_ms, prompts, edits }]);
+          return false;
+        });
+      }
       const off = q.offset ?? 0;
-      const rows = hits.slice(off, off + (q.limit || 100)).map((d) => (ts.length ? { ...d.row, snippet: snippet(d.words, ts, d.row.prompt.length + 1) } : d.row));
+      const rows = hits.slice(off, off + (q.limit || 100)).map((d) => {
+        const row = under.has(d.row.id) ? { ...d.row, helpers: under.get(d.row.id) } : d.row;
+        return ts.length ? { ...row, snippet: snippet(d.words, ts, d.row.prompt.length + 1) } : row;
+      });
       return {
         rows,
         total: hits.length,
+        agents,
         projects: [...facets].map(([project, f]) => ({ project, ...f })).sort((a, b) => b.last_ms - a.last_ms),
         status: st,
         took_ms: performance.now() - t,

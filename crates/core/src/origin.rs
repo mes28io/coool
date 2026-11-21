@@ -36,7 +36,7 @@ pub const TEST_CLIENT_NAME: &str = "coool-selftest";
 
 /// Claude: from the first `entrypoint` seen and whether a human typed a turn.
 pub(crate) fn claude(entrypoint: Option<&str>, human: bool) -> Origin {
-    let programmatic = entrypoint.is_some_and(|e| e.starts_with("sdk-") || matches!(e, "github-action" | "mcp"));
+    let programmatic = entrypoint.is_some_and(claude_programmatic);
     if programmatic && !human { Origin::Automation } else { Origin::User }
 }
 
@@ -58,6 +58,97 @@ pub(crate) fn codex_source_kind(v: &serde_json::Value) -> String {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Object(m) => m.keys().next().cloned().unwrap_or_default(),
         _ => String::new(),
+    }
+}
+
+// ---------- who started it: the person or an agent ----------
+
+/// Whether the person started a session (and talked to it), or an agent / tool did. History, the sidebar's lists and
+/// counts, ⌘K and the New session sheet list the person's by default; [`Starter::Unknown`] is listed with them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Starter {
+    Person,
+    Agent,
+    /// The transcript doesn't say (no entrypoint, an unknown client): shown, never hidden by surprise.
+    Unknown,
+}
+
+/// What a transcript (and coool's own records) say about how a session started. Metadata only.
+#[derive(Clone, Copy, Debug)]
+pub struct Facts<'a> {
+    pub provider: Provider,
+    /// Claude: the first `entrypoint`; Codex: `session_meta.originator`.
+    pub entry: &'a str,
+    /// Codex: the kind of `session_meta.source`.
+    pub source: &'a str,
+    /// Claude: a user record a person typed (`turnOrigin`/`origin.kind` "human").
+    pub human: bool,
+    /// Claude: some record came from an interactive client (`cli`, an IDE, the app): run or resumed by a person.
+    pub interactive: bool,
+    /// Claude: records marked `isSidechain` (a sub-agent's own transcript).
+    pub sidechain: bool,
+    /// coool started or drove it ([`OwnSessions::contains`]).
+    pub own: bool,
+    /// The person typed into it in coool ([`OwnSessions::typed`]).
+    pub typed: bool,
+    /// The session that started it, when known: a Codex subagent's parent thread, a link coool saw live (a lane, a
+    /// child run, a Ladder helper), an agent scratch folder naming its session.
+    pub parent: Option<&'a str>,
+}
+
+impl Facts<'_> {
+    /// Nothing known yet but the CLI.
+    pub fn new(provider: Provider) -> Self {
+        Facts { provider, entry: "", source: "", human: false, interactive: false, sidechain: false, own: false, typed: false, parent: None }
+    }
+}
+
+/// Claude entrypoints of interactive clients a person drives.
+pub(crate) fn claude_interactive(e: &str) -> bool {
+    matches!(e, "cli" | "claude-vscode" | "claude-desktop" | "local-agent") || e.starts_with("remote") || e.contains("jetbrains")
+}
+
+/// Claude entrypoints of programmatic runs (`claude -p`, the Agent SDK, CI, MCP).
+pub(crate) fn claude_programmatic(e: &str) -> bool {
+    e.starts_with("sdk-") || matches!(e, "github-action" | "mcp")
+}
+
+/// The rule (see the module docs and APP_SPEC "Who started it"):
+/// 1. a person typed in it (a human turn, an interactive client, typing in coool): the person's, even when an agent
+///    started it (a headless run continued by hand);
+/// 2. otherwise a known parent or a sidechain: an agent's (Ladder helper, lane, child run, sub-agent);
+/// 3. otherwise coool started or drove it: the person's (a chat or terminal they opened in coool);
+/// 4. otherwise a programmatic run (`claude -p`, SDK, `codex exec`, MCP, a self-test's client): an agent's;
+/// 5. an interactive client the CLI names (terminal, IDE, desktop, remote, Codex TUI / app): the person's;
+/// 6. anything else: [`Starter::Unknown`].
+pub fn started_by(f: &Facts) -> Starter {
+    let continued = f.human || f.interactive || f.typed;
+    if continued {
+        return Starter::Person;
+    }
+    if f.sidechain || f.parent.is_some_and(|p| !p.is_empty()) {
+        return Starter::Agent;
+    }
+    if f.own {
+        return Starter::Person;
+    }
+    match f.provider {
+        Provider::Claude => {
+            if claude_programmatic(f.entry) {
+                Starter::Agent
+            } else if claude_interactive(f.entry) {
+                Starter::Person
+            } else {
+                Starter::Unknown
+            }
+        }
+        Provider::Codex => match codex(f.entry, f.source) {
+            Origin::Automation => Starter::Agent,
+            Origin::Coool => Starter::Person,
+            Origin::User if f.entry.is_empty() && matches!(f.source, "" | "-") => Starter::Unknown,
+            Origin::User => Starter::Person,
+        },
     }
 }
 
@@ -122,6 +213,9 @@ struct File {
     /// (see [`crate::lineage`]), so an ended child stays attached.
     #[serde(default)]
     parents: Vec<ParentRow>,
+    /// Sessions the person typed into in coool (a helper or a child run they took over is theirs from then on).
+    #[serde(default)]
+    typed: Vec<Row>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -149,9 +243,10 @@ pub struct OwnSessions {
     path: Option<PathBuf>,
     ids: HashMap<(Provider, String), u64>,
     parents: HashMap<(Provider, String), (String, u64)>,
+    typed: HashMap<(Provider, String), u64>,
 }
 
-type Maps = (HashMap<(Provider, String), u64>, HashMap<(Provider, String), (String, u64)>);
+type Maps = (HashMap<(Provider, String), u64>, HashMap<(Provider, String), (String, u64)>, HashMap<(Provider, String), u64>);
 
 /// Keeps the newest `max` entries of `m` (by their time), dropping ones older than `max_age`.
 fn bound<V>(m: &mut HashMap<(Provider, String), V>, seen: impl Fn(&V) -> u64, now: u64) {
@@ -178,8 +273,8 @@ impl OwnSessions {
 
     /// Backed by `path` (None: in memory only). Reads what is there now.
     pub fn at(path: Option<PathBuf>) -> Self {
-        let mut s = Self { path, ids: HashMap::new(), parents: HashMap::new() };
-        (s.ids, s.parents) = s.read();
+        let mut s = Self { path, ids: HashMap::new(), parents: HashMap::new(), typed: HashMap::new() };
+        (s.ids, s.parents, s.typed) = s.read();
         s
     }
 
@@ -189,6 +284,7 @@ impl OwnSessions {
         (
             f.sessions.into_iter().map(|r| ((r.provider, r.id), r.seen)).collect(),
             f.parents.into_iter().map(|r| ((r.provider, r.id), (r.parent, r.seen))).collect(),
+            f.typed.into_iter().map(|r| ((r.provider, r.id), r.seen)).collect(),
         )
     }
 
@@ -208,6 +304,25 @@ impl OwnSessions {
         }
         let now = now_secs();
         self.parents.insert(key, (parent.to_string(), now));
+        self.save(now);
+    }
+
+    /// Whether the person typed into `id` in coool.
+    pub fn typed(&self, provider: Provider, id: &str) -> bool {
+        self.typed.contains_key(&(provider, id.to_string()))
+    }
+
+    /// Remembers that the person typed into `id` in coool (written only when new, or a day stale).
+    pub fn record_typed(&mut self, provider: Provider, id: &str) {
+        if id.is_empty() {
+            return;
+        }
+        let now = now_secs();
+        let key = (provider, id.to_string());
+        if self.typed.get(&key).is_some_and(|t| now.saturating_sub(*t) < TOUCH_EVERY) {
+            return;
+        }
+        self.typed.insert(key, now);
         self.save(now);
     }
 
@@ -232,9 +347,13 @@ impl OwnSessions {
 
     fn save(&mut self, now: u64) {
         // Merge: another coool process may have added entries since we read.
-        let (ids, parents) = self.read();
+        let (ids, parents, typed) = self.read();
         for (k, t) in ids {
             let e = self.ids.entry(k).or_insert(t);
+            *e = (*e).max(t);
+        }
+        for (k, t) in typed {
+            let e = self.typed.entry(k).or_insert(t);
             *e = (*e).max(t);
         }
         for (k, v) in parents {
@@ -242,12 +361,15 @@ impl OwnSessions {
         }
         bound(&mut self.ids, |t| *t, now);
         bound(&mut self.parents, |(_, t)| *t, now);
+        bound(&mut self.typed, |t| *t, now);
         let Some(p) = &self.path else { return };
         let mut rows: Vec<Row> = self.ids.iter().map(|((provider, id), seen)| Row { provider: *provider, id: id.clone(), seen: *seen }).collect();
         rows.sort_by(|a, b| b.seen.cmp(&a.seen).then(a.id.cmp(&b.id)));
         let mut prows: Vec<ParentRow> = self.parents.iter().map(|((provider, id), (parent, seen))| ParentRow { provider: *provider, id: id.clone(), parent: parent.clone(), seen: *seen }).collect();
         prows.sort_by(|a, b| b.seen.cmp(&a.seen).then(a.id.cmp(&b.id)));
-        let Ok(body) = serde_json::to_vec(&File { v: 1, sessions: rows, parents: prows }) else { return };
+        let mut trows: Vec<Row> = self.typed.iter().map(|((provider, id), seen)| Row { provider: *provider, id: id.clone(), seen: *seen }).collect();
+        trows.sort_by(|a, b| b.seen.cmp(&a.seen).then(a.id.cmp(&b.id)));
+        let Ok(body) = serde_json::to_vec(&File { v: 1, sessions: rows, parents: prows, typed: trows }) else { return };
         let _ = write_private(p, &body);
     }
 
@@ -379,7 +501,7 @@ pub(crate) mod tests {
             rows.push(Row { provider: Provider::Claude, id: format!("n{i}"), seen: now_secs() - 1000 + (i as u64 % 500) });
         }
         rows.push(Row { provider: Provider::Claude, id: "newest".into(), seen: now_secs() });
-        fs::write(&p, serde_json::to_vec(&File { v: 1, sessions: rows, parents: vec![] }).unwrap()).unwrap();
+        fs::write(&p, serde_json::to_vec(&File { v: 1, sessions: rows, parents: vec![], typed: vec![] }).unwrap()).unwrap();
         let mut e = OwnSessions::at(Some(p.clone()));
         e.record(Provider::Codex, "fresh");
         assert_eq!(e.len(), MAX_ENTRIES);
@@ -401,5 +523,56 @@ pub(crate) mod tests {
         g.record(Provider::Claude, "after-garbage");
         assert!(OwnSessions::at(Some(p)).contains(Provider::Claude, "after-garbage"));
         let _ = fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod starter_tests {
+    use super::*;
+
+    fn f(provider: Provider, entry: &'static str) -> Facts<'static> {
+        Facts { entry, ..Facts::new(provider) }
+    }
+
+    #[test]
+    fn who_started_it() {
+        use Starter::*;
+        let c = |e| f(Provider::Claude, e);
+        // Interactive clients: the person's.
+        for e in ["cli", "claude-vscode", "claude-desktop", "remote_mobile", "local-agent", "jetbrains-idea"] {
+            assert_eq!(started_by(&c(e)), Person, "{e}");
+        }
+        // Programmatic: an agent's or another tool's.
+        for e in ["sdk-cli", "sdk-ts", "sdk-py", "github-action", "mcp"] {
+            assert_eq!(started_by(&c(e)), Agent, "{e}");
+        }
+        // Can't tell: shown.
+        assert_eq!(started_by(&c("")), Unknown);
+        assert_eq!(started_by(&c("something-new")), Unknown);
+        // coool's own chat: the person's; with a parent (a Ladder helper): an agent's; typed into since: the person's.
+        assert_eq!(started_by(&Facts { own: true, ..c("sdk-cli") }), Person);
+        assert_eq!(started_by(&Facts { own: true, parent: Some("p"), ..c("sdk-cli") }), Agent);
+        assert_eq!(started_by(&Facts { own: true, parent: Some("p"), typed: true, ..c("sdk-cli") }), Person);
+        // A sidechain, a lane with its parent: agents'. A headless run continued by hand: the person's.
+        assert_eq!(started_by(&Facts { sidechain: true, ..c("sdk-cli") }), Agent);
+        assert_eq!(started_by(&Facts { parent: Some("p"), ..c("sdk-cli") }), Agent);
+        assert_eq!(started_by(&Facts { parent: Some(""), ..c("sdk-cli") }), Agent);
+        assert_eq!(started_by(&Facts { interactive: true, ..c("sdk-cli") }), Person);
+        assert_eq!(started_by(&Facts { human: true, ..c("sdk-cli") }), Person);
+        // A terminal session in an agent's scratch folder is still the person's.
+        assert_eq!(started_by(&Facts { parent: Some("p"), interactive: true, ..c("cli") }), Person);
+        // Codex.
+        let x = |o, s| Facts { source: s, ..f(Provider::Codex, o) };
+        assert_eq!(started_by(&x("codex_cli_rs", "cli")), Person);
+        assert_eq!(started_by(&x("Codex Desktop", "vscode")), Person);
+        assert_eq!(started_by(&x("codex_vscode", "vscode")), Person);
+        assert_eq!(started_by(&x("coool", "vscode")), Person);
+        assert_eq!(started_by(&Facts { parent: Some("p"), ..x("coool", "vscode") }), Agent);
+        assert_eq!(started_by(&x("codex_exec", "exec")), Agent);
+        assert_eq!(started_by(&x("tool", "mcp")), Agent);
+        assert_eq!(started_by(&x("coool-selftest", "vscode")), Agent);
+        assert_eq!(started_by(&x("Codex Desktop", "subagent")), Agent);
+        assert_eq!(started_by(&x("", "")), Unknown);
+        assert_eq!(started_by(&x("", "-")), Unknown);
     }
 }

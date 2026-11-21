@@ -8,6 +8,7 @@ import { sessionKey } from "./lib/types";
 import { api, isTauri } from "./lib/backend";
 import type { Away } from "./lib/away";
 import type { HistoryFilters } from "./lib/history";
+import { byAgent } from "./lib/historyRules";
 import { markOnce } from "./lib/perfCount";
 import { layoutMode, useLayout } from "./lib/layout";
 import { SIDEBAR_DEFAULT, sidebarKeys, type LayoutMode } from "./lib/layoutRules";
@@ -170,9 +171,9 @@ interface State {
   sessions: Session[];
   /** Every session the backend reported (for resolving open tabs). */
   allSessions: Session[];
-  /** Automation runs left out of `sessions` right now. */
+  /** Runs agents and other tools started (`byAgent`) left out of `sessions` right now. */
   hiddenAutomation: number;
-  /** Settings: "Show runs started by other tools" (persisted by the backend). */
+  /** Settings: "Show runs started by agents or other tools" (persisted by the backend). */
   showAutomation: boolean;
   setShowAutomation(v: boolean): void;
   pending: number[];
@@ -413,13 +414,14 @@ let showAutomationSetAt = 0;
 const selfNeeds = (s: Session) => (s.status !== "ended" ? (s.waiting_for ? `Waiting for you: ${s.waiting_for}` : (s.insight?.needs_you ?? null)) : null);
 
 /**
- * Who the UI lists (see State.sessions): everything the person or coool
- * started; runs by other tools only when the setting is on, when one needs the
- * person, or when it is a child run of a listed session (then shown nested
- * under that session, never on its own).
+ * Who the UI lists (see State.sessions): every session the person started
+ * (in coool, a terminal, an editor, an app); runs agents and other tools started
+ * (`byAgent`: `claude -p`, `codex exec`, Ladder helpers, lanes) only when the
+ * setting is on, when one needs the person, or when it is a child run of a
+ * listed session (then shown nested under that session, never on its own).
  */
 function visibleSessions(all: Session[], showAutomation: boolean): { sessions: Session[]; hidden: number } {
-  const top = all.filter((s) => s.origin !== "automation" || showAutomation || !!selfNeeds(s));
+  const top = all.filter((s) => !byAgent(s) || showAutomation || !!selfNeeds(s));
   const ids = new Set(top.filter((s) => !s.parent).map((s) => s.id));
   const isChild = (s: Session) => !!s.parent && ids.has(s.parent) && s.parent !== s.id;
   const listed = all.filter((s) => top.includes(s) || isChild(s));

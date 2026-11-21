@@ -410,6 +410,12 @@ impl Core {
                     helper: self.ladder.helper_row(c.id),
                 })
                 .collect();
+            // A Ladder helper's session is its caller's (History and the lists say so after both ended).
+            for c in &chats {
+                if let Some(h) = &c.helper {
+                    hub.note_helper(c.id, h.parent);
+                }
+            }
             // Chats the Hub no longer holds: stop pumping them once their exit went out.
             self.chats.lock().unwrap().retain(|id, c| !c.exit_sent || hub.chat(*id).is_some());
             (s, p, ptys, hub.loading(), chats)
@@ -826,6 +832,8 @@ fn private_alias(cwd: &str) -> String {
 #[tauri::command(async)]
 fn chat_send(core: State<'_, Arc<Core>>, id: usize, text: String, attachments: Option<Vec<coool_core::attach::Attachment>>) -> Res<()> {
     let atts = attachments.unwrap_or_default();
+    // The person typed it: the session is theirs from now on (see `origin::started_by`).
+    core.hub.lock().unwrap().note_typed(id);
     core.with_chat(id, |c| c.send_with(&text, &atts))
 }
 
@@ -838,6 +846,7 @@ fn chat_interrupt(core: State<'_, Arc<Core>>, id: usize) -> Res<()> {
 /// A steering note for the running turn; returns its id (see CHAT_SPEC "Steering").
 #[tauri::command(async)]
 fn chat_steer(core: State<'_, Arc<Core>>, id: usize, text: String, now: bool, attachments: Option<Vec<coool_core::attach::Attachment>>) -> Res<String> {
+    core.hub.lock().unwrap().note_typed(id);
     core.with_chat(id, |c| c.steer_with(&text, now, &attachments.unwrap_or_default()))
 }
 

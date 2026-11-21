@@ -4,6 +4,8 @@
 // coool's session view (lib/history.ts `openHistoryRow`), where the ended-session box continues it as a coool chat.
 // It lies over the sheet like the Needs you page: going back finds the app as it was. Nothing is imported: the CLIs'
 // transcripts are read where they are (the note under the search says so).
+// It lists the sessions the person started (crates/core/src/origin.rs `started_by`); "Started by agents (N)" adds the
+// ones agents and other tools started, each under the session that started it when that one is listed.
 //
 // Keys: type to search, ↑ ↓ move, ↵ opens (⌘↵ in a new tab), Esc clears the search, then goes back.
 
@@ -11,12 +13,12 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/backend";
 import { folderName, homeShort } from "../lib/format";
-import { byDay, filtersOn, NO_FILTERS, openHistoryRow, promptsLabel, spanLabel, toQuery, WHERE_LABEL, type DateRange, type HistoryFilters, type HistoryPage as Page, type HistoryRow, type Where } from "../lib/history";
+import { byDay, filtersOn, NO_FILTERS, openHistoryRow, promptsLabel, spanLabel, toQuery, WHERE_LABEL, type DateRange, type HistoryFilters, type HistoryHelper, type HistoryPage as Page, type HistoryRow, type Where } from "../lib/history";
 import { modelLabel } from "../lib/models";
 import { useMotion } from "../lib/motion";
 import { sessionKey, type Provider } from "../lib/types";
 import { useStore } from "../store";
-import { IBack, ICheck, IChevron, IClock, IClose, IDiff, IFolder, IInfo, ISearch } from "./icons";
+import { IBack, ICheck, IChevron, IClock, IClose, IDiff, IFanout, IFolder, IInfo, ISearch } from "./icons";
 import { Chip, cx, ease, Kbd, Popover, ProviderMark, Segmented, StatusDot } from "./primitives";
 
 const PAGE = 120;
@@ -185,7 +187,7 @@ export function HistoryPage() {
           <h2 className="truncate text-base font-semibold text-fg">History</h2>
           {page && (
             <span className="shrink-0 text-small text-dim tnum" data-history-count>
-              {searching || nOn ? `${page.total.toLocaleString()} of ${(st?.sessions ?? 0).toLocaleString()}` : (st?.sessions ?? 0).toLocaleString()} sessions
+              {searching || nOn ? `${page.total.toLocaleString()} of ${((st?.sessions ?? 0) + (query.agents ? (st?.agents ?? 0) : 0)).toLocaleString()}` : (st?.sessions ?? 0).toLocaleString()} sessions
             </span>
           )}
         </div>
@@ -232,6 +234,18 @@ export function HistoryPage() {
             <IDiff size={14} />
             Changed files
           </Chip>
+          {page && (page.agents > 0 || f.agents) && (
+            <span data-history-agents={page.agents} data-on={f.agents || undefined} className="contents">
+              <Chip
+                active={f.agents}
+                onClick={() => setF((x) => ({ ...x, agents: !x.agents }))}
+                title={f.agents ? "Hide the sessions agents and other tools started" : "Also list the sessions agents and other tools started (Ladder helpers, lanes, claude -p, codex exec), under the session that started them"}
+              >
+                <IFanout size={14} />
+                Started by agents <span className="tnum text-faint">({page.agents.toLocaleString()})</span>
+              </Chip>
+            </span>
+          )}
           {nOn > 0 && (
             <button type="button" onClick={() => setF({ ...NO_FILTERS, text: f.text })} className="ml-1 h-[28px] rounded-[8px] px-2 text-small text-dim hover:bg-hover hover:text-fg" data-history-clear>
               Clear filters
@@ -279,7 +293,12 @@ export function HistoryPage() {
               </div>
               {g.rows.map((r, k) => {
                 const i = g.base + k;
-                return <Row key={r.key} r={r} i={i} on={i === sel} live={live.get(r.key)} searching={searching} opening={opening === r.key} reduce={reduce} onHover={() => setSel(i)} onOpen={(nt) => void open(r, nt)} />;
+                return (
+                  <div key={r.key}>
+                    <Row r={r} i={i} on={i === sel} live={live.get(r.key)} searching={searching} opening={opening === r.key} reduce={reduce} onHover={() => setSel(i)} onOpen={(nt) => void open(r, nt)} />
+                    {r.helpers?.length ? <Helpers parent={r} rows={r.helpers} live={live} opening={opening} searching={searching} onOpen={(h, nt) => void open({ ...r, ...h, helpers: undefined, by: "agent" } as HistoryRow, nt)} /> : null}
+                  </div>
+                );
               })}
             </section>
           ))}
@@ -366,6 +385,37 @@ function Row({ r, i, on, live, searching, opening, reduce, onHover, onOpen }: { 
         </span>
       </button>
     </motion.div>
+  );
+}
+
+/** The sessions a row's session started (agents' runs), listed under it: a few, then "N more". */
+function Helpers({ parent, rows, live, opening, searching, onOpen }: { parent: HistoryRow; rows: HistoryHelper[]; live: Map<string, "busy" | "idle">; opening: string | null; searching: boolean; onOpen: (h: HistoryHelper, newTab: boolean) => void }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? rows : rows.slice(0, 4);
+  return (
+    <div className="mb-1.5 ml-[30px] border-l border-hairline pl-2" data-history-helpers={parent.key}>
+      {shown.map((h) => (
+        <button
+          key={h.key}
+          type="button"
+          data-history-helper={h.key}
+          onClick={(e) => onOpen(h, e.metaKey || e.ctrlKey)}
+          className="flex h-[30px] w-full min-w-0 items-center gap-2 rounded-[8px] px-2 text-left text-small transition-colors duration-150 hover:bg-hover"
+          title={`Started by “${parent.title}”`}
+        >
+          <ProviderMark provider={h.provider} size={12} />
+          <span className="min-w-0 truncate text-fg/85">{h.title}</span>
+          <span className="shrink-0 text-faint">{h.via}</span>
+          {h.model && <span className="hidden shrink-0 text-faint @[560px]:inline">{modelLabel(h.model)}</span>}
+          <span className="ml-auto shrink-0 pl-2 text-faint tnum">{opening === h.key ? "Opening…" : live.get(h.key) ? "running now" : time(h.last_ms, searching)}</span>
+        </button>
+      ))}
+      {rows.length > 4 && (
+        <button type="button" onClick={() => setAll(!all)} className="flex h-[26px] items-center rounded-[7px] px-2 text-small text-dim hover:bg-hover hover:text-fg" data-history-helpers-more>
+          {all ? "Fewer" : `${rows.length - 4} more started by this session`}
+        </button>
+      )}
+    </div>
   );
 }
 

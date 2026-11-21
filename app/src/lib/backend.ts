@@ -175,7 +175,7 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   /** The AI read of one permission request (CHAT_SPEC "What this does and why"; cached by request id in the backend). */
   explainRequest(req: ExplainRequest): Promise<ExplainReply>;
 
-  /** Settings: "Show runs started by other tools" (persisted; echoed in `Snapshot.show_automation`). */
+  /** Settings: "Show runs started by agents or other tools" (persisted; echoed in `Snapshot.show_automation`). */
   setShowAutomation(enabled: boolean): Promise<void>;
 
   /** Settings: the device pilot's decision log, kept locally for training (APP_SPEC "Device pilot"). */

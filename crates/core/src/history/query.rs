@@ -3,7 +3,7 @@
 //! The same call serves the History page and anything else that wants past sessions (the New session sheet's
 //! "recent in this folder": `cwd` + `limit`).
 
-use super::{listed, History, Status};
+use super::{listed, History, Starter, Status};
 use crate::model::Provider;
 use memchr::memmem;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,10 @@ pub struct Query {
     pub to_ms: Option<u64>,
     /// Only sessions that changed files.
     pub has_changes: bool,
+    /// Also sessions agents and other tools started ([`crate::origin::started_by`]); each one whose parent is among
+    /// the results is listed under it (`Row::helpers`) instead of on its own. Off: only the person's sessions are
+    /// listed, counted and searched.
+    pub agents: bool,
     pub offset: usize,
     /// Rows to return (0: 100).
     pub limit: usize,
@@ -95,6 +99,31 @@ pub struct Row {
     pub archived: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub snippet: Vec<Seg>,
+    /// Who started it.
+    pub by: Starter,
+    /// The session that started it (an id), when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// With `Query::agents`: the sessions it started (agents' runs, helpers, lanes) that match too, newest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub helpers: Vec<Helper>,
+}
+
+/// A session an agent started, listed under the session that started it.
+#[derive(Clone, Debug, Serialize)]
+pub struct Helper {
+    pub key: String,
+    pub provider: Provider,
+    pub id: String,
+    pub cwd: String,
+    pub title: String,
+    pub model: String,
+    #[serde(rename = "where")]
+    pub place: Where,
+    pub via: String,
+    pub last_ms: u64,
+    pub prompts: u32,
+    pub edits: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -102,6 +131,8 @@ pub struct Page {
     pub rows: Vec<Row>,
     /// Rows matching, in all.
     pub total: usize,
+    /// Sessions agents started that match every filter and the words (listed only with `Query::agents`).
+    pub agents: usize,
     /// Projects among the sessions matching every filter but the project and the words, busiest first.
     pub projects: Vec<Facet>,
     pub status: Status,
@@ -148,6 +179,8 @@ struct Cand {
     score: f64,
     /// First hit in the words: (byte offset, term length).
     hit: Option<(usize, usize)>,
+    by: Starter,
+    parent: Option<String>,
 }
 
 impl History {
@@ -186,14 +219,17 @@ impl History {
             {
                 continue;
             }
+            let (by, parent) = self.starter(d);
             let project = crate::project::project_root(&m.cwd);
-            let f = facets.entry(project.clone()).or_default();
-            f.0 += 1;
-            f.1 = f.1.max(last);
+            if by != Starter::Agent || q.agents {
+                let f = facets.entry(project.clone()).or_default();
+                f.0 += 1;
+                f.1 = f.1.max(last);
+            }
             if q.project.as_deref().is_some_and(|p| p != project) {
                 continue;
             }
-            cands.push(Cand { i, title: self.title_of(d, names), last, project, score: 0.0, hit: None });
+            cands.push(Cand { i, title: self.title_of(d, names), last, project, score: 0.0, hit: None, by, parent });
         }
 
         if terms.is_empty() {
@@ -262,11 +298,62 @@ impl History {
             cands.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(b.last.cmp(&a.last)));
         }
 
+        // Agents' sessions: counted; listed only on asking, each under the session that started it when that is listed.
+        let agents = cands.iter().filter(|c| c.by == Starter::Agent).count();
+        let mut under: HashMap<usize, Vec<Cand>> = HashMap::new();
+        if !q.agents {
+            cands.retain(|c| c.by != Starter::Agent);
+        } else if agents > 0 {
+            let at: HashMap<&str, usize> = cands.iter().enumerate().map(|(k, c)| (self.docs[c.i].meta.id.as_str(), k)).collect();
+            // The top-most listed ancestor (a helper's own helpers go under the same row).
+            let top = |mut k: usize| -> Option<usize> {
+                let mut up = None;
+                for _ in 0..8 {
+                    let Some(&p) = cands[k].parent.as_deref().filter(|_| cands[k].by == Starter::Agent).and_then(|p| at.get(p)) else { break };
+                    if p == k {
+                        break;
+                    }
+                    up = Some(p);
+                    k = p;
+                }
+                up
+            };
+            let tops: Vec<Option<usize>> = (0..cands.len()).map(top).collect();
+            let mut keep = Vec::with_capacity(cands.len());
+            let mut moved: Vec<(usize, Cand)> = Vec::new();
+            for (k, c) in cands.into_iter().enumerate() {
+                match tops[k] {
+                    Some(p) => moved.push((p, c)),
+                    None => keep.push((k, c)),
+                }
+            }
+            let mut new_at: HashMap<usize, usize> = HashMap::new();
+            for (n, (k, _)) in keep.iter().enumerate() {
+                new_at.insert(*k, n);
+            }
+            for (p, c) in moved {
+                if let Some(&n) = new_at.get(&p) {
+                    under.entry(n).or_default().push(c);
+                }
+            }
+            cands = keep.into_iter().map(|(_, c)| c).collect();
+        }
         let total = cands.len();
         let limit = if q.limit == 0 { 100 } else { q.limit.min(1000) };
-        let page: Vec<Cand> = cands.into_iter().skip(q.offset).take(limit).collect();
+        let page: Vec<(usize, Cand)> = cands.into_iter().enumerate().skip(q.offset).take(limit).collect();
         let mut rows = Vec::with_capacity(page.len());
-        for c in page {
+        for (n, c) in page {
+            let mut helpers: Vec<Helper> = under
+                .remove(&n)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|h| {
+                    let d = &self.docs[h.i];
+                    let (place, via) = self.where_of(d);
+                    Helper { key: format!("{}:{}", d.provider.label(), d.meta.id), provider: d.provider, id: d.meta.id.clone(), cwd: d.meta.cwd.clone(), title: h.title, model: d.meta.model.clone(), place, via, last_ms: h.last, prompts: d.meta.prompts, edits: d.meta.edits_n }
+                })
+                .collect();
+            helpers.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
             let snippet = match c.hit {
                 Some((at, n)) => self.snippet(c.i, at, n, &terms),
                 None => Vec::new(),
@@ -296,11 +383,14 @@ impl History {
                 missing,
                 archived: d.archived,
                 snippet,
+                by: c.by,
+                parent: c.parent,
+                helpers,
             });
         }
         let mut projects: Vec<Facet> = facets.into_iter().map(|(project, (count, last_ms))| Facet { project, count, last_ms }).collect();
         projects.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then(a.project.cmp(&b.project)));
-        Page { rows, total, projects, status: self.status(), took_ms: t0.elapsed().as_secs_f64() * 1000.0 }
+        Page { rows, total, agents, projects, status: self.status(), took_ms: t0.elapsed().as_secs_f64() * 1000.0 }
     }
 
     /// About two lines of the words around a hit, the matched words marked.

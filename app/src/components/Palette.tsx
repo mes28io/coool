@@ -11,7 +11,7 @@ import { IFolder, IGauge, IGear, IGrid, IMoon, ISpark, IPlus, ISearch, ISplitDow
 import { cx, ease, Kbd, ProviderMark, StatusDot } from "./primitives";
 import { askStop } from "./SessionView";
 import { score } from "../lib/fuzzy";
-import { dayLabel, openHistoryRow, type HistoryRow } from "../lib/history";
+import { byAgent, dayLabel, openHistoryRow, type HistoryRow } from "../lib/history";
 import { IClock } from "./icons";
 
 interface Item {
@@ -87,7 +87,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         group: "Sessions",
         label: displayTitle(s),
         also: previousTitles(s),
-        hint: s.origin === "automation" ? `${folderName(projectOf(s))} · by another tool` : folderName(projectOf(s)),
+        hint: byAgent(s) ? `${folderName(projectOf(s))} · started by an agent` : folderName(projectOf(s)),
         icon: (
           <span className="flex items-center gap-1.5">
             <StatusDot status={s.status === "idle" && !isUnseen(st.seen, sessionKey(s), seenAt(s)) ? "ended" : s.status} size={7} />
@@ -252,6 +252,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
               <button
                 type="button"
                 data-i={i}
+                data-palette-item={it.id}
                 onMouseMove={() => sel !== i && setSel(i)}
                 onClick={it.run}
                 className={cx("relative flex h-[36px] w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left text-base", i === sel ? "text-fg" : "text-fg/85")}

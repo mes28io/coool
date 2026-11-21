@@ -17,9 +17,21 @@ export interface HistoryFilters {
   from: string;
   to: string;
   changes: boolean;
+  /** "Started by agents": also the sessions agents and other tools started. */
+  agents: boolean;
 }
 
-export const NO_FILTERS: HistoryFilters = { text: "", project: null, provider: null, wheres: [], range: "any", from: "", to: "", changes: false };
+export const NO_FILTERS: HistoryFilters = { text: "", project: null, provider: null, wheres: [], range: "any", from: "", to: "", changes: false, agents: false };
+
+/**
+ * A live session an agent or another tool started (the sidebar hides these unless "Show" is on, or lists them under
+ * the session that started them): a programmatic run, or one with a known parent (a Ladder helper, a lane, a child
+ * run). History's rule for past sessions is the backend's (`started_by`); this is the same rule on what the sessions
+ * payload says.
+ */
+export function byAgent(s: { origin?: string | null; parent?: string | null }): boolean {
+  return s.origin === "automation" || !!s.parent;
+}
 
 const DAY = 86_400_000;
 
@@ -52,12 +64,14 @@ export function toQuery(f: HistoryFilters, now = Date.now()): HistoryQuery {
     from_ms: from,
     to_ms: to,
     has_changes: f.changes,
+    // "Other tools" are agents' runs: picking that place asks for them.
+    agents: f.agents || f.wheres.includes("automation"),
   };
 }
 
 /** How many filters (beyond the words) are set. */
 export function filtersOn(f: HistoryFilters): number {
-  return (f.project ? 1 : 0) + (f.provider ? 1 : 0) + (f.wheres.length ? 1 : 0) + (f.range !== "any" ? 1 : 0) + (f.changes ? 1 : 0);
+  return (f.project ? 1 : 0) + (f.provider ? 1 : 0) + (f.wheres.length ? 1 : 0) + (f.range !== "any" ? 1 : 0) + (f.changes ? 1 : 0) + (f.agents ? 1 : 0);
 }
 
 /** "Today", "Yesterday", "Tuesday" (this week), "Mon 3 Nov", "Mon 3 Nov 2024". */

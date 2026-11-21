@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { byDay, dayLabel, filtersOn, NO_FILTERS, promptsLabel, spanLabel, toQuery } from "./historyRules.ts";
+import { byAgent, byDay, dayLabel, filtersOn, NO_FILTERS, promptsLabel, spanLabel, toQuery } from "./historyRules.ts";
 
 const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h).getTime();
 const NOW = at(2026, 11, 21, 15);
@@ -10,8 +10,24 @@ const DAY = 86_400_000;
 
 test("toQuery: words trimmed, one CLI, places, changed files", () => {
   const q = toQuery({ ...NO_FILTERS, text: "  login redirect ", provider: "codex", wheres: ["terminal", "ide"], changes: true, project: "/w/atlas" }, NOW);
-  assert.deepEqual(q, { text: "login redirect", project: "/w/atlas", providers: ["codex"], wheres: ["terminal", "ide"], from_ms: null, to_ms: null, has_changes: true });
+  assert.deepEqual(q, { text: "login redirect", project: "/w/atlas", providers: ["codex"], wheres: ["terminal", "ide"], from_ms: null, to_ms: null, has_changes: true, agents: false });
   assert.deepEqual(toQuery(NO_FILTERS, NOW).providers, []);
+});
+
+test("toQuery: agents' sessions only on asking (the chip, or the Other tools place)", () => {
+  assert.equal(toQuery(NO_FILTERS, NOW).agents, false);
+  assert.equal(toQuery({ ...NO_FILTERS, agents: true }, NOW).agents, true);
+  assert.equal(toQuery({ ...NO_FILTERS, wheres: ["automation"] }, NOW).agents, true);
+  assert.equal(toQuery({ ...NO_FILTERS, wheres: ["terminal"] }, NOW).agents, false);
+});
+
+test("byAgent: programmatic runs and sessions with a known parent", () => {
+  assert.equal(byAgent({ origin: "automation" }), true);
+  assert.equal(byAgent({ origin: "coool", parent: "lead" }), true, "a Ladder helper");
+  assert.equal(byAgent({ origin: "automation", parent: "lead" }), true, "a lane");
+  assert.equal(byAgent({ origin: "user" }), false);
+  assert.equal(byAgent({ origin: "coool", parent: null }), false);
+  assert.equal(byAgent({}), false, "unknown: shown");
 });
 
 test("toQuery: date ranges start at midnight; a custom range covers its whole last day", () => {
@@ -33,6 +49,7 @@ test("filtersOn counts what is set beyond the words", () => {
   assert.equal(filtersOn(NO_FILTERS), 0);
   assert.equal(filtersOn({ ...NO_FILTERS, text: "x" }), 0);
   assert.equal(filtersOn({ ...NO_FILTERS, project: "/p", provider: "claude", wheres: ["app"], range: "week", changes: true }), 5);
+  assert.equal(filtersOn({ ...NO_FILTERS, agents: true }), 1);
 });
 
 test("dayLabel and byDay", () => {
