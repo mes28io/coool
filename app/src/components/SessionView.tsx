@@ -335,7 +335,8 @@ export function SessionView({
   const cLive = chat ? chat.running && chat.state !== "idle" : r.session?.status === "busy";
   // Open: every new step; closed (the header's count only): every finished turn or new transcript event.
   const cTick = changesOpen ? `${chat?.items.length ?? 0}:${r.session?.last_event ?? 0}:${r.session?.agents.length ?? 0}` : `${chat?.items.filter((i) => i.kind === "turn").length ?? 0}:${chat ? 0 : (r.session?.last_event ?? 0)}`;
-  const changes = useChanges(cTarget, changesScope, cTick, cLive && changesOpen, !!cTarget);
+  // Open: every 1.5 s while the agent works, every 4 s otherwise (a hand edit, a commit in a terminal).
+  const changes = useChanges(cTarget, changesScope, cTick, changesOpen ? (cLive ? 1500 : 4000) : null, !!cTarget);
   useChangeNotes(chat ?? null, changes.data, cTarget);
   const onChanges = () => {
     if (!panelKey) return;

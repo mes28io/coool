@@ -69,7 +69,8 @@ export function ChangesPanel({
       try {
         const o = await f();
         after?.(o);
-        show(o);
+        // A question shows in its file card, not again as a note.
+        if (!o.ask) show(o);
       } catch (e) {
         setNote({ text: String(e instanceof Error ? e.message : e), bad: true });
       } finally {

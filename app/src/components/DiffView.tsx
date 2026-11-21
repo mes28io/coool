@@ -163,10 +163,12 @@ export interface HunkSlots {
 /** A file's hunks. `split`: side by side. Kept hunks fold to one line (`foldKept`). */
 export function DiffBody({ file, split, slots, foldKept }: { file: Pick<FileChange, "rel" | "hunks" | "text" | "status">; split: boolean; slots?: HunkSlots; foldKept?: boolean }) {
   const name = file.rel.split("/").pop() ?? file.rel;
-  const text = useMemo(() => (file.text != null ? textLines(file.text) : null), [file.text]);
+  // A new or deleted file is all one hunk: nothing unchanged around it.
+  const whole = file.status === "added" || file.status === "deleted";
+  const text = useMemo(() => (file.text != null && !whole ? textLines(file.text) : null), [file.text, whole]);
   const g = useMemo(() => gaps(file.hunks, text ? text.length : null), [file.hunks, text]);
   const maxN = file.hunks.reduce((m, h) => Math.max(m, h.old_start + h.old_count, h.new_start + h.new_count), text?.length ?? 0);
-  const wide = Math.max(3, String(maxN).length + 1);
+  const wide = Math.max(4, String(maxN).length + 2);
   const [unfold, setUnfold] = useState<Set<string>>(new Set());
   return (
     <div className="font-mono text-mono-small leading-[19px]" data-diff-body={file.rel}>
@@ -178,7 +180,7 @@ export function DiffBody({ file, split, slots, foldKept }: { file: Pick<FileChan
         const first = h.lines.find((l) => l.k !== " ");
         return (
           <div key={h.id + i} data-hunk={h.id} data-hunk-index={i} data-hunk-kept={h.kept || undefined} data-hunk-since={h.since || undefined}>
-            {before && <Gap range={before} text={text} name={name} wide={wide} split={split} offset={offset} edge={i === 0 ? "top" : "mid"} />}
+            {before && !whole && <Gap range={before} text={text} name={name} wide={wide} split={split} offset={offset} edge={i === 0 ? "top" : "mid"} />}
             <div
               className={cx(
                 "group/h sticky top-0 z-[1] flex min-h-[26px] items-center gap-2 border-y border-hairline bg-panel px-2 font-sans text-small",
@@ -207,7 +209,7 @@ export function DiffBody({ file, split, slots, foldKept }: { file: Pick<FileChan
           </div>
         );
       })}
-      {g.after && file.hunks.length > 0 && <Gap range={g.after} text={text} name={name} wide={wide} split={split} offset={file.hunks[file.hunks.length - 1].new_start + file.hunks[file.hunks.length - 1].new_count - (file.hunks[file.hunks.length - 1].old_start + file.hunks[file.hunks.length - 1].old_count)} edge="end" />}
+      {g.after && !whole && file.hunks.length > 0 && <Gap range={g.after} text={text} name={name} wide={wide} split={split} offset={file.hunks[file.hunks.length - 1].new_start + file.hunks[file.hunks.length - 1].new_count - (file.hunks[file.hunks.length - 1].old_start + file.hunks[file.hunks.length - 1].old_count)} edge="end" />}
     </div>
   );
 }

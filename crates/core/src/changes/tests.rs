@@ -222,7 +222,7 @@ fn claude_review_flow() {
     assert!(a.hunks[0].since);
     let o = t.undo(Scope::Chat, Some("a.txt"), None, false);
     assert!(!o.ok);
-    assert!(o.ask.as_deref().unwrap().contains("after the agent did"), "{o:?}");
+    assert!(o.ask.as_deref().unwrap().contains("after the agent did (around line 2)"), "{o:?}");
     assert_eq!(t.read("a.txt"), txt, "nothing written");
     let o = t.undo(Scope::Chat, Some("a.txt"), Some(&a.hunks[0].id), false);
     assert!(o.ask.is_some());

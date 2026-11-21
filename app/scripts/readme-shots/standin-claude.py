@@ -367,6 +367,42 @@ def mac_turn(prompt, start):
     result(start)
 
 
+def edit_file(rel, old=None, new=None, content=None):
+    """An Edit (old -> new) or a Write (content), applied for real and recorded with its `toolUseResult` as the CLI
+    writes it (originalFile is the file before), for the Changes view's self-test."""
+    f = CWD / rel
+    before = f.read_text() if f.exists() else None
+    if content is None:
+        after = before.replace(old, new, 1)
+        name, inp = "Edit", {"file_path": str(f), "old_string": old, "new_string": new, "replace_all": False}
+        res = {"filePath": str(f), "oldString": old, "newString": new, "originalFile": before, "structuredPatch": [], "userModified": False, "replaceAll": False}
+    else:
+        after = content
+        name, inp = "Write", {"file_path": str(f), "content": content}
+        res = {"type": "create" if before is None else "update", "filePath": str(f), "content": content, "structuredPatch": [], "originalFile": before}
+    tid = f"toolu_{uuid.uuid4().hex[:24]}"
+    assistant([{"type": "tool_use", "id": tid, "name": name, "input": inp}])
+    time.sleep(0.3)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(after)
+    m = {"role": "user", "content": [{"tool_use_id": tid, "type": "tool_result", "content": f"The file {f} has been updated."}]}
+    out({"type": "user", "message": m, "parent_tool_use_id": None, "session_id": SID, "uuid": str(uuid.uuid4()), "timestamp": iso(), "tool_use_result": res})
+    record({"type": "user", "message": m, "toolUseResult": res})
+
+
+def changes_turn(prompt, start):
+    """Edits two files (one in two far-apart places) and creates a third: the Changes view's self-test."""
+    time.sleep(0.5)
+    edit_file("a.txt", "line 2\n", "line two\n")
+    edit_file("a.txt", "line 30\n", "line thirty\n")
+    text("Renamed lines 2 and 30 in a.txt.")
+    edit_file("b.txt", "beta\n", "BETA\n")
+    edit_file("notes/new.txt", content="a brand new file\n")
+    text("Done: a.txt and b.txt edited, notes/new.txt created.")
+    title("Edit a.txt and b.txt, add notes/new.txt")
+    result(start)
+
+
 def generic_turn(prompt, start):
     text("Done.")
     result(start)
@@ -380,7 +416,9 @@ def run_turn(prompt):
     status_line()
     low = prompt.lower()
     try:
-        if "march" in low:
+        if "changes demo" in low:
+            changes_turn(prompt, start)
+        elif "march" in low:
             invoices_turn(prompt, start)
         elif "browser panel" in low:
             browser_turn(prompt, start)

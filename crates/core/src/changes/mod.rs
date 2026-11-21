@@ -793,6 +793,11 @@ fn blocked_reason(c: &Chain, f: &FileChange, ctx: &Ctx) -> Option<String> {
     None
 }
 
+/// A hunk's first changed line (new side, else old side), 1-based.
+fn first_changed(h: &HunkView) -> usize {
+    h.lines.iter().find(|l| l.k != " ").and_then(|l| l.n.or(l.o)).map(|n| n as usize).unwrap_or(h.new_start)
+}
+
 enum Refusal {
     /// Needs the person's go-ahead (the question).
     Ask(String),
@@ -836,7 +841,7 @@ fn plan_undo(c: &Chain, v: &View, scope: Scope, hunk: Option<&str>, force: bool,
         }
         ops
     };
-    let first_since = |v: &View| v.file.hunks.iter().find(|h| h.since).map(|h| h.new_start).unwrap_or(1);
+    let first_since = |v: &View| v.file.hunks.iter().find(|h| h.since).map(first_changed).unwrap_or(1);
     if let Some(id) = hunk {
         let i = v.file.hunks.iter().position(|h| h.id == id).ok_or_else(|| Refusal::No("That part isn't in the diff any more (the file changed); look again".into()))?;
         let h = &v.hunks[i];
@@ -845,7 +850,7 @@ fn plan_undo(c: &Chain, v: &View, scope: Scope, hunk: Option<&str>, force: bool,
             return Err(Refusal::No(b.clone()));
         }
         if hv.since && !force {
-            return Err(Refusal::Ask(format!("You changed lines here (around line {}) after the agent's edit. Undoing this part would undo your edits too.", hv.new_start)));
+            return Err(Refusal::Ask(format!("You changed lines here (around line {}) after the agent's edit. Undoing this part would undo your edits too.", first_changed(hv))));
         }
         let cur = disk.clone().unwrap_or_default();
         let text = diff::apply(&cur, std::slice::from_ref(h), true).map_err(|e| Refusal::No(format!("This part no longer applies ({e}). The file changed since.")))?;

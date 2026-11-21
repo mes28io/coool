@@ -100,8 +100,12 @@ export interface SplitRow {
   right: DiffLine | null;
 }
 
-/** Context on both sides; a run of removals beside the run of additions after it, line for line. */
+/**
+ * Context on both sides; in a changed run, each removed line beside the added line most like it (`partners`), an
+ * added line with no partner on a row of its own, and otherwise removals and additions line for line.
+ */
 export function splitRows(lines: DiffLine[]): SplitRow[] {
+  const pair = partners(lines);
   const out: SplitRow[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -111,11 +115,26 @@ export function splitRows(lines: DiffLine[]): SplitRow[] {
       i++;
       continue;
     }
-    const del: DiffLine[] = [];
-    const add: DiffLine[] = [];
-    while (i < lines.length && lines[i].k === "-") del.push(lines[i++]);
-    while (i < lines.length && lines[i].k === "+") add.push(lines[i++]);
-    for (let k = 0; k < Math.max(del.length, add.length); k++) out.push({ left: del[k] ?? null, right: add[k] ?? null });
+    const d0 = i;
+    while (i < lines.length && lines[i].k === "-") i++;
+    const a0 = i;
+    while (i < lines.length && lines[i].k === "+") i++;
+    if (!pair.slice(d0, a0).some((p) => p >= 0)) {
+      for (let k = 0; k < Math.max(a0 - d0, i - a0); k++) out.push({ left: d0 + k < a0 ? lines[d0 + k] : null, right: a0 + k < i ? lines[a0 + k] : null });
+      continue;
+    }
+    let a = a0;
+    for (let d = d0; d < a0; d++) {
+      const p = pair[d];
+      if (p < 0) {
+        out.push({ left: lines[d], right: null });
+        continue;
+      }
+      for (; a < p; a++) out.push({ left: null, right: lines[a] });
+      out.push({ left: lines[d], right: lines[p] });
+      a = p + 1;
+    }
+    for (; a < i; a++) out.push({ left: null, right: lines[a] });
   }
   return out;
 }
@@ -136,18 +155,46 @@ export function partners(lines: DiffLine[]): number[] {
     while (i < lines.length && lines[i].k === "-") i++;
     const a0 = i;
     while (i < lines.length && lines[i].k === "+") i++;
-    const n = Math.min(a0 - d0, i - a0);
-    for (let k = 0; k < n; k++) {
-      const a = lines[d0 + k].t;
-      const b = lines[a0 + k].t;
-      const short = Math.min(a.length, b.length);
-      const long = Math.max(a.length, b.length);
-      if (long > 2000 || (long > 12 && short < long / 4)) continue;
-      out[d0 + k] = a0 + k;
-      out[a0 + k] = d0 + k;
+    // Each removed line with the most alike added line after the last one paired (in order), when alike enough.
+    let next = a0;
+    for (let d = d0; d < a0; d++) {
+      let best = -1;
+      let score = 0.45;
+      for (let a = next; a < i; a++) {
+        const s = likeness(lines[d].t, lines[a].t);
+        if (s > score) {
+          score = s;
+          best = a;
+        }
+      }
+      if (best >= 0) {
+        out[d] = best;
+        out[best] = d;
+        next = best + 1;
+      }
     }
   }
   return out;
+}
+
+/** How alike two lines are, 0..1: shared words and symbols over all of them (Dice). */
+export function likeness(a: string, b: string): number {
+  if (a.length > 2000 || b.length > 2000) return 0;
+  const tok = (s: string) => s.match(/\w+|[^\w\s]/g) ?? [];
+  const ta = tok(a);
+  const tb = tok(b);
+  if (!ta.length || !tb.length) return a.trim() === b.trim() ? 1 : 0;
+  const bag = new Map<string, number>();
+  for (const t of ta) bag.set(t, (bag.get(t) ?? 0) + 1);
+  let common = 0;
+  for (const t of tb) {
+    const n = bag.get(t) ?? 0;
+    if (n > 0) {
+      common++;
+      bag.set(t, n - 1);
+    }
+  }
+  return (2 * common) / (ta.length + tb.length);
 }
 
 /** Unchanged lines (new side, 1-based, inclusive) before each hunk, and after the last one; null when none. */

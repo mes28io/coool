@@ -12,6 +12,12 @@ test("split rows put a run of removals beside the additions after it", () => {
   assert.deepEqual([rows[1].left?.t, rows[1].right?.t], ["b", "B"]);
   assert.deepEqual([rows[2].left?.t, rows[2].right], ["c", null]);
   assert.equal(rows[3].left, rows[3].right);
+  // A new comment line above the changed line gets a row of its own; the line sits beside its new version.
+  const r2 = splitRows([L("-", "const month = d.getMonth();", 8), L("+", "// zero-based", undefined, 8), L("+", "const month = d.getMonth() + 1;", undefined, 9)]);
+  assert.deepEqual(r2.map((r) => [r.left?.t ?? null, r.right?.t ?? null]), [
+    [null, "// zero-based"],
+    ["const month = d.getMonth();", "const month = d.getMonth() + 1;"],
+  ]);
 });
 
 test("word pairs: the k-th removal with the k-th addition, never wildly different lengths", () => {
@@ -20,6 +26,9 @@ test("word pairs: the k-th removal with the k-th addition, never wildly differen
   assert.deepEqual(p.slice(0, 2), [1, 0]);
   assert.equal(p[2], -1);
   assert.deepEqual(p.slice(3), [-1, -1]);
+  // A comment added above the changed line: the line pairs with its new version, not the comment.
+  const q = partners([L("-", "const month = d.getMonth();"), L("+", "// getMonth() is zero-based: March is 2."), L("+", "const month = d.getMonth() + 1;")]);
+  assert.deepEqual(q, [2, -1, 0]);
 });
 
 test("gaps between hunks and after the last one", () => {

@@ -504,6 +504,10 @@ export async function runChangesDemo(c: MockChat, root: string) {
 function openPanel(c: MockChat) {
   void import("../store").then(({ useStore }) => {
     const theme = /[?&]theme=(light|dark)/.exec(location.search)?.[1] as "light" | "dark" | undefined;
+    if (/[?&]split=1/.test(location.search)) {
+      void import("./changes").then((m) => m.setSplitPref(true));
+      useStore.getState().setChangesWidth(1000);
+    }
     if (theme) useStore.getState().setThemePref(theme);
     useStore.getState().open({ kind: "chat", id: c.id });
     setTimeout(() => {
@@ -511,6 +515,21 @@ function openPanel(c: MockChat) {
       if (knob() !== "pending") useStore.getState().setRightPanel(key, "changes");
       const sc = /[?&]scope=([\w:]+)/.exec(location.search)?.[1];
       if (sc) void import("./changes").then((m) => m.useChangesOpen.getState().open(key, sc as never));
+      // `click=undo|undoall|keephunk|stage`: press a button once the panel is up (for screenshots of what follows).
+      const click = /[?&]click=(\w+)/.exec(location.search)?.[1];
+      const sel: Record<string, string[]> = {
+        undo: ['[data-change-file="src/format.ts"] [data-undo-file]'],
+        undoall: ["[data-undo-all]"],
+        keephunk: ['[data-change-file="src/format.ts"] [data-keep-hunk]'],
+        stage: ['[data-change-file="src/format.ts"] [data-keep-more]', "[data-keep-stage]"],
+      };
+      if (click && sel[click]) {
+        let t = 1200;
+        for (const s of sel[click]) {
+          setTimeout(() => document.querySelector<HTMLElement>(s)?.click(), t);
+          t += 600;
+        }
+      }
     }, 600);
   });
 }

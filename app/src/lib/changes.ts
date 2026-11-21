@@ -31,10 +31,10 @@ export function changesTarget(session: Session | null | undefined, chat: Chat | 
 const targetKey = (t: ChangesTarget | null) => (t ? `${t.provider}:${t.sessionId}:${t.agents.length}:${t.cwd}:${t.external}` : "");
 
 /**
- * The change set for `scope`, reloaded when `tick` changes (new activity) and every 1.5 s while `live` (the agent
+ * The change set for `scope`, reloaded when `tick` changes (new activity) and every `every` ms (1.5 s while the agent
  * is working). Keeps the last good set while a reload is on its way.
  */
-export function useChanges(target: ChangesTarget | null, scope: Scope, tick: unknown, live: boolean, enabled = true): { data: ChangeSet | null; error: string | null; reload: () => Promise<void> } {
+export function useChanges(target: ChangesTarget | null, scope: Scope, tick: unknown, every: number | null, enabled = true): { data: ChangeSet | null; error: string | null; reload: () => Promise<void> } {
   const [data, setData] = useState<ChangeSet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const t = useRef(target);
@@ -62,10 +62,10 @@ export function useChanges(target: ChangesTarget | null, scope: Scope, tick: unk
     return () => clearTimeout(h);
   }, [reload, tick, enabled]);
   useEffect(() => {
-    if (!enabled || !live) return;
-    const h = setInterval(() => void reload(), 1500);
+    if (!enabled || !every) return;
+    const h = setInterval(() => void reload(), every);
     return () => clearInterval(h);
-  }, [reload, live, enabled]);
+  }, [reload, every, enabled]);
   useEffect(() => {
     setData(null);
     setError(null);
