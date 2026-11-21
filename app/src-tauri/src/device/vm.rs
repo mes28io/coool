@@ -105,6 +105,8 @@ pub struct Vm {
     next_stream: AtomicU64,
     /// When the last input of coool's own (a click, a key) finished: a key right after one waits for what it set off.
     last_input: Mutex<Option<Instant>>,
+    /// Per front app (bundle id or name): whether its windows report being key (see [`vm_input::learn`]).
+    key_reports: Mutex<HashMap<String, bool>>,
 }
 
 fn emit_state(app: &Option<tauri::AppHandle>, status: &Arc<Mutex<Value>>, patch: Value) {
@@ -1322,13 +1324,34 @@ impl MacTools<'_> {
 
     fn click(&self, (x, y): (f64, f64), count: u64, right: bool, label: Option<String>) -> Res<String> {
         self.activity("tap", Some((x, y)), label.clone());
+        let before = self.before_click((x, y));
         self.d.vm.click_with(self.d, (x, y), if right { vm_input::RIGHT } else { vm_input::LEFT }, count.clamp(1, 3) as u32)?;
         let what = label.map(|l| format!(" \"{l}\"")).unwrap_or_default();
-        Ok(format!("{}clicked{what} at ({x:.0},{y:.0})", match (count, right) {
+        Ok(format!("{}clicked{what} at ({x:.0},{y:.0}){}", match (count, right) {
             (_, true) => "right-",
             (2, _) => "double-",
             _ => "",
-        }))
+        }, before.note()))
+    }
+
+    /// Before a click: the window under the point is brought forward and waited for until it is key (see
+    /// [`vm_input::before_click`]), so the click isn't spent on activating it.
+    fn before_click(&self, p: (f64, f64)) -> vm_input::BeforeClick {
+        let mut known = std::mem::take(&mut *self.d.vm.key_reports.lock().unwrap());
+        let r = vm_input::before_click(&mut AgentGuest(self), p, &mut known);
+        self.d.vm.key_reports.lock().unwrap().extend(known);
+        r
+    }
+
+    /// The front app and its windows, cheaply (no menus, a few nodes).
+    fn front(&self, max_nodes: u32) -> Option<Value> {
+        self.d.vm.agent(self.d, json!({ "cmd": "tree", "maxNodes": max_nodes, "menus": false }), Duration::from_secs(3)).ok()
+    }
+
+    /// A shell command in the guest through the agent's `run`: its output when it exits 0.
+    fn guest_sh(&self, sh: &str, timeout_s: u64) -> Option<String> {
+        let r = self.d.vm.agent(self.d, json!({ "cmd": "run", "sh": sh, "timeout": timeout_s }), Duration::from_secs(timeout_s + 3)).ok()?;
+        (r["status"] == 0 && r["timedOut"] != true).then(|| r["output"].as_str().unwrap_or("").to_string())
     }
 
     fn type_into(&self, text_: &str, into: Option<&str>, replace: Option<bool>, submit: bool) -> Res<String> {
@@ -1382,7 +1405,16 @@ impl MacTools<'_> {
             let left = (1500 - since.as_millis() as u64).clamp(300, 1200);
             let _ = self.helper(json!({ "cmd": "idle", "quietMs": 120, "firstMs": 0, "timeoutMs": left }), Duration::from_millis(left) + Duration::from_secs(3));
         }
-        let sample = || self.d.vm.agent(self.d, json!({ "cmd": "tree", "maxNodes": 2, "menus": false }), Duration::from_secs(3)).ok().and_then(|t| vm_input::focus_print(&t));
+        // Steady, and key when the app is known to say so (a window coming back from hidden reads steady a moment
+        // before it is key).
+        let sample = || {
+            let t = self.front(2)?;
+            let mut known = self.d.vm.key_reports.lock().unwrap();
+            if let Some(f) = vm_input::front(&t) {
+                vm_input::learn(&mut known, &f);
+            }
+            vm_input::key_print(&t, &known)
+        };
         vm_input::wait_steady(sample, std::thread::sleep, Duration::from_millis(70), Duration::from_millis(1200)).0
     }
 
@@ -1557,6 +1589,34 @@ impl MacTools<'_> {
             "shutdown" => self.d.vm.shutdown(self.d).map(|_| "shut down".into()),
             _ => Err("mac_device action is status, boot or shutdown".into()),
         }
+    }
+}
+
+/// [`vm_input::before_click`]'s guest: today's agent (`tree`, `run`, `launch`), nothing new installed in the VM.
+struct AgentGuest<'a, 'b>(&'a MacTools<'b>);
+
+impl vm_input::Guest for AgentGuest<'_, '_> {
+    fn front(&mut self) -> Option<vm_input::Front> {
+        vm_input::front(&self.0.front(12)?)
+    }
+
+    fn owner(&mut self, p: (f64, f64)) -> Option<vm_input::Owner> {
+        let out = self.0.guest_sh(&vm_input::owner_command(p), 4)?;
+        vm_input::owner(&serde_json::from_str(out.trim().lines().last()?).ok()?)
+    }
+
+    fn activate(&mut self, o: &vm_input::Owner) -> bool {
+        // Launch Services, as `mac_app launch` (an app already running comes forward; the agent returns once it is
+        // in front with a window). A bare executable has no bundle to open: activate its process.
+        let app = if !o.path.is_empty() { &o.path } else { &o.app };
+        if o.path.is_empty() && o.app == o.name {
+            return self.0.guest_sh(&vm_input::activate_command(o.pid), 3).is_some_and(|s| s.trim() == "1");
+        }
+        self.0.d.vm.agent(self.0.d, json!({ "cmd": "launch", "app": app }), Duration::from_secs(4)).is_ok()
+    }
+
+    fn sleep(&mut self, d: Duration) {
+        std::thread::sleep(d);
     }
 }
 
