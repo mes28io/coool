@@ -274,6 +274,13 @@ pub fn bar(r: &Reading, mode: Mode, test: bool) -> Bar {
             segs.push(v(pct3(r.cpu)));
             segs.push(l("MEM"));
             segs.push(v(pct3(mem_share)));
+            // Free space on the startup volume, in whole GB, padded so the width holds from 1 to 9999.
+            if let Some(d) = r.disk {
+                let gb = (d.free as f64 / 1e9).round() as u64;
+                let t = format!("{gb}G");
+                segs.push(l("DISK"));
+                segs.push(v(format!("{}{t}", "\u{2007}".repeat(5usize.saturating_sub(t.chars().count())))));
+            }
         }
         Mode::Needs => {
             if needs > 0 {
@@ -594,7 +601,7 @@ mod tests {
         let texts = |b: &Bar| b.segs.iter().map(|s| s.text.clone()).collect::<Vec<_>>();
         assert_eq!(texts(&bar(idle, Mode::Nothing, false)), Vec::<String>::new());
         assert_eq!(texts(&bar(idle, Mode::Cpu, false)), vec!["\u{2007}\u{2007}7%"]);
-        assert_eq!(texts(&bar(idle, Mode::CpuMemory, false)), vec!["CPU", "\u{2007}\u{2007}7%", "MEM", "\u{2007}47%"]);
+        assert_eq!(texts(&bar(idle, Mode::CpuMemory, false)), vec!["CPU", "\u{2007}\u{2007}7%", "MEM", "\u{2007}47%", "DISK", "\u{2007}\u{2007}51G"]);
         assert_eq!(texts(&bar(idle, Mode::Needs, false)), Vec::<String>::new());
         // The mark leads in every mode when a session needs the person.
         for m in [Mode::Nothing, Mode::Cpu, Mode::CpuMemory, Mode::Needs] {

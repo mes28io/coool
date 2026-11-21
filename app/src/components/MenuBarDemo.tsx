@@ -31,7 +31,7 @@ export function menubarDemoState(): string | null {
 const MODES: { mode: MenuBarMode; label: string }[] = [
   { mode: "nothing", label: "Nothing" },
   { mode: "cpu", label: "CPU" },
-  { mode: "cpu_memory", label: "CPU and memory" },
+  { mode: "cpu_memory", label: "CPU, memory and disk" },
   { mode: "needs", label: "Sessions needing you" },
 ];
 

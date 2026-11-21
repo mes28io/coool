@@ -29,6 +29,8 @@ struct Ui {
     rows: Vec<(String, Retained<NSMenuItem>)>,
     acts: Vec<Act>,
     bar: Option<Bar>,
+    /// A self-test's item (its glyph differs).
+    test: bool,
 }
 
 thread_local! {
@@ -137,7 +139,9 @@ pub fn bar_title(b: &Bar) -> Retained<NSMutableAttributedString> {
     }
     let size = NSFont::menuBarFontOfSize(0.0).pointSize();
     let value = attrs(&NSFont::monospacedDigitSystemFontOfSize_weight(size, 0.0), &NSColor::labelColor(), None, None);
-    let label = attrs(&NSFont::systemFontOfSize_weight(size * 0.62, 0.3), &NSColor::secondaryLabelColor(), None, Some(1.0));
+    // The same colour as the figures: a dimmer one resolved against the app's appearance, not the menu bar's, and came
+    // out muddy on a coloured or dark bar.
+    let label = attrs(&NSFont::systemFontOfSize_weight(size * 0.62, 0.3), &NSColor::labelColor(), None, Some(1.0));
     let mark = attrs(&NSFont::systemFontOfSize_weight(size * 0.7, 0.0), &needs_color(), None, Some(1.0));
     let space = attrs(&NSFont::monospacedDigitSystemFontOfSize_weight(size, 0.0), &NSColor::labelColor(), None, None);
     push(&out, " ", &space);
@@ -287,7 +291,7 @@ pub fn create(hidden: bool, test: bool) {
     menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
     item.setMenu(Some(&menu));
     eprintln!("coool menubar: item created{}", if hidden { " (hidden)" } else { "" });
-    UI.with(|u| *u.borrow_mut() = Some(Ui { item, menu, _target: target, rows: Vec::new(), acts: Vec::new(), bar: None }));
+    UI.with(|u| *u.borrow_mut() = Some(Ui { item, menu, _target: target, rows: Vec::new(), acts: Vec::new(), bar: None, test }));
 }
 
 /// Takes the item out of the bar for good.
@@ -323,6 +327,10 @@ pub fn set_bar(b: &Bar) {
             return;
         }
         if let Some(btn) = u.item.button(mtm) {
+            // The glyph only when there is no figure to show: with one, the reading is the item.
+            let figures = b.segs.iter().any(|s| matches!(s.kind, SegKind::Value));
+            let img = (!figures).then(|| glyph(u.test));
+            btn.setImage(img.as_deref());
             btn.setAttributedTitle(&bar_title(b));
             btn.setToolTip(Some(&NSString::from_str(&b.tooltip)));
         }
