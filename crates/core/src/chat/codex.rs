@@ -178,7 +178,7 @@ pub(crate) struct Codex {
     /// `originator`, which is how a later launch recognises coool's own threads.
     pub(crate) client_name: String,
     /// Ladder's policy (APP_SPEC "Ladder"), sent as `developerInstructions` after the person's own; None: off.
-    ladder: Option<String>,
+    pub(super) ladder: Option<String>,
 }
 
 impl Codex {
@@ -217,7 +217,7 @@ impl Codex {
             stopping: false,
             plans: 0,
             client_name: crate::origin::CLIENT_NAME.to_string(),
-            ladder: opts.ladder.as_ref().map(|l| crate::ladder::policy(crate::ladder::Cli::Codex, l, std::path::Path::new(&opts.cwd), true)),
+            ladder: opts.ladder.as_ref().map(|l| crate::ladder::codex_policy(l, std::path::Path::new(&opts.cwd), None)),
         };
         if let Some(m) = &opts.permission_mode {
             let m = approval_policy(m);
@@ -1480,7 +1480,7 @@ mod tests {
     #[test]
     fn ladder_policy_rides_on_the_thread_after_the_persons_own() {
         use crate::ladder::{Ladder, Role, Tier};
-        let lad = Ladder { tiers: vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }], max_parallel: 2, verify_tests: false };
+        let lad = Ladder { tiers: vec![Tier { role: Role::Small, model: "gpt-5.6-luna".into(), label: "GPT-5.6-Luna".into() }], max_parallel: 2, verify_tests: false, ..Default::default() };
         let sent = |o: &Out, method: &str| o.writes.iter().map(|w| serde_json::from_str::<Value>(w).unwrap()).find(|v| v["method"] == method);
         for resume in [None, Some("t-1".to_string())] {
             let mut c = Codex::new(&ChatOptions { ladder: Some(lad.clone()), resume: resume.clone(), ..opts() });

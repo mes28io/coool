@@ -18,7 +18,7 @@ fn main() {
     }
     let tiers: Vec<Tier> = serde_json::from_str(&a[2]).expect("tiers json");
     let max_parallel = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(4);
-    let l = Ladder { tiers, max_parallel, verify_tests: true };
+    let l = Ladder { tiers, max_parallel, verify_tests: true, ..Default::default() };
     let args = claude_args(&l, Path::new(&a[0]), Some(Path::new(&a[1])));
     println!("{}", serde_json::to_string(&args).unwrap());
 }
