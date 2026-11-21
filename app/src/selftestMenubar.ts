@@ -48,7 +48,7 @@ type Status = {
   reading: { cpu: number | null; memory: { used: number; total: number } | null; disk: { free: number } | null; load: number[] | null };
 };
 type Agents = { working: number; needs: number; done: number; needing: { key: string | null; chat: number | null; title: string; ask: string }[]; pids: { pid: number; key: string | null; chat: number | null; title: string }[] };
-type MenuItem = { text: string; enabled: boolean; tip: string | null };
+type MenuItem = { text: string; enabled: boolean; tip: string | null; view: boolean };
 
 class Fail extends Error {}
 const must = (ok: unknown, what: string) => {
@@ -190,6 +190,45 @@ export function menubarScenarios(k: MenubarKit): Record<string, () => Promise<vo
         }
       });
 
+      await step("menubar: the open menu (never shown) sits under the bar, its read-only rows at full contrast and aligned with the native ones", async () => {
+        type Row = { text: string; x: number; right: number | null; row_height: number | null };
+        type View = Row & { enabled: boolean; in_window: boolean; color: string; detail_color: string | null };
+        type Probe = {
+          drop: number;
+          geometry: { bar_bottom: number; bar_height: number; top_before: number; top_after: number; moved: boolean; item_bar_height: number | null; thickness: number; text_x: number } | null;
+          relayout_top: number | null;
+          updated_top: number;
+          natives: Row[];
+          views: View[];
+          renders: Record<string, { darkest: number; brightest: number; pixels: number; png: string | null }>;
+        };
+        // AppKit opened the person's menu about 36 pt below the bar: the probe opens it there.
+        const p = await mb<Probe>("probe", 36);
+        await log(`menubar probe: ${JSON.stringify(p)}`);
+        const g = p.geometry;
+        must(g, "no geometry: the menu's window wasn't found");
+        must(Math.abs(g!.top_before - (g!.bar_bottom - 36)) <= 2, `opened with its top at ${g!.top_before}, bar bottom ${g!.bar_bottom}`);
+        must(g!.moved && Math.abs(g!.top_after - g!.bar_bottom) <= 1, `top after ${g!.top_after}, bar bottom ${g!.bar_bottom}`);
+        must(Math.abs(p.updated_top - g!.bar_bottom) <= 1, `after a relayout (AppKit put it back at ${p.relayout_top}) and an update in place: top ${p.updated_top}`);
+        must(p.views.length >= 6 && p.natives.length >= 3, `${p.views.length} views, ${p.natives.length} native rows`);
+        for (const v of p.views) {
+          must(v.in_window && !v.enabled, `"${v.text}": in the menu ${v.in_window}, enabled ${v.enabled}`);
+          const want = v.text.includes("\t") ? "label" : "secondary";
+          must(v.color === want, `"${v.text}": ${v.color}, want ${want}`);
+          must(v.detail_color === null || v.detail_color === "secondary", `"${v.text}" second line: ${v.detail_color}`);
+        }
+        const xs = [...p.natives, ...p.views].map((r) => r.x);
+        const rights = [...p.natives, ...p.views].flatMap((r) => (r.right === null ? [] : [r.right]));
+        const spread = (a: number[]) => Math.max(...a) - Math.min(...a);
+        must(spread(xs) <= 1, `text x from ${Math.min(...xs)} to ${Math.max(...xs)}`);
+        must(p.natives.some((n) => n.right !== null), "no native row with a figure to compare with");
+        must(rights.length >= 5 && spread(rights) <= 1,`figures' right edges from ${Math.min(...rights)} to ${Math.max(...rights)}`);
+        const [light, dark] = [p.renders.light, p.renders.dark];
+        must(light && light.pixels > 50 && light.darkest <= 0.15, `light: ${JSON.stringify(light)}`);
+        must(dark && dark.pixels > 50 && dark.brightest >= 0.85, `dark: ${JSON.stringify(dark)}`);
+        return `bar ${g!.bar_height} pt, bottom ${g!.bar_bottom}; opened with its top ${(g!.bar_bottom - g!.top_before).toFixed(1)} pt below, moved to ${(g!.bar_bottom - g!.top_after).toFixed(1)} pt; after a relayout AppKit put it back ${(g!.bar_bottom - (p.relayout_top ?? g!.bar_bottom)).toFixed(1)} pt below, after the update in place ${(g!.bar_bottom - p.updated_top).toFixed(1)} pt; text x ${Math.min(...xs)}..${Math.max(...xs)} over ${p.natives.length} native rows and ${p.views.length} views; figures' right edge ${Math.min(...rights).toFixed(2)}..${Math.max(...rights).toFixed(2)}; views disabled, colours label/secondary; offscreen row: light darkest ${light.darkest.toFixed(3)}, dark brightest ${dark.brightest.toFixed(3)}`;
+      });
+
       await step("menubar: with the menu closed again, the sampler is back to the bar's pace", async () => {
         const s = await until("2 s, menu closed", async () => {
           const s = await status();
@@ -205,10 +244,12 @@ export function menubarScenarios(k: MenubarKit): Record<string, () => Promise<vo
         });
         const st = await status();
         must(st.open && st.interval_ms === 2000, `open menu: interval ${st.interval_ms} ms`);
-        await log(`menubar menu:\n${items.map((i, n) => `  ${n} ${i.enabled ? "*" : " "} ${i.text.replace(/\n/g, " ⏎ ")}`).join("\n")}`);
+        await log(`menubar menu:\n${items.map((i, n) => `  ${n} ${i.enabled ? "*" : i.view ? "v" : " "} ${i.text.replace(/\n/g, " ⏎ ")}`).join("\n")}`);
         for (const want of ["This Mac", "Busiest processes", "coool", "Open coool", "New session…", "Quit coool"]) must(items.some((i) => i.text === want), `no "${want}" row`);
         for (const want of ["CPU\t", "Memory\t", "Disk\t", "Sessions\t"]) must(items.some((i) => i.text.startsWith(want)), `no "${want}" row`);
         must(items.filter((i) => i.text.startsWith("Memory\t"))[0]?.tip?.includes("Activity Monitor"), "memory row doesn't say what it is");
+        // Rows only read are views (AppKit dims a disabled item's own title, not its view); rows that act stay native.
+        for (const i of items) if (i.text !== "---") must(i.view === !i.enabled, `"${i.text.split("\n")[0]}": enabled ${i.enabled}, view ${i.view}`);
         const a = await agents();
         const mine = a.needing.find((n) => n.chat === chat)!;
         const row = items.find((i) => i.enabled && i.text.startsWith("● ") && i.text.includes(mine.title.slice(0, 20)));
@@ -283,6 +324,26 @@ export function menubarScenarios(k: MenubarKit): Record<string, () => Promise<vo
           return s.exists && !s.visible ? s : null;
         });
         return `removed, then back (hidden) with title "${s.title}"`;
+      });
+
+      await step("menubar: the app's own CPU over 30 s with the menu open (rows updated in place every 2 s)", async () => {
+        type P = { app: { cpu_ms: number } | null };
+        await setPrefs({ show: true, mode: "cpu" });
+        await mb("open");
+        try {
+          await sleep(3000);
+          const [a, s0] = [(await invoke("selftest_perf_stats")) as P, await status()];
+          const t = Date.now();
+          await sleep(30_000);
+          const [b, s1] = [(await invoke("selftest_perf_stats")) as P, await status()];
+          const wall = (Date.now() - t) / 1000;
+          const pct = ((b.app!.cpu_ms - a.app!.cpu_ms) / 1000 / wall) * 100;
+          const line = `menu open 30 s: app process CPU ${pct.toFixed(2)}% of one core; the sampler ${s1.samples - s0.samples} samples, ${(s1.busy_ms - s0.busy_ms).toFixed(1)} ms`;
+          await log(`menubar menu-open cost: ${line}`);
+          return line;
+        } finally {
+          await mb("close");
+        }
       });
 
       await step("menubar: the app's own CPU over a minute with the item on and off", async () => {

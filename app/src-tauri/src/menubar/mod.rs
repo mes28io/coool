@@ -391,7 +391,15 @@ pub fn selftest(action: &str, arg: serde_json::Value) -> Result<serde_json::Valu
                 ui::set_rows(&rows);
                 ui::menu_items()
             })?;
-            Ok(json!(items.into_iter().map(|(t, e, tip)| json!({ "text": t, "enabled": e, "tip": tip })).collect::<Vec<_>>()))
+            Ok(json!(items.into_iter().map(|(t, e, tip, view)| json!({ "text": t, "enabled": e, "tip": tip, "view": view })).collect::<Vec<_>>()))
+        }
+        // The real menu opened `arg` points below the main screen's menu bar and never shown (alpha 0, closed again
+        // within a few turns): where it sits before and after it is moved up, the rows' alignment and colours, a row
+        // drawn offscreen in light and dark (`ui::probe`).
+        "probe" => {
+            let drop = arg.as_f64().unwrap_or(36.0);
+            let shots = std::env::var("COOOL_SELFTEST_SHOTS").ok();
+            main_sync(move || ui::probe(drop, shots))?
         }
         // A click on the menu row whose text starts with `arg`, without opening the menu.
         "click" => {
