@@ -9,7 +9,7 @@ import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
 import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
-import type { ChangeSet, FileChange, Outcome } from "./changesRules";
+import type { ChangesWire, FileChange, Outcome } from "./changesRules";
 import type { HistoryBackend } from "./history";
 
 /** Which session's changes, and which part (crates/core/src/changes; `changes_load` and the rest). */
@@ -77,7 +77,8 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   /** What fills a session's (or one of its subagents') context window, for the open Models panel only (crates/core/src/context.rs). */
   contextMap(a: { provider: Provider; sessionId: string; agentId?: string | null; cwd?: string }): Promise<ContextMap>;
   // ---- the Changes view (crates/core/src/changes, app/src-tauri/src/changes.rs) ----
-  changesLoad(t: ChangesReq): Promise<ChangeSet>;
+  /** `since`: the revision the page has (0: all); `summary`: counts and turns only. */
+  changesLoad(t: ChangesReq, since?: number, summary?: boolean): Promise<ChangesWire>;
   /** Undo a hunk, a file, or (file null) every file of the scope. `force`: the person said "anyway". */
   changesUndo(t: ChangesReq, file: string | null, hunk: string | null, force: boolean): Promise<Outcome>;
   /** Keep (mark reviewed) a hunk, a file or every file of the scope; `stage` also runs `git add`; `unkeep` takes it back. */
@@ -675,7 +676,7 @@ async function tauriBackend(): Promise<Backend> {
     environment: () => invoke("environment"),
     gitTrail: (path) => invoke("git_trail", { path }),
     contextMap: ({ provider, sessionId, agentId, cwd }) => soft("context_map", { provider, sessionId, agentId: agentId ?? null, cwd: cwd ?? null }),
-    changesLoad: (target) => soft("changes_load", { target }),
+    changesLoad: (target, since = 0, summary = false) => soft("changes_load", { target, since, summary }),
     changesUndo: (target, file, hunk, force) => soft("changes_undo", { target, file, hunk, force }),
     changesKeep: (target, file, hunk, stage, unkeep) => soft("changes_keep", { target, file, hunk, stage, unkeep }),
     changesTold: (target, paths) => soft("changes_told", { target, paths }),

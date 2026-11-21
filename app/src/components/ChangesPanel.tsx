@@ -6,7 +6,7 @@
 // j / k next and previous hunk, ] / [ next and previous file, Enter folds the file. Nothing destructive is on a key.
 
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/backend";
 import { type Chat, useChats } from "../lib/chat";
 import { changesKeep, changesUndo, setSplitPref, setTellAgentPref, splitPref, tellAgentPref, type ChangesTarget } from "../lib/changes";
@@ -46,7 +46,10 @@ export function ChangesPanel({
   const [note, setNote] = useState<{ text: string; bad: boolean } | null>(null);
   const [asks, setAsks] = useState<Record<string, { q: string; hunk: string | null }>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // Files folded or unfolded by hand: a big diff starts folded (BIG_DIFF), every other one open.
   const [folded, setFolded] = useState<Set<string>>(new Set());
+  const isFolded = useCallback((f: FileChange) => bigDiff(f) !== folded.has(f.path), [folded]);
+  const scroller = useRef<HTMLDivElement>(null);
   const [focus, setFocus] = useState<{ f: number; h: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const files = useMemo(() => data?.files ?? [], [data]);
@@ -104,11 +107,12 @@ export function ChangesPanel({
   };
 
   // Keyboard: j/k hunks, ]/[ files, Enter folds.
-  const flat = useMemo(() => files.flatMap((f, fi) => (folded.has(f.path) ? [{ f: fi, h: -1 }] : f.hunks.length ? f.hunks.map((_, hi) => ({ f: fi, h: hi })) : [{ f: fi, h: -1 }])), [files, folded]);
+  const flat = useMemo(() => files.flatMap((f, fi) => (isFolded(f) ? [{ f: fi, h: -1 }] : f.hunks.length ? f.hunks.map((_, hi) => ({ f: fi, h: hi })) : [{ f: fi, h: -1 }])), [files, isFolded]);
   const goTo = (p: { f: number; h: number } | undefined) => {
     if (!p) return;
     setFocus(p);
-    const el = root.current?.querySelector(p.h >= 0 ? `[data-file-index="${p.f}"] [data-hunk-index="${p.h}"]` : `[data-file-index="${p.f}"]`);
+    // A file's diff that hasn't been drawn yet (out of sight): its card.
+    const el = root.current?.querySelector(p.h >= 0 ? `[data-file-index="${p.f}"] [data-hunk-index="${p.h}"]` : `[data-file-index="${p.f}"]`) ?? root.current?.querySelector(`[data-file-index="${p.f}"]`);
     el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   };
   const onKey = (e: React.KeyboardEvent) => {
@@ -178,7 +182,7 @@ export function ChangesPanel({
       )}
 
       {/* body */}
-      <div className="scroll min-h-0 flex-1" data-changes-body>
+      <div ref={scroller} className="scroll min-h-0 flex-1" data-changes-body>
         {error && !data ? (
           <Empty title="Changes aren't available" text={error} />
         ) : !data ? (
@@ -203,7 +207,9 @@ export function ChangesPanel({
                 split={sideBySide}
                 scope={scope}
                 root={data.root}
-                folded={folded.has(f.path)}
+                folded={isFolded(f)}
+                eager={fi < EAGER_FILES}
+                scroller={scroller}
                 onFold={() => setFolded((s) => (s.has(f.path) ? new Set([...s].filter((x) => x !== f.path)) : new Set(s).add(f.path)))}
                 busyKey={busyKey}
                 readOnly={readOnly}
@@ -368,6 +374,50 @@ function UndoAll({ files, disabled, turn, onConfirm }: { files: FileChange[]; di
   );
 }
 
+/** Files drawn at once; the rest draw their diffs when they come near the panel's view (LazyDiff). */
+const EAGER_FILES = 6;
+/** A diff of more lines than this starts folded (its header shows; a click opens it). */
+const BIG_DIFF = 800;
+const bigDiff = (f: FileChange) => f.hunks.reduce((n, h) => n + h.lines.length, 0) > BIG_DIFF;
+
+/**
+ * A file's diff, drawn once it comes within ~1.5 screens of the panel's view (until then a box of about its height:
+ * 19 px a line, 27 px a hunk header). When one above the view is drawn, the view is moved by the difference, so what
+ * the person looks at stays put.
+ */
+function LazyDiff({ f, eager, scroller, children }: { f: FileChange; eager: boolean; scroller: React.RefObject<HTMLDivElement | null>; children: () => React.ReactNode }) {
+  const [seen, setSeen] = useState(eager);
+  const box = useRef<HTMLDivElement>(null);
+  const est = useMemo(() => f.hunks.reduce((n, h) => n + 27 + h.lines.length * 19, 2), [f.hunks]);
+  const was = useRef<number | null>(null);
+  useEffect(() => {
+    if (seen || !box.current || typeof IntersectionObserver === "undefined") return void (seen || setSeen(true));
+    const io = new IntersectionObserver(
+      (es) => {
+        if (!es.some((e) => e.isIntersecting)) return;
+        const el = box.current;
+        const sc = scroller.current;
+        // Above the view: remember its estimated height to make up the difference once drawn.
+        was.current = el && sc && el.getBoundingClientRect().bottom <= sc.getBoundingClientRect().top ? el.offsetHeight : null;
+        setSeen(true);
+      },
+      { root: scroller.current, rootMargin: "1500px 0px" },
+    );
+    io.observe(box.current);
+    return () => io.disconnect();
+  }, [seen, scroller]);
+  useLayoutEffect(() => {
+    if (!seen || was.current === null || !box.current || !scroller.current) return;
+    scroller.current.scrollTop += box.current.offsetHeight - was.current;
+    was.current = null;
+  }, [seen, scroller]);
+  return (
+    <div ref={box} style={seen ? undefined : { height: est }} data-diff-lazy={seen ? undefined : "waiting"}>
+      {seen ? children() : null}
+    </div>
+  );
+}
+
 function FileCard({
   f,
   index,
@@ -375,6 +425,8 @@ function FileCard({
   scope,
   root,
   folded,
+  eager,
+  scroller,
   onFold,
   busyKey,
   readOnly,
@@ -395,6 +447,8 @@ function FileCard({
   scope: Scope;
   root: string;
   folded: boolean;
+  eager: boolean;
+  scroller: React.RefObject<HTMLDivElement | null>;
   onFold: () => void;
   busyKey: string | null;
   readOnly: boolean;
@@ -475,6 +529,11 @@ function FileCard({
           {f.said && <span className="italic">“{f.said}”</span>}
         </div>
       )}
+      {folded && !gone && bigDiff(f) && (
+        <button type="button" onClick={onFold} className="mx-3 mb-2 block rounded-[8px] bg-[color-mix(in_oklab,var(--dim)_7%,transparent)] px-3 py-1.5 text-left text-small text-dim hover:bg-hover hover:text-fg" data-file-big>
+          A large diff ({f.hunks.reduce((n, h) => n + h.lines.length, 0)} lines): show it
+        </button>
+      )}
       {f.reedited && <div className="mx-3 mb-2 rounded-[8px] border border-[color-mix(in_oklab,var(--status-needs)_30%,var(--border))] px-2.5 py-1.5 text-small text-fg" data-file-reedited>The agent edited this again after you undid its change.</div>}
       <AnimatePresence initial={false}>
         {ask && (
@@ -504,9 +563,12 @@ function FileCard({
       )}
       {showHunks && f.hunks.length > 0 && (
         <div className={cx("mx-3 mb-3 overflow-hidden rounded-[10px] border border-hairline bg-bg", f.busy && "border-[color-mix(in_oklab,var(--status-running)_35%,var(--border))]")}>
-          <DiffBody file={f} split={split} foldKept={scope !== "pending"} slots={{ actions: hunkActions, focused }} />
+          <LazyDiff f={f} eager={eager} scroller={scroller}>
+            {() => <DiffBody file={f} split={split} foldKept={scope !== "pending"} slots={{ actions: hunkActions, focused }} />}
+          </LazyDiff>
         </div>
       )}
+
       {!folded && f.unknown_base && f.hunks.length > 0 && !showHunks && null}
     </section>
   );

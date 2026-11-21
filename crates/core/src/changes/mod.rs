@@ -41,7 +41,7 @@ pub struct Source {
     pub path: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// Everything since the chat started.
     Chat,
@@ -83,7 +83,7 @@ pub struct Request<'a> {
 /// Moves a file to the Trash.
 pub type Trash<'a> = &'a dyn Fn(&Path) -> Result<()>;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HunkView {
     pub id: String,
     pub old_start: usize,
@@ -102,7 +102,7 @@ pub struct HunkView {
     pub blocked: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FileChange {
     pub path: String,
     pub rel: String,
@@ -164,6 +164,8 @@ pub struct TurnInfo {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ChangeSet {
+    /// Its revision (see [`Changes::load_wire`]).
+    pub rev: u64,
     pub root: String,
     pub scope: String,
     pub git: Option<git::GitInfo>,
@@ -230,6 +232,8 @@ struct Chain {
     edits: Vec<Edit>,
     pre: Vec<Option<St>>,
     post: Vec<Option<St>>,
+    /// Its edits (tool ids, times, turns, moves) as a key.
+    sig: u64,
 }
 
 #[derive(Debug)]
@@ -261,42 +265,136 @@ pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// The engine: transcript readers kept between calls (read incrementally), and where the reviews are saved.
+/// The engine. Per session (its key), kept between calls: the transcript readers (read incrementally, only what was
+/// appended), the files' edit chains (rebuilt only for a file that got a new edit), and each file's view per scope
+/// (worked out again only when something it depends on changed: its edits, the file on disk (size, mtime, inode),
+/// what the person kept or undid, staged, being edited, what the agent said after). A call costs a `stat` per file
+/// when nothing changed. Every view and every set gets a revision number when its content changes, so the app asks
+/// with the revision it has and gets back only what is new ([`Changes::load_wire`]). Sessions are locked one by one:
+/// a long call on one never holds up another; the map of sessions is locked only to find one.
 pub struct Changes {
+    sessions: std::sync::Mutex<HashMap<String, std::sync::Arc<std::sync::Mutex<Sess>>>>,
+    state_dir: Option<PathBuf>,
+    /// Revisions: one counter for everything (starts at the time, so a revision from before a restart is never reused).
+    rev: std::sync::atomic::AtomicU64,
+}
+
+/// One session's state between calls.
+#[derive(Default)]
+struct Sess {
     readers: HashMap<PathBuf, Reader>,
     /// Codex: the file right after an edit, as first seen (path, tool id) -> content.
     seen_after: HashMap<(PathBuf, String), St>,
-    state_dir: Option<PathBuf>,
+    /// `resolved()` of the paths seen (only those whose folder existed).
+    resolved: HashMap<PathBuf, PathBuf>,
+    /// What the chains were built from (the sources and how many edits and turns each had).
+    chains_key: u64,
+    chains: Vec<Chain>,
+    turns: Vec<record::Turn>,
+    said: Vec<record::Said>,
+    busy: HashSet<PathBuf>,
+    /// The view of a file in a scope, and the key it was worked out for.
+    memo: HashMap<(PathBuf, Scope), Memo>,
+    /// A file's lines added and removed in one turn (for the turn list).
+    counts: HashMap<(PathBuf, usize), (u64, Option<(usize, usize)>)>,
+    /// Per (scope, summary): the set's key and revision.
+    sets: HashMap<(Scope, bool), (u64, u64)>,
+    /// The turn list's key and revision.
+    turns_rev: (u64, u64),
+    /// What the person kept and undid, with the file's (size, mtime) and a count of coool's own saves.
+    review: Option<((u64, u128, u64), Review)>,
+    saves: u64,
 }
 
-impl Changes {
-    pub fn new(state_dir: Option<PathBuf>) -> Self {
-        Self { readers: HashMap::new(), seen_after: HashMap::new(), state_dir }
-    }
+struct Memo {
+    key: u64,
+    file: Option<FileChange>,
+    rev: u64,
+}
 
-    fn review_path(&self, key: &str) -> Option<PathBuf> {
-        let safe: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-        self.state_dir.as_ref().map(|d| d.join(format!("{safe}.json")))
-    }
+/// What [`Changes::load_wire`] sends: the revision, and the set when it is newer than the one the app has.
+#[derive(Clone, Debug, Serialize)]
+pub struct Wire {
+    pub rev: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set: Option<WireSet>,
+}
 
-    pub fn review(&self, key: &str) -> Review {
-        self.review_path(key).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-    }
+/// A [`ChangeSet`] as sent: files the app already has (same revision) as their path only; the turns only when they
+/// changed; no files at all for a summary (the header's count).
+#[derive(Clone, Debug, Serialize)]
+pub struct WireSet {
+    pub rev: u64,
+    pub root: String,
+    pub scope: String,
+    pub git: Option<git::GitInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turns: Option<Vec<TurnInfo>>,
+    pub files: Vec<WireFile>,
+    pub pending: usize,
+    pub total: usize,
+    pub external: bool,
+    pub busy: bool,
+    /// Files the agent edited again after the person undid them, not told yet: (path, rel).
+    pub reedited: Vec<(String, String)>,
+}
 
-    fn save_review(&self, key: &str, r: &Review) -> Result<()> {
-        let Some(p) = self.review_path(key) else { return Ok(()) };
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        write_atomic(&p, serde_json::to_string(r)?.as_bytes())
-    }
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum WireFile {
+    /// Unchanged since the revision the app has.
+    Same { path: String, same: bool },
+    Full(FileChange),
+}
 
-    /// Reads what was appended to each transcript, and returns every edit (oldest first), the turns, what the
-    /// agent said, and the files being edited right now.
-    fn gather(&mut self, req: &Request) -> (Vec<Edit>, Vec<record::Turn>, Vec<record::Said>, HashSet<PathBuf>) {
-        let mut edits = Vec::new();
-        let mut turns = Vec::new();
-        let mut said = Vec::new();
+fn hash_of(x: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    x.hash(&mut h);
+    h.finish()
+}
+
+/// A file's size, mtime (ns) and inode; None when it isn't there.
+fn stat_sig(p: &Path) -> Option<(u64, u128, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(p).ok()?;
+    let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+    Some((m.len(), t, m.ino()))
+}
+
+/// What the person kept and undid for one file, as a key.
+fn review_sig(r: &Review, key: &str) -> u64 {
+    let mut kept: Vec<&String> = r.kept.get(key).map(|s| s.iter().collect()).unwrap_or_default();
+    kept.sort();
+    let mut hunks: Vec<&String> = r.hunks.get(key).map(|s| s.iter().collect()).unwrap_or_default();
+    hunks.sort();
+    let u = r.undone.get(key).map(|u| (u.at, &u.last_tool, u.told, &u.left));
+    hash_of((kept, hunks, u))
+}
+
+/// The indices of a chain's edits in `scope`.
+fn scope_idx(c: &Chain, scope: Scope, review: &Review) -> Vec<usize> {
+    let kept = review.kept.get(c.path.to_string_lossy().as_ref());
+    (0..c.edits.len())
+        .filter(|&i| match scope {
+            Scope::Chat => true,
+            Scope::Pending => !kept.is_some_and(|k| k.contains(&c.edits[i].tool_id)),
+            Scope::Turn(t) => c.edits[i].turn == t,
+        })
+        .collect()
+}
+
+/// What the agent said right after edit `last` of the chain, before the next prompt.
+fn said_after<'a>(c: &Chain, last: usize, turns: &[record::Turn], said: &'a [record::Said]) -> Option<&'a str> {
+    let ets = c.edits[last].ts;
+    let next_turn = turns.iter().map(|t| t.ts).find(|&t| t > ets).unwrap_or(u64::MAX);
+    said.iter().find(|s| s.ts >= ets && s.ts < next_turn).map(|s| s.text.as_str())
+}
+
+impl Sess {
+    /// Reads what was appended to each transcript; rebuilds the chains of files that got new edits.
+    fn refresh(&mut self, req: &Request, git: Option<&git::GitInfo>) {
+        let mut key = Vec::new();
         let mut busy = HashSet::new();
         for s in req.sources {
             let len = std::fs::metadata(&s.path).map(|m| m.len()).unwrap_or(0);
@@ -313,113 +411,317 @@ impl Changes {
                     r.feed(&buf);
                 }
             }
-            edits.extend(r.edits.iter().cloned());
+            key.push((s.path.clone(), r.edits.len(), r.edits.last().map(|e| e.tool_id.clone()), r.turns.len()));
             if s.agent.is_none() {
-                turns = r.turns.clone();
-                said = r.said.clone();
+                if r.turns.len() != self.turns.len() || r.turns.last().map(|t| t.ts) != self.turns.last().map(|t| t.ts) {
+                    self.turns = r.turns.clone();
+                }
+                if r.said.len() != self.said.len() || r.said.last().map(|t| t.ts) != self.said.last().map(|t| t.ts) {
+                    self.said = r.said.clone();
+                }
             }
             busy.extend(r.busy());
         }
-        edits.sort_by(|a, b| a.ts.cmp(&b.ts).then(a.seq.cmp(&b.seq)));
+        self.busy = busy;
+        // Readers of transcripts no longer named are dropped.
+        self.readers.retain(|p, _| req.sources.iter().any(|s| s.path == *p));
+        let key = hash_of(key);
+        if key == self.chains_key {
+            return;
+        }
+        self.chains_key = key;
+        self.rebuild(req, git);
+    }
+
+    /// The chains from the readers' edits, oldest first; a file's chain is kept as it was while its edits are.
+    fn rebuild(&mut self, req: &Request, git: Option<&git::GitInfo>) {
+        let mut all: Vec<&Edit> = req.sources.iter().filter_map(|s| self.readers.get(&s.path)).flat_map(|r| r.edits.iter()).collect();
+        all.sort_by(|a, b| a.ts.cmp(&b.ts).then(a.seq.cmp(&b.seq)));
+        let turns = &self.turns;
         // Turns by time (subagents' edits fall into the turn that ran them).
-        for e in &mut edits {
-            if e.agent.is_some() || e.turn == 0 {
-                e.turn = turns.iter().take_while(|t| t.ts <= e.ts || t.ts == 0).count();
+        let turn_of = |e: &Edit| if e.agent.is_some() || e.turn == 0 { turns.iter().take_while(|t| t.ts <= e.ts || t.ts == 0).count() } else { e.turn };
+        let cache = &mut self.resolved;
+        let mut res = |p: &Path| -> PathBuf {
+            if let Some(r) = cache.get(p) {
+                return r.clone();
             }
-        }
-        (edits, turns, said, busy)
-    }
-
-    fn chains(&mut self, edits: Vec<Edit>, git: Option<&git::GitInfo>) -> Vec<Chain> {
-        let mut by: Vec<Chain> = Vec::new();
-        let mut idx: HashMap<PathBuf, usize> = HashMap::new();
-        for mut e in edits {
-            // One name per file (/tmp and /private/tmp are the same folder).
-            e.path = resolved(&e.path);
-            e.from = e.from.as_deref().map(resolved);
-            let i = *idx.entry(e.path.clone()).or_insert_with(|| {
-                by.push(Chain { path: e.path.clone(), from: None, edits: Vec::new(), pre: Vec::new(), post: Vec::new() });
-                by.len() - 1
+            let r = resolved(p);
+            if p.parent().is_some_and(|d| d.exists()) {
+                cache.insert(p.to_path_buf(), r.clone());
+            }
+            r
+        };
+        // One name per file (/tmp and /private/tmp are the same folder), in order of first edit.
+        let mut order: Vec<PathBuf> = Vec::new();
+        let mut groups: HashMap<PathBuf, Vec<(&Edit, usize, Option<PathBuf>)>> = HashMap::new();
+        for e in all {
+            let p = res(&e.path);
+            let from = e.from.as_deref().map(&mut res);
+            let g = groups.entry(p.clone()).or_insert_with(|| {
+                order.push(p.clone());
+                Vec::new()
             });
-            if by[i].edits.is_empty() && e.from.is_some() {
-                by[i].from = e.from.clone();
-            }
-            by[i].edits.push(e);
+            g.push((e, turn_of(e), from));
         }
-        for c in &mut by {
-            let n = c.edits.len();
-            c.pre = c.edits.iter().map(|e| known(&e.before)).collect();
-            c.post = c.edits.iter().map(|e| known(&e.after)).collect();
-            if c.post[n - 1].is_none() {
-                // What the agent's last edit left: as first seen after it (Codex), else the file now.
-                let k = (c.path.clone(), c.edits[n - 1].tool_id.clone());
-                let now = self.seen_after.entry(k).or_insert_with(|| {
-                    let d = read_disk(&c.path);
-                    if d.binary { None } else { d.st }
-                });
-                c.post[n - 1] = Some(now.clone());
+        let mut old: HashMap<PathBuf, Chain> = std::mem::take(&mut self.chains).into_iter().map(|c| (c.path.clone(), c)).collect();
+        let mut chains = Vec::with_capacity(order.len());
+        for p in order {
+            let g = &groups[&p];
+            let sig = hash_of(g.iter().map(|(e, t, f)| (&e.tool_id, e.ts, *t, f)).collect::<Vec<_>>());
+            if let Some(c) = old.remove(&p).filter(|c| c.sig == sig) {
+                chains.push(c);
+                continue;
             }
-            for i in (0..n).rev() {
-                if c.post[i].is_none() && i + 1 < n {
-                    c.post[i] = c.pre[i + 1].clone();
-                }
-                if c.pre[i].is_none() {
-                    c.pre[i] = match (&c.post[i], &c.edits[i].reverse) {
-                        (Some(Some(t)), Reverse::Strings(p)) => record::reverse_strings(t, p).map(Some),
-                        (Some(Some(t)), Reverse::Patch(h)) => record::apply_patch_hunks(t, h, true).map(Some),
-                        // A delete without its content: what HEAD has.
-                        (Some(None), _) => git.and_then(|g| git::head_content(Path::new(&g.top), c.edits[i].from.as_deref().unwrap_or(&c.path))).map(Some),
-                        _ => None,
-                    };
-                }
-                if i > 0 && c.post[i - 1].is_none() {
-                    c.post[i - 1] = c.pre[i].clone();
-                }
-            }
+            let edits: Vec<Edit> = g
+                .iter()
+                .map(|(e, t, f)| {
+                    let mut e = (*e).clone();
+                    e.path = p.clone();
+                    e.from = f.clone();
+                    e.turn = *t;
+                    e
+                })
+                .collect();
+            chains.push(build_chain(p.clone(), edits, sig, &mut self.seen_after, git));
         }
-        by
+        self.chains = chains;
     }
 
-    /// The change set for `req.scope`.
-    pub fn load(&mut self, req: &Request) -> ChangeSet {
+    /// What the person kept and undid, read again only when its file changed.
+    fn load_review(&mut self, eng: &Changes, key: &str) {
+        let sig = eng.review_path(key).and_then(|p| stat_sig(&p)).map(|(l, t, _)| (l, t, self.saves)).unwrap_or((0, 0, self.saves));
+        if self.review.as_ref().is_none_or(|(s, _)| *s != sig) {
+            self.review = Some((sig, eng.review(key)));
+        }
+    }
+}
+
+/// One file's chain: its edits in order, and its content before and after each one where it can be told.
+fn build_chain(path: PathBuf, edits: Vec<Edit>, sig: u64, seen_after: &mut HashMap<(PathBuf, String), St>, git: Option<&git::GitInfo>) -> Chain {
+    // A move: where it was before its first edit.
+    let from = edits.first().and_then(|e| e.from.clone());
+    let mut c = Chain { path, from, edits, pre: Vec::new(), post: Vec::new(), sig };
+    let n = c.edits.len();
+    c.pre = c.edits.iter().map(|e| known(&e.before)).collect();
+    c.post = c.edits.iter().map(|e| known(&e.after)).collect();
+    if c.post[n - 1].is_none() {
+        // What the agent's last edit left: as first seen after it (Codex), else the file now.
+        let k = (c.path.clone(), c.edits[n - 1].tool_id.clone());
+        let now = seen_after.entry(k).or_insert_with(|| {
+            let d = read_disk(&c.path);
+            if d.binary { None } else { d.st }
+        });
+        c.post[n - 1] = Some(now.clone());
+    }
+    for i in (0..n).rev() {
+        if c.post[i].is_none() && i + 1 < n {
+            c.post[i] = c.pre[i + 1].clone();
+        }
+        if c.pre[i].is_none() {
+            c.pre[i] = match (&c.post[i], &c.edits[i].reverse) {
+                (Some(Some(t)), Reverse::Strings(p)) => record::reverse_strings(t, p).map(Some),
+                (Some(Some(t)), Reverse::Patch(h)) => record::apply_patch_hunks(t, h, true).map(Some),
+                // A delete without its content: what HEAD has.
+                (Some(None), _) => git.and_then(|g| git::head_content(Path::new(&g.top), c.edits[i].from.as_deref().unwrap_or(&c.path))).map(Some),
+                _ => None,
+            };
+        }
+        if i > 0 && c.post[i - 1].is_none() {
+            c.post[i - 1] = c.pre[i].clone();
+        }
+    }
+    c
+}
+
+impl Changes {
+    pub fn new(state_dir: Option<PathBuf>) -> Self {
+        Self { sessions: Default::default(), state_dir, rev: std::sync::atomic::AtomicU64::new(now_ms()) }
+    }
+
+    fn next_rev(&self) -> u64 {
+        self.rev.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    }
+
+    fn sess(&self, key: &str) -> std::sync::Arc<std::sync::Mutex<Sess>> {
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).entry(key.to_string()).or_default().clone()
+    }
+
+    fn review_path(&self, key: &str) -> Option<PathBuf> {
+        let safe: String = key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        self.state_dir.as_ref().map(|d| d.join(format!("{safe}.json")))
+    }
+
+    pub fn review(&self, key: &str) -> Review {
+        self.review_path(key).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    fn save_review(&self, s: &mut Sess, key: &str, r: &Review) -> Result<()> {
+        s.saves += 1;
+        let Some(p) = self.review_path(key) else { return Ok(()) };
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        write_atomic(&p, serde_json::to_string(r)?.as_bytes())
+    }
+
+    /// The change set for `req.scope`, in full.
+    pub fn load(&self, req: &Request) -> ChangeSet {
+        let s = self.load_wire(req, 0, false).set.expect("a full load has its set");
+        ChangeSet {
+            rev: s.rev,
+            root: s.root,
+            scope: s.scope,
+            git: s.git,
+            turns: s.turns.unwrap_or_default(),
+            files: s
+                .files
+                .into_iter()
+                .filter_map(|f| match f {
+                    WireFile::Full(f) => Some(f),
+                    WireFile::Same { .. } => None,
+                })
+                .collect(),
+            pending: s.pending,
+            total: s.total,
+            external: s.external,
+            busy: s.busy,
+        }
+    }
+
+    /// The change set for `req.scope` as newer than revision `since` (0: all of it): no set when the app has it
+    /// already, the files it has as their path only. `summary`: counts, turns and re-edited files only (no diffs).
+    pub fn load_wire(&self, req: &Request, since: u64, summary: bool) -> Wire {
         let root = canonical_root(req.cwd);
-        let gi = git::info(&root);
-        let (edits, turns, said, busy) = self.gather(req);
-        let chains = self.chains(edits, gi.as_ref());
-        let review = self.review(req.key);
-        let ctx = Ctx { root: &root, git: gi.as_ref(), busy: &busy, said: &said, turns: &turns, review: &review, external: req.external };
-        let files: Vec<FileChange> = chains.iter().filter_map(|c| view(c, req.scope, &ctx).map(|v| v.file)).collect();
-        let pending = chains.iter().filter(|c| view(c, Scope::Pending, &ctx).is_some()).count();
-        let total = chains.iter().filter(|c| view(c, Scope::Chat, &ctx).is_some_and(|v| v.file.status != "unchanged")).count();
+        let gi = git::info_cached(&root);
+        let arc = self.sess(req.key);
+        let mut guard = arc.lock().unwrap_or_else(|e| e.into_inner());
+        let s = &mut *guard;
+        s.refresh(req, gi.as_ref());
+        s.load_review(self, req.key);
+        let Sess { chains, turns, said, busy, memo, counts, review, turns_rev, sets, .. } = s;
+        let review = &review.as_ref().expect("loaded above").1;
+        let ctx = Ctx { root: &root, git: gi.as_ref(), busy, said, turns, review, external: req.external };
+        let mut files = Vec::new();
+        let mut list = Vec::new();
+        let (mut pending, mut total) = (0, 0);
+        let mut reedited = Vec::new();
         let mut tinfo: Vec<TurnInfo> = turns.iter().enumerate().map(|(i, t)| TurnInfo { n: i + 1, ts: t.ts, prompt: t.prompt.clone(), files: 0, added: 0, removed: 0 }).collect();
-        for c in &chains {
-            let ts: HashSet<usize> = c.edits.iter().map(|e| e.turn).collect();
+        for c in chains.iter() {
+            let disk = stat_sig(&c.path);
+            if let Some(f) = self.memo_view(memo, c, Scope::Chat, disk, &ctx).0 {
+                if f.status != "unchanged" {
+                    total += 1;
+                }
+                if f.reedited {
+                    reedited.push((f.path.clone(), f.rel.clone()));
+                }
+            }
+            if self.memo_view(memo, c, Scope::Pending, disk, &ctx).0.is_some() {
+                pending += 1;
+            }
+            let (f, rev) = self.memo_view(memo, c, req.scope, disk, &ctx);
+            if let Some(f) = f {
+                list.push((f.path.clone(), rev));
+                if !summary {
+                    files.push(if rev > since { WireFile::Full(f.clone()) } else { WireFile::Same { path: f.path.clone(), same: true } });
+                }
+            }
+            // The turns it changed, with its lines added and removed in each.
+            let ts: std::collections::BTreeSet<usize> = c.edits.iter().map(|e| e.turn).collect();
             for t in ts {
                 if t == 0 || t > tinfo.len() {
                     continue;
                 }
-                if let Some(v) = view(c, Scope::Turn(t), &ctx) {
+                let k = hash_of((c.sig, disk, t));
+                let e = counts.entry((c.path.clone(), t)).or_insert((k.wrapping_add(1), None));
+                if e.0 != k {
+                    *e = (k, view(c, Scope::Turn(t), &ctx).map(|v| (v.file.added, v.file.removed)));
+                }
+                if let Some((a, r)) = e.1 {
                     let ti = &mut tinfo[t - 1];
                     ti.files += 1;
-                    ti.added += v.file.added;
-                    ti.removed += v.file.removed;
+                    ti.added += a;
+                    ti.removed += r;
                 }
             }
         }
-        ChangeSet { root: root.to_string_lossy().into_owned(), scope: req.scope.name(), git: gi.clone(), turns: tinfo, files, pending, total, external: req.external, busy: !busy.is_empty() }
+        // Views of files no longer in the chat are dropped now and then.
+        if memo.len() > chains.len() * 4 + 16 || counts.len() > chains.iter().map(|c| c.edits.len()).sum::<usize>() + 16 {
+            let paths: HashSet<&PathBuf> = chains.iter().map(|c| &c.path).collect();
+            memo.retain(|(p, _), _| paths.contains(p));
+            counts.retain(|(p, _), _| paths.contains(p));
+        }
+        let tk = hash_of(tinfo.iter().map(|t| (t.n, t.ts, &t.prompt, t.files, t.added, t.removed)).collect::<Vec<_>>());
+        if turns_rev.0 != tk || turns_rev.1 == 0 {
+            *turns_rev = (tk, self.next_rev());
+        }
+        let turns_rev = turns_rev.1;
+        let is_busy = !busy.is_empty();
+        let sk = hash_of((&root, &gi, pending, total, is_busy, req.external, turns_rev, &reedited, &list));
+        let e = sets.entry((req.scope, summary)).or_insert((sk.wrapping_add(1), 0));
+        if e.0 != sk {
+            *e = (sk, self.next_rev());
+        }
+        let rev = e.1;
+        if rev <= since {
+            return Wire { rev, set: None };
+        }
+        let set = WireSet {
+            rev,
+            root: root.to_string_lossy().into_owned(),
+            scope: req.scope.name(),
+            git: gi,
+            turns: (turns_rev > since).then_some(tinfo),
+            files,
+            pending,
+            total,
+            external: req.external,
+            busy: is_busy,
+            reedited,
+        };
+        Wire { rev, set: Some(set) }
+    }
+
+    /// A file's view in `scope`, worked out again only when something it depends on changed; with its revision.
+    fn memo_view<'m>(&self, memo: &'m mut HashMap<(PathBuf, Scope), Memo>, c: &Chain, scope: Scope, disk: Option<(u64, u128, u64)>, ctx: &Ctx) -> (Option<&'m FileChange>, u64) {
+        let key = c.path.to_string_lossy();
+        let idx = scope_idx(c, scope, ctx.review);
+        let said = idx.last().and_then(|&l| said_after(c, l, ctx.turns, ctx.said));
+        let k = hash_of((
+            c.sig,
+            disk,
+            review_sig(ctx.review, &key),
+            ctx.git.map(|g| (g.staged.iter().any(|s| *s == *key), &g.busy)),
+            ctx.busy.contains(&c.path),
+            ctx.external,
+            said,
+        ));
+        let m = memo.entry((c.path.clone(), scope)).or_insert(Memo { key: k.wrapping_add(1), file: None, rev: 0 });
+        if m.key != k {
+            let f = view(c, scope, ctx).map(|v| v.file);
+            if f != m.file || m.rev == 0 {
+                m.rev = self.next_rev();
+            }
+            m.file = f;
+            m.key = k;
+        }
+        (m.file.as_ref(), m.rev)
     }
 
     /// Undo: one hunk (`hunk`), one file, or every file of the scope (`file` None).
-    pub fn undo(&mut self, req: &Request, file: Option<&str>, hunk: Option<&str>, force: bool, trash: Trash) -> Outcome {
+    pub fn undo(&self, req: &Request, file: Option<&str>, hunk: Option<&str>, force: bool, trash: Trash) -> Outcome {
         let root = canonical_root(req.cwd);
         let gi = git::info(&root);
         if let Some(b) = gi.as_ref().and_then(|g| g.busy.clone()) {
             return refused(format!("The repository is in the middle of a {b}. Finish or abort it first; until then changes are read-only."));
         }
-        let (edits, turns, said, busy) = self.gather(req);
-        let chains = self.chains(edits, gi.as_ref());
+        let arc = self.sess(req.key);
+        let mut guard = arc.lock().unwrap_or_else(|e| e.into_inner());
+        let s = &mut *guard;
+        s.refresh(req, gi.as_ref());
+        let (chains, turns, said, busy) = (&s.chains, &s.turns, &s.said, &s.busy);
         let mut review = self.review(req.key);
-        let ctx = Ctx { root: &root, git: gi.as_ref(), busy: &busy, said: &said, turns: &turns, review: &review, external: req.external };
+        let ctx = Ctx { root: &root, git: gi.as_ref(), busy, said, turns, review: &review, external: req.external };
         let picked: Vec<&Chain> = chains.iter().filter(|c| file.is_none_or(|f| Path::new(f) == c.path)).collect();
         if picked.is_empty() {
             return refused("That file isn't among this chat's changes any more.".into());
@@ -467,7 +769,7 @@ impl Changes {
             for (p, t, left) in undone_paths {
                 review.undone.insert(p, Undone { at: now_ms(), last_tool: t, told: false, left });
             }
-            let _ = self.save_review(req.key, &review);
+            let _ = self.save_review(s, req.key, &review);
         }
         out.ok = !out.done.is_empty() && out.ask.is_none();
         if out.message.is_empty() {
@@ -478,17 +780,20 @@ impl Changes {
 
     /// Keep (or, with `unkeep`, mark unreviewed again): a hunk, a file, or every file of the scope. `stage` also
     /// stages the files in git.
-    pub fn keep(&mut self, req: &Request, file: Option<&str>, hunk: Option<&str>, stage: bool, unkeep: bool) -> Outcome {
+    pub fn keep(&self, req: &Request, file: Option<&str>, hunk: Option<&str>, stage: bool, unkeep: bool) -> Outcome {
         let root = canonical_root(req.cwd);
         let gi = git::info(&root);
-        let (edits, turns, said, busy) = self.gather(req);
-        let chains = self.chains(edits, gi.as_ref());
+        let arc = self.sess(req.key);
+        let mut guard = arc.lock().unwrap_or_else(|e| e.into_inner());
+        let s = &mut *guard;
+        s.refresh(req, gi.as_ref());
+        let (chains, turns, said, busy) = (&s.chains, &s.turns, &s.said, &s.busy);
         let mut review = self.review(req.key);
         let mut out = Outcome::default();
         let mut to_stage = Vec::new();
         {
             let snapshot = review.clone();
-            let ctx = Ctx { root: &root, git: gi.as_ref(), busy: &busy, said: &said, turns: &turns, review: &snapshot, external: req.external };
+            let ctx = Ctx { root: &root, git: gi.as_ref(), busy, said, turns, review: &snapshot, external: req.external };
             for c in chains.iter().filter(|c| file.is_none_or(|f| Path::new(f) == c.path)) {
                 let Some(v) = view(c, if unkeep { Scope::Chat } else { req.scope }, &ctx) else { continue };
                 let key = c.path.to_string_lossy().into_owned();
@@ -520,7 +825,7 @@ impl Changes {
                 }
             }
         }
-        if let Err(e) = self.save_review(req.key, &review) {
+        if let Err(e) = self.save_review(s, req.key, &review) {
             return refused(format!("couldn't save what you kept: {e:#}"));
         }
         if stage && !to_stage.is_empty() {
@@ -545,14 +850,16 @@ impl Changes {
     }
 
     /// Notes about re-edited undone files were sent to the agent.
-    pub fn mark_told(&mut self, key: &str, paths: &[String]) {
+    pub fn mark_told(&self, key: &str, paths: &[String]) {
+        let arc = self.sess(key);
+        let mut guard = arc.lock().unwrap_or_else(|e| e.into_inner());
         let mut r = self.review(key);
         for p in paths {
             if let Some(u) = r.undone.get_mut(p) {
                 u.told = true;
             }
         }
-        let _ = self.save_review(key, &r);
+        let _ = self.save_review(&mut guard, key, &r);
     }
 }
 

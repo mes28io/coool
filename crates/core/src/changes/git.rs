@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq, Hash)]
 pub struct GitInfo {
     /// The repository's top level.
     pub top: String,
@@ -56,6 +56,66 @@ pub fn info(dir: &Path) -> Option<GitInfo> {
         .map(|s| s.split('\0').filter(|p| !p.is_empty()).map(|p| Path::new(&top).join(p).to_string_lossy().into_owned()).collect())
         .unwrap_or_default();
     Some(GitInfo { top, branch, busy, staged })
+}
+
+/// [`info`], run again only when the repository changed: its index, HEAD, the branch's ref, packed refs, a merge or
+/// rebase starting or ending (a `stat` each), and at least every 30 s. A folder that isn't a repository is looked at
+/// again every 10 s (it may become one).
+pub fn info_cached(dir: &Path) -> Option<GitInfo> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    struct Entry {
+        at: Instant,
+        dirs: Option<(PathBuf, PathBuf)>,
+        sig: u64,
+        info: Option<GitInfo>,
+    }
+    static CACHE: Mutex<Option<HashMap<PathBuf, Entry>>> = Mutex::new(None);
+    let now = Instant::now();
+    let sig_of = |gd: &Path, common: &Path| -> u64 {
+        use std::hash::{Hash, Hasher};
+        let st = |p: PathBuf| std::fs::metadata(&p).ok().map(|m| (m.len(), m.modified().ok()));
+        let head = std::fs::read_to_string(gd.join("HEAD")).unwrap_or_default();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        head.hash(&mut h);
+        st(gd.join("index")).hash(&mut h);
+        if let Some(r) = head.strip_prefix("ref: ") {
+            st(common.join(r.trim())).hash(&mut h);
+        }
+        st(common.join("packed-refs")).hash(&mut h);
+        for b in ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"] {
+            gd.join(b).exists().hash(&mut h);
+        }
+        h.finish()
+    };
+    {
+        let g = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = g.as_ref().and_then(|m| m.get(dir)) {
+            match &e.dirs {
+                Some((gd, common)) if now.duration_since(e.at) < Duration::from_secs(30) && gd.is_dir() && sig_of(gd, common) == e.sig => return e.info.clone(),
+                None if now.duration_since(e.at) < Duration::from_secs(10) => return None,
+                _ => {}
+            }
+        }
+    }
+    let dirs = ok(dir, &["rev-parse", "--absolute-git-dir", "--git-common-dir"]).ok().and_then(|o| {
+        let mut l = o.lines();
+        let gd = PathBuf::from(l.next()?);
+        let c = PathBuf::from(l.next()?);
+        let common = if c.is_absolute() { c } else { dir.join(c) };
+        Some((gd, common))
+    });
+    // The signature from before reading, so a change while reading is seen next time.
+    let sig = dirs.as_ref().map(|(gd, c)| sig_of(gd, c)).unwrap_or(0);
+    let info = dirs.as_ref().and_then(|_| info(dir));
+    let mut g = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let m = g.get_or_insert_with(HashMap::new);
+    if m.len() > 64 {
+        m.clear();
+    }
+    m.insert(dir.to_path_buf(), Entry { at: now, dirs, sig, info: info.clone() });
+    info
 }
 
 /// What the repository is in the middle of, from its git dir.

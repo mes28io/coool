@@ -2,7 +2,9 @@
 //!
 //! - `changes_load`: the diff of a session's changes for a scope (the chat, what isn't kept, one turn). Transcripts
 //!   are found through the hub (the session's own and its subagents', by the ids the page names), never a path the
-//!   page gives.
+//!   page gives. The page sends the revision it has (`since`): nothing comes back when nothing changed, and files it
+//!   has as their path only; `summary` (the panel closed, the header's count): counts and turns, no diffs. The engine
+//!   keeps each session's work between calls (crates/core/src/changes), so a call with nothing new is a `stat` per file.
 //! - `changes_undo`, `changes_keep`: write only inside the session's folder (resolved), atomically; deletions go to the
 //!   Trash (NSFileManager, no prompt); refused mid merge or rebase. Keep's `stage` runs `git add`.
 //! - `changes_commit`: `git commit` of what is staged, on the person's click. Nothing here pushes.
@@ -11,7 +13,7 @@
 //! - `changes_open`: a file at a line in the editor chosen in Settings > General.
 
 use crate::{Core, Res};
-use coool_core::changes::{self, ChangeSet, FileChange, Outcome, Request, Scope, Source};
+use coool_core::changes::{self, FileChange, Outcome, Request, Scope, Source, Wire};
 use coool_core::changes::record::Kind;
 use coool_core::model::Provider;
 use serde::Deserialize;
@@ -58,7 +60,7 @@ fn key(t: &Target) -> String {
     format!("{}:{}", t.provider.label(), t.session_id)
 }
 
-fn with<R>(core: &Core, t: &Target, f: impl FnOnce(&mut changes::Changes, &Request) -> R) -> Res<R> {
+fn with<R>(core: &Core, t: &Target, f: impl FnOnce(&changes::Changes, &Request) -> R) -> Res<R> {
     if t.cwd.trim().is_empty() || !Path::new(&t.cwd).is_absolute() {
         return Err("this session has no folder".into());
     }
@@ -69,8 +71,7 @@ fn with<R>(core: &Core, t: &Target, f: impl FnOnce(&mut changes::Changes, &Reque
     let k = key(t);
     let cwd = PathBuf::from(&t.cwd);
     let req = Request { key: &k, cwd: &cwd, sources: &src, scope: Scope::parse(&t.scope), external: t.external };
-    let mut eng = core.changes.lock().unwrap();
-    Ok(f(&mut eng, &req))
+    Ok(f(&core.changes, &req))
 }
 
 /// Where what the person kept is saved (a self-test keeps it in its folder).
@@ -82,9 +83,9 @@ pub fn state_dir(selftest: Option<&crate::selftest::SelfTest>) -> Option<PathBuf
 }
 
 #[tauri::command(async)]
-pub fn changes_load(core: State<'_, Arc<Core>>, target: Target) -> Res<ChangeSet> {
+pub fn changes_load(core: State<'_, Arc<Core>>, target: Target, since: Option<u64>, summary: Option<bool>) -> Res<Wire> {
     let t = std::time::Instant::now();
-    let r = with(&core, &target, |e, r| e.load(r));
+    let r = with(&core, &target, |e, r| e.load_wire(r, since.unwrap_or(0), summary.unwrap_or(false)));
     if core.selftest.is_some() {
         use crate::perf::*;
         bump(&CHANGES_LOADS, 1);
@@ -108,7 +109,7 @@ pub fn changes_keep(core: State<'_, Arc<Core>>, target: Target, file: Option<Str
 
 #[tauri::command(async)]
 pub fn changes_told(core: State<'_, Arc<Core>>, target: Target, paths: Vec<String>) -> Res<()> {
-    core.changes.lock().unwrap().mark_told(&key(&target), &paths);
+    core.changes.mark_told(&key(&target), &paths);
     Ok(())
 }
 
