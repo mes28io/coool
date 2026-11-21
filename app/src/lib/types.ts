@@ -179,6 +179,10 @@ export interface Session {
   shells?: Shell[];
   /** The CLI reports it is blocked on the person (e.g. a permission prompt). */
   waiting_for?: string | null;
+  /** A helper another session started from its shell, and how it stands. */
+  lane?: LaneInfo | null;
+  /** The helpers this session started from its shell. */
+  lanes?: LaneInfo[];
   /** UI only: listed under its parent's row rather than on its own. */
   nested?: boolean;
   /** UI only: why a live child run of this session needs the person. */
@@ -207,6 +211,32 @@ export interface Shell {
   idle_loop?: boolean;
   /** Started with run_in_background (else a long foreground command). */
   background?: boolean;
+  /** What it does for the session's helpers, in plain words ("waiting for 2 Codex helpers"); crates/core/src/lanes.rs. */
+  label?: string;
+}
+
+/**
+ * A helper a session started from its shell (`codex exec`, `claude -p`): crates/core/src/lanes.rs `LaneInfo`. On the
+ * helper's own session as `lane`, on the lead's as `lanes` (with `session` when its session file was found).
+ */
+export interface LaneInfo {
+  parent: string;
+  /** The tool call that ran it, and its place among that call's launches. */
+  tool: string;
+  index: number;
+  provider: Provider;
+  model: string | null;
+  cwd: string | null;
+  brief: string;
+  background: boolean;
+  detached: boolean;
+  image: boolean;
+  /** The call, then its own start and end, epoch ms. */
+  at: number;
+  started: number;
+  ended: number | null;
+  state: AgentState;
+  session: string | null;
 }
 
 export interface PtyInfo {
