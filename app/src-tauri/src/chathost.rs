@@ -110,7 +110,7 @@ pub fn ensure(app: &AppHandle, core: &Core) -> Option<Arc<Client>> {
     }
     let dir = core.hosts.dir.lock().unwrap().clone()?;
     let exe = std::env::current_exe().ok()?;
-    let started = host::spawn_host(&exe, &dir).and_then(|hf| Client::open(&dir, &hf, &format!("coool {}", version(app))));
+    let started = host::spawn_host(&exe, &dir, &version(app)).and_then(|hf| Client::open(&dir, &hf, &format!("coool {}", version(app))));
     match started {
         Ok(c) => {
             core.hosts.clients.lock().unwrap().insert(0, c.clone());

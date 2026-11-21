@@ -659,11 +659,12 @@ pub fn run(dir: &Path, version: &str) -> i32 {
 
 /// Starts a host for `dir` from coool's executable `exe`, detached (its own session, so it outlives the app and a
 /// crash of it), and returns its file once it is serving.
-pub fn spawn_host(exe: &Path, dir: &Path) -> Result<HostFile> {
+/// `version`: the coool version the host reports (the app's own, so the app knows it as its own).
+pub fn spawn_host(exe: &Path, dir: &Path, version: &str) -> Result<HostFile> {
     ensure_dir(dir)?;
     let log = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(dir.join("host.log"))?;
     let mut cmd = Command::new(exe);
-    cmd.arg(FLAG).arg(dir).stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log);
+    cmd.arg(FLAG).arg(dir).arg(version).stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log);
     // SAFETY: setsid is async-signal-safe and only detaches the child from our session and process group.
     unsafe {
         cmd.pre_exec(|| {

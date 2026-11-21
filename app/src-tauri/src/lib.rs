@@ -1821,8 +1821,9 @@ pub const LADDER_MCP_FLAG: &str = ladder::PROXY_FLAG;
 
 /// `coool --coool-chat-host <dir>`: the chat host, which owns the CLIs of chats so they outlive the app (APP_SPEC
 /// "Chats that outlive the app"; chathost.rs starts it).
-pub fn chat_host(dir: &std::path::Path) -> i32 {
-    coool_core::chat::host::run(dir, env!("CARGO_PKG_VERSION"))
+/// `version`: the version of the app that started it (its bundle's), else this build's.
+pub fn chat_host(dir: &std::path::Path, version: Option<&str>) -> i32 {
+    coool_core::chat::host::run(dir, version.unwrap_or(env!("CARGO_PKG_VERSION")))
 }
 
 pub const CHAT_HOST_FLAG: &str = coool_core::chat::host::FLAG;
