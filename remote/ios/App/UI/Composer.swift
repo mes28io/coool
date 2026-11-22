@@ -540,7 +540,7 @@ struct MetaRow: View {
   }
 
   private func label(_ id: String, _ list: [StartOptions.Choice]) -> String {
-    list.first { $0.id == id }?.label ?? (id.isEmpty ? "Model" : id)
+    list.first { $0.id == id }?.label ?? (id.isEmpty ? "Model" : modelName(id))
   }
 
   private func chip<C: View>(action: @escaping () -> Void, @ViewBuilder _ c: () -> C) -> some View {
@@ -817,7 +817,7 @@ struct ContextSheet: View {
     NavigationStack {
       VStack(alignment: .leading, spacing: 14) {
         ContextSummary(meta: meta)
-        if let m = meta?.model { Label("Model: \(m)", systemImage: "cpu").font(.footnote).foregroundStyle(Theme.dim) }
+        if let m = meta?.model { Label("Model: \(modelName(m))", systemImage: "cpu").font(.footnote).foregroundStyle(Theme.dim) }
         if let m = meta?.mode { Label("Mode: \(meta?.modeLabel ?? m) (change it on the Mac)", systemImage: "lock.fill").font(.footnote).foregroundStyle(Theme.dim) }
         Spacer()
       }
@@ -913,4 +913,18 @@ struct CommandsSheet: View {
       .navigationBarTitleDisplayMode(.inline)
     }
   }
+}
+
+/// A model id as people say it: "claude-opus-5-5" -> "Opus 5.5", "claude-haiku-5-5[1m]" -> "Haiku 5.5 [1m]".
+/// Ids of other shapes (Codex's "gpt-6.1-sol", aliases) come back unchanged.
+func modelName(_ id: String) -> String {
+  guard id.hasPrefix("claude-") else { return id }
+  var rest = String(id.dropFirst("claude-".count))
+  var suffix = ""
+  if let b = rest.firstIndex(of: "[") { suffix = " " + rest[b...]; rest = String(rest[..<b]) }
+  let parts = rest.split(separator: "-").map(String.init)
+  guard let family = parts.first, !family.isEmpty, family.allSatisfy(\.isLetter) else { return id }
+  let version = parts.dropFirst().prefix { $0.allSatisfy(\.isNumber) && $0.count <= 2 }
+  guard !version.isEmpty else { return id }
+  return family.prefix(1).uppercased() + family.dropFirst() + " " + version.joined(separator: ".") + suffix
 }

@@ -41,7 +41,7 @@ final class VoiceCapture {
     guard granted else { return "Microphone access is off for coool Remote. Turn it on in Settings > Privacy & Security > Microphone." }
     do {
       let s = AVAudioSession.sharedInstance()
-      try s.setCategory(.record, mode: .spokenAudio)
+      try s.setCategory(.record, mode: .default)
       try s.setActive(true)
       let u = FileManager.default.temporaryDirectory.appending(path: "voice-\(randomId()).m4a")
       let r = try AVAudioRecorder(url: u, settings: [

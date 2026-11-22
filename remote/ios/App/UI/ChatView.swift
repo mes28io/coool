@@ -259,7 +259,7 @@ struct ChatView: View {
           }
           Spacer(minLength: 0)
           let model = log?.meta?.model ?? s.model
-          Text("\(s.cli.label)\(model.isEmpty ? "" : " · \(model)")").font(.caption).foregroundStyle(Theme.faint).lineLimit(1)
+          Text("\(s.cli.label)\(model.isEmpty ? "" : " · \(modelName(model))")").font(.caption).foregroundStyle(Theme.faint).lineLimit(1)
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("chat.tally")
