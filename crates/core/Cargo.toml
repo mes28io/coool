@@ -1,6 +1,6 @@
 [package]
 name = "coool-core"
-version = "0.4.8"
+version = "0.4.9"
 edition = "2024"
 description = "Core of coool: discover, monitor and drive Claude Code and Codex sessions"
 license = "MIT"
