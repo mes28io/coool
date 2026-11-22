@@ -51,6 +51,7 @@
 //! Codex chats introduce themselves as `coool-selftest`, so a later normal launch
 //! never counts them as the person's.
 
+pub mod drag;
 pub mod film;
 
 use crate::Core;
@@ -1415,8 +1416,10 @@ pub fn selftest_local_ipc(app: AppHandle, core: State<'_, Arc<Core>>, url: Strin
 }
 
 /// A file drag over the main webview as Tauri delivers the system's (`tauri://drag-enter` / `-over` / `-drop` /
-/// `-leave` to the `main` webview, with the same payload: the paths and the physical position). `kind`: enter, over,
-/// drop or leave. Nothing touches the system's drag pasteboard or the pointer.
+/// `-leave` to the `main` webview, with the same payload: the paths and the position, which on macOS wry gives in the
+/// webview's points, i.e. CSS pixels, although Tauri calls it physical). `kind`: enter, over, drop or leave. Nothing
+/// touches the system's drag pasteboard or the pointer. This skips AppKit and wry: `selftest_native_drag`
+/// (selftest/drag.rs) goes through them.
 #[tauri::command(async)]
 pub fn selftest_drag(app: AppHandle, core: State<'_, Arc<Core>>, kind: String, paths: Vec<String>, x: f64, y: f64) -> Result<(), String> {
     use tauri::Emitter;

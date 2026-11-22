@@ -40,7 +40,9 @@
 // `changes` / `changes-codex` (selftestChanges.ts: the Changes view's undo, keep, stage and commit on a scratch git
 // repository, with the stand-in CLIs; run by app/scripts/changes-e2e.sh; not in `all`; no model use).
 // `attach-step-image` (the preview of an image the agent writes, and its refusals) and `attach-gestures` (drag events as
-// Tauri delivers them, a paste event, the PDF pages; no model use). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
+// Tauri delivers them, a paste event, the PDF pages; no model use), `attach-native-drop` (a Finder drag through AppKit
+// and wry into the page: plain chat, browser panel, New session sheet, after a reload; app/scripts/drop-e2e.sh runs
+// both; no model use). Prompts are tiny and run on the cheapest models (Claude Haiku, a small Codex model).
 
 import { glassState } from "./lib/glass";
 import { openOnboarding } from "./lib/onboarding";

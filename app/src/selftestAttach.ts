@@ -19,6 +19,8 @@ import { addFiles, addPaths, useAttach } from "./lib/attach";
 import { useChats, type Chat } from "./lib/chat";
 import { useViewer } from "./components/Attachments";
 import { useStore } from "./store";
+import { activeTabKey, nativeId } from "./lib/browser";
+import { chatPanelKey } from "./lib/browserAgent";
 
 interface H {
   step: (name: string, f: () => Promise<string | void>) => Promise<void>;
@@ -247,8 +249,8 @@ export function attachScenarios(h: H, models: { claude: string; codex: string })
       await h.step("attach-gestures: a drag over the chat shows the veil, leaving hides it, a drop fills the tray", async () => {
         id = await open("claude", dir, null);
         const box = $("[data-chat-drop]")!.getBoundingClientRect();
-        const r = window.devicePixelRatio || 1;
-        const at = { x: (box.left + box.width / 2) * r, y: (box.top + box.height / 2) * r };
+        // As wry reports a macOS drag: the point in the webview, in CSS pixels (not scaled by the pixel ratio).
+        const at = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
         const paths = [`${inputs}/shape.png`, `${inputs}/notes.txt`];
         await h.invoke("selftest_drag", { kind: "enter", paths, ...at });
         await h.invoke("selftest_drag", { kind: "over", paths: [], ...at });
@@ -258,7 +260,7 @@ export function attachScenarios(h: H, models: { claude: string; codex: string })
         await h.invoke("selftest_drag", { kind: "leave", paths: [], x: 0, y: 0 });
         await h.waitFor("the veil gone after leave", () => !$("[data-drop-veil]"), 5_000);
         // Outside any chat (the sidebar): no veil, and a drop there adds nothing.
-        const side = { x: 40 * r, y: 300 * r };
+        const side = { x: 40, y: 300 };
         await h.invoke("selftest_drag", { kind: "enter", paths, ...side });
         await h.sleep(400);
         if ($("[data-drop-veil]")) throw h.fail("a veil over the sidebar");
@@ -321,6 +323,111 @@ export function attachScenarios(h: H, models: { claude: string; codex: string })
         await h.invoke("chat_stop", { id }).catch(() => {});
         return `${imgs.length} page(s), ${im.naturalWidth}×${im.naturalHeight}, ${dark} dark / ${white} white of ${total} pixels`;
       });
+    },
+
+    // A file drag from Finder through the native path (no model use; app/scripts/drop-e2e.sh): the view that takes a
+    // file drag at the point, found in the window's real view tree as AppKit finds it, must be the app's WKWebView;
+    // the self-test's own NSDraggingInfo (the files on a private pasteboard) goes to its dragging-destination methods
+    // (selftest/drag.rs), wry turns it into Tauri's drag events, and the page's listener shows the veil and fills the
+    // tray: a plain chat, with the browser panel open and after it closed (its webview stays alive, hidden), the New
+    // session sheet, and after the window reloads. The pointer and the system's drag pasteboard are never touched.
+    async "attach-native-drop"(ctx) {
+      const dir = ctx.cfg.dir;
+      const inputs = inputsOf(dir);
+      const paths = [`${inputs}/shape.png`, `${inputs}/notes.txt`];
+      type Drag = { op: number | null; dest: string[]; views: string[]; unknown: string[] };
+      const drag = (kind: string, at: { x: number; y: number }, p: string[] = []) => h.invoke("selftest_native_drag", { kind, paths: p, ...at }) as Promise<Drag>;
+      const centre = (el: Element) => {
+        const b = el.getBoundingClientRect();
+        return { x: b.left + Math.min(b.width / 2, 300), y: b.top + b.height / 2 };
+      };
+      const drafts = (chatId: number) => useAttach.getState().drafts[chatId] ?? [];
+      /** Enter, over: the veil; exit: gone; enter, over, drop: both files in the tray. */
+      const roundTrip = async (tag: string, chatId: number, target: () => Element | null, veil: () => Element | null) => {
+        useAttach.getState().clear(chatId);
+        const el = await h.waitFor(`${tag}: the drop target`, target, 10_000);
+        const at = centre(el);
+        // The drag events as the page receives them (Tauri's, to this webview), to compare the position with the point.
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        const got: { x: number; y: number }[] = [];
+        const un = await getCurrentWebview().listen<{ position: { x: number; y: number } }>("tauri://drag-enter", (ev) => void got.push(ev.payload.position));
+        let e: Drag;
+        try {
+          e = await drag("enter", at, paths);
+          await drag("over", at);
+          await h.waitFor(`${tag}: Tauri's drag-enter`, () => got.length > 0, 5_000).catch(() => null);
+        } finally {
+          un();
+        }
+        if (!e.op) throw h.fail(`${tag}: draggingEntered answered ${e.op} (no copy)`);
+        if (!got.length) throw h.fail(`${tag}: no tauri://drag-enter reached the page (the view: ${e.dest.join(" < ")})`);
+        const shown = await h.waitFor(`${tag}: the veil`, veil, 5_000).catch(() => null);
+        if (!shown) throw h.fail(`${tag}: no veil at ${JSON.stringify(at)} (Tauri's position ${JSON.stringify(got[0])}, pixel ratio ${window.devicePixelRatio}; over ${JSON.stringify(useAttach.getState().over)})`);
+        await drag("exit", at);
+        await h.waitFor(`${tag}: the veil gone after exit`, () => !useAttach.getState().over, 5_000);
+        await drag("enter", at, paths);
+        await drag("over", at);
+        const d = await drag("drop", at);
+        if (d.op !== 1) throw h.fail(`${tag}: performDragOperation answered ${d.op}`);
+        const tray = await h.waitFor(`${tag}: both files ready`, () => drafts(chatId).length === 2 && drafts(chatId).every((x) => x.state === "ready") && drafts(chatId), 10_000).catch(() => null);
+        if (!tray) throw h.fail(`${tag}: tray ${JSON.stringify(drafts(chatId).map((x) => [x.name, x.state, x.error]))}`);
+        await h.waitFor(`${tag}: the veil gone after the drop`, () => !useAttach.getState().over, 3_000);
+        const asked = [...new Set([...e.unknown, ...d.unknown])];
+        return `${tag}: to ${e.dest[0].replace(/^.*::/, "")} (Tauri's position ${Math.round(got[0].x)},${Math.round(got[0].y)} for ${Math.round(at.x)},${Math.round(at.y)}), op ${e.op}, ${tray.map((x) => x.name).join(" + ")}${asked.length ? `; the info object was also asked ${asked.join(", ")}` : ""}`;
+      };
+
+      if (sessionStorage.getItem("coool.selftest.nativeDropReloaded") === "1") {
+        sessionStorage.removeItem("coool.selftest.nativeDropReloaded");
+        await h.step("attach-native-drop: after the window reloads, a drop still attaches", async () => {
+          const id = await open("claude", dir, null);
+          const r = await roundTrip("reloaded", id, () => $("[data-chat-drop]"), () => $("[data-drop-veil]"));
+          await h.invoke("chat_stop", { id }).catch(() => {});
+          return r;
+        });
+        return;
+      }
+
+      let id = -1;
+      await h.step("attach-native-drop: the window's views, and a drop on a plain chat", async () => {
+        id = await open("claude", dir, null);
+        const v = await drag("views", centre($("[data-chat-drop]")!));
+        const r = await roundTrip("plain", id, () => $("[data-chat-drop]"), () => $("[data-drop-veil]"));
+        await h.shot("attach-native-drop-plain");
+        return `${r}; views: ${v.views.map((l) => l.trim()).join(" | ")}`;
+      });
+
+      const key = chatPanelKey(id);
+      await h.step("attach-native-drop: with the browser panel open", async () => {
+        useStore.getState().openBrowser(key, { kind: "web", url: "http://127.0.0.1:9/" });
+        const wv = await h.waitFor("the browser webview", () => nativeId(activeTabKey(key) ?? ""), 15_000);
+        await h.sleep(800);
+        const r = await roundTrip("browser open", id, () => $("[data-chat-drop]"), () => $("[data-drop-veil]"));
+        await h.shot("attach-native-drop-browser");
+        return `${wv}; ${r}`;
+      });
+
+      await h.step("attach-native-drop: with the browser panel closed again (its webview alive, hidden)", async () => {
+        useStore.getState().setRightPanel(key, "closed");
+        await h.sleep(800);
+        return roundTrip("browser closed", id, () => $("[data-chat-drop]"), () => $("[data-drop-veil]"));
+      });
+
+      await h.step("attach-native-drop: the New session sheet", async () => {
+        useStore.getState().setSheet({ kind: "new" });
+        const sheetDrop = () => $("[data-ns-sheet] [data-chat-drop]");
+        const draft = Number((await h.waitFor("the sheet", sheetDrop, 5_000)).getAttribute("data-chat-drop"));
+        const r = await roundTrip("sheet", draft, sheetDrop, () => (useAttach.getState().over?.chat === draft ? sheetDrop() : null));
+        await h.shot("attach-native-drop-sheet");
+        useAttach.getState().clear(draft);
+        useStore.getState().setSheet(null);
+        return r;
+      });
+
+      await h.invoke("chat_stop", { id }).catch(() => {});
+      sessionStorage.setItem("coool.selftest.nativeDropReloaded", "1");
+      await h.sleep(300);
+      location.reload();
+      await new Promise(() => {});
     },
 
     // The preview button on an image an agent writes (one Haiku turn), read only on click; and the refusals.

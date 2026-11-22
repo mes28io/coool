@@ -2379,6 +2379,7 @@ pub fn run() {
             selftest::selftest_click,
             selftest::selftest_drag,
             selftest::selftest_native,
+            selftest::drag::selftest_native_drag,
             selftest::selftest_sim_delete,
             selftest::selftest_mac_install_requests,
             selftest::selftest_sim_screen,

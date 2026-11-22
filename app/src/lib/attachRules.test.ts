@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { admit, colorize, fmtSize, gridOf, imagePaths, MAX_COUNT, PICK_OPTIONS, pickedPaths, pickWith, toneOf, typeLabel } from "./attachRules.ts";
+import { admit, colorize, dropPoint, fmtSize, gridOf, imagePaths, MAX_COUNT, PICK_OPTIONS, pickedPaths, pickWith, toneOf, typeLabel } from "./attachRules.ts";
 
 test("admit: limits, duplicates and plain reasons", () => {
   const have = [{ name: "a.png", size: 10 }];
@@ -85,4 +85,11 @@ test("the attach button's picker: options, a cancel, one path and a list", async
   assert.deepEqual(seen[0], { multiple: true, directory: false, title: "Attach files" });
   assert.equal(PICK_OPTIONS.directory, false);
   assert.deepEqual(pickedPaths([null, "", "/ok"]), ["/ok"]);
+});
+
+test("dropPoint: macOS positions are already CSS pixels; elsewhere physical", () => {
+  // A drag over (900, 500) on a Retina Mac: wry reports (900, 500), not (1800, 1000).
+  assert.deepEqual(dropPoint({ x: 900, y: 500 }, true, 2), { x: 900, y: 500 });
+  assert.deepEqual(dropPoint({ x: 1800, y: 1000 }, false, 2), { x: 900, y: 500 });
+  assert.deepEqual(dropPoint({ x: 10, y: 20 }, false, 0), { x: 10, y: 20 });
 });
