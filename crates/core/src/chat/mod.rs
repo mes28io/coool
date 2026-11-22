@@ -1573,6 +1573,10 @@ pub(crate) fn now_ms() -> u64 {
 
 /// A random UUID v4 (for `claude --session-id`), from the OS RNG.
 pub(crate) fn uuid_v4() -> String {
+    #[cfg(test)]
+    if let Some(u) = testutil::PINNED_UUID.with(|p| p.borrow_mut().take()) {
+        return u;
+    }
     let mut b = [0u8; 16];
     let ok = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_ok();
     if !ok {
@@ -1718,11 +1722,24 @@ pub(crate) mod testutil {
     /// Replays a trace captured from a real run (`COOOL_CHAT_TRACE`): the CLI's
     /// stdout lines (`out`) and the API calls made on the chat (`api`), in order.
     /// Returns every event, and every line the backend wrote.
+    thread_local! {
+        /// The next [`uuid_v4`]: a replayed `send` writes the user line's uuid the recorded run wrote, so the CLI's
+        /// lifecycle frames and results in the fixture name it.
+        pub static PINNED_UUID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    }
+
     pub fn replay_full(b: &mut dyn Backend, fixture: &str) -> (Vec<ChatEventKind>, Vec<String>) {
         let mut o = Out::default();
         b.start(&mut o);
-        for l in fixture.lines().filter(|l| !l.trim().is_empty()) {
+        let lines: Vec<&str> = fixture.lines().filter(|l| !l.trim().is_empty()).collect();
+        for (i, l) in lines.iter().enumerate() {
             let v: Value = serde_json::from_str(l).unwrap();
+            if v["dir"] == "api" && v["line"]["call"] == "send" {
+                // The uuid of the user line the recorded run wrote next (Claude Code's traces).
+                let next = lines[i + 1..].iter().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find(|r| r["dir"] == "in" && r["line"].as_str().is_some_and(|x| x.contains("\"type\":\"user\"")));
+                let uuid = next.and_then(|r| serde_json::from_str::<Value>(r["line"].as_str().unwrap_or("")).ok()).and_then(|u| u["uuid"].as_str().map(str::to_string));
+                PINNED_UUID.with(|p| *p.borrow_mut() = uuid);
+            }
             let line = &v["line"];
             match v["dir"].as_str() {
                 Some("out") => b.on_line(line.as_str().unwrap(), &mut o),
@@ -1743,6 +1760,7 @@ pub(crate) mod testutil {
                         }
                         c => panic!("unknown call {c}"),
                     };
+                    PINNED_UUID.with(|p| p.borrow_mut().take());
                     // Withdrawing a note can fail in a real run (too late); every other call must work.
                     if line["call"] != "cancel_steer" {
                         r.unwrap();

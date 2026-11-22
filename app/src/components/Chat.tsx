@@ -44,7 +44,7 @@ import { PermExplain, RedactedPre } from "./Explain";
 import { RiskTag } from "./RiskTag";
 import { LaterBar, useFolded, useQuestionLater } from "./QuestionLater";
 import { digitPick, isTyping, keyQuestion } from "../lib/questionKeys";
-import { NoteRows } from "./SteerStrip";
+import { NoteBubble } from "./SteerStrip";
 import { IAlert, IChevron, ICheck, IClose, IDiff, IFile, IGlobe, IMac, IPhone, IRefresh, IReturn, ITerminal } from "./icons";
 import { PERMISSION_MODES } from "./ChatComposer";
 import { ModelTag } from "./Models";
@@ -587,6 +587,7 @@ function blockHeight(b: Block, latest: boolean): number {
     case "text":
       return 30 + Math.ceil(b.item.text.length / 80) * 26;
     case "prompt":
+    case "note":
       return 70 + Math.ceil(b.item.text.length / 70) * 24;
     case "turn":
     case "thinking":
@@ -647,6 +648,8 @@ function ItemView({ item, chat, onOpenTerminal, onResume }: { item: ChatItem; ch
   switch (item.kind) {
     case "prompt":
       return <PromptBubble text={item.text} stamp={item.unsent ? `${clockTime(item.ts)} · not sent` : clockTime(item.ts)} unsent={item.unsent} attachments={item.attachments} scope={item.key} />;
+    case "note":
+      return <NoteBubble item={item} />;
     case "text":
       return <AssistantText text={item.text} streaming={item.streaming} />;
     case "thinking":
@@ -855,10 +858,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
                     ) : isPilotTool(t.name) ? (
                       <PilotRun t={t} chat={chat.id} fresh={fresh} />
                     ) : (
-                      <>
-                        <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
-                        <NoteRows notes={chat.notes.filter((n) => n.toolId === t.id)} />
-                      </>
+                      <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
                     )}
                   </RailItem>
                 );

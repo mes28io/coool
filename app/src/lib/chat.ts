@@ -28,6 +28,8 @@ export interface OpenFailed {
 
 export type ChatItem =
   | { kind: "prompt"; key: string; id: string; text: string; ts: number; unsent?: boolean; attachments?: Attachment[] }
+  /** A steering note the agent took in mid-turn, where it took it in (its `user_message` echo). */
+  | { kind: "note"; key: string; id: string; noteId: string; text: string; ts: number; state: "picked_up" | "interrupted"; toolId: string | null; attachments?: Attachment[] }
   | { kind: "text"; key: string; id: string; text: string; ts: number; streaming: boolean; parent: string | null; model: string | null }
   | { kind: "thinking"; key: string; id: string; text: string; ts: number; endTs: number | null; parent: string | null }
   | {
@@ -299,12 +301,18 @@ export function applyEvents(c0: Chat, events: ChatEvent[]): Chat {
         };
         break;
       case "user_message": {
-        // A delivered steering note is echoed as a user message too (`steer: true`, with its note id): it is
-        // shown under its step, not as a prompt, unless it was delivered as an ordinary prompt.
+        // A delivered steering note is echoed as a user message too (`steer: true`, with its note id): it shows
+        // where the agent took it in, as a note (an ordinary prompt when it was delivered as one). It used to show
+        // only as a row under its step, hidden once the steps folded and never drawn under a subagent's step: the
+        // note left the strip and was nowhere on screen.
         const n = e.note_id ? c.notes.find((x) => x.id === e.note_id) : undefined;
         if (n) {
           c = { ...c, notes: c.notes.map((x) => (x === n ? { ...x, echoed: true } : x)) };
-          if (!n.asPrompt && e.steer !== false) break;
+          if (!n.asPrompt && e.steer !== false && (n.state === "picked_up" || n.state === "interrupted")) {
+            const atts = e.attachments?.length ? e.attachments : n.attachments;
+            its().push({ kind: "note", key, id: e.id, noteId: n.id, text: e.text, ts: e.ts, state: n.state, toolId: n.toolId, ...(atts?.length ? { attachments: atts } : {}) });
+            break;
+          }
         }
         its().push({ kind: "prompt", key, id: e.id, text: e.text, ts: e.ts, ...(e.attachments?.length ? { attachments: e.attachments } : {}) });
         c = { ...c, prompts: c.prompts[c.prompts.length - 1] === e.text ? c.prompts : [...c.prompts, e.text].slice(-200), turnStart: c.turnStart ?? e.ts, turnOut0: c.turnStart === null ? c.tokens.output : c.turnOut0 };

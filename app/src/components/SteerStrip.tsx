@@ -1,11 +1,13 @@
 // Steering UI: the strip of queued notes above the composer input, the "notes weren't
-// used" strip after a turn, and the rows that attach a delivered note under its step.
+// used" strip after a turn, and a delivered note in the timeline.
 
 import { AnimatePresence, motion } from "motion/react";
-import type { Chat, Note } from "../lib/chat";
+import type { Chat, ChatItem, Note } from "../lib/chat";
+import { clockTime } from "../lib/format";
+import { MessageAttachments } from "./Attachments";
 import { canCancel, cancelNote, discardUnused, noteNow, sendUnused } from "../lib/steer";
 import { IBolt, ICheck, IClip, IClose, IReturn } from "./icons";
-import { cx, ease } from "./primitives";
+import { ease } from "./primitives";
 import { reducedMotion } from "./StepRail";
 
 const slide = () => {
@@ -94,27 +96,25 @@ function NoteAtts({ n }: { n: Note }) {
   );
 }
 
-/** Delivered notes attached under the step they were picked up in. */
-export function NoteRows({ notes }: { notes: Note[] }) {
-  const shown = notes.filter((n) => n.state === "picked_up" || n.state === "interrupted");
-  if (!shown.length) return null;
+/**
+ * A delivered note, where the agent took it in: the person's words as a message of theirs, marked as a note
+ * ("Picked up" at a step boundary, "Interrupted" when it cut the step). Always in the timeline, so a note that left
+ * the strip is always somewhere on screen.
+ */
+export function NoteBubble({ item }: { item: Extract<ChatItem, { kind: "note" }> }) {
+  const cut = item.state === "interrupted";
   return (
-    <AnimatePresence initial={false}>
-      {shown.map((n) => (
-        <motion.div key={n.id} initial={reducedMotion() ? false : { height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} transition={{ duration: reducedMotion() ? 0 : 0.24, ease }} className="overflow-hidden" data-note={n.state}>
-          <div className="flex h-[26px] items-center gap-2 pl-[28px] pr-2 text-small text-dim">
-            <span className="shrink-0 text-faint">↳</span>
-            <span className="min-w-0 flex-1 truncate" title={n.text}>
-              {n.text}
-            </span>
-            <NoteAtts n={n} />
-            <span className={cx("flex shrink-0 items-center gap-1 text-faint")}>
-              {n.state === "interrupted" ? <IReturn size={12} /> : <ICheck size={12} />}
-              {n.state === "interrupted" ? "Interrupted" : "Picked up"}
-            </span>
-          </div>
-        </motion.div>
-      ))}
-    </AnimatePresence>
+    <div className="flex flex-col items-end gap-1 pt-1" data-note={item.state} data-note-id={item.noteId}>
+      {!!item.attachments?.length && <MessageAttachments atts={item.attachments} scope={item.key} />}
+      {item.text.trim() && (
+        <div className="selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[18px] rounded-br-[6px] border border-[color-mix(in_oklab,var(--status-running)_22%,var(--border))] bg-[color-mix(in_oklab,var(--status-running)_7%,var(--raised))] px-4 py-3 text-prose text-fg shadow-card">
+          {item.text}
+        </div>
+      )}
+      <span className="flex items-center gap-1 pr-1 font-mono text-mono-small text-faint tnum">
+        {cut ? <IReturn size={11} /> : <ICheck size={11} />}
+        {`${clockTime(item.ts)} · ${cut ? "Interrupted the step" : "Picked up mid-turn"}`}
+      </span>
+    </div>
   );
 }

@@ -44,14 +44,18 @@ enum Pending {
     CancelNote(String, bool),
 }
 
-/// An interrupt sent for `now` notes: they go out once the CLI answered it
-/// and the cut turn's `result` arrived.
+/// An interrupt sent for `now` notes. They go out as soon as the CLI answered it (with `priority: "now"`, so they
+/// run before anything else the CLI has queued, such as a finished background task's notification), and the cut
+/// turn's `result` says whether anything was cut.
 #[derive(Default)]
 struct Cut {
     acked: bool,
-    ended: bool,
-    /// The turn ended by the interrupt (not on its own just before).
-    cut: bool,
+    /// The held notes were written.
+    written: bool,
+    /// The cut turn's `result` arrived: `Some(ok)`; `ok` means it ended on its own just before the interrupt.
+    ended: Option<bool>,
+    /// The main-thread step running when the interrupt went out.
+    step: Option<String>,
 }
 
 /// One entry of the CLI's task list (`TaskCreate` / `TaskUpdate`).
@@ -290,8 +294,13 @@ pub(crate) struct Claude {
     /// terminal `command_lifecycle`): the chat is working while any is left.
     cmds: Vec<String>,
     interrupted: bool,
-    /// A turn is running (`command_lifecycle` `started` seen, no `result` yet).
+    /// A turn is running (`command_lifecycle` `started` seen, or a turn the CLI started itself; no `result` yet).
     turn_live: bool,
+    /// The CLI reports `command_lifecycle` frames (then `cmds` is kept by them and the results' uuid lists alone).
+    lifecycle: bool,
+    /// A turn the CLI started on its own is running: one for a background task's (a `run_in_background` command's,
+    /// a background subagent's) notification, after the turn that started it ended. No user line of ours is in it.
+    auto_turn: bool,
     /// Main-thread tool calls without their result, oldest first.
     open_tools: Vec<String>,
     /// The main-thread tool whose result came last this turn.
@@ -451,6 +460,8 @@ impl Claude {
             cmds: Vec::new(),
             interrupted: false,
             turn_live: false,
+            lifecycle: false,
+            auto_turn: false,
             open_tools: Vec::new(),
             last_tool_end: None,
             notes: Notes::default(),
@@ -570,11 +581,16 @@ impl Claude {
     fn working_or_idle(&self) -> ChatState {
         if !self.perms.is_empty() {
             ChatState::WaitingPermission
-        } else if !self.cmds.is_empty() {
+        } else if self.busy() {
             ChatState::Working
         } else {
             ChatState::Idle
         }
+    }
+
+    /// A turn runs or is about to: a user line of ours not yet answered, or a turn the CLI started itself.
+    fn busy(&self) -> bool {
+        !self.cmds.is_empty() || self.auto_turn
     }
 
     fn on_control_response(&mut self, r: &Value, o: &mut Out) {
@@ -597,11 +613,18 @@ impl Claude {
                 Pending::SetMode(m) => format!("switch to permission mode {m}"),
                 Pending::Interrupt => "interrupt".to_string(),
                 Pending::SteerCut => {
-                    // The turn goes on; the notes go out when it ends.
-                    if let Some(c) = self.cut.as_mut() {
-                        c.acked = true;
+                    // Nothing was cut: the notes go in as ordinary ones (after the running step, or as the next turn).
+                    for n in self.notes.list.iter_mut().filter(|n| !n.sent) {
+                        n.now = false;
                     }
-                    self.flush_cut(o);
+                    let over = self.cut.take().is_some_and(|c| c.ended.is_some());
+                    if over || !self.busy() {
+                        // The turn is over already: they are the next one.
+                        self.write_held(false, o);
+                    } else {
+                        self.flush_notes(o);
+                    }
+                    o.ev(ChatEventKind::State { state: self.working_or_idle() });
                     "interrupt the step for the note".to_string()
                 }
                 Pending::CancelNote(..) => "withdraw the note".to_string(),
@@ -762,9 +785,15 @@ impl Claude {
     }
 
     /// A note's user line: its content blocks when it has attachments, else its text.
-    fn write_note(&mut self, id: &str, text: &str, o: &mut Out) {
+    /// `first`: `priority: "now"`, so the CLI runs it before anything it already queued (a finished background
+    /// task's notification would otherwise get a turn of its own first, and the agent would answer that instead).
+    fn write_note(&mut self, id: &str, text: &str, first: bool, o: &mut Out) {
         let content = self.notes.message(id).unwrap_or_else(|| Value::String(text.to_string()));
-        o.write(&json!({"type": "user", "message": {"role": "user", "content": content}, "parent_tool_use_id": null, "session_id": "", "uuid": id}));
+        let mut line = json!({"type": "user", "message": {"role": "user", "content": content}, "parent_tool_use_id": null, "session_id": "", "uuid": id});
+        if first {
+            line["priority"] = json!("now");
+        }
+        o.write(&line);
         self.cmds.push(id.to_string());
     }
 
@@ -778,7 +807,7 @@ impl Claude {
         }
         let ids: Vec<(String, String)> = self.notes.list.iter().filter(|n| !n.sent && !n.now).map(|n| (n.id.clone(), n.text.clone())).collect();
         for (id, text) in ids {
-            self.write_note(&id, &text, o);
+            self.write_note(&id, &text, false, o);
             if let Some(n) = self.notes.get(&id) {
                 n.sent = true;
             }
@@ -787,7 +816,16 @@ impl Claude {
 
     /// Interrupt for held `now` notes (not while the person is being asked).
     fn start_cut(&mut self, o: &mut Out) {
-        if self.cut.is_some() || !self.perms.is_empty() || self.cmds.is_empty() || !self.notes.list.iter().any(|n| n.now && !n.sent) {
+        if self.cut.is_some() || !self.perms.is_empty() || !self.busy() || !self.notes.list.iter().any(|n| n.now && !n.sent) {
+            return;
+        }
+        // An earlier `now` note is written and its turn hasn't started: this one goes right behind it (the CLI takes
+        // both before anything else), instead of cutting that turn as it begins.
+        if let Some(cut) = self.notes.list.iter().find(|n| n.sent && n.own_turn).map(|n| n.cut.clone()) {
+            for n in self.notes.list.iter_mut().filter(|n| n.now && !n.sent) {
+                n.cut = cut.clone();
+            }
+            self.write_held(true, o);
             return;
         }
         let step = self.open_tools.last().cloned();
@@ -795,35 +833,55 @@ impl Claude {
             n.cut = step.clone();
         }
         self.interrupted = true;
-        self.cut = Some(Cut::default());
+        self.cut = Some(Cut { step, ..Cut::default() });
         self.request(json!({"subtype": "interrupt"}), Pending::SteerCut, o);
     }
 
-    /// The cut turn is over and the interrupt answered: every held note goes
-    /// out now, `now` ones first; the first starts the next turn.
-    fn flush_cut(&mut self, o: &mut Out) {
-        let Some(c) = self.cut.as_ref() else { return };
-        if !(c.acked && c.ended) {
-            return;
-        }
-        let cut = c.cut;
-        self.cut = None;
+    /// Every held note goes out as a turn of its own, `now` ones first, with `priority: "now"` while a cut is under
+    /// way (`first`).
+    fn write_held(&mut self, first: bool, o: &mut Out) {
         let mut held: Vec<(String, String, bool)> = self.notes.list.iter().filter(|n| !n.sent).map(|n| (n.id.clone(), n.text.clone(), n.now)).collect();
         held.sort_by_key(|h| !h.2);
         for (id, text, _) in held {
-            self.write_note(&id, &text, o);
+            self.write_note(&id, &text, first, o);
             if let Some(n) = self.notes.get(&id) {
                 n.sent = true;
                 n.own_turn = true;
-                // Ended on its own before the interrupt landed: nothing was cut.
-                n.now = n.now && cut;
             }
+        }
+    }
+
+    /// The interrupt was answered: the held notes go out at once, ahead of anything the CLI queued meanwhile (the
+    /// notification of a background task that finished during the cut step would otherwise run first, as a turn of
+    /// its own, and the agent would answer it as if the note had never been sent). Once the cut turn's `result` is
+    /// in too, the cut is over.
+    fn flush_cut(&mut self, o: &mut Out) {
+        let Some(c) = self.cut.as_mut() else { return };
+        if !c.acked {
+            return;
+        }
+        if !c.written {
+            c.written = true;
+            self.write_held(true, o);
+        }
+        let Some(c) = self.cut.as_ref() else { return };
+        if let Some(ok) = c.ended {
+            self.cut = None;
+            if ok {
+                // Ended on its own before the interrupt landed: nothing was cut.
+                for n in self.notes.list.iter_mut().filter(|n| n.sent && n.own_turn) {
+                    n.now = false;
+                }
+            }
+            // Notes sent after the interrupt was answered and before the cut turn ended join the next turn.
+            self.write_held(false, o);
         }
         o.ev(ChatEventKind::State { state: self.working_or_idle() });
     }
 
     fn on_lifecycle(&mut self, v: &Value, o: &mut Out) {
         let Some(uuid) = v["command_uuid"].as_str() else { return };
+        self.lifecycle = true;
         match v["state"].as_str().unwrap_or("") {
             "started" => {
                 let fold = self.turn_live;
@@ -837,6 +895,8 @@ impl Claude {
                     (SteerState::PickedUp, None)
                 };
                 self.notes.settle(uuid, state, tool, &mut self.user_n, o);
+                // Its own turn, maybe after the chat looked idle (a turn the CLI ran first ended meanwhile).
+                o.ev(ChatEventKind::State { state: self.working_or_idle() });
             }
             "queued" => {}
             terminal => {
@@ -1024,9 +1084,13 @@ impl Claude {
         }
         let before = self.cmds.len();
         self.cmds.retain(|c| !answered.contains(c));
-        if self.cmds.len() == before && !self.cmds.is_empty() {
+        // Without lifecycle frames, the oldest. With them, a result that lists none of ours is a turn the CLI ran on
+        // its own (a background task's notification): what we wrote is still to come. (Taking the oldest here once
+        // dropped a `now` note the CLI still held: the chat looked idle and the next Now cut nothing.)
+        if !self.lifecycle && self.cmds.len() == before && !self.cmds.is_empty() {
             self.cmds.remove(0);
         }
+        self.auto_turn = false;
         // Without lifecycle frames, a note listed here was answered by this turn.
         let listed: Vec<String> = answered.into_iter().filter(|u| self.notes.list.iter().any(|n| n.sent && n.id == *u)).collect();
         for id in listed {
@@ -1049,7 +1113,8 @@ impl Claude {
             }
         }
         self.last_error = None;
-        if self.cmds.is_empty() {
+        // (The cut turn's notes may be written already: the turn they start is not an interrupted one.)
+        if self.cmds.is_empty() || (self.cut.is_some() && !self.stopping) {
             self.interrupted = false;
         }
         if let Some(mu) = v["modelUsage"].as_object() {
@@ -1077,8 +1142,7 @@ impl Claude {
             self.cut = None;
             self.notes.unused(|n| !n.sent, o);
         } else if let Some(c) = self.cut.as_mut() {
-            c.ended = true;
-            c.cut = !ok;
+            c.ended = Some(ok);
             self.flush_cut(o);
         } else {
             // Still held: the turn ended before another step took them.
@@ -1223,6 +1287,14 @@ impl Backend for Claude {
             }
             Some("system") => match v["subtype"].as_str() {
                 Some("init") => {
+                    // Every turn starts with one; ours come after their `command_lifecycle` `started`. One without it
+                    // is a turn the CLI runs on its own: a background task's notification, after the turn that
+                    // started the task ended. The chat works meanwhile (notes wait for its steps, Now and Stop cut it).
+                    if self.lifecycle && !self.turn_live {
+                        self.turn_live = true;
+                        self.auto_turn = true;
+                        o.ev(ChatEventKind::State { state: self.working_or_idle() });
+                    }
                     if let Some(s) = v["session_id"].as_str() {
                         self.session_id = s.to_string();
                     }
@@ -1375,15 +1447,22 @@ impl Backend for Claude {
         // While the person is asked, nothing is cut: the note waits for the answer.
         let now = now && self.perms.is_empty();
         self.notes.add_with(note_id, text, now, atts.to_vec(), payload, o);
-        if self.cmds.is_empty() {
+        if !self.busy() && self.cut.is_none() {
             // Idle: the note is the next prompt.
-            self.write_note(note_id, text, o);
+            self.write_note(note_id, text, false, o);
             if let Some(n) = self.notes.get(note_id) {
                 n.sent = true;
                 n.own_turn = true;
                 n.now = false;
             }
             o.ev(ChatEventKind::State { state: self.working_or_idle() });
+        } else if let Some(step) = self.cut.as_ref().filter(|c| c.written).map(|c| c.step.clone()) {
+            // The interrupt was answered and the cut's notes are out: this one goes right behind them, before
+            // anything the CLI queued (a `now` note as if sent with them; any note: the next turn is theirs).
+            if let Some(n) = self.notes.get(note_id).filter(|n| n.now) {
+                n.cut = step;
+            }
+            self.write_held(true, o);
         } else if now {
             self.start_cut(o);
         } else {
@@ -1404,7 +1483,7 @@ impl Backend for Claude {
     }
 
     fn interrupt(&mut self, o: &mut Out) -> Result<()> {
-        if self.cmds.is_empty() {
+        if !self.busy() && self.cut.is_none() {
             return Ok(());
         }
         // Stop means stop: notes the CLI holds are withdrawn (they end unused),
@@ -1501,6 +1580,8 @@ impl Backend for Claude {
 
     fn on_exit(&mut self, o: &mut Out) {
         self.perms.clear();
+        self.cut = None;
+        self.auto_turn = false;
         self.notes.unused(|_| true, o);
         if !self.cmds.is_empty() {
             self.cmds.clear();
@@ -2151,6 +2232,207 @@ mod tests {
         assert_eq!((w["uuid"].as_str(), w["message"]["content"].as_str()), (Some("idle"), Some("hello")));
         c.on_line(&started("idle"), &mut o);
         assert_eq!(steers(&o.events).last().unwrap().1, SteerState::PickedUp);
+    }
+
+    fn writes(o: &Out) -> Vec<Value> {
+        o.writes.iter().map(|w| serde_json::from_str(w).unwrap()).collect()
+    }
+
+    fn lc(uuid: &str, state: &str) -> String {
+        line(json!({"type": "command_lifecycle", "command_uuid": uuid, "state": state}))
+    }
+
+    fn init() -> String {
+        line(json!({"type": "system", "subtype": "init", "session_id": "s", "model": "claude-haiku-5-5"}))
+    }
+
+    fn tool_use(id: &str) -> String {
+        line(json!({"type": "assistant", "message": {"id": format!("m-{id}"), "model": "x", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {"command": "sleep 8"}}]}}))
+    }
+
+    fn tool_done(id: &str) -> String {
+        line(json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": id, "content": "ok"}]}}))
+    }
+
+    fn reply(t: &str) -> String {
+        line(json!({"type": "assistant", "message": {"id": format!("m-{t}"), "model": "x", "content": [{"type": "text", "text": t}]}}))
+    }
+
+    fn result(ok: bool, uuids: &[&str]) -> String {
+        let mut v = json!({"type": "result", "subtype": if ok { "success" } else { "error_during_execution" }, "is_error": !ok, "duration_ms": 1});
+        if !uuids.is_empty() {
+            v["user_message_uuids"] = json!(uuids);
+            v["user_message_uuid"] = json!(uuids[0]);
+        }
+        line(v)
+    }
+
+    fn ack(rid: &str) -> String {
+        line(json!({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {"still_queued": []}}}))
+    }
+
+    /// A chat running `sleep` steps with a `run_in_background` command that finished meanwhile (Claude Code 2.1.330,
+    /// Haiku 5.5): its notification waits in the CLI's queue. The `now` note is written as soon as the interrupt is
+    /// answered, with `priority: "now"`; written only after the cut turn's `result` (as before), the CLI ran the
+    /// notification as a turn of its own first and the agent answered that instead ("I stopped after step 1. The
+    /// background command finished...").
+    #[test]
+    fn now_note_goes_ahead_of_a_background_tasks_notification() {
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("steps", &[], &mut o).unwrap();
+        let a = c.cmds[0].clone();
+        for l in [lc(&a, "queued"), lc(&a, "started"), init(), tool_use("bg"), tool_done("bg"), tool_use("t2")] {
+            c.on_line(&l, &mut o);
+        }
+        let mut o = Out::default();
+        c.steer("n1", "reply BANANA", true, &[], &mut o).unwrap();
+        let w = writes(&o);
+        assert_eq!((w.len(), w[0]["request"]["subtype"].as_str()), (1, Some("interrupt")));
+        let mut o = Out::default();
+        c.on_line(&ack(w[0]["request_id"].as_str().unwrap()), &mut o);
+        let w = writes(&o);
+        assert_eq!((w.len(), w[0]["uuid"].as_str(), w[0]["priority"].as_str()), (1, Some("n1"), Some("now")), "out at the answer, first in the CLI's queue");
+        let mut o = Out::default();
+        for l in [lc("n1", "queued"), tool_done("t2"), result(false, &[&a]), lc(&a, "cancelled"), lc("n1", "started")] {
+            c.on_line(&l, &mut o);
+        }
+        assert_eq!(steers(&o.events), [("reply BANANA".to_string(), SteerState::Interrupted, Some("t2".to_string()))]);
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::UserMessage { steer: true, note_id: Some(n), .. } if n == "n1")), "echoed");
+        assert!(!o.events.iter().any(|e| matches!(e, ChatEventKind::Notice { level: NoticeLevel::Error, .. })), "the cut is no error");
+        for l in [init(), reply("BANANA"), result(true, &["n1"]), lc("n1", "completed")] {
+            c.on_line(&l, &mut o);
+        }
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+        // Then the CLI runs the notification's turn itself: the chat works meanwhile, and is idle after it.
+        let mut o = Out::default();
+        c.on_line(&init(), &mut o);
+        assert_eq!(c.working_or_idle(), ChatState::Working);
+        assert!(o.events.iter().any(|e| matches!(e, ChatEventKind::State { state: ChatState::Working })));
+        c.on_line(&reply("The background command finished."), &mut o);
+        c.on_line(&result(true, &[]), &mut o);
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+        assert!(c.cmds.is_empty() && c.notes.list.is_empty());
+    }
+
+    /// A turn the CLI runs on its own (a background task's notification) while a line of ours waits in its queue:
+    /// its `result` lists none of ours, and must not count as the answer to ours (it did: the `now` note's uuid was
+    /// dropped, the chat showed idle while the CLI still had it, and the next Now went out as a plain prompt).
+    #[test]
+    fn a_turn_the_cli_runs_itself_answers_none_of_ours() {
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("first", &[], &mut o).unwrap();
+        let a = c.cmds[0].clone();
+        for l in [lc(&a, "queued"), lc(&a, "started"), init(), reply("ok"), result(true, &[&a]), lc(&a, "completed")] {
+            c.on_line(&l, &mut o);
+        }
+        c.send("second", &[], &mut o).unwrap();
+        let b = c.cmds[0].clone();
+        // The notification's turn runs before it.
+        for l in [lc(&b, "queued"), init(), reply("The helper finished."), result(true, &[])] {
+            c.on_line(&l, &mut o);
+        }
+        assert_eq!(c.cmds, [b.clone()], "still to come");
+        assert_eq!(c.working_or_idle(), ChatState::Working);
+        for l in [lc(&b, "started"), init(), reply("ok"), result(true, &[&b]), lc(&b, "completed")] {
+            c.on_line(&l, &mut o);
+        }
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+    }
+
+    /// Now and Stop during a turn the CLI runs on its own cut it (before, the chat looked idle: the note went out as
+    /// a plain prompt the CLI queued behind that turn, and Stop did nothing). A plain note waits for its next step.
+    #[test]
+    fn now_and_stop_cut_a_turn_the_cli_runs_itself() {
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("first", &[], &mut o).unwrap();
+        let a = c.cmds[0].clone();
+        for l in [lc(&a, "queued"), lc(&a, "started"), init(), reply("started a helper"), result(true, &[&a]), lc(&a, "completed")] {
+            c.on_line(&l, &mut o);
+        }
+        // The helper finished: the CLI starts a turn for it.
+        c.on_line(&init(), &mut o);
+        let mut o = Out::default();
+        c.steer("p", "a plain note", false, &[], &mut o).unwrap();
+        assert!(o.writes.is_empty(), "waits for a step of that turn");
+        c.on_line(&tool_use("t9"), &mut o);
+        assert_eq!(writes(&o).iter().filter(|w| w["uuid"] == "p").count(), 1, "out with the step in flight");
+        let mut o = Out::default();
+        c.steer("n", "now note", true, &[], &mut o).unwrap();
+        let w = writes(&o);
+        assert_eq!(w.iter().map(|w| w["request"]["subtype"].as_str().unwrap_or("user")).collect::<Vec<_>>(), ["interrupt"]);
+        let mut o = Out::default();
+        c.on_line(&ack(w[0]["request_id"].as_str().unwrap()), &mut o);
+        assert_eq!(writes(&o)[0]["priority"], "now");
+        for l in [tool_done("t9"), result(false, &[]), lc("p", "started"), lc("n", "started")] {
+            c.on_line(&l, &mut o);
+        }
+        let s = steers(&o.events);
+        assert_eq!(s.iter().map(|x| (x.0.as_str(), x.1)).collect::<Vec<_>>(), [("a plain note", SteerState::PickedUp), ("now note", SteerState::PickedUp)]);
+        for l in [reply("ok"), result(true, &["p", "n"]), lc("p", "completed"), lc("n", "completed")] {
+            c.on_line(&l, &mut o);
+        }
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+        // Stop reaches such a turn too.
+        c.on_line(&init(), &mut o);
+        let mut o = Out::default();
+        c.interrupt(&mut o).unwrap();
+        assert_eq!(writes(&o).iter().filter(|w| w["request"]["subtype"] == "interrupt").count(), 1);
+        c.on_line(&result(false, &[]), &mut o);
+        assert_eq!(c.working_or_idle(), ChatState::Idle);
+    }
+
+    /// Two `now` notes in a row: the second, sent once the first is out, goes right behind it (no second interrupt,
+    /// which would cut the first one's turn as it starts); a note sent before the interrupt was answered goes with
+    /// the first. Every note is delivered once.
+    #[test]
+    fn notes_sent_during_a_cut_go_with_it() {
+        let mut c = Claude::new(&opts());
+        let mut o = Out::default();
+        c.send("steps", &[], &mut o).unwrap();
+        let a = c.cmds[0].clone();
+        for l in [lc(&a, "queued"), lc(&a, "started"), init(), tool_use("t1")] {
+            c.on_line(&l, &mut o);
+        }
+        let mut o = Out::default();
+        c.steer("n1", "one", true, &[], &mut o).unwrap();
+        c.steer("x", "plain, before the answer", false, &[], &mut o).unwrap();
+        let w = writes(&o);
+        assert_eq!(w.len(), 1, "one interrupt, the notes held");
+        let mut o = Out::default();
+        c.on_line(&ack(w[0]["request_id"].as_str().unwrap()), &mut o);
+        assert_eq!(writes(&o).iter().map(|w| w["uuid"].as_str().unwrap()).collect::<Vec<_>>(), ["n1", "x"], "now ones first");
+        let mut o = Out::default();
+        c.steer("n2", "two", true, &[], &mut o).unwrap();
+        let w = writes(&o);
+        assert_eq!((w.len(), w[0]["uuid"].as_str(), w[0]["priority"].as_str()), (1, Some("n2"), Some("now")), "behind the first, no second interrupt");
+        let mut o = Out::default();
+        for l in [tool_done("t1"), result(false, &[&a]), lc("n1", "started"), lc("x", "started"), lc("n2", "started")] {
+            c.on_line(&l, &mut o);
+        }
+        let s = steers(&o.events);
+        assert_eq!(s.iter().map(|x| (x.0.as_str(), x.1)).collect::<Vec<_>>(), [("one", SteerState::Interrupted), ("plain, before the answer", SteerState::PickedUp), ("two", SteerState::PickedUp)]);
+        assert_eq!(o.events.iter().filter(|e| matches!(e, ChatEventKind::UserMessage { steer: true, .. })).count(), 3);
+        // A refused interrupt: the note becomes an ordinary one (no note is left held for good).
+        for l in [reply("ok"), result(true, &["n1", "x", "n2"])] {
+            c.on_line(&l, &mut o);
+        }
+        c.send("more", &[], &mut o).unwrap();
+        let b = c.cmds[0].clone();
+        for l in [lc(&b, "started"), init(), reply("thinking aloud")] {
+            c.on_line(&l, &mut o);
+        }
+        let mut o = Out::default();
+        c.steer("n3", "three", true, &[], &mut o).unwrap();
+        let rid = writes(&o)[0]["request_id"].as_str().unwrap().to_string();
+        let mut o = Out::default();
+        c.on_line(&result(true, &[&b]), &mut o);
+        c.on_line(&line(json!({"type": "control_response", "response": {"subtype": "error", "request_id": rid, "error": "busy"}})), &mut o);
+        assert_eq!(writes(&o).iter().filter(|w| w["uuid"] == "n3").count(), 1, "the turn was over: it is the next one");
+        c.on_line(&lc("n3", "started"), &mut o);
+        assert_eq!(steers(&o.events), [("three".to_string(), SteerState::PickedUp, None)]);
     }
 
     /// Real run (claude-haiku-4-5, the CLI's task tools are off on newer

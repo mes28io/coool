@@ -74,6 +74,7 @@ import { attachScenarios } from "./selftestAttach";
 import { changesScenarios } from "./selftestChanges";
 import { typingScenarios } from "./selftestTyping";
 import { restartScenarios } from "./selftestRestart";
+import { steerScenarios } from "./selftestSteer";
 import { platformScenarios } from "./selftestPlatform";
 import { historyScenarios } from "./selftestHistory";
 import { keepaliveScenarios } from "./selftestKeepalive";
@@ -1883,7 +1884,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const seen = evs(id).filter((e) => e.type === "text_delta").length;
       await say("Count from 1 to 400, one number per line, nothing else.");
       await waitFor("streaming to start", () => evs(id).filter((e) => e.type === "text_delta").length > seen + 3, 60_000);
-      const stop = await waitFor("the Stop button", () => $('button[title="Stop this turn (Esc)"]'), 5_000);
+      const stop = await waitFor("the Stop button", () => $('button[data-stop]'), 5_000);
       stop.click();
       const end = await nextTurn(id, n, 30_000);
       if (end.ok) throw new Fail("interrupted turn reported ok");
@@ -2041,7 +2042,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
     });
   },
 
-  /** Steering notes against the real Claude CLI: queued -> picked up under a step, "now" -> interrupted, unused after Stop. */
+  /** Steering notes against the real Claude CLI: queued -> picked up after a step (a note in the timeline), "now" -> interrupted, unused after Stop. */
   async steer(ctx) {
     const note = (s: string) => $all("[data-chat-timeline]").map((t) => t.textContent ?? "").join(" ").split(s).length - 1;
     const running = (id: number) => items(id).find((i) => i.kind === "tool" && !i.parent && i.endTs === null) as Extract<ChatItem, { kind: "tool" }> | undefined;
@@ -2066,7 +2067,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         await shot("steer-queued");
         return `strip: "${strip.textContent?.trim().slice(0, 60)}"`;
       });
-      await step("it leaves the strip and appears under a step as Picked up, with no prompt bubble of its own", async () => {
+      await step("it leaves the strip and shows in the timeline as Picked up (a note, not a prompt bubble), attached to its step", async () => {
         const n = await waitFor("the note to be picked up", () => notes(id).find((x) => x.state === "picked_up"), 30_000);
         await waitFor("the strip to empty", () => !$("[data-steer-queued]"), 5_000);
         const row = await waitFor("the Picked up row", () => $all('[data-note="picked_up"]').find((r) => r.textContent?.includes(N1)), 8_000);
@@ -2106,7 +2107,7 @@ const scenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
         const B = "Second note, never reached.";
         await say(B);
         await waitFor("the second note queued", () => $("[data-steer-queued]")?.textContent?.includes(B), 5_000);
-        $('button[title="Stop this turn (Esc)"]')!.click();
+        $('button[data-stop]')!.click();
         const strip = await waitFor("the unused strip", () => $("[data-steer-unused]"), 30_000);
         if (!/n't used/.test(strip.textContent ?? "") || !button("Send now", strip) || !button("Discard", strip)) throw new Fail(`strip reads "${strip.textContent}"`);
         await waitFor("the chat to be idle", () => chat(id)?.state === "idle", 30_000);
@@ -7554,7 +7555,7 @@ const codexScenarios: Record<string, (ctx: Ctx) => Promise<void>> = {
       const n = turnEnds(id).length;
       await send(id, "Run the shell command sleep 30, then reply done.");
       await waitFor("the step to run", () => items(id).find((i) => i.kind === "tool" && !i.parent && i.endTs === null), 120_000);
-      const stop = await waitFor("the Stop button", () => $('button[title="Stop this turn (Esc)"]'), 5_000);
+      const stop = await waitFor("the Stop button", () => $('button[data-stop]'), 5_000);
       const t0 = Date.now();
       stop.click();
       const end = await nextTurn(id, n, 30_000);
@@ -7872,6 +7873,11 @@ scenarios["typing-steady"] = (c: Ctx) => typingScenarios({ dir: c.cfg.dir, log, 
 // `restart` (selftestRestart.ts): a chat's Restart (the offer under a reply asking for it, `/restart` mid-turn), with
 // the stand-in CLIs, in the chat host and inside coool (app/scripts/restart-e2e.sh). No model calls. Not in `all`.
 scenarios.restart = (c: Ctx) => restartScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s), invoke: (cmd, a) => invoke(cmd, a) }).restart();
+
+// `steer-queue` (selftestSteer.ts): queued and Now notes against the stand-in Claude CLI in queue mode (background
+// tasks whose notifications get turns of their own, a subagent step, a restart), in the chat host and inside coool
+// (app/scripts/steer-e2e.sh). No model calls. Not in `all`.
+scenarios["steer-queue"] = (c: Ctx) => steerScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s), invoke: (cmd, a) => invoke(cmd, a) })["steer-queue"]();
 
 // `platform` (selftestPlatform.ts): chats billed to a Claude Platform API key (an invented test key in env, debug
 // builds only), with the stand-in CLIs, in the chat host and inside coool (app/scripts/platform-e2e.sh). Not in `all`.

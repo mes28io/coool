@@ -11,6 +11,10 @@ parser and UI all run as they do for the real CLI. It plays two scripted turns, 
 - "fan-out" (the prompt mentions agents): splits an audit over three subagents whose steps stream in, and keeps them
   running for a few minutes (a chat with live subagents).
 
+With <HOME>/.standin-queue present it runs user lines through a queue as Claude Code does (lifecycle frames, notes
+taken in mid-turn, background tasks whose notifications get turns of their own, interrupt, cancel_async_message;
+see "queue mode" below), for the steering e2e (app/scripts/steer-e2e.sh).
+
 Like the CLI it writes the transcript (<HOME>/.claude/projects/<folder>/<session>.jsonl) and a registry entry
 (<HOME>/.claude/sessions/<pid>.json), so the session lists as it would. Anything else (other prompts, `--help`, other
 control requests) gets a short, plausible answer. HOME must be the throwaway workspace: run.sh checks that.
@@ -602,9 +606,274 @@ def run_turn(prompt):
         result(start)
 
 
+# ------------------------------------------------------------------------------------------------ queue mode
+# The steering e2e (app/scripts/steer-e2e.sh) writes <HOME>/.standin-queue. Then user lines are not each run at once:
+# they go through a queue the way Claude Code 2.1.330 runs them (observed with Haiku 5.5, `sleep` steps and a
+# `run_in_background` command; CHAT_SPEC "Steering"):
+#
+# - every user line gets `command_lifecycle` frames (`queued`, `started`, then `completed` or `cancelled`);
+# - one turn at a time; a line written while a turn runs waits in the queue and is taken into that turn after the
+#   next tool result (`started`, no result of its own; the turn's `result.user_message_uuids` lists it); one still
+#   queued when the turn ends runs as a turn of its own right after;
+# - `priority: "now"` puts a line ahead of everything queued (coool writes `now` notes so, right after the interrupt);
+# - a background command (`run_in_background`) that finishes queues a task notification. Taken in mid-turn like a
+#   line, or, when no turn runs (or the turn ends first), run as a turn of the CLI's own: `system/init` with no
+#   lifecycle frame, a reply, a `result` that lists no uuid;
+# - `interrupt` answers `{still_queued}` at once; the running step ends with "[Request interrupted by user for tool
+#   use]" and the turn with `error_during_execution`; its lines get `cancelled`. What was queued stays queued;
+# - `cancel_async_message {message_uuid}`: `{cancelled: true}` and a `cancelled` frame while the line is queued,
+#   `{cancelled: false}` once taken in.
+QUEUE_MODE = (HOME / ".standin-queue").exists()
+QL = threading.Condition()
+queue: list[dict] = []
+turn: dict | None = None
+_bg_n = [0]
+
+
+def lifecycle(u, state):
+    out({"type": "command_lifecycle", "command_uuid": u, "state": state, "session_id": SID, "uuid": str(uuid.uuid4())})
+
+
+def enqueue(e):
+    with QL:
+        if e.get("prio") == "now":
+            i = 0
+            while i < len(queue) and queue[i].get("prio") == "now":
+                i += 1
+            queue.insert(i, e)
+        else:
+            queue.append(e)
+        QL.notify_all()
+
+
+def absorb():
+    """After a tool result: everything queued comes into the running turn."""
+    with QL:
+        taken, queue[:] = queue[:], []
+    for e in taken:
+        if e["kind"] == "prompt":
+            lifecycle(e["uuid"], "started")
+            record({"type": "attachment", "attachment": {"type": "queued_command", "prompt": e["prompt"], "commandMode": "prompt", "source_uuid": e["uuid"]}})
+            turn["uuids"].append(e["uuid"])
+            turn["notes"].append(e["prompt"])
+        else:
+            turn["tasks"].append(e["name"])
+
+
+def aborted():
+    return turn is not None and turn["abort"].is_set()
+
+
+def qtool(name, inp, res, secs):
+    """A main-thread step that the interrupt cuts. False: cut."""
+    tid = f"toolu_{uuid.uuid4().hex[:24]}"
+    assistant([{"type": "tool_use", "id": tid, "name": name, "input": inp}])
+    cut = turn["abort"].wait(secs)
+    if cut:
+        tool_result(tid, "Interrupted by user", error=True)
+        return False
+    tool_result(tid, res)
+    absorb()
+    return True
+
+
+def qagent(desc, secs):
+    """A foreground subagent step (a Ladder helper's shape): its own steps stream in under it."""
+    tid = f"toolu_{uuid.uuid4().hex[:24]}"
+    agent = f"a{uuid.uuid4().hex[:16]}"
+    assistant([{"type": "tool_use", "id": tid, "name": "Agent", "input": {"description": desc, "prompt": desc, "subagent_type": "general-purpose", "model": "haiku"}}])
+    out({"type": "system", "subtype": "task_started", "task_id": agent, "tool_use_id": tid, "description": desc, "subagent_type": "general-purpose", "is_backgrounded": False, "task_type": "local_agent", "uuid": str(uuid.uuid4()), "session_id": SID})
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        if turn["abort"].wait(1.0):
+            tool_result(tid, "Interrupted by user", error=True)
+            return False
+        tool("Read", {"file_path": str(CWD / "README.md")}, "# notes", parent=tid, agent=agent, pause=0.2)
+    tool_result(tid, f"{desc}: done.")
+    absorb()
+    return True
+
+
+def qbackground(desc, secs, step=False):
+    """A `run_in_background` command: its notification is queued when it finishes."""
+    _bg_n[0] += 1
+    bid = f"b{_bg_n[0]}"
+    tid = f"toolu_{uuid.uuid4().hex[:24]}"
+    assistant([{"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": f"sleep {secs:g}", "description": desc, "run_in_background": True}}])
+    out({"type": "system", "subtype": "task_started", "task_id": bid, "tool_use_id": tid, "description": desc, "task_type": "local_bash", "is_backgrounded": True, "uuid": str(uuid.uuid4()), "session_id": SID})
+    tool_result(tid, f"Command running in background with ID: {bid}.")
+
+    def done():
+        time.sleep(secs)
+        out({"type": "system", "subtype": "task_notification", "task_id": bid, "tool_use_id": tid, "status": "completed", "summary": f'Background command "{desc}" completed (exit code 0)', "uuid": str(uuid.uuid4()), "session_id": SID})
+        enqueue({"kind": "task", "name": desc, "step": step})
+
+    threading.Thread(target=done, daemon=True).start()
+    absorb()
+
+
+def stream_text(t, secs):
+    """A reply streamed over `secs` (cut by an interrupt). False: cut."""
+    mid = f"msg_{uuid.uuid4().hex[:24]}"
+    ev = lambda e: out({"type": "stream_event", "event": e, "parent_tool_use_id": None, "session_id": SID, "uuid": str(uuid.uuid4())})
+    ev({"type": "message_start", "message": {"id": mid, "model": MODEL}})
+    ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+    words = t.split(" ")
+    for i, w in enumerate(words):
+        if turn["abort"].wait(secs / len(words)):
+            return False
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": w + (" " if i < len(words) - 1 else "")}})
+    msg = {"model": MODEL, "id": mid, "type": "message", "role": "assistant", "content": [{"type": "text", "text": t}], "stop_reason": None, "usage": usage()}
+    out({"type": "assistant", "message": msg, "parent_tool_use_id": None, "session_id": SID, "uuid": str(uuid.uuid4())})
+    return True
+
+
+def qresult(start, ok=True):
+    o = {"type": "result", "subtype": "success" if ok else "error_during_execution", "is_error": not ok, "duration_ms": int((time.time() - start) * 1000), "num_turns": 1,
+         "result": "", "session_id": SID, "usage": usage(), "uuid": str(uuid.uuid4())}
+    if turn["uuids"]:
+        o["user_message_uuids"] = list(turn["uuids"])
+        o["user_message_uuid"] = turn["uuids"][0]
+    out(o)
+    for u in turn["uuids"]:
+        lifecycle(u, "completed" if ok else "cancelled")
+    registry("idle")
+
+
+def noted():
+    """What the agent saw mid-turn, said back (the e2e checks the agent had each note)."""
+    parts = [f"Noted: {n}" for n in turn["notes"]] + [f"(The background task \"{t}\" finished.)" for t in turn["tasks"]]
+    return ("\n\n" + "\n".join(parts)) if parts else ""
+
+
+def q_steps_turn(prompt, start):
+    """"steer demo": a background command (2 s) and then three foreground `sleep 4` steps."""
+    qbackground("Build in the background", 2)
+    for i in range(3):
+        if not qtool("Bash", {"command": "sleep 4", "description": f"Step {i + 1}"}, "", 4):
+            return False
+    text("Done with the steps." + noted())
+    return True
+
+
+def q_helper_turn(prompt, start):
+    """"helper demo": a background helper whose notification turn has a step of its own; this turn ends first."""
+    qbackground("Helper: audit the notes", 1.5, step=True)
+    text("Started a helper in the background; I'll pick up its results when it reports." + noted())
+    return True
+
+
+def q_agent_turn(prompt, start):
+    """"agent step demo": a foreground subagent step, then another step (a Ladder lead waiting on a helper)."""
+    if not qagent("Helper: read the notes", 5):
+        return False
+    if not qtool("Bash", {"command": "sleep 3", "description": "Check the helper's work"}, "", 3):
+        return False
+    text("The helper is done." + noted())
+    return True
+
+
+def q_story_turn(prompt, start):
+    """"story demo": no tool, a reply streamed over a few seconds."""
+    return stream_text("Once upon a time a lighthouse keeper counted the ships that passed, one by one, until the fog came in and there was nothing left to count but the waves.", 6)
+
+
+def q_prompt_turn(e):
+    global turn
+    start = time.time()
+    registry("busy")
+    lifecycle(e["uuid"], "started")
+    record({"type": "user", "message": {"role": "user", "content": e["prompt"]}})
+    init_line()
+    out({"type": "system", "subtype": "status", "status": "requesting", "session_id": SID, "user_message_uuids": [e["uuid"]], "uuid": str(uuid.uuid4())})
+    low = e["prompt"].lower()
+    try:
+        if "steer demo" in low:
+            ok = q_steps_turn(e["prompt"], start)
+        elif "helper demo" in low:
+            ok = q_helper_turn(e["prompt"], start)
+        elif "agent step demo" in low:
+            ok = q_agent_turn(e["prompt"], start)
+        elif "story demo" in low:
+            ok = q_story_turn(e["prompt"], start)
+        else:
+            text(f"Re: {e['prompt']}")
+            ok = True
+    except BrokenPipeError:
+        return
+    if not ok:
+        m = {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}
+        out({"type": "user", "message": m, "parent_tool_use_id": None, "session_id": SID, "uuid": str(uuid.uuid4())})
+    qresult(start, ok=ok)
+
+
+def q_task_turn(e):
+    """A turn the CLI runs on its own for a background task's notification (no lifecycle frame, no uuid)."""
+    start = time.time()
+    registry("busy")
+    init_line()
+    status_line()
+    ok = True
+    if e.get("step"):
+        ok = qtool("Bash", {"command": "sleep 6", "description": "Read the helper's report"}, "", 6)
+    if ok:
+        text(f"The background task \"{e['name']}\" finished." + noted())
+    else:
+        m = {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}
+        out({"type": "user", "message": m, "parent_tool_use_id": None, "session_id": SID, "uuid": str(uuid.uuid4())})
+    qresult(start, ok=ok)
+
+
+def q_runner():
+    global turn
+    while True:
+        with QL:
+            while not queue:
+                QL.wait()
+            e = queue.pop(0)
+            turn = {"uuids": [e["uuid"]] if e["kind"] == "prompt" else [], "notes": [], "tasks": [], "abort": threading.Event()}
+        try:
+            if e["kind"] == "prompt":
+                q_prompt_turn(e)
+            else:
+                q_task_turn(e)
+        except BrokenPipeError:
+            return
+        except Exception:
+            import traceback
+            with open(HOME / "standin.err", "a") as f:
+                f.write(traceback.format_exc())
+        with QL:
+            turn = None
+
+
+def q_control(sub, req, rid):
+    """Queue mode's `interrupt` and `cancel_async_message`; None: not one of them."""
+    if sub == "interrupt":
+        with QL:
+            if turn is not None:
+                turn["abort"].set()
+            still = [e["uuid"] for e in queue if e["kind"] == "prompt"]
+        return {"still_queued": still}
+    if sub == "cancel_async_message":
+        u = req.get("message_uuid")
+        with QL:
+            hit = [e for e in queue if e.get("uuid") == u]
+            for e in hit:
+                queue.remove(e)
+        if hit:
+            out({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {"cancelled": True}}})
+            lifecycle(u, "cancelled")
+            return False
+        return {"cancelled": False}
+    return None
+
+
 def main():
     global MODE
     registry("idle")
+    if QUEUE_MODE:
+        threading.Thread(target=q_runner, daemon=True).start()
     for line in sys.stdin:
         try:
             v = json.loads(line)
@@ -622,6 +891,10 @@ def main():
             elif sub == "set_permission_mode":
                 MODE = req.get("mode", MODE)
                 resp = {}
+            elif QUEUE_MODE and (r := q_control(sub, req, rid)) is not None:
+                if r is False:
+                    continue
+                resp = r
             else:
                 resp = {}
             out({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": resp}})
@@ -633,6 +906,11 @@ def main():
         elif t == "user":
             c = v.get("message", {}).get("content")
             prompt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c or [] if isinstance(b, dict))
+            if QUEUE_MODE:
+                u = v.get("uuid") or str(uuid.uuid4())
+                lifecycle(u, "queued")
+                enqueue({"kind": "prompt", "uuid": u, "prompt": prompt, "prio": v.get("priority")})
+                continue
             threading.Thread(target=run_turn, args=(prompt,), daemon=True).start()
     REGISTRY.unlink(missing_ok=True)
 
