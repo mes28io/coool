@@ -45,8 +45,9 @@ function whenIdle(id: number, f: () => void) {
 /**
  * A note for the running turn, with any attachments. Both CLIs take a whole message mid-turn, so the attachments go
  * in with the note at the next step (images as images). Without chat_steer (the fallback), the note and its
- * attachments are held and sent as the next message when the turn ends; the strip says which. False: not sent (the
- * caller keeps the attachments).
+ * attachments are held and sent as the next message when the turn ends; the strip says which. A note the backend
+ * refused (the chat ended, a restart took too long) is kept as "wasn't used", with Send now / Discard, never dropped.
+ * False: nothing to send.
  */
 export async function steer(chat: Chat, text: string, now: boolean, atts: Attachment[] = []): Promise<boolean> {
   const t = text.trim();
@@ -62,7 +63,8 @@ export async function steer(chat: Chat, text: string, now: boolean, atts: Attach
     } catch (e) {
       if (!isNotAvailable(e)) {
         useStore.getState().toast(String(e), "error");
-        return false;
+        st.noteAdd(chat.id, { id: `kept:${++n}`, text: t, state: "unused", toolId: null, ts: Date.now(), local: true, ...extra });
+        return true;
       }
       missing = true;
     }
@@ -103,7 +105,10 @@ export async function cancelNote(chat: Chat, noteId: string): Promise<boolean> {
 /** Codex can withdraw a note only while coool holds it: while an approval or a question is pending. */
 export const canCancel = (chat: Chat, n: { local?: boolean }) => chat.provider !== "codex" || !!n.local || !!chat.pendingPermission || !!chat.pendingQuestion;
 
-/** Deliver a queued note immediately: cancel it and send its text again with now=true. */
+/**
+ * Deliver a queued note immediately: withdraw it and send it again with now=true. (If the agent took it in meanwhile,
+ * the withdrawal fails and it stays delivered; if the new note can't be sent, it is kept as unused.)
+ */
 export async function noteNow(chat: Chat, noteId: string) {
   const note = chat.notes.find((x) => x.id === noteId);
   if (!note) return;

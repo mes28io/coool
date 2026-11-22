@@ -237,6 +237,48 @@ fn live_claude_steer() {
     live_steer(Provider::Claude, "haiku", "claude_steer");
 }
 
+/// Now while a background command's notification waits in Claude Code's queue (trace `claude_steer_background`): the
+/// note's turn comes first and the agent answers it (it used to be the notification's own turn, then the note's),
+/// and the notification's turn after it shows the chat as working.
+#[test]
+#[ignore]
+fn live_claude_steer_background() {
+    let (mut hub, cwd) = plans_hub();
+    let id = start(&mut hub, "claude_steer_background", ChatOptions { provider: Provider::Claude, cwd, resume: None, model: Some("haiku".into()), permission_mode: Some("bypassPermissions".into()), ladder: None, context: None, account: None });
+    let mut w = Watch::new();
+    w.until(&hub, id, 60, "ready", is_ready);
+    hub.chat_mut(id)
+        .unwrap()
+        .send("Do exactly these steps, one tool call each, no commentary: 1) Bash `sleep 3; echo bgdone` with run_in_background true. 2) Bash `sleep 9` (foreground). 3) Bash `sleep 9` (foreground). 4) reply DONE.")
+        .unwrap();
+    let fg = |e: &ChatEventKind| matches!(e, ChatEventKind::ToolStart { parent_tool_id: None, name, input, .. } if name == "Bash" && input["run_in_background"] != true);
+    let cut = match w.until(&hub, id, 120, "the foreground step", fg) {
+        ChatEventKind::ToolStart { id, .. } => id,
+        _ => unreachable!(),
+    };
+    // The background command finishes meanwhile; its notification waits in the CLI's queue.
+    std::thread::sleep(Duration::from_secs(5));
+    let note = hub.chat_mut(id).unwrap().steer("New instruction: reply with exactly the word BANANA and nothing else.", true).unwrap();
+    let got = w.until(&hub, id, 120, "note delivered", |e| steer_state(e, &note).is_some());
+    assert_eq!(steer_state(&got, &note), Some((SteerState::Interrupted, Some(cut))));
+    let first = w.until(&hub, id, 120, "the next reply", |e| matches!(e, ChatEventKind::AssistantMessage { parent_tool_id: None, .. }));
+    let ChatEventKind::AssistantMessage { text, .. } = first else { unreachable!() };
+    assert!(text.contains("BANANA"), "the first reply after the note answers it: {text}");
+    assert!(w.turn_end(&hub, id));
+    // Then (usually) the CLI's own turn for the notification: working while it runs, idle after.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline && hub.chat(id).unwrap().state() != coool_core::chat::ChatState::Idle {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    std::thread::sleep(Duration::from_secs(8));
+    let (evs, _) = hub.chat(id).unwrap().events_since(w.seq);
+    for e in evs {
+        println!("{}", serde_json::to_string(&e).unwrap());
+    }
+    assert_eq!(hub.chat(id).unwrap().state(), coool_core::chat::ChatState::Idle);
+    hub.kill_all();
+}
+
 #[test]
 #[ignore]
 fn live_codex_steer() {
