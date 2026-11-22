@@ -56,7 +56,8 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 # Voice: the microphone (Core Audio through cpal; Apache-2.0, objc2-based, no bindgen).
 cpal = "0.18"
-objc2 = "0.6"
+# `exception`: the self-test's native drag turns an Objective-C exception into an error (src/selftest/drag.rs).
+objc2 = { version = "0.6", features = ["exception"] }
 # Completion handlers of WKWebView (the agent's browser tools: evaluateJavaScript, takeSnapshot). Already in Tauri's tree.
 block2 = "0.6"
 # The menu bar item (src/menubar/ui.rs): NSStatusItem, its NSMenu and their attributed titles. Already in Tauri's tree.

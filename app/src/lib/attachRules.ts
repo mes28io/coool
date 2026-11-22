@@ -46,6 +46,17 @@ export interface Incoming {
   path?: string;
 }
 
+/**
+ * A file drag's position from Tauri, in CSS pixels. Tauri types it as physical, but on macOS wry reports the point in
+ * the webview's own coordinates (AppKit points, CSS pixels at zoom 1; wkwebview/drag_drop.rs): dividing by the pixel
+ * ratio there put the point at half its place, so on a Retina screen a drag over a chat found no chat under it (no
+ * veil, nothing attached). Elsewhere the position is physical pixels.
+ */
+export function dropPoint(pos: { x: number; y: number }, mac: boolean, ratio: number): { x: number; y: number } {
+  const r = mac ? 1 : ratio || 1;
+  return { x: pos.x / r, y: pos.y / r };
+}
+
 /** Which of `incoming` can be added next to `have` items; the rest with a plain reason. */
 export function admit(have: { name: string; size: number }[], incoming: Incoming[]): { ok: number[]; refused: { i: number; reason: string }[] } {
   const ok: number[] = [];

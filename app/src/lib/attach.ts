@@ -5,7 +5,7 @@
 import type React from "react";
 import { create } from "zustand";
 import { api, isTauri } from "./backend";
-import { admit, type Attachment, type Incoming, pickWith } from "./attachRules";
+import { admit, type Attachment, dropPoint, type Incoming, pickWith } from "./attachRules";
 import type { Provider } from "./types";
 
 export interface Draft {
@@ -144,19 +144,29 @@ function chatAt(x: number, y: number): number | null {
   return v ? Number(v) : null;
 }
 
-let listening = false;
+const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
+
+let listening: Promise<void> | null = null;
 /** Listens once for the window's file drags (Tauri) and hands drops to the chat under the pointer. */
-export async function listenDrops() {
-  if (!isTauri || listening) return;
-  listening = true;
+export function listenDrops(): Promise<void> {
+  if (!isTauri) return Promise.resolve();
+  // A failed attempt (the import or the listen) is tried again by the next caller, not kept for the app's life.
+  listening ??= startDrops().catch((e) => {
+    listening = null;
+    throw e;
+  });
+  return listening;
+}
+
+async function startDrops() {
   const { getCurrentWebview } = await import("@tauri-apps/api/webview");
   let count = 0;
   await getCurrentWebview().onDragDropEvent((ev) => {
     const p = ev.payload;
     const set = useAttach.getState().setOver;
     if (p.type === "leave") return set(null);
-    const r = window.devicePixelRatio || 1;
-    const at = "position" in p ? chatAt(p.position.x / r, p.position.y / r) : null;
+    const pt = "position" in p ? dropPoint(p.position, isMac, window.devicePixelRatio) : null;
+    const at = pt ? chatAt(pt.x, pt.y) : null;
     if (p.type === "enter") count = p.paths.length;
     if (p.type === "enter" || p.type === "over") return set(at === null ? null : { chat: at, count });
     if (p.type === "drop") {
