@@ -26,6 +26,9 @@ pub struct AgentContext {
     /// A phone is paired with coool Remote.
     #[serde(default)]
     pub remote: bool,
+    /// The `show` tool (media in the reply), on coool's device server.
+    #[serde(default)]
+    pub show: bool,
 }
 
 impl AgentContext {
@@ -34,6 +37,7 @@ impl AgentContext {
         self.browser = false;
         self.iphone = false;
         self.mac = false;
+        self.show = false;
         self
     }
     fn any_device(&self) -> bool {
@@ -54,6 +58,9 @@ pub fn text(cli: Cli, c: &AgentContext, helpers: bool) -> String {
         Cli::Codex => " Approvals show your command's justification and a risk tag: say in it what the command does and why.",
     });
     s.push_str(" Attachments arrive as images or `<attachment path=…>` lines.");
+    if c.show {
+        s.push_str(" `show` screenshots, recordings, images or an .html/.svg animation when one explains best.");
+    }
     // The CLI reads its settings, MCP config, permissions and instructions only at start: coool restarts it in place.
     s.push_str(match cli {
         Cli::Claude => " Restart is rare: only if your next step needs a settings, MCP or permissions change you made reloaded, say \"press Restart (or type /restart continue)\" once, not \"restart Claude Code\"; never for builds or releases.",
@@ -96,7 +103,7 @@ mod tests {
     use crate::ladder::approx_tokens;
 
     fn all() -> AgentContext {
-        AgentContext { browser: true, iphone: true, mac: true, remote: true }
+        AgentContext { browser: true, iphone: true, mac: true, remote: true, show: true }
     }
 
     #[test]
@@ -104,13 +111,14 @@ mod tests {
         let bare = text(Cli::Claude, &AgentContext::default(), false);
         assert!(bare.starts_with("# coool\nYou run in coool"));
         assert!(bare.contains("`description`") && bare.contains("<attachment"));
+        assert!(!bare.contains("`show`"));
         assert!(bare.contains("press Restart (or type /restart continue)") && bare.contains("not \"restart Claude Code\""));
         assert!(text(Cli::Codex, &AgentContext::default(), false).contains("not \"restart Codex\""));
         for absent in ["Browser panel", "iPhone", "Sandboxed Mac", "pilot_run", "Jobs panel", "phone"] {
             assert!(!bare.contains(absent), "{absent} in {bare}");
         }
         let full = text(Cli::Claude, &all(), true);
-        for present in ["Browser panel", "is done only once you have opened it there", "a project file's path", "iPhone simulator", "Sandboxed Mac", "never to the person's desktop", "pilot_run", "`success`", "Jobs panel", "git worktree", "from their phone", "outcome"] {
+        for present in ["`show` screenshots", "Browser panel", "is done only once you have opened it there", "a project file's path", "iPhone simulator", "Sandboxed Mac", "never to the person's desktop", "pilot_run", "`success`", "Jobs panel", "git worktree", "from their phone", "outcome"] {
             assert!(full.contains(present), "{present} missing");
         }
         // Only the browser: no iPhone or Mac line, the pilot still (it drives the browser too).
@@ -124,7 +132,8 @@ mod tests {
     fn small() {
         let full = text(Cli::Claude, &all(), true);
         let bare = text(Cli::Claude, &AgentContext::default(), false);
-        assert!(approx_tokens(&full) < 340, "{} tokens", approx_tokens(&full));
+        // 340 until the `show` sentence (about 15 tokens, only with the device server).
+        assert!(approx_tokens(&full) < 355, "{} tokens", approx_tokens(&full));
         assert!(approx_tokens(&bare) < 125, "{} tokens", approx_tokens(&bare));
     }
 

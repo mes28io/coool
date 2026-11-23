@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { MessageAttachments } from "./Attachments";
+import { ShownMedia } from "./Media";
 import type { Attachment } from "../lib/attachRules";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Activity, Agent, ArtifactInfo, Session } from "../lib/types";
@@ -37,7 +38,9 @@ type Block =
   | { type: "prompt" | "text" | "error"; key: string; a: Activity }
   | { type: "steps"; key: string; items: { key: string; a: Activity }[] }
   /** An artifact's newest publish; earlier publishes of the same page fold into it. */
-  | { type: "artifact"; key: string; a: Activity; info: ArtifactInfo; versions: number };
+  | { type: "artifact"; key: string; a: Activity; info: ArtifactInfo; versions: number }
+  /** A `show` step: the files the agent showed, in its reply. */
+  | { type: "media"; key: string; a: Activity };
 
 function buildBlocks(list: Activity[]): Block[] {
   const seen = new Map<string, number>();
@@ -59,6 +62,8 @@ function buildBlocks(list: Activity[]): Block[] {
       const p = pages.get(a.artifact.url)!;
       // Keyed by the page, so a new version replaces the card instead of adding one.
       if (p.last === i) held.push({ type: "artifact", key: `artifact:${a.artifact.url}`, a, info: p.info, versions: p.versions });
+    } else if (a.media) {
+      out.push({ type: "media", key, a });
     } else if (a.kind === "tool" || a.kind === "agent") {
       const last = out[out.length - 1];
       if (last?.type === "steps") last.items.push({ key, a });
@@ -406,6 +411,7 @@ const NO_KEYS: string[] = [];
 function activityHeight(b: Block, latest: boolean): number {
   if (b.type === "steps") return 30 + (latest || b.items.length <= 2 ? b.items.length * 30 : 0);
   if (b.type === "artifact") return 120;
+  if (b.type === "media") return 300;
   const t = b.a.full ?? b.a.text;
   if (b.type === "prompt") return 70 + Math.ceil(t.length / 70) * 24;
   if (b.type === "error") return 32;
@@ -439,6 +445,7 @@ const TimelineBlock = memo(function TimelineBlock({
       {b.type === "error" && <ErrorBlock a={b.a} />}
       {b.type === "steps" && <StepGroup items={b.items} agents={agents} active={active} latest={latest} live={live} />}
       {b.type === "artifact" && <ArtifactCard info={b.info} versions={b.versions} />}
+      {b.type === "media" && <ShownMedia input={b.a.media} ok={true} output="" />}
     </div>
   );
 });
@@ -457,6 +464,7 @@ export function HistoryBlocks({ rows }: { rows: Activity[] }) {
           {b.type === "error" && <ErrorBlock a={b.a} />}
           {b.type === "steps" && <StepGroup items={b.items} agents={[]} active={false} latest={false} live={STILL} />}
           {b.type === "artifact" && <ArtifactCard info={b.info} versions={b.versions} />}
+          {b.type === "media" && <ShownMedia input={b.a.media} ok={true} output="" />}
         </div>
       ))}
     </div>

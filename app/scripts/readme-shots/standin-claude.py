@@ -553,20 +553,68 @@ def flood_turn(prompt, start):
     result(start)
 
 
+def media_turn(prompt, start):
+    """The media e2e (app/scripts/media-e2e.sh): the agent writes a chart, shows it with a recording, a sound and a
+    PDF through coool's `show` tool, takes a Browser panel screenshot (kept in coool's capture folder), tries to show
+    a file that is no media, and embeds the chart and links the recording in its reply."""
+    thinking("The chart is rendered; I'll show it with the recording so the change is visible, not just described.")
+    time.sleep(0.4)
+    text("I rendered the chart and recorded the flow; here they are.")
+    tool("Write", {"file_path": str(CWD / "out" / "chart.png"), "content": "(the chart's PNG bytes)"}, f"File created successfully at: {CWD / 'out' / 'chart.png'}", pause=0.3)
+    m = Mcp()
+    try:
+        m.tool("show", {"paths": ["out/chart.png", "out/flow.mp4"], "caption": "The chart after the fix, and a recording of the flow"})
+        time.sleep(0.3)
+        m.tool("show", {"paths": ["out/voice.m4a"], "caption": "The new alert sound"})
+        m.tool("show", {"paths": [str(CWD / "docs" / "spec.pdf")]})
+        m.tool("show", {"paths": ["out/flow.html", "out/loop.svg"], "caption": "How a request flows, and the retry loop"})
+        if "screenshot" in prompt.lower():
+            m.tool("browser_navigate", {"url": str(CWD / "out" / "page.html")})
+            time.sleep(0.5)
+            m.tool("browser_screenshot", {})
+        m.tool("show", {"paths": ["README.md"]})
+    finally:
+        m.close()
+    text("The chart inline as well:\n\n![chart](out/chart.png)\n\nAnd [the recording](out/flow.mp4). A file outside the folder stays a link: ![secret](../secret/hidden.png)")
+    title("Show the chart, the recording and the sound")
+    result(start)
+
+
+def frames_turn(prompt, start):
+    """The media e2e: what came with a message that carries a video (its key frames, as images, and the marker)."""
+    import re
+    n = LAST_IMAGES[0]
+    m = re.search(r'name="([^"]+)"[^>]*duration="([^"]+)"[^>]*frames="([^"]+)"', prompt)
+    if m:
+        text(f"I got {n} images with your message: the key frames of **{m.group(1)}** ({m.group(2)}) at {m.group(3)}.")
+    else:
+        text(f"I got {n} images with your message and no key frames.")
+    result(start)
+
+
 def generic_turn(prompt, start):
     text("Done.")
     result(start)
 
 
+# The images (content blocks) the last user line carried, and the line's content as the CLI records it.
+LAST_IMAGES = [0]
+LAST_CONTENT = [None]
+
+
 def run_turn(prompt):
     start = time.time()
     registry("busy")
-    record({"type": "user", "message": {"role": "user", "content": prompt}})
+    record({"type": "user", "message": {"role": "user", "content": LAST_CONTENT[0] if isinstance(LAST_CONTENT[0], list) else prompt}})
     init_line()
     status_line()
     low = prompt.lower()
     try:
-        if "changes demo" in low:
+        if "media demo" in low:
+            media_turn(prompt, start)
+        elif "what happens in the recording" in low:
+            frames_turn(prompt, start)
+        elif "changes demo" in low:
             changes_turn(prompt, start)
         elif "settings demo" in low:
             settings_turn(prompt, start)
@@ -906,6 +954,8 @@ def main():
         elif t == "user":
             c = v.get("message", {}).get("content")
             prompt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c or [] if isinstance(b, dict))
+            LAST_IMAGES[0] = sum(1 for b in c if isinstance(b, dict) and b.get("type") == "image") if isinstance(c, list) else 0
+            LAST_CONTENT[0] = c
             if QUEUE_MODE:
                 u = v.get("uuid") or str(uuid.uuid4())
                 lifecycle(u, "queued")

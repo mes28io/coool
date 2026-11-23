@@ -648,7 +648,11 @@ fn parse_line(line: &str, st: &mut ParseState, s: &mut Fields) {
             crate::lanes::push(&mut st.lanes, lanes);
             let (name, input) = code_mode_call(name, &input).unwrap_or((name.to_string(), input));
             let sum = codex_tool_summary(&name, &input);
-            push_activity(&mut s.activity, Activity::line(ts, ActivityKind::Tool, sum.clone()));
+            let mut step = Activity::line(ts, ActivityKind::Tool, sum.clone());
+            if crate::media::is_show_tool(&name) {
+                step.media = crate::media::shown(&input).map(Box::new);
+            }
+            push_activity(&mut s.activity, step);
             s.current = Some(sum);
         }
         // A step that failed or was denied: an error row right after it, as Claude's `is_error` results give (the
@@ -913,8 +917,8 @@ mod tests {
     /// `localImage` as an `input_image` data URL, between wrapper texts.
     #[test]
     fn prompt_attachments_round_trip() {
-        let f = crate::attach::Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 9, kind: crate::attach::AttachKind::File, path: Some("/w/notes.txt".into()), key: None, note: None };
-        let i = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/s/k.png".into()), key: None, note: None };
+        let f = crate::attach::Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 9, kind: crate::attach::AttachKind::File, path: Some("/w/notes.txt".into()), key: None, note: None, ..Default::default() };
+        let i = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/s/k.png".into()), key: None, note: None, ..Default::default() };
         let text = crate::attach::with_markers("describe", &[i, f]);
         let line = serde_json::json!({"timestamp": "2026-11-20T10:00:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [
             {"type": "input_text", "text": text},

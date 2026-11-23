@@ -13,7 +13,7 @@ fn main() {
     let cli = if a.next().as_deref() == Some("codex") { Cli::Codex } else { Cli::Claude };
     let has = a.next().unwrap_or_default();
     let on = |k: &str| has.split(',').any(|x| x == k);
-    let c = AgentContext { browser: on("browser"), iphone: on("iphone"), mac: on("mac"), remote: on("remote") };
+    let c = AgentContext { browser: on("browser"), iphone: on("iphone"), mac: on("mac"), remote: on("remote"), show: on("show") };
     let t = text(cli, &c, on("helpers"));
     print!("{t}");
     eprintln!("~{} tokens (4 chars per token)", approx_tokens(&t));

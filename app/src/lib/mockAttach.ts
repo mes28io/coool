@@ -244,3 +244,15 @@ export async function runAttachDemo(c: MockChat) {
   if (mode === "pdf") useViewer.getState().open({ kind: "file", att: spec });
   if (mode === "drop") useAttach.getState().setOver({ chat: c.id, count: 3 });
 }
+
+/** The browser demo's `media_grant`: pictures are drawn here; movies and sounds aren't available outside the app. */
+export async function mockMediaGrant(paths: string[]): Promise<import("./backend").MediaGrant[]> {
+  const { mediaKind, baseName } = await import("./mediaRules");
+  return paths.map((path) => {
+    const kind = mediaKind(path) ?? undefined;
+    const name = baseName(path);
+    if (kind !== "image") return { path, name, kind, size: 0, error: "only in the app" };
+    const url = chart();
+    return { path, name, kind, mime: "image/png", url, thumb: url, size: url.length, real: path };
+  });
+}

@@ -34,6 +34,9 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./Chat";
 import { Composer } from "./Composer";
 import { IActivity, IArrowUp, IClose, IContext, IDiff, IMac, IPhone, IRefresh, ITerminal } from "./icons";
+import { MediaContext } from "./Media";
+import { collectMedia } from "../lib/mediaRules";
+import { useChats } from "../lib/chat";
 import { ContextPanelBody } from "./ContextPanel";
 import type { CtxTarget } from "../lib/chatContext";
 import { ModelsChip, ModelsPanelBody, sessionModelsData, type ModelsData } from "./Models";
@@ -395,6 +398,25 @@ export function SessionView({
   const modeTarget: Target = session ? { kind: "session", key: sessionKey(session) } : target;
   // Where this pane's images come from when coool's store doesn't have them: its session's transcript.
   const attachSource = useMemo(() => ({ provider: chat?.provider ?? session?.provider ?? null, session: chat?.sessionId ?? session?.id ?? null }), [chat?.provider, chat?.sessionId, session?.provider, session?.id]);
+  // Whose media files the page may load (CHAT_SPEC "Media"): the backend checks every path against this chat's own.
+  const mediaSessionKey = session ? sessionKey(session) : chat?.sessionId ? `${chat.provider}:${chat.sessionId}` : null;
+  // The viewer's arrows go across all of the chat's media, read from the store when it opens (not on every token).
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const mediaCtx = useMemo(
+    () => ({
+      scope: chatId !== null || mediaSessionKey ? { chat: chatId, session: mediaSessionKey } : null,
+      provider: attachSource.provider,
+      session: attachSource.session,
+      cwd: ctxCwd,
+      all: () => {
+        const st = useChats.getState();
+        const c = chatId !== null ? st.chats[chatId] : undefined;
+        return c ? collectMedia(c.items, st.earlier[chatId!] ?? [], c.cwd) : collectMedia([], sessionRef.current?.activity ?? [], sessionRef.current?.cwd);
+      },
+    }),
+    [chatId, mediaSessionKey, attachSource.provider, attachSource.session, ctxCwd],
+  );
 
   // ⌘↵ allows / ⌘⌫ denies a pending permission in the focused pane.
   useEffect(() => {
@@ -585,6 +607,7 @@ export function SessionView({
         )}
       </div>
 
+      <MediaContext.Provider value={mediaCtx}>
       <div ref={setBody} className={cx("flex min-h-0 flex-1", panelAxisNow === "y" && "flex-col")} data-pane-body>
         <AttachSource.Provider value={attachSource}>
         <div
@@ -680,6 +703,7 @@ export function SessionView({
           </RightPanel>
         )}
       </div>
+      </MediaContext.Provider>
     </div>
     </BrowserContext.Provider>
   );

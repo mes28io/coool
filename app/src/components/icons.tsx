@@ -336,3 +336,22 @@ export const IFolderPlus = mk(
     <path d="M12 10.25v4M10 12.25h4" />
   </>,
 );
+/** Media: two stacked pictures (the Media panel). */
+export const IGallery = mk(
+  <>
+    <rect x="3.75" y="1.75" width="10.5" height="9" rx="1.25" />
+    <path d="M1.75 5.25v7.75a1.25 1.25 0 001.25 1.25h8.25" />
+    <path d="M3.75 9l2.75-2.5 2.25 2 1.5-1.25 4 3.25" />
+  </>,
+);
+/** A video: a frame with a play triangle. */
+export const IFilm = mk(
+  <>
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+    <path d="M6.5 5.75v4.5l3.75-2.25z" />
+  </>,
+);
+/** A sound: a waveform. */
+export const IWave = mk(<path d="M1.75 8h1M4.25 5.75v4.5M6.75 3v10M9.25 5v6M11.75 6.5v3M14.25 8h0" />);
+/** Pause: two bars. */
+export const IPause = mk(<path d="M5.5 3.25v9.5M10.5 3.25v9.5" />);

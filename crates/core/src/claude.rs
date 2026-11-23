@@ -859,7 +859,11 @@ fn parse_line(
                                 }
                             }
                             let kind = if name == "Agent" || name == "Task" { ActivityKind::Agent } else { ActivityKind::Tool };
-                            push_activity(activity, Activity::line(ts.clone(), kind, sum.clone()));
+                            let mut step = Activity::line(ts.clone(), kind, sum.clone());
+                            if crate::media::is_show_tool(name) {
+                                step.media = crate::media::shown(&item["input"]).map(Box::new);
+                            }
+                            push_activity(activity, step);
                             *current = Some(sum);
                         }
                         Some("text") if v["isApiErrorMessage"].as_bool() != Some(true) => {
@@ -1048,8 +1052,8 @@ mod tests {
     #[test]
     fn prompt_attachments_round_trip() {
         let mut o = Out::default();
-        let a = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/w/dot.png".into()), key: None, note: None };
-        let f = crate::attach::Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 9, kind: crate::attach::AttachKind::File, path: Some("/w/notes.txt".into()), key: None, note: None };
+        let a = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/w/dot.png".into()), key: None, note: None, ..Default::default() };
+        let f = crate::attach::Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 9, kind: crate::attach::AttachKind::File, path: Some("/w/notes.txt".into()), key: None, note: None, ..Default::default() };
         let text = crate::attach::with_markers("what is in these?", &[a, f]);
         let line = serde_json::json!({"type": "user", "timestamp": "2026-11-20T10:00:00Z", "message": {"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}},
@@ -1060,7 +1064,7 @@ mod tests {
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "BBBB"}}]}});
         feed(&mut o, &paste.to_string());
         let only = serde_json::json!({"type": "user", "timestamp": "2026-11-20T10:02:00Z", "message": {"role": "user", "content": [
-            {"type": "text", "text": crate::attach::with_markers("", &[crate::attach::Attachment { name: "a.pdf".into(), mime: "application/pdf".into(), size: 1, kind: crate::attach::AttachKind::File, path: Some("/w/a.pdf".into()), key: None, note: None }])}]}});
+            {"type": "text", "text": crate::attach::with_markers("", &[crate::attach::Attachment { name: "a.pdf".into(), mime: "application/pdf".into(), size: 1, kind: crate::attach::AttachKind::File, path: Some("/w/a.pdf".into()), key: None, note: None, ..Default::default() }])}]}});
         feed(&mut o, &only.to_string());
         let p: Vec<&Activity> = o.activity.iter().filter(|a| a.kind == ActivityKind::Prompt).collect();
         assert_eq!(p.len(), 3);
@@ -1080,7 +1084,7 @@ mod tests {
     #[test]
     fn queued_note_with_an_image_keeps_its_attachments() {
         let mut o = Out::default();
-        let a = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/w/dot.png".into()), key: None, note: None };
+        let a = crate::attach::Attachment { name: "dot.png".into(), mime: "image/png".into(), size: 3, kind: crate::attach::AttachKind::Image, path: Some("/w/dot.png".into()), key: None, note: None, ..Default::default() };
         let line = serde_json::json!({"type": "attachment", "timestamp": "2026-11-20T10:00:00Z", "attachment": {"type": "queued_command", "prompt": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "CCCC"}},
             {"type": "text", "text": crate::attach::with_markers("this too", &[a])}]}});

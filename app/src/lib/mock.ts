@@ -1958,6 +1958,9 @@ export function mockBackend(): Backend {
     attachImage: (key) => import("./mockAttach").then((m) => m.mockAttachImage(key)),
     attachPreview: (path, imagesOnly, root) => import("./mockAttach").then((m) => m.mockAttachPreview(path, imagesOnly, root)),
     attachReveal: async () => {},
+    mediaGrant: (_scope, paths) => import("./mockAttach").then((m) => m.mockMediaGrant(paths)),
+    mediaReveal: async () => {},
+    mediaCopy: async () => {},
     async chatInterrupt(id) {
       chats[id]?.interrupt();
     },

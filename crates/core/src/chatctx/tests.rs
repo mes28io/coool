@@ -252,7 +252,7 @@ fn the_launch_record_matches_the_real_launch() {
         model: Some("opus".into()),
         permission_mode: None,
         ladder: Some(Ladder { tiers: vec![Tier { role: Role::Small, model: "haiku".into(), label: "Haiku".into() }], max_parallel: 2, verify_tests: false, ..Default::default() }),
-        context: Some(crate::agent_context::AgentContext { browser: true, iphone: false, mac: false, remote: false }),
+        context: Some(crate::agent_context::AgentContext { browser: true, iphone: false, mac: false, remote: false, show: false }),
         account: None,
     };
     let (_, _, args) = Chat::launch(&opts, "coool", &[], Some(&t.root.join("lp")), None);

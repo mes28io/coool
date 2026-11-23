@@ -20,6 +20,7 @@ pub mod agent_context;
 pub mod ladder;
 pub mod lanes;
 pub mod lineage;
+pub mod media;
 mod loader;
 pub mod model;
 pub mod origin;

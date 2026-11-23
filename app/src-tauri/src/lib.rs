@@ -23,6 +23,7 @@ mod glass;
 mod history;
 mod ladder;
 mod lid;
+mod media;
 mod login;
 mod menubar;
 mod motion;
@@ -136,6 +137,8 @@ struct Core {
     trace: Option<trace::Trace>,
     /// Artifact previews (see [`artifact`]).
     previews: artifact::Previews,
+    /// Media files granted to the page (see [`media`]).
+    media: media::Media,
     /// The in-app browser's child webviews (see [`browser`]).
     browsers: browser::Browsers,
     /// Context maps of the transcripts whose Models panel is open (see `context_map`).
@@ -883,6 +886,7 @@ fn start_chat_with(app: &AppHandle, core: &Core, opts: ChatOptions) -> Res<usize
 fn fill_context(app: &AppHandle, c: &mut coool_core::agent_context::AgentContext) {
     static IPHONE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     c.browser = true;
+    c.show = true;
     c.iphone = *IPHONE.get_or_init(|| device::simctl::unavailable().is_none());
     c.mac = device::vm::unavailable().is_none();
     c.remote = app.try_state::<remote::RemoteState>().is_some_and(|r| {
@@ -2135,6 +2139,7 @@ pub fn run() {
         notifier: notify::Notifier::new(prefs.notify.clone()),
         trace: trace::Trace::from_env(),
         previews: artifact::Previews::default(),
+        media: media::Media::default(),
         browsers: browser::Browsers::default(),
         contexts: Mutex::default(),
         ladder: Arc::default(),
@@ -2171,6 +2176,12 @@ pub fn run() {
         // link click (its IPC call is refused there). The app's own links open through its handlers.
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .register_uri_scheme_protocol(artifact::SCHEME, |ctx, req| artifact::serve(&ctx.app_handle().state::<Arc<Core>>().previews, &req))
+        // Media of a chat (media.rs): read on a thread of its own, in ranges, so a long video streams.
+        .register_asynchronous_uri_scheme_protocol(media::SCHEME, |ctx, req, responder| {
+            let core = ctx.app_handle().state::<Arc<Core>>().inner().clone();
+            let label = ctx.webview_label().to_string();
+            std::thread::spawn(move || responder.respond(media::serve(&core, &label, &req)));
+        })
         .manage(core.clone())
         .manage(history_state.clone())
         .manage(devices.clone())
@@ -2183,6 +2194,9 @@ pub fn run() {
             attach::attach_image,
             attach::attach_preview,
             attach::attach_reveal,
+            media::media_grant,
+            media::media_reveal,
+            media::media_copy,
             list_sessions,
             spawn_session,
             resume_session,

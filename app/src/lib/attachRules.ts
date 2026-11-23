@@ -15,6 +15,10 @@ export interface Attachment {
   key?: string;
   /** Why it went differently (e.g. an image type sent as a file). */
   note?: string;
+  /** A video: the key frames sent with it as images (`t` in seconds). */
+  frames?: { key: string; t: number }[];
+  /** A video or a sound: its length in seconds. */
+  duration?: number;
 }
 
 /** `attach_paths`: one dropped or picked path. */

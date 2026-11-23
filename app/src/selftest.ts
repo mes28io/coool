@@ -73,6 +73,7 @@ import { contextScenarios } from "./selftestContext";
 import { newSessionScenarios } from "./selftestNewSession";
 import { remoteScenarios } from "./selftestRemote";
 import { attachScenarios } from "./selftestAttach";
+import { mediaScenarios } from "./selftestMedia";
 import { changesScenarios } from "./selftestChanges";
 import { typingScenarios } from "./selftestTyping";
 import { restartScenarios } from "./selftestRestart";
@@ -7880,6 +7881,10 @@ scenarios.restart = (c: Ctx) => restartScenarios({ dir: c.cfg.dir, log, sleep, w
 // tasks whose notifications get turns of their own, a subagent step, a restart), in the chat host and inside coool
 // (app/scripts/steer-e2e.sh). No model calls. Not in `all`.
 scenarios["steer-queue"] = (c: Ctx) => steerScenarios({ dir: c.cfg.dir, log, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s), invoke: (cmd, a) => invoke(cmd, a) })["steer-queue"]();
+
+// `media` (selftestMedia.ts): pictures, videos, sounds and PDFs an agent shows, the Media panel, the viewer, what the
+// backend refuses to serve, and the key frames of an attached video (app/scripts/media-e2e.sh). No model calls.
+scenarios.media = (c: Ctx) => mediaScenarios({ dir: c.cfg.dir, sleep, waitFor, step, shot: (x, s) => shot(x, undefined, s), invoke: (cmd, a) => invoke(cmd, a) }).media();
 
 // `platform` (selftestPlatform.ts): chats billed to a Claude Platform API key (an invented test key in env, debug
 // builds only), with the stand-in CLIs, in the chat host and inside coool (app/scripts/platform-e2e.sh). Not in `all`.
