@@ -33,16 +33,26 @@ pub const MAX_PREVIEW_TEXT: u64 = 512 * 1024;
 /// Largest image or PDF previewed.
 pub const MAX_PREVIEW_BYTES: u64 = 30 * 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachKind {
     /// Sent as image input.
     Image,
     /// Sent as a path the agent reads.
+    #[default]
     File,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One key frame of an attached video (see [`crate::media`]): sent as an image after the attachments' images.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Frame {
+    /// The stored image's key ([`key_of`]); empty when read back from a marker before its image was matched.
+    pub key: String,
+    /// Where in the video, in seconds.
+    pub t: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Attachment {
     pub name: String,
     /// Media type, e.g. `image/png`, `text/plain`, `application/pdf` (`application/octet-stream` when unknown).
@@ -58,7 +68,17 @@ pub struct Attachment {
     /// Why an image goes as a file instead (e.g. a format the CLIs can't take as an image).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// A video: its key frames, sent as images so the agent sees what it shows (the agent can't play a video).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<Frame>,
+    /// A video or a sound: its length in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
 }
+
+// Times and lengths are finite (never NaN), so equality is total.
+impl Eq for Frame {}
+impl Eq for Attachment {}
 
 /// Image formats both CLIs take as image input.
 pub const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -107,8 +127,13 @@ pub fn detect(name: &str, head: &[u8]) -> String {
         "csv" => "text/csv",
         "html" | "htm" => "text/html",
         "zip" => "application/zip",
-        "mp4" | "mov" => "video/mp4",
-        "mp3" | "wav" | "m4a" => "audio/mpeg",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" | "aac" => "audio/mp4",
+        "aif" | "aiff" => "audio/aiff",
         _ if is_text_ext(&ext) => "text/plain",
         _ if looks_text(head) => "text/plain",
         _ => "application/octet-stream",
@@ -180,7 +205,8 @@ pub fn stored(dir: &Path, key: &str) -> Option<(PathBuf, String)> {
     IMAGE_TYPES.iter().map(|m| (dir.join(format!("{key}.{}", ext_for(m))), m.to_string())).find(|(p, _)| p.is_file())
 }
 
-fn store_image(dir: &Path, bytes: &[u8], mime: &str) -> Result<(String, PathBuf)> {
+/// Keeps image bytes in the store under their key; returns the key and the stored file.
+pub fn store_image(dir: &Path, bytes: &[u8], mime: &str) -> Result<(String, PathBuf)> {
     let key = key_of(&base64::engine::general_purpose::STANDARD.encode(bytes));
     let p = dir.join(format!("{key}.{}", ext_for(mime)));
     if !p.is_file() {
@@ -252,7 +278,7 @@ pub fn inspect_path(dir: &Path, path: &Path) -> Result<Attachment> {
     let size = meta.len();
     let head = head_of(path);
     let mime = detect(&name, &head);
-    let mut a = Attachment { name, mime: mime.clone(), size, kind: AttachKind::File, path: Some(path.to_string_lossy().into_owned()), key: None, note: None };
+    let mut a = Attachment { name, mime: mime.clone(), size, kind: AttachKind::File, path: Some(path.to_string_lossy().into_owned()), key: None, note: None, ..Default::default() };
     if is_image(&head) {
         if size > MAX_IMAGE_SOURCE_BYTES {
             bail!("too large: images can be up to {} MB", MAX_IMAGE_SOURCE_BYTES / 1024 / 1024);
@@ -286,10 +312,10 @@ pub fn store_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Result<Attachment> {
             let _ = std::fs::remove_file(&tmp);
             let (b, m) = r?;
             let (key, p) = store_image(dir, &b, &m)?;
-            return Ok(Attachment { name, mime: m, size: b.len() as u64, kind: AttachKind::Image, path: Some(p.to_string_lossy().into_owned()), key: Some(key), note: Some("scaled down to fit".into()) });
+            return Ok(Attachment { name, mime: m, size: b.len() as u64, kind: AttachKind::Image, path: Some(p.to_string_lossy().into_owned()), key: Some(key), note: Some("scaled down to fit".into()), ..Default::default() });
         }
         let (key, p) = store_image(dir, bytes, &mime)?;
-        return Ok(Attachment { name, mime, size, kind: AttachKind::Image, path: Some(p.to_string_lossy().into_owned()), key: Some(key), note: None });
+        return Ok(Attachment { name, mime, size, kind: AttachKind::Image, path: Some(p.to_string_lossy().into_owned()), key: Some(key), note: None, ..Default::default() });
     }
     if size > MAX_STORED_BYTES {
         bail!("too large: pasted files can be up to {} MB (drop it instead, so the agent reads it in place)", MAX_STORED_BYTES / 1024 / 1024);
@@ -301,7 +327,7 @@ pub fn store_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Result<Attachment> {
     if !p.is_file() {
         std::fs::write(&p, bytes)?;
     }
-    Ok(Attachment { name, mime, size, kind: AttachKind::File, path: Some(p.to_string_lossy().into_owned()), key: None, note: None })
+    Ok(Attachment { name, mime, size, kind: AttachKind::File, path: Some(p.to_string_lossy().into_owned()), key: None, note: None, ..Default::default() })
 }
 
 fn esc(s: &str) -> String {
@@ -320,8 +346,21 @@ pub fn marker(a: &Attachment) -> String {
     if let Some(p) = &a.path {
         s.push_str(&format!(r#" path="{}""#, esc(p)));
     }
+    if let Some(d) = a.duration {
+        s.push_str(&format!(r#" duration="{d:.1}s""#));
+    }
+    if !a.frames.is_empty() {
+        let times: Vec<String> = a.frames.iter().map(|f| crate::media::clock(f.t)).collect();
+        s.push_str(&format!(r#" frames="{}""#, times.join(" ")));
+    }
     s.push_str("/>");
     s
+}
+
+/// A marker's `frames="0:00.5 0:04.0"` back to times in seconds.
+fn parse_clock(s: &str) -> Option<f64> {
+    let (m, sec) = s.split_once(':')?;
+    Some(m.parse::<f64>().ok()? * 60.0 + sec.parse::<f64>().ok()?)
 }
 
 /// The prompt text as sent: the person's text, then one marker line per attachment.
@@ -350,7 +389,18 @@ fn parse_marker(line: &str) -> Option<Attachment> {
         "image" => AttachKind::Image,
         _ => AttachKind::File,
     };
-    Some(Attachment { name: attr(l, "name")?, mime: attr(l, "type").unwrap_or_else(|| "application/octet-stream".into()), size: attr(l, "size").and_then(|s| s.parse().ok()).unwrap_or(0), kind, path: attr(l, "path"), key: None, note: None })
+    let frames = attr(l, "frames").map(|f| f.split_whitespace().filter_map(parse_clock).map(|t| Frame { key: String::new(), t }).collect()).unwrap_or_default();
+    let duration = attr(l, "duration").and_then(|d| d.trim_end_matches('s').parse().ok());
+    Some(Attachment {
+        name: attr(l, "name")?,
+        mime: attr(l, "type").unwrap_or_else(|| "application/octet-stream".into()),
+        size: attr(l, "size").and_then(|s| s.parse().ok()).unwrap_or(0),
+        kind,
+        path: attr(l, "path"),
+        frames,
+        duration,
+        ..Default::default()
+    })
 }
 
 /// Splits a prompt as sent into the person's text and the attachments its marker lines name (trailing lines only).
@@ -389,9 +439,18 @@ pub fn merge_images(mut atts: Vec<Attachment>, images: Vec<(String, String, u64)
             None => break,
         }
     }
+    // A video's key frames follow the attachments' images.
+    'frames: for a in atts.iter_mut() {
+        for f in a.frames.iter_mut() {
+            match it.next() {
+                Some((key, _, _)) => f.key = key,
+                None => break 'frames,
+            }
+        }
+    }
     let n0 = atts.iter().filter(|a| a.kind == AttachKind::Image).count();
     for (i, (key, mime, size)) in it.enumerate() {
-        atts.push(Attachment { name: format!("Image {}", n0 + i + 1), mime, size, kind: AttachKind::Image, path: None, key: Some(key), note: None });
+        atts.push(Attachment { name: format!("Image {}", n0 + i + 1), mime, size, kind: AttachKind::Image, key: Some(key), ..Default::default() });
     }
     atts
 }
@@ -411,11 +470,22 @@ pub fn block_image(b: &Value) -> Option<(String, String, u64)> {
     Some((key_of(data), mime, (data.len() as u64) * 3 / 4))
 }
 
+/// The images a prompt sends, in order (name for errors, key): the image attachments, then each video's key frames.
+fn images_of(atts: &[Attachment]) -> Vec<(String, Option<&str>)> {
+    let mut v: Vec<(String, Option<&str>)> = atts.iter().filter(|a| a.kind == AttachKind::Image).map(|a| (a.name.clone(), a.key.as_deref())).collect();
+    for a in atts {
+        for f in &a.frames {
+            v.push((format!("{} (frame at {})", a.name, crate::media::clock(f.t)), Some(f.key.as_str()).filter(|k| !k.is_empty())));
+        }
+    }
+    v
+}
+
 /// Claude's content blocks for a prompt with attachments: images first, then the text with its markers.
 pub fn claude_content(dir: &Path, text: &str, atts: &[Attachment]) -> Result<Value> {
     let mut blocks = Vec::new();
-    for a in atts.iter().filter(|a| a.kind == AttachKind::Image) {
-        let (p, mime) = a.key.as_deref().and_then(|k| stored(dir, k)).with_context(|| format!("{}: the image is gone from coool's store; attach it again", a.name))?;
+    for (name, key) in images_of(atts) {
+        let (p, mime) = key.and_then(|k| stored(dir, k)).with_context(|| format!("{name}: the image is gone from coool's store; attach it again"))?;
         let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&p)?);
         blocks.push(json!({"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}}));
     }
@@ -427,8 +497,8 @@ pub fn claude_content(dir: &Path, text: &str, atts: &[Attachment]) -> Result<Val
 /// `localImage` (coool's stored copy).
 pub fn codex_input(dir: &Path, text: &str, atts: &[Attachment]) -> Result<Value> {
     let mut input = vec![json!({"type": "text", "text": with_markers(text, atts), "text_elements": []})];
-    for a in atts.iter().filter(|a| a.kind == AttachKind::Image) {
-        let (p, _) = a.key.as_deref().and_then(|k| stored(dir, k)).with_context(|| format!("{}: the image is gone from coool's store; attach it again", a.name))?;
+    for (name, key) in images_of(atts) {
+        let (p, _) = key.and_then(|k| stored(dir, k)).with_context(|| format!("{name}: the image is gone from coool's store; attach it again"))?;
         input.push(json!({"type": "localImage", "path": p.to_string_lossy()}));
     }
     Ok(Value::Array(input))
@@ -593,8 +663,8 @@ mod tests {
     #[test]
     fn markers_round_trip_with_odd_names() {
         let atts = vec![
-            Attachment { name: "a \"b\" <c>.png".into(), mime: "image/png".into(), size: 12, kind: AttachKind::Image, path: Some("/tmp/x & y/a.png".into()), key: Some("0123456789abcdef".into()), note: None },
-            Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 3, kind: AttachKind::File, path: Some("/tmp/notes.txt".into()), key: None, note: None },
+            Attachment { name: "a \"b\" <c>.png".into(), mime: "image/png".into(), size: 12, kind: AttachKind::Image, path: Some("/tmp/x & y/a.png".into()), key: Some("0123456789abcdef".into()), note: None, ..Default::default() },
+            Attachment { name: "notes.txt".into(), mime: "text/plain".into(), size: 3, kind: AttachKind::File, path: Some("/tmp/notes.txt".into()), key: None, note: None, ..Default::default() },
         ];
         let sent = with_markers("look at these\n", &atts);
         assert!(sent.starts_with("look at these\n\n<attachment kind=\"image\""));
@@ -615,7 +685,7 @@ mod tests {
 
     #[test]
     fn images_pair_with_markers_and_extra_ones_get_names() {
-        let (_, atts) = split_markers(&with_markers("x", &[Attachment { name: "s.png".into(), mime: "image/png".into(), size: 1, kind: AttachKind::Image, path: None, key: None, note: None }]));
+        let (_, atts) = split_markers(&with_markers("x", &[Attachment { name: "s.png".into(), mime: "image/png".into(), size: 1, kind: AttachKind::Image, path: None, key: None, note: None, ..Default::default() }]));
         let m = merge_images(atts, vec![("aaaaaaaaaaaaaaaa".into(), "image/png".into(), 10), ("bbbbbbbbbbbbbbbb".into(), "image/jpeg".into(), 20)]);
         assert_eq!(m.len(), 2);
         assert_eq!((m[0].name.as_str(), m[0].key.as_deref()), ("s.png", Some("aaaaaaaaaaaaaaaa")));
@@ -666,6 +736,45 @@ mod tests {
         let fresh = d.join("store2");
         let (p, _) = image_from_transcript(&fresh, &tr, &key).unwrap();
         assert_eq!(std::fs::read(p).unwrap(), PNG);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_video_goes_with_its_key_frames() {
+        let d = tmp("frames");
+        let store = d.join("store");
+        let img = d.join("dot.png");
+        std::fs::write(&img, PNG).unwrap();
+        let a = inspect_path(&store, &img).unwrap();
+        // Two frames, stored like any image (the app's AVFoundation cuts them; here the same picture stands in).
+        let (k1, _) = store_image(&store, PNG, "image/png").unwrap();
+        let mut b = PNG.to_vec();
+        b.push(0);
+        let (k2, _) = store_image(&store, &b, "image/png").unwrap();
+        let v = Attachment {
+            name: "rec.mov".into(),
+            mime: "video/quicktime".into(),
+            size: 9000,
+            path: Some("/tmp/rec.mov".into()),
+            duration: Some(12.3),
+            frames: vec![Frame { key: k1.clone(), t: 0.4 }, Frame { key: k2.clone(), t: 7.5 }],
+            ..Default::default()
+        };
+        let atts = vec![v.clone(), a.clone()];
+        let c = claude_content(&store, "what happens?", &atts).unwrap();
+        // The image attachment first, then the video's frames in order, then the text.
+        let keys: Vec<String> = c.as_array().unwrap().iter().filter(|b| b["type"] == "image").map(|b| key_of(b["source"]["data"].as_str().unwrap())).collect();
+        assert_eq!(keys, [a.key.clone().unwrap(), k1.clone(), k2.clone()]);
+        let t = c[3]["text"].as_str().unwrap();
+        assert!(t.contains(r#"name="rec.mov" type="video/quicktime" size="9000" path="/tmp/rec.mov" duration="12.3s" frames="0:00.4 0:07.5"/>"#), "{t}");
+        assert_eq!(codex_input(&store, "x", &atts).unwrap().as_array().unwrap().len(), 4);
+        // Read back from a transcript: the marker gives the times, the images in order the keys.
+        let (_, back) = split_markers(t);
+        let m = merge_images(back, keys.iter().map(|k| (k.clone(), "image/png".to_string(), 1)).collect());
+        assert_eq!(m.len(), 2, "no frame becomes an extra image");
+        assert_eq!(m[0].frames, v.frames);
+        assert_eq!(m[0].duration, Some(12.3));
+        assert_eq!(m[1].key, a.key);
         let _ = std::fs::remove_dir_all(&d);
     }
 

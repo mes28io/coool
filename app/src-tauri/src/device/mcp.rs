@@ -423,7 +423,7 @@ impl Session {
                 let name = m["params"]["name"].as_str().unwrap_or("");
                 let args = m["params"]["arguments"].clone();
                 let r = match self.call(name, &args) {
-                    Ok(content) => json!({ "content": content }),
+                    Ok(content) => json!({ "content": keep_screenshots(content) }),
                     Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
                 };
                 ok(r)
@@ -439,6 +439,11 @@ impl Session {
         if name == "pilot_run" {
             let text = super::pilot::call(&self.devices, self.chat, a)?;
             return Ok(vec![json!({ "type": "text", "text": text })]);
+        }
+        // Media in the agent's reply (the chat draws the files the call names; nothing here acts on a device).
+        if name == coool_core::media::SHOW_TOOL {
+            let cwd = self.devices.mcp.cwd(self.chat);
+            return show(a, cwd.as_deref().map(Path::new)).map(|t| vec![json!({ "type": "text", "text": t })]);
         }
         // The sandboxed Mac: its own VM, no simulator involved.
         if name.starts_with("mac_") {
@@ -947,6 +952,81 @@ fn describe_wait(a: &Value) -> String {
     }
 }
 
+/// Every screenshot a tool returns is kept in coool's capture folder (the chat's Media panel lists it), and its result
+/// says where, so the agent can `show` it or use the file.
+fn keep_screenshots(mut content: Vec<Value>) -> Vec<Value> {
+    let mut saved = Vec::new();
+    for c in &content {
+        if c["type"] == "image"
+            && let (Some(d), Some(m)) = (c["data"].as_str(), c["mimeType"].as_str())
+            && let Some(p) = crate::media::save_capture(d, m)
+        {
+            saved.push(p.to_string_lossy().into_owned());
+        }
+    }
+    for p in saved {
+        content.push(json!({ "type": "text", "text": format!("Screenshot saved: {p}") }));
+    }
+    content
+}
+
+/// `show`: checks the files (they exist and are pictures, movies, sounds or PDFs) and says what the person sees.
+fn show(a: &Value, cwd: Option<&Path>) -> Result<String, String> {
+    use coool_core::media::{MediaKind, shown, sniff};
+    let s = shown(a).ok_or("`show` needs `paths`: files to show, e.g. [\"shots/after.png\"]")?;
+    let (mut ok, mut bad) = (Vec::new(), Vec::new());
+    for p in &s.paths {
+        let path = if let Some(r) = p.strip_prefix("~/") {
+            dirs::home_dir().unwrap_or_default().join(r)
+        } else {
+            match (Path::new(p).is_relative(), cwd) {
+                (true, Some(c)) => c.join(p),
+                _ => PathBuf::from(p),
+            }
+        };
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+        if !path.is_file() {
+            bad.push(format!("{p}: no such file"));
+            continue;
+        }
+        let mut head = vec![0u8; coool_core::media::HEAD];
+        let n = std::fs::File::open(&path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+        head.truncate(n);
+        match sniff(&name, &head) {
+            Some((k, _)) => ok.push(format!(
+                "{name} ({})",
+                match k {
+                    MediaKind::Image => "image",
+                    MediaKind::Video => "video",
+                    MediaKind::Audio => "audio",
+                    MediaKind::Pdf => "PDF",
+                    MediaKind::Explainer => "explainer, drawn in a sandboxed frame: no network",
+                }
+            )),
+            None => bad.push(format!("{p}: not a picture, movie, sound, PDF or explainer (.html / .svg)")),
+        }
+    }
+    if ok.is_empty() {
+        return Err(format!("Nothing shown. {}", bad.join("; ")));
+    }
+    let mut t = format!("Shown to the person in the chat: {}.", ok.join(", "));
+    if !bad.is_empty() {
+        t.push_str(&format!(" Not shown: {}.", bad.join("; ")));
+    }
+    Ok(t)
+}
+
+fn show_tool() -> Value {
+    json!({
+        "name": "show",
+        "description": "Show the person files in your reply, where they see and play them: screenshots, screen recordings, generated images (PNG, JPEG, GIF, WebP, HEIC), videos (MP4, MOV, WebM), audio (M4A, MP3, WAV), a PDF, or an explainer: one self-contained .html or .svg (CSS / SVG / JS animation or interactive diagram; inline script and style only, no network, pictures as data: URLs) drawn in a sandboxed frame with Replay. Use it after making or capturing visual or audio output instead of only describing it, or when an animation explains a flow better than text. Paths are absolute or relative to the chat's folder.",
+        "inputSchema": { "type": "object", "required": ["paths"], "properties": {
+            "paths": { "type": "array", "items": { "type": "string" }, "description": "Files to show, in order (up to 12)." },
+            "caption": { "type": "string", "description": "One short line under them (optional)." }
+        } }
+    })
+}
+
 /// The server's tools for the Context panel: how many, and the size of their definitions (bytes of JSON).
 pub fn tools_size() -> (u32, u64) {
     let t = tools();
@@ -960,6 +1040,7 @@ fn tools() -> Value {
     }
     all.extend(super::web::tools());
     all.extend(super::vm::tools());
+    all.push(show_tool());
     Value::Array(all)
 }
 
@@ -1056,7 +1137,7 @@ mod tests {
         let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(&names[..10], ["pilot_run", "observe", "tap", "type", "swipe", "press", "batch", "wait_for", "app", "device"]);
         assert!(init["result"]["instructions"].as_str().unwrap().contains("pilot_run"));
-        assert!(names[24..].iter().all(|n| n.starts_with("mac_")) && names.len() == 36, "{names:?}");
+        assert!(names[24..36].iter().all(|n| n.starts_with("mac_")) && names.len() == 37 && names[36] == "show", "{names:?}");
         assert!(init["result"]["instructions"].as_str().unwrap().contains("mac_observe"));
         assert_eq!(
             &names[10..24],
@@ -1069,6 +1150,15 @@ mod tests {
         // Without the app, a browser tool answers with an error result (and never boots a simulator).
         let r = s.handle(&json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"browser_observe","arguments":{}}})).unwrap();
         assert_eq!(r["result"]["isError"], true);
+        // `show` checks the files and says what the person sees.
+        let dir = std::env::temp_dir().join(format!("coool-show-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.png"), b"\x89PNG\r\n\x1a\n0000").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"hello").unwrap();
+        let t = show(&json!({"paths": ["a.png", "notes.txt", "gone.mp4"]}), Some(&dir)).unwrap();
+        assert!(t.starts_with("Shown to the person in the chat: a.png (image).") && t.contains("notes.txt: not a picture") && t.contains("gone.mp4: no such file"), "{t}");
+        assert!(show(&json!({"paths": ["notes.txt"]}), Some(&dir)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
         let unknown = s.handle(&json!({"jsonrpc":"2.0","id":3,"method":"nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
     }

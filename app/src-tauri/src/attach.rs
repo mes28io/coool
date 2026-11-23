@@ -41,7 +41,11 @@ pub fn attach_paths(paths: Vec<String>) -> Res<Vec<Added>> {
             let path = PathBuf::from(&p);
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
             match attach::inspect_path(&dir, &path) {
-                Ok(a) => Added { path: p, name, attachment: Some(a), error: None },
+                Ok(mut a) => {
+                    // A video: its key frames go with it (the agent can't play it).
+                    crate::media::add_frames(&mut a);
+                    Added { path: p, name, attachment: Some(a), error: None }
+                }
                 Err(e) => Added { path: p, name, attachment: None, error: Some(format!("{e:#}")) },
             }
         })
@@ -56,7 +60,9 @@ pub fn attach_bytes(name: String, data: String) -> Res<Attachment> {
         return Err(format!("too large: pasted files can be up to {} MB", attach::MAX_STORED_BYTES / 1024 / 1024));
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| "couldn't read the pasted data".to_string())?;
-    attach::store_bytes(&store()?, &name, &bytes).map_err(|e| format!("{e:#}"))
+    let mut a = attach::store_bytes(&store()?, &name, &bytes).map_err(|e| format!("{e:#}"))?;
+    crate::media::add_frames(&mut a);
+    Ok(a)
 }
 
 /// An image by key as a `data:` URL: from coool's store, else from that session's transcript.
@@ -104,6 +110,14 @@ pub fn attach_preview(path: String, images_only: Option<bool>, root: Option<Stri
         }),
         other => Ok(other),
     }
+}
+
+/// The first page of a PDF as PNG bytes, `width` pixels wide at most (the Media panel's thumbnail).
+pub fn pdf_thumb(path: &Path, width: f64) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let (pages, _) = pdf::pages(path, 1, width)?;
+    let d = pages.first()?.strip_prefix("data:image/png;base64,")?;
+    base64::engine::general_purpose::STANDARD.decode(d).ok()
 }
 
 /// Pages of a PDF drawn for the preview.

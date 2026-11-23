@@ -107,6 +107,9 @@ pub struct Activity {
     /// A prompt's attachments (images and files the person added; see [`crate::attach`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<crate::attach::Attachment>,
+    /// A `show` step: the files the agent showed the person, and its caption (see [`crate::media`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<Box<crate::media::Shown>>,
 }
 
 /// Characters of `Activity::full` kept per entry.
@@ -118,7 +121,7 @@ pub const FULL_RECENT: usize = 50;
 impl Activity {
     /// A step (tool call, subagent) or a fixed note: one line says it all.
     pub fn line(ts: String, kind: ActivityKind, text: impl Into<String>) -> Self {
-        Self { ts, kind, text: text.into(), full: None, shortened: false, step: false, artifact: None, attachments: Vec::new() }
+        Self { ts, kind, text: text.into(), full: None, shortened: false, step: false, artifact: None, attachments: Vec::new(), media: None }
     }
 
     /// A prompt, reply or error: its one-line form (`max` columns) and, when
@@ -133,7 +136,7 @@ impl Activity {
             Some((end, _)) => (format!("{}…", &s[..end]), true),
             None => (s.to_string(), false),
         };
-        Self { ts, kind, text, full: Some(full), shortened: cut, step: false, artifact: None, attachments: Vec::new() }
+        Self { ts, kind, text, full: Some(full), shortened: cut, step: false, artifact: None, attachments: Vec::new(), media: None }
     }
 }
 

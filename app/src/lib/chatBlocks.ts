@@ -5,6 +5,7 @@
 import type { ArtifactInfo } from "./types";
 import type { ChatItem } from "./chat";
 import { isPlanTool, isSyntheticPlan, isTaskNoise } from "./plan.ts";
+import { isShowTool } from "./mediaRules.ts";
 
 export type Tool = Extract<ChatItem, { kind: "tool" }>;
 
@@ -16,6 +17,8 @@ export type Block =
   | { type: "steps"; key: string; tools: Tool[] }
   /** An artifact's newest publish; earlier publishes of the same page fold into it. */
   | { type: "artifact"; key: string; info: ArtifactInfo; versions: number }
+  /** What an agent's `show` call put in its reply (pictures, videos, sounds), where it called it. */
+  | { type: "media"; key: string; tool: Tool }
   /** One task-list card per turn (TodoWrite / update_plan calls), updated in place. */
   | { type: "plan"; key: string; calls: Tool[]; prompt: string; end: { ts: number; ok: boolean } | null };
 
@@ -124,6 +127,8 @@ export function buildBlocks(items: ChatItem[], prev?: Built | null): Built {
     if (it.kind === "tool" && it.artifact) {
       const p = pages.get(it.artifact.url)!;
       if (p.last === idx) held.push({ type: "artifact", key: `artifact:${it.artifact.url}`, info: p.info, versions: p.versions });
+    } else if (it.kind === "tool" && isShowTool(it.name)) {
+      blocks.push({ type: "media", key: it.key, tool: it });
     } else if (it.kind === "tool") {
       const last = blocks[blocks.length - 1];
       if (last?.type === "steps" && blocks.length > (mark?.blocks ?? 0)) last.tools.push(it);
@@ -160,6 +165,8 @@ export function sameBlock(a: Block, b: Block): boolean {
       return b.type === "steps" && sameList(a.tools, b.tools);
     case "artifact":
       return b.type === "artifact" && a.info === b.info && a.versions === b.versions;
+    case "media":
+      return b.type === "media" && a.tool === b.tool;
     case "plan":
       return b.type === "plan" && a.prompt === b.prompt && sameList(a.calls, b.calls) && a.end?.ts === b.end?.ts && a.end?.ok === b.end?.ok;
   }

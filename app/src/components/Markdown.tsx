@@ -2,6 +2,8 @@
 // Tolerates incomplete markdown while streaming (see `streamSafe`), memoized per message; while it streams, its
 // finished blocks are parsed once each and only the block being written is parsed again (lib/mdSplit.ts).
 
+import { InlineMedia } from "./Media";
+import { localMedia } from "../lib/mediaRules";
 import { Children, isValidElement, memo, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import parseMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -145,13 +147,17 @@ const components: Components = {
     ) : null,
   blockquote: ({ node: _n, ...p }) => <blockquote className="my-2 border-l-2 border-line pl-3 text-dim" {...p} />,
   hr: () => <hr className="my-3 border-0 border-t border-hairline" />,
-  a: ({ node: _n, href, children }) => <Link href={href}>{children}</Link>,
-  // Remote images are never loaded: an image is its alt text as a link.
-  img: ({ node: _n, src, alt }) => (
-    <a href={src} title={src} target="_blank" rel="noreferrer" onClick={(e) => e.preventDefault()} className="text-dim underline decoration-faint underline-offset-2">
-      {alt || src}
-    </a>
-  ),
+  // A link to a picture, video, sound or PDF of the chat opens it in the media viewer; other links as before.
+  a: ({ node: _n, href, children }) => (localMedia(href) ? <InlineMedia path={localMedia(href)!.path} link={children} /> : <Link href={href}>{children}</Link>),
+  // Remote images are never loaded: an image is its alt text as a link. A local one the chat references is shown.
+  img: ({ node: _n, src, alt }) =>
+    typeof src === "string" && localMedia(src) ? (
+      <InlineMedia path={localMedia(src)!.path} alt={alt} />
+    ) : (
+      <a href={src} title={typeof src === "string" ? src : undefined} target="_blank" rel="noreferrer" onClick={(e) => e.preventDefault()} className="text-dim underline decoration-faint underline-offset-2">
+        {alt || src}
+      </a>
+    ),
   pre: ({ node: _n, children }) => <CodeBlock>{children}</CodeBlock>,
   code: ({ node: _n, className, children }) => <code className={cx("rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-[5px] py-[1px] font-mono text-[0.88em] text-fg", className)}>{children}</code>,
   // A table takes the column's width and its cells wrap (long words and paths too), so it fits; one with too many

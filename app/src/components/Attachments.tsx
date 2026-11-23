@@ -12,6 +12,8 @@ import { type Attachment, colorize, fmtSize, gridOf, TONE_VAR, toneOf, typeLabel
 import type { Provider } from "../lib/types";
 import { IBack, IClip, IClose, ICopy, IFile, IFit, IForward, IFolderOpen, IImage, IZoomIn, IZoomOut } from "./icons";
 import { Chip, cx, ease } from "./primitives";
+import { AttachedMedia } from "./Media";
+import { mediaKind } from "../lib/mediaRules";
 
 // ---------- where a conversation's images come from ----------
 
@@ -306,7 +308,9 @@ function Fan() {
 export const MessageAttachments = memo(function MessageAttachments({ atts, scope }: { atts: Attachment[]; scope: string }) {
   const src = useContext(AttachSource);
   const images = atts.filter((a) => a.kind === "image");
-  const files = atts.filter((a) => a.kind !== "image");
+  // A video or a sound plays in the message (its path is the chat's own: the backend serves it).
+  const playable = atts.filter((a) => a.kind !== "image" && a.path && (mediaKind(a.name, a.mime) === "video" || mediaKind(a.name, a.mime) === "audio"));
+  const files = atts.filter((a) => a.kind !== "image" && !playable.includes(a));
   const views: ViewImage[] = useMemo(
     () => images.map((a, i) => ({ id: `${scope}:${i}`, name: a.name, size: a.size, key: a.key, path: a.path, provider: src.provider, session: src.session })),
     [images.length, scope, src.provider, src.session], // eslint-disable-line react-hooks/exhaustive-deps
@@ -323,6 +327,9 @@ export const MessageAttachments = memo(function MessageAttachments({ atts, scope
           ))}
         </div>
       )}
+      {playable.map((a, i) => (
+        <AttachedMedia key={`m${i}`} a={a} />
+      ))}
       {files.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1.5">
           {files.map((a, i) => (

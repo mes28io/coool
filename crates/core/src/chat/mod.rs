@@ -1892,7 +1892,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let p = tmp.to_str().unwrap();
         let mcp = [McpServer { name: "coool-device".into(), command: "/x/coool".into(), args: vec!["--coool-device-mcp".into()], env: vec![], allow_all: true, tool_timeout_sec: Some(900) }];
-        let has = AgentContext { browser: true, iphone: true, mac: false, remote: false };
+        let has = AgentContext { browser: true, iphone: true, mac: false, remote: false, show: false };
         for ctx_on in [false, true] {
             for ladder_on in [false, true] {
                 for devices in [false, true] {

@@ -1,5 +1,6 @@
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { AttachViewer } from "./components/Attachments";
+import { MediaViewer } from "./components/Media";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { api } from "./lib/backend";
 import { useNativeRects } from "./lib/browser";
@@ -312,6 +313,7 @@ export default function App() {
       <VoiceHost />
       <Toasts />
       <AttachViewer />
+      <MediaViewer />
       <UpdateScreen />
     </MotionConfig>
   );

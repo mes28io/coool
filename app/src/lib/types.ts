@@ -20,6 +20,8 @@ export interface Activity {
   artifact?: ArtifactInfo;
   /** A prompt's images and files (crates/core/src/attach.rs). */
   attachments?: Attachment[];
+  /** A `show` step: the files the agent showed and its caption (crates/core/src/media.rs). */
+  media?: { paths: string[]; caption?: string };
 }
 
 /** One published version of an artifact (crates/core/src/artifact.rs). Publishes with the same `url` are versions of one artifact. */

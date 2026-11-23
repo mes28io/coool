@@ -9,6 +9,21 @@ import type { SettingsBackend } from "./settingsTypes";
 import { countIpc } from "./perfCount";
 import type { UpdateStatus, UpdateWelcome } from "./updateView";
 import type { AttachAdded, AttachPreview, Attachment } from "./attachRules";
+import type { MediaKind } from "./mediaRules";
+
+/** `media_grant`: one path's URL, or why it isn't served. */
+export interface MediaGrant {
+  path: string;
+  name: string;
+  url?: string;
+  thumb?: string;
+  kind?: MediaKind;
+  mime?: string;
+  size: number;
+  /** The file on disk (symlinks resolved). */
+  real?: string;
+  error?: string;
+}
 import type { ChangesWire, FileChange, Outcome } from "./changesRules";
 import type { HistoryBackend } from "./history";
 import type { InvokeArgs, InvokeOptions } from "@tauri-apps/api/core";
@@ -153,6 +168,11 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   attachPreview(path: string, imagesOnly?: boolean, root?: string | null): Promise<AttachPreview>;
   /** Shows a file in Finder. */
   attachReveal(path: string): Promise<void>;
+  /** URLs (`coool-media://`) for a chat's media files; each path checked against what the chat references (CHAT_SPEC "Media"). */
+  mediaGrant(scope: { chat?: number | null; session?: string | null }, paths: string[]): Promise<MediaGrant[]>;
+  /** Reveal / copy (to the pasteboard, as files) a granted file, by its token. */
+  mediaReveal(token: string): Promise<void>;
+  mediaCopy(tokens: string[]): Promise<void>;
   chatInterrupt(id: number): Promise<void>;
   /** Steer a running turn: `now: false` delivers at the next step boundary, `now: true` interrupts the current step. Returns the note id. */
   chatSteer(id: number, text: string, now: boolean, attachments?: Attachment[]): Promise<string>;
@@ -633,6 +653,9 @@ async function tauriBackend(): Promise<Backend> {
     attachImage: (key, provider, session) => invoke("attach_image", { key, provider: provider ?? null, session: session ?? null }),
     attachPreview: (path, imagesOnly, root) => invoke("attach_preview", { path, imagesOnly: imagesOnly ?? null, root: root ?? null }),
     attachReveal: (path) => invoke("attach_reveal", { path }),
+    mediaGrant: (scope, paths) => invoke("media_grant", { chat: scope.chat ?? null, session: scope.session ?? null, paths }),
+    mediaReveal: (token) => invoke("media_reveal", { token }),
+    mediaCopy: (tokens) => invoke("media_copy", { tokens }),
     chatInterrupt: (id) => soft("chat_interrupt", { id }),
     chatSteer: (id, text, now, attachments) => soft("chat_steer", { id, text, now, attachments: attachments?.length ? attachments : null }),
     chatSteerCancel: (id, noteId) => soft("chat_steer_cancel", { id, noteId }),

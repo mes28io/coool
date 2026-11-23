@@ -20,6 +20,7 @@ import type { Activity, RememberOption } from "../lib/types";
 import { ArtifactCard } from "./ArtifactCard";
 import { AwayCard, useChatAway } from "./Away";
 import { StepImages } from "./Attachments";
+import { ShownMedia } from "./Media";
 import { imagePaths } from "../lib/attachRules";
 import { agentResultParts, FinishedAgentHead, FoldBody, FoldChevron, HistoryBlocks, PromptBubble, StepLine, ThinkingRow, useFocusLit, type AgentEnd } from "./Activity";
 import { useFold } from "../lib/cardFold";
@@ -126,6 +127,8 @@ const ChatBlock = memo(function ChatBlock({ b, chat, nested, fresh, cv, latest, 
         <ChatSteps tools={b.tools} chat={chat} nested={nested} latest={latest} />
       ) : b.type === "artifact" ? (
         <ArtifactCard info={b.info} versions={b.versions} />
+      ) : b.type === "media" ? (
+        <ShownMedia input={b.tool.input} ok={b.tool.ok} output={b.tool.output} />
       ) : (
         <ItemView item={b.item} chat={chat} onOpenTerminal={onOpenTerminal} onResume={onResume} />
       )}
@@ -583,6 +586,7 @@ function blockHeight(b: Block, latest: boolean): number {
   if (b.type === "steps") return 30 + (latest || b.tools.length <= 2 ? b.tools.length * 30 : 0);
   if (b.type === "plan") return 180;
   if (b.type === "artifact") return 120;
+  if (b.type === "media") return 300;
   switch (b.item.kind) {
     case "text":
       return 30 + Math.ceil(b.item.text.length / 80) * 26;
@@ -605,6 +609,7 @@ function blockAfter(b: Block, t: number): boolean {
   if (b.type === "item") return b.item.ts > t;
   if (b.type === "steps") return b.tools.some((x) => x.ts > t);
   if (b.type === "plan") return b.calls.some((x) => x.ts > t);
+  if (b.type === "media") return b.tool.ts > t;
   return false;
 }
 
