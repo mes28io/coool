@@ -49,6 +49,21 @@ export function mediaKind(name: string, mime?: string): MediaKind | null {
 
 export const baseName = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
 
+/** A path as one file: relative ones against the chat's folder, `.` and `..` folded (`~/` kept as written). */
+export function absPath(p: string, cwd?: string | null): string {
+  const full = p.startsWith("/") || p.startsWith("~") || !cwd ? p : `${cwd.replace(/\/+$/, "")}/${p}`;
+  const out: string[] = [];
+  for (const part of full.split("/")) {
+    if (part === "." || (part === "" && out.length > 0)) continue;
+    if (part === "..") out.length > 1 && out.pop();
+    else out.push(part);
+  }
+  return out.join("/") || full;
+}
+
+/** The same file in a chat (an item's identity for the viewer and for dedupe). */
+export const sameFile = (a: MediaItem, b: MediaItem, cwd?: string | null) => a.id === b.id || (!!a.path && !!b.path && absPath(a.path, cwd) === absPath(b.path, cwd));
+
 /** coool's `show` tool: Claude `mcp__coool-device__show`, Codex `coool-device.show`. */
 export function isShowTool(name: string): boolean {
   const m = /^(.*?)([._/]+)show$/.exec(name);
@@ -163,7 +178,7 @@ function itemMedia(it: MediaTool | MediaMessage): MediaItem[] {
  * Everything a chat holds for its Media panel, newest first, each file once (its newest appearance; a file the agent
  * wrote and then showed counts as shown). `earlier`: a resumed chat's rows from its transcript (older than any item).
  */
-export function collectMedia(items: readonly (MediaTool | MediaMessage | { kind: string })[], earlier: readonly MediaRow[] = []): MediaItem[] {
+export function collectMedia(items: readonly (MediaTool | MediaMessage | { kind: string })[], earlier: readonly MediaRow[] = [], cwd?: string | null): MediaItem[] {
   const out: MediaItem[] = [];
   earlier.forEach((r, i) => {
     const ts = i - earlier.length - 1e12;
@@ -179,12 +194,15 @@ export function collectMedia(items: readonly (MediaTool | MediaMessage | { kind:
   }
   const rank: Record<MediaSource, number> = { shown: 3, attached: 2, screenshot: 1, written: 0 };
   const best = new Map<string, MediaItem>();
-  for (const m of out) {
+  for (const m0 of out) {
+    // One file however it was named (relative in a `show`, absolute in a Write).
+    const m = m0.id.startsWith("file:") && m0.path ? { ...m0, id: `file:${absPath(m0.path, cwd)}` } : m0;
     const o = best.get(m.id);
     if (!o) best.set(m.id, m);
     else best.set(m.id, { ...(rank[m.source] >= rank[o.source] ? m : o), ts: Math.max(m.ts, o.ts), caption: m.caption ?? o.caption });
   }
-  return [...best.values()].sort((a, b) => b.ts - a.ts);
+  // Newest first; within one step (same time) the later file counts as newer, so the reversed list keeps the agent's order.
+  return [...best.values()].map((m, i) => ({ m, i })).sort((a, b) => b.m.ts - a.m.ts || b.i - a.i).map((x) => x.m);
 }
 
 /** `0:07`, `1:02:05` for a player's clock. */

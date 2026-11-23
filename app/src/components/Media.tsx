@@ -10,7 +10,7 @@ import { create } from "zustand";
 import { api, type MediaGrant } from "../lib/backend";
 import { loadImage } from "../lib/attach";
 import { tokenOf, useGrant, type MediaScope } from "../lib/media";
-import { baseName, fmtTime, frameHeight, mediaKind, shownOf, SOURCE_LABEL, type MediaItem, type MediaKind } from "../lib/mediaRules";
+import { baseName, fmtTime, frameHeight, mediaKind, sameFile, shownOf, SOURCE_LABEL, type MediaItem, type MediaKind } from "../lib/mediaRules";
 import { fmtSize } from "../lib/attachRules";
 import type { Attachment } from "../lib/attachRules";
 import type { Provider } from "../lib/types";
@@ -20,7 +20,7 @@ import { cx } from "./primitives";
 // ---------- whose media ----------
 
 /** The chat a view's media belong to (SessionView provides it); `provider` / `session` load attached images by key. */
-export const MediaContext = createContext<{ scope: MediaScope | null; provider: Provider | null; session: string | null; all?: () => MediaItem[] }>({ scope: null, provider: null, session: null });
+export const MediaContext = createContext<{ scope: MediaScope | null; provider: Provider | null; session: string | null; cwd?: string; all?: () => MediaItem[] }>({ scope: null, provider: null, session: null });
 
 /** True once the element has come near the screen (stays true). */
 function useNear<T extends Element>(): [React.RefCallback<T>, boolean] {
@@ -79,8 +79,9 @@ export function useOpenMedia() {
   return useCallback(
     (items: MediaItem[], index: number) => {
       const all = ctx.all?.().slice().reverse() ?? [];
-      const at = all.findIndex((x) => x.id === items[index]?.id);
-      if (at >= 0) return useMediaViewer.getState().open({ items: all.map((x) => (x.id === items[index].id ? { ...x, caption: items[index].caption ?? x.caption } : x)), index: at, ctx });
+      const it = items[index];
+      const at = it ? all.findIndex((x) => sameFile(x, it, ctx.cwd)) : -1;
+      if (at >= 0) return useMediaViewer.getState().open({ items: all.map((x, j) => (j === at ? { ...x, caption: it.caption ?? x.caption } : x)), index: at, ctx });
       useMediaViewer.getState().open({ items, index, ctx });
     },
     [ctx],
@@ -457,7 +458,7 @@ function Single({ item, onOpen, maxW = 520, maxH = 360 }: { item: MediaItem; onO
       </div>
     );
   if (item.kind === "audio")
-    return <div ref={ref} className="w-[min(460px,100%)]">{src ? <AudioPlayer src={src} name={item.name} sub={g?.size ? fmtSize(g.size) : undefined} /> : <Placeholder w={460} h={58} />}</div>;
+    return <div ref={ref} className="w-[min(460px,100%)]" data-media-shown={item.name} data-media-kind="audio">{src ? <AudioPlayer src={src} name={item.name} sub={g?.size ? fmtSize(g.size) : undefined} /> : <Placeholder w={460} h={58} />}</div>;
   if (item.kind === "video")
     return (
       <div ref={ref} className="overflow-hidden rounded-[14px] border border-hairline bg-black" style={box ? { width: box.w, height: box.h } : { width: Math.min(maxW, 480), height: 270 }} data-media-shown={item.name} data-media-kind="video">
@@ -477,7 +478,7 @@ function Single({ item, onOpen, maxW = 520, maxH = 360 }: { item: MediaItem; onO
     );
   const shown = item.kind === "image" ? src : thumb;
   return (
-    <button ref={ref as unknown as React.Ref<HTMLButtonElement>} type="button" onClick={onOpen} title={item.name} data-media-shown={item.name} data-media-kind={item.kind} className="relative block overflow-hidden rounded-[14px] border border-hairline bg-raised transition-[border-color] duration-150 hover:border-line">
+    <button ref={ref as unknown as React.Ref<HTMLButtonElement>} type="button" onClick={onOpen} title={item.name} data-media-shown={item.name} data-media-kind={item.kind} className="relative block w-fit self-start overflow-hidden rounded-[14px] border border-hairline bg-raised transition-[border-color] duration-150 hover:border-line">
       {shown ? (
         <motion.img
           src={shown}
@@ -516,6 +517,7 @@ const Tile = memo(function Tile({ item, size, onOpen, more }: { item: MediaItem;
       data-media-tile={item.name}
       data-media-kind={item.kind}
       data-media-source={item.source}
+      data-near={near || undefined}
       className={cx("group relative block shrink-0 overflow-hidden rounded-[12px] border bg-raised [content-visibility:auto]", failed ? "border-dashed border-line" : "border-hairline hover:border-line")}
       style={{ width: size, height: size }}
     >

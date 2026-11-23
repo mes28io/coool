@@ -359,7 +359,8 @@ pub fn serve(core: &Core, webview: &str, req: &Request<Vec<u8>>) -> Response<Vec
 pub const FRAME_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'";
 
 /// Tells the chat how tall the explainer is (its frame grows to fit, up to a maximum).
-const SIZE_SCRIPT: &str = "<script>(function(){function s(){var d=document.documentElement,b=document.body;parent.postMessage({cooolFrame:1,h:Math.ceil(Math.max(d.scrollHeight,b?b.scrollHeight:0))},'*')}try{new ResizeObserver(s).observe(document.documentElement)}catch(e){}addEventListener('load',s);s()})()</script>";
+/// The content's height, not the frame's: `scrollHeight` is never less than the frame itself, so it could only grow.
+const SIZE_SCRIPT: &str = "<script>(function(){function s(){var d=document.documentElement,b=document.body,h=d.getBoundingClientRect().height;if(b){var r=b.getBoundingClientRect(),m=parseFloat(getComputedStyle(b).marginBottom)||0;h=Math.max(h,r.bottom+m)}parent.postMessage({cooolFrame:1,h:Math.ceil(h)},'*')}try{new ResizeObserver(s).observe(document.documentElement);if(document.body)new ResizeObserver(s).observe(document.body)}catch(e){}addEventListener('load',s);s()})()</script>";
 
 /// The page of an explainer's frame: the HTML as it is, or the SVG inline in a bare page, plus the height script.
 pub fn frame_page(src: &str, svg: bool) -> String {
@@ -425,16 +426,19 @@ fn thumb(core: &Core, token: &str, file: &Path, kind: MediaKind) -> Option<Arc<V
 
 /// Keeps a screenshot a device tool returned (base64) in the capture folder; its path, for the tool's result.
 pub fn save_capture(b64: &str, mime: &str) -> Option<PathBuf> {
+    save_capture_in(&media::capture_dir()?, b64, mime)
+}
+
+fn save_capture_in(dir: &Path, b64: &str, mime: &str) -> Option<PathBuf> {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
-    let dir = media::capture_dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::create_dir_all(dir).ok()?;
     let ext = if mime == "image/png" { "png" } else { "jpg" };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let name = format!("shot-{}-{:03}-{}.{ext}", now.as_secs(), now.subsec_millis(), &attach::key_of(b64)[..6]);
     let p = dir.join(name);
     std::fs::write(&p, bytes).ok()?;
-    prune(&dir);
+    prune(dir);
     Some(p)
 }
 
@@ -502,6 +506,23 @@ mod tests {
         assert_eq!(parse_range("bytes=10-", 10), None);
         assert_eq!(parse_range("bytes=5-2", 10), None);
         assert_eq!(parse_range("items=0-1", 10), None);
+    }
+
+    #[test]
+    fn screenshots_are_kept_and_pruned() {
+        use base64::Engine;
+        let d = std::env::temp_dir().join(format!("coool-captures-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"\xff\xd8\xff\xe0 a jpeg");
+        let p = save_capture_in(&d, &b64, "image/jpeg").unwrap();
+        assert!(p.starts_with(&d) && p.extension().unwrap() == "jpg" && std::fs::read(&p).unwrap().starts_with(b"\xff\xd8"));
+        assert!(save_capture_in(&d, "not base64!", "image/png").is_none());
+        for i in 0..media::MAX_CAPTURES + 5 {
+            std::fs::write(d.join(format!("shot-old-{i:04}.jpg")), b"x").unwrap();
+        }
+        prune(&d);
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), media::MAX_CAPTURES);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collectMedia, fmtTime, frameHeight, isShowTool, localMedia, mediaKind, savedShots, shownOf } from "./mediaRules.ts";
+import { absPath, collectMedia, fmtTime, frameHeight, isShowTool, localMedia, mediaKind, savedShots, shownOf } from "./mediaRules.ts";
 
 test("the show tool, by each CLI's name", () => {
   for (const n of ["mcp__coool-device__show", "coool-device.show", "coool-device__show"]) assert.ok(isShowTool(n), n);
@@ -47,18 +47,33 @@ test("a chat's media, newest first, each file once", () => {
   const earlier = [{ kind: "prompt", attachments: [{ name: "old.png", mime: "image/png", size: 1, kind: "image" as const, key: "ffffffffffffffff" }] }, { kind: "tool", media: { paths: ["old.mp4"] } }];
   const m = collectMedia(items, earlier);
   assert.deepEqual(m.map((x) => [x.name, x.source, x.kind]), [
-    ["chart.png", "shown", "image"],
     ["demo.mp4", "shown", "video"],
+    ["chart.png", "shown", "image"],
     ["shot-9.jpg", "screenshot", "image"],
-    ["shot.png", "attached", "image"],
     ["rec.mov", "attached", "video"],
+    ["shot.png", "attached", "image"],
     ["old.mp4", "shown", "video"],
     ["old.png", "attached", "image"],
   ]);
-  assert.equal(m[0].caption, "Before and after");
-  assert.equal(m[0].ts, 4, "a written file the agent then showed is where it was shown");
-  assert.deepEqual([m[4].duration, m[4].frames], [12, 2]);
-  assert.equal(m[3].key, "aaaaaaaaaaaaaaaa");
+  assert.equal(m[1].caption, "Before and after");
+  assert.equal(m[1].ts, 4, "a written file the agent then showed is where it was shown");
+  assert.deepEqual([m[3].duration, m[3].frames], [12, 2]);
+  assert.equal(m[4].key, "aaaaaaaaaaaaaaaa");
+});
+
+test("one file however it is named", () => {
+  assert.equal(absPath("out/./a.png", "/p/"), "/p/out/a.png");
+  assert.equal(absPath("../x/a.png", "/p/q"), "/p/x/a.png");
+  assert.equal(absPath("/abs/a.png", "/p"), "/abs/a.png");
+  const m = collectMedia(
+    [
+      { kind: "tool", id: "w", name: "Write", input: { file_path: "/p/out/chart.png" }, output: "", ts: 1, ok: true },
+      { kind: "tool", id: "s", name: "mcp__coool-device__show", input: { paths: ["out/chart.png"] }, output: "", ts: 2, ok: true },
+    ],
+    [],
+    "/p",
+  );
+  assert.deepEqual(m.map((x) => [x.id, x.source]), [["file:/p/out/chart.png", "shown"]]);
 });
 
 test("player clock", () => {

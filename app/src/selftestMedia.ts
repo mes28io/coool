@@ -70,7 +70,7 @@ export function mediaScenarios(k: MediaKit): Record<string, () => Promise<void>>
       let sid = "";
       await k.step("media: the agent shows a picture and a video, a sound and a PDF in its reply", async () => {
         const before = ids();
-        if (!(await newChat({ provider: "claude", cwd: k.dir, prompt: "media demo, with a screenshot", model: null, permissionMode: null }))) throw new Error("couldn't start the chat");
+        if (!(await newChat({ provider: "claude", cwd: k.dir, prompt: "media demo", model: null, permissionMode: null }))) throw new Error("couldn't start the chat");
         id = (await k.waitFor("the new chat", () => {
           const i = [...ids()].find((x) => !before.has(x));
           return i === undefined ? null : { i };
@@ -84,7 +84,7 @@ export function mediaScenarios(k: MediaKit): Record<string, () => Promise<void>>
         grid.scrollIntoView({ block: "center" });
         await k.waitFor("the chart's tile loaded", () => loaded($('[data-media-tile="chart.png"] img', grid) as HTMLImageElement), 15_000);
         await k.waitFor("the video's poster loaded", () => loaded($('[data-media-tile="flow.mp4"] img', grid) as HTMLImageElement), 15_000);
-        const audio = await k.waitFor("the sound's player", () => $('[data-media-audio="voice.m4a"]', tl), 10_000);
+        const audio = await k.waitFor("the sound's player", () => ($('[data-media-shown="voice.m4a"]', tl)?.scrollIntoView({ block: "center" }), $('[data-media-audio="voice.m4a"]', tl)), 10_000);
         const pdf = $('[data-media-shown="spec.pdf"]', tl);
         pdf?.scrollIntoView({ block: "center" });
         await k.waitFor("the PDF's first page", () => loaded($("img", pdf ?? document) as HTMLImageElement), 15_000);
@@ -157,7 +157,7 @@ export function mediaScenarios(k: MediaKit): Record<string, () => Promise<void>>
         await k.shot("media-explainer-full");
         const count = $("[data-media-count]")?.textContent ?? "";
         const n = Number(/of (\d+)/.exec(count)?.[1] ?? 0);
-        if (n < 7) throw new Error(`the viewer's arrows go across ${n} items ("${count}")`);
+        if (n !== 6) throw new Error(`the viewer's arrows go across ${n} items ("${count}")`);
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
         await k.waitFor("closed", () => !$("[data-media-viewer]"), 5_000);
         return `probe ${JSON.stringify(probe)}; height ${h} px; replayed; full size "${count}"`;
@@ -218,10 +218,21 @@ export function mediaScenarios(k: MediaKit): Record<string, () => Promise<void>>
           return i === undefined ? null : { i };
         }, 15_000)).i;
         useStore.getState().open({ kind: "chat", id: rid });
-        await k.waitFor("the earlier shows", () => $$("[data-earlier] [data-media-show]").length >= 4, 20_000);
-        const g = $$("[data-earlier] [data-media-show]").find((x) => !!$('[data-media-tile="chart.png"]', x))!;
+        await k.waitFor("the earlier shows", () => $$("[data-earlier] [data-media-show]").filter((x) => x.offsetParent !== null).length >= 4, 20_000);
+        const g = $$("[data-earlier] [data-media-show]").find((x) => x.offsetParent !== null && !!$('[data-media-tile="chart.png"]', x))!;
         g.scrollIntoView({ block: "center" });
-        await k.waitFor("the earlier chart loaded", () => loaded($('[data-media-tile="chart.png"] img', g) as HTMLImageElement), 15_000);
+        // The resumed chat follows its newest line while it starts: keep the earlier grid in view.
+        await k.waitFor("the resumed chat ready", () => chat(rid)?.ready, 30_000).catch(() => null);
+        await k.waitFor("the earlier chart loaded", () => (g.scrollIntoView({ block: "center" }), loaded($('[data-media-tile="chart.png"] img', g) as HTMLImageElement)), 15_000).catch((e) => {
+          const t = $('[data-media-tile="chart.png"]', g);
+          const sidNow = useChats.getState().chats[rid]?.sessionId;
+          const r0 = t?.getBoundingClientRect();
+          void k.shot("media-reopened-fail");
+          const where = `rect ${r0 ? [r0.x, r0.y, r0.width, r0.height].map(Math.round).join(",") : "-"} in ${innerWidth}x${innerHeight}; cv ${t?.closest(".cv-auto") ? "yes" : "no"}`;
+          return k.invoke("media_grant", { chat: rid, session: `claude:${sidNow}`, paths: ["out/chart.png"] }).then((r) => {
+            throw new Error(`${e}; the tile: ${t ? `"${t.getAttribute("title")}", near ${t.getAttribute("data-near")}, ${t.querySelectorAll("img").length} img` : "none"}; grant now ${JSON.stringify(r).slice(0, 120)}; ${where}`);
+          });
+        });
         await k.shot("media-reopened");
         await k.invoke("chat_stop", { id: rid }).catch(() => {});
         return `${shown} show steps in the transcript; the video's frames read back: ${withFrames ? `${withFrames.frames!.length} (${withFrames.frames!.every((f) => f.key) ? "with keys" : "no keys"})` : "none"}`;

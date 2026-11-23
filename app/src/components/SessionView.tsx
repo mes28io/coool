@@ -408,13 +408,14 @@ export function SessionView({
       scope: chatId !== null || mediaSessionKey ? { chat: chatId, session: mediaSessionKey } : null,
       provider: attachSource.provider,
       session: attachSource.session,
+      cwd: ctxCwd,
       all: () => {
         const st = useChats.getState();
         const c = chatId !== null ? st.chats[chatId] : undefined;
-        return c ? collectMedia(c.items, st.earlier[chatId!] ?? []) : collectMedia([], sessionRef.current?.activity ?? []);
+        return c ? collectMedia(c.items, st.earlier[chatId!] ?? [], c.cwd) : collectMedia([], sessionRef.current?.activity ?? [], sessionRef.current?.cwd);
       },
     }),
-    [chatId, mediaSessionKey, attachSource.provider, attachSource.session],
+    [chatId, mediaSessionKey, attachSource.provider, attachSource.session, ctxCwd],
   );
 
   // ⌘↵ allows / ⌘⌫ denies a pending permission in the focused pane.
