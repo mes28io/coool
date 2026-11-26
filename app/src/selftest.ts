@@ -3269,6 +3269,7 @@ const settingRow = (attr: string) => document.querySelector(`[data-setting="${CS
 const switchIn = (el: Element | null) => el?.querySelector('[role="switch"]') as HTMLElement | null;
 const dbl = (el: Element) => el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));
 function ctxMenu(el: Element) {
+  window.__cooolMenuHeadless = true;
   const r = el.getBoundingClientRect();
   el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 5, button: 2 }));
 }
@@ -3578,12 +3579,10 @@ const sweep: Record<string, (ctx: Ctx) => Promise<void>> = {
     });
     await step("titles: right-click > Use automatic title unpins it; renamed again for the restart check", async () => {
       const h = await waitFor("the header title", () => $("[data-session-title]"), 5_000);
+      window.__cooolMenu = undefined;
       ctxMenu(h);
-      const menu = await waitFor("the title menu", () => $("[data-title-menu]"), 3_000);
-      await shot("sweep-title-menu", undefined, 300);
-      const useAuto = button("Use automatic title", menu);
-      if (!useAuto) throw new Fail(`menu: ${textOf(menu)}`);
-      useAuto.click();
+      const menu = await waitFor("the title menu", () => window.__cooolMenu, 3_000);
+      if (!(await menu.run("Use automatic title"))) throw new Fail(`menu: ${menu.labels.join(" | ")}`);
       const s = await waitFor("an automatic title", () => useStore.getState().sessions.find((x) => sessionKey(x) === key && x.name?.source !== "manual"), 10_000);
       const autoNow = displayTitle(s);
       await api().renameSession(s.provider, s.id, "Sweep survives restart");

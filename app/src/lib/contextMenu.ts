@@ -18,6 +18,8 @@ type Shown = { labels: string[]; run: (label: string) => Promise<boolean> };
 declare global {
   interface Window {
     __cooolMenu?: Shown;
+    /** Selftests: record menus without popping them up (a native popup runs a modal loop until dismissed). */
+    __cooolMenuHeadless?: boolean;
   }
 }
 
@@ -53,7 +55,7 @@ export async function showMenu(items: MenuEntry[]): Promise<void> {
       return true;
     },
   };
-  if (!isTauri) return;
+  if (!isTauri || window.__cooolMenuHeadless) return;
   const { Menu, MenuItem, Submenu, CheckMenuItem, PredefinedMenuItem } = await import("@tauri-apps/api/menu");
   const safe = (f: () => void | Promise<void>) => () => {
     void Promise.resolve()
@@ -102,7 +104,7 @@ const editable = (t: EventTarget | null): HTMLElement | null => {
 async function textMenu(field: boolean) {
   const sel = (window.getSelection()?.toString() ?? "").length > 0;
   window.__cooolMenu = { labels: field ? ["Cut", "Copy", "Paste", "Select All"] : ["Copy", "Select All"], run: async () => false };
-  if (!isTauri) return;
+  if (!isTauri || window.__cooolMenuHeadless) return;
   const { Menu, PredefinedMenuItem } = await import("@tauri-apps/api/menu");
   const items = field
     ? [
