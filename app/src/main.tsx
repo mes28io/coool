@@ -20,6 +20,10 @@ import { onMotion, reducedMotion, setMotionHints } from "./lib/motion";
 import { useChats } from "./lib/chat";
 import { rememberModels, seenModelsNow } from "./lib/prefs";
 import { setLadderStatus } from "./lib/ladder";
+import { installContextMenus } from "./lib/contextMenu";
+
+// Right-click: coool's own menus, never the webview's Reload / Inspect Element (lib/contextMenu.ts).
+installContextMenus();
 
 // "Reduce motion: Auto" follows the device (Low Power Mode, heat, battery) as well as the system setting.
 void initBackend().then((b) => {
