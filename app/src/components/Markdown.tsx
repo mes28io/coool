@@ -163,16 +163,18 @@ const components: Components = {
     ),
   pre: ({ node: _n, children }) => <CodeBlock>{children}</CodeBlock>,
   code: ({ node: _n, className, children }) => <code className={cx("rounded-[4px] bg-[color-mix(in_oklab,var(--dim)_14%,transparent)] px-[5px] py-[1px] font-mono text-[0.88em] text-fg", className)}>{children}</code>,
-  // A table takes the column's width and its cells wrap (long words and paths too), so it fits; one with too many
-  // columns to wrap readably (under ~7rem a column) keeps that width and scrolls sideways in its own box. Never wider
-  // than the column, never clipped.
+  // A table takes the column's width and its cells wrap between words, so it fits; one with too many columns to wrap
+  // readably (under ~7rem a column) keeps that width and scrolls sideways in its own box. Never wider than the column,
+  // never clipped. Words are never split letter by letter ("FUL/L"): `break-word` breaks a word only when it alone
+  // overflows its cell and, unlike `anywhere`, doesn't shrink a column below its longest word. Code in a cell (paths,
+  // ids) may still break anywhere so one long path can't stretch the table.
   table: ({ node, ...p }) => (
     <div className="scroll my-2 max-w-full overflow-x-auto" data-md-table>
       <table className="w-full border-collapse text-base tnum" style={{ minWidth: `${tableColumns(node) * 7}rem` }} {...p} />
     </div>
   ),
-  th: ({ node: _n, ...p }) => <th className="border-b border-line px-[10px] py-[6px] text-left align-bottom font-medium text-fg [overflow-wrap:anywhere]" {...p} />,
-  td: ({ node: _n, ...p }) => <td className="border-b border-hairline px-[10px] py-[6px] align-top [overflow-wrap:anywhere]" {...p} />,
+  th: ({ node: _n, ...p }) => <th className="border-b border-line px-[10px] py-[6px] text-left align-bottom font-medium text-fg [overflow-wrap:break-word] [&_code]:[overflow-wrap:anywhere]" {...p} />,
+  td: ({ node: _n, ...p }) => <td className="border-b border-hairline px-[10px] py-[6px] align-top [overflow-wrap:break-word] [&_code]:[overflow-wrap:anywhere]" {...p} />,
 };
 
 /** Assistant prose as markdown. `streaming`: the text is still arriving. */
