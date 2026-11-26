@@ -8,6 +8,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 import { LADDER, LADDER_LINE } from "../lib/ladderTiers";
 import { SETTINGS_SECTIONS, useStore, type SettingsSection } from "../store";
 import { remoteApi } from "../lib/remote";
+import { onContext } from "../lib/contextMenu";
+import { settingMenu, settingOf } from "../lib/menus/misc";
 import { IBack, IBell, IBranch, IClose, ICommand, IDisk, IGauge, IGear, IInfo, ILock, IPhone, IPlug, ISearch, ISpark, ISun, ITerminal } from "./icons";
 import { PlatformSettings } from "./settings/Platform";
 import { cx, ease, Kbd } from "./primitives";
@@ -216,7 +218,14 @@ export function SettingsPage() {
         transition={{ duration: 0.18, ease }}
       >
         <div data-tauri-drag-region className="h-[48px]" />
-        <div className="mx-auto w-full max-w-[700px] px-8 pb-12" ref={panel}>
+        <div
+          className="mx-auto w-full max-w-[700px] px-8 pb-12"
+          ref={panel}
+          onContextMenu={onContext((e) => {
+            const row = (e.target as Element).closest("[data-setting]");
+            return row ? settingMenu(settingOf(row)) : null;
+          })}
+        >
           {searching ? (
             <>
               <h1 className="text-display font-semibold tracking-[-0.02em] text-fg">Search</h1>

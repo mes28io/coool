@@ -10,6 +10,8 @@ import { create } from "zustand";
 import { api, type MediaGrant } from "../lib/backend";
 import { loadImage } from "../lib/attach";
 import { tokenOf, useGrant, type MediaScope } from "../lib/media";
+import { onContext } from "../lib/contextMenu";
+import { mediaMenu } from "../lib/menus/misc";
 import { baseName, fmtTime, frameHeight, mediaKind, sameFile, shownOf, SOURCE_LABEL, type MediaItem, type MediaKind } from "../lib/mediaRules";
 import { fmtSize } from "../lib/attachRules";
 import type { Attachment } from "../lib/attachRules";
@@ -57,6 +59,11 @@ function useSource(item: MediaItem | null, on = true): { g: MediaGrant | null; s
     return { g: null, src: k?.src ?? null, thumb: k?.src ?? null, failed: k?.failed ? "the image isn’t available any more" : null };
   }
   return { g, src: g?.url ?? null, thumb: g?.thumb ?? null, failed: g?.error ?? null };
+}
+
+/** The right-click menu of a shown item (copy and reveal only for a served file: an attached picture by key has no token). */
+function useItemMenu(item: MediaItem, g: MediaGrant | null, onOpen: () => void) {
+  return onContext(() => mediaMenu({ name: item.name, path: item.path, token: tokenOf(g), open: onOpen, copy: (t) => void api().mediaCopy([t]).catch(() => {}), reveal: (t) => void api().mediaReveal(t).catch(() => {}) }));
 }
 
 const KIND_ICON: Record<MediaKind, (p: { size?: number; className?: string }) => React.ReactNode> = { image: IImage, video: IFilm, audio: IWave, pdf: IFile, explainer: ISpark };
@@ -437,6 +444,7 @@ const itemsOf = (paths: string[], caption: string | undefined): MediaItem[] =>
 function Single({ item, onOpen, maxW = 520, maxH = 360 }: { item: MediaItem; onOpen: () => void; maxW?: number; maxH?: number }) {
   const [ref, near] = useNear<HTMLDivElement>();
   const { g, src, thumb, failed } = useSource(item, near);
+  const cm = useItemMenu(item, g, onOpen);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   const fit = (w: number, h: number) => {
     const s = Math.min(1, maxW / w, maxH / h);
@@ -453,15 +461,15 @@ function Single({ item, onOpen, maxW = 520, maxH = 360 }: { item: MediaItem; onO
     );
   if (item.kind === "explainer")
     return (
-      <div ref={ref} className="w-[min(640px,100%)]" data-media-shown={item.name} data-media-kind="explainer">
+      <div ref={ref} onContextMenu={cm} className="w-[min(640px,100%)]" data-media-shown={item.name} data-media-kind="explainer">
         {src ? <Explainer src={src} name={item.name} onOpen={onOpen} /> : <Placeholder w={640} h={200} />}
       </div>
     );
   if (item.kind === "audio")
-    return <div ref={ref} className="w-[min(460px,100%)]" data-media-shown={item.name} data-media-kind="audio">{src ? <AudioPlayer src={src} name={item.name} sub={g?.size ? fmtSize(g.size) : undefined} /> : <Placeholder w={460} h={58} />}</div>;
+    return <div ref={ref} onContextMenu={cm} className="w-[min(460px,100%)]" data-media-shown={item.name} data-media-kind="audio">{src ? <AudioPlayer src={src} name={item.name} sub={g?.size ? fmtSize(g.size) : undefined} /> : <Placeholder w={460} h={58} />}</div>;
   if (item.kind === "video")
     return (
-      <div ref={ref} className="overflow-hidden rounded-[14px] border border-hairline bg-black" style={box ? { width: box.w, height: box.h } : { width: Math.min(maxW, 480), height: 270 }} data-media-shown={item.name} data-media-kind="video">
+      <div ref={ref} onContextMenu={cm} className="overflow-hidden rounded-[14px] border border-hairline bg-black" style={box ? { width: box.w, height: box.h } : { width: Math.min(maxW, 480), height: 270 }} data-media-shown={item.name} data-media-kind="video">
         {src ? (
           <video
             src={src}
@@ -478,7 +486,7 @@ function Single({ item, onOpen, maxW = 520, maxH = 360 }: { item: MediaItem; onO
     );
   const shown = item.kind === "image" ? src : thumb;
   return (
-    <button ref={ref as unknown as React.Ref<HTMLButtonElement>} type="button" onClick={onOpen} title={item.name} data-media-shown={item.name} data-media-kind={item.kind} className="relative block w-fit self-start overflow-hidden rounded-[14px] border border-hairline bg-raised transition-[border-color] duration-150 hover:border-line">
+    <button ref={ref as unknown as React.Ref<HTMLButtonElement>} type="button" onClick={onOpen} onContextMenu={cm} title={item.name} data-media-shown={item.name} data-media-kind={item.kind} className="relative block w-fit self-start overflow-hidden rounded-[14px] border border-hairline bg-raised transition-[border-color] duration-150 hover:border-line">
       {shown ? (
         <motion.img
           src={shown}
@@ -505,7 +513,8 @@ function Placeholder({ w, h }: { w: number; h: number }) {
 /** A square tile: the picture, or a video's / PDF's thumbnail with its badge, or a sound's mark. */
 const Tile = memo(function Tile({ item, size, onOpen, more }: { item: MediaItem; size: number | string; onOpen: () => void; more?: number }) {
   const [ref, near] = useNear<HTMLButtonElement>();
-  const { src, thumb, failed } = useSource(item, near);
+  const { g, src, thumb, failed } = useSource(item, near);
+  const cm = useItemMenu(item, g, onOpen);
   const Icon = KIND_ICON[item.kind];
   const pic = item.kind === "image" ? (item.key ? src : thumb) : thumb;
   return (
@@ -513,6 +522,7 @@ const Tile = memo(function Tile({ item, size, onOpen, more }: { item: MediaItem;
       ref={ref}
       type="button"
       onClick={onOpen}
+      onContextMenu={failed ? undefined : cm}
       title={failed ? `${item.name}: ${failed}` : item.name}
       data-media-tile={item.name}
       data-media-kind={item.kind}

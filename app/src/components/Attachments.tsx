@@ -14,6 +14,10 @@ import { IBack, IClip, IClose, ICopy, IFile, IFit, IForward, IFolderOpen, IImage
 import { Chip, cx, ease } from "./primitives";
 import { AttachedMedia } from "./Media";
 import { mediaKind } from "../lib/mediaRules";
+import { onContext } from "../lib/contextMenu";
+import { attachMenu } from "../lib/menus/misc";
+
+const reveal = (path: string) => void api().attachReveal(path).catch(() => {});
 
 // ---------- where a conversation's images come from ----------
 
@@ -106,11 +110,11 @@ function RemoveButton({ onClick, name }: { onClick: () => void; name: string }) 
 }
 
 /** A file as a chip: badge, name, size and type; a note or a refusal on the second line. */
-export function FileChip({ a, state, error, onOpen, onRemove, compact }: { a: { name: string; mime: string; size: number; note?: string }; state?: Draft["state"]; error?: string; onOpen?: () => void; onRemove?: () => void; compact?: boolean }) {
+export function FileChip({ a, state, error, onOpen, onRemove, compact }: { a: { name: string; mime: string; size: number; note?: string; path?: string }; state?: Draft["state"]; error?: string; onOpen?: () => void; onRemove?: () => void; compact?: boolean }) {
   const bad = state === "error";
   const sub = bad ? error : state === "reading" ? "Reading…" : [fmtSize(a.size), a.note].filter(Boolean).join(" · ") || typeLabel(a).toLowerCase();
   return (
-    <div className="group relative" data-attach-file={a.name} data-attach-state={state ?? "sent"}>
+    <div className="group relative" data-attach-file={a.name} data-attach-state={state ?? "sent"} onContextMenu={onContext(() => bad || state === "reading" ? null : attachMenu({ name: a.name, path: a.path, open: onOpen, reveal, remove: onRemove }))}>
       <button
         type="button"
         onClick={bad ? undefined : onOpen}
@@ -144,7 +148,7 @@ function ImageTile({ img, size, state, error, onOpen, onRemove, more, layout }: 
   const { src, failed } = useImage(state === "error" ? null : img);
   const bad = state === "error";
   return (
-    <div className="group relative" style={{ width: size, height: size }} data-attach-image={img.name} data-attach-state={state ?? "sent"}>
+    <div className="group relative" style={{ width: size, height: size }} data-attach-image={img.name} data-attach-state={state ?? "sent"} onContextMenu={onContext(() => bad || state === "reading" ? null : attachMenu({ name: img.name, path: img.path, open: failed ? undefined : onOpen, reveal, remove: onRemove }))}>
       <button
         type="button"
         onClick={bad || failed ? undefined : onOpen}
@@ -236,7 +240,7 @@ export function AttachTray({ chat }: { chat: number }) {
                     {isImg ? (
                       <ImageTile img={viewOf(d)} size={56} state={d.state} error={d.error} onOpen={() => open(d)} onRemove={() => remove(chat, d.id)} />
                     ) : (
-                      <FileChip a={{ name: d.name, mime: d.att?.mime ?? d.mime, size: d.size, note: d.att?.note }} state={d.state} error={d.error} compact onOpen={() => open(d)} onRemove={() => remove(chat, d.id)} />
+                      <FileChip a={{ name: d.name, mime: d.att?.mime ?? d.mime, size: d.size, note: d.att?.note, path: d.att?.path }} state={d.state} error={d.error} compact onOpen={() => open(d)} onRemove={() => remove(chat, d.id)} />
                     )}
                   </motion.div>
                 );
@@ -352,7 +356,7 @@ function SingleImage({ img, onOpen }: { img: ViewImage; onOpen: () => void }) {
       </div>
     );
   return (
-    <button type="button" onClick={onOpen} title={img.name} data-attach-image={img.name} className="block overflow-hidden rounded-[14px] border border-hairline bg-raised transition-[border-color] duration-150 hover:border-line">
+    <button type="button" onClick={onOpen} onContextMenu={onContext(() => attachMenu({ name: img.name, path: img.path, open: onOpen, reveal }))} title={img.name} data-attach-image={img.name} className="block overflow-hidden rounded-[14px] border border-hairline bg-raised transition-[border-color] duration-150 hover:border-line">
       <motion.img
         src={src}
         alt={img.name}
@@ -387,6 +391,7 @@ export function StepImages({ paths, root }: { paths: string[]; root: string }) {
             useViewer.getState().open({ kind: "images", items, index: i });
           }}
           title={`Preview ${paths[i]}`}
+          onContextMenu={onContext(() => attachMenu({ name: it.name, path: paths[i], open: () => useViewer.getState().open({ kind: "images", items, index: i }), reveal }))}
           className="inline-flex h-[20px] items-center gap-1 rounded-[6px] px-1.5 text-micro text-dim hover:bg-hover hover:text-fg"
         >
           <IImage size={12} />

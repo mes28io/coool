@@ -12,6 +12,8 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/backend";
+import { onContext } from "../lib/contextMenu";
+import { historyMenu } from "../lib/menus/misc";
 import { folderName, homeShort } from "../lib/format";
 import { byDay, filtersOn, NO_FILTERS, openHistoryRow, promptsLabel, spanLabel, toQuery, WHERE_LABEL, type DateRange, type HistoryFilters, type HistoryHelper, type HistoryPage as Page, type HistoryRow, type Where } from "../lib/history";
 import { modelLabel } from "../lib/models";
@@ -319,6 +321,9 @@ export function HistoryPage() {
   );
 }
 
+const revealFolder = (path: string) => void api().attachReveal(path).catch(() => {});
+const makeFolder = (cwd: string) => void api().historyMakeFolder(cwd).then(() => useStore.getState().toast("Folder made again", "info")).catch((e) => useStore.getState().toast(String(e), "error"));
+
 function time(ms: number, searching: boolean): string {
   const d = new Date(ms);
   if (!searching) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -349,6 +354,7 @@ function Row({ r, i, on, live, searching, opening, reduce, onHover, onOpen }: { 
         data-history-row={r.key}
         onMouseMove={() => !on && onHover()}
         onClick={(e) => onOpen(e.metaKey || e.ctrlKey)}
+        onContextMenu={onContext(() => (onHover(), historyMenu({ row: r, open: onOpen, reveal: revealFolder, makeFolder })))}
         className={cx("mb-0.5 flex w-full items-start gap-3 rounded-[12px] border px-3 py-2.5 text-left transition-colors duration-150", on ? "border-hairline bg-raised shadow-card" : "border-transparent hover:bg-hover")}
       >
         <span className="relative mt-[3px] flex shrink-0">
@@ -400,6 +406,7 @@ function Helpers({ parent, rows, live, opening, searching, onOpen }: { parent: H
           type="button"
           data-history-helper={h.key}
           onClick={(e) => onOpen(h, e.metaKey || e.ctrlKey)}
+          onContextMenu={onContext(() => historyMenu({ row: { id: h.id, cwd: parent.cwd, missing: parent.missing }, open: (nt) => onOpen(h, nt), reveal: revealFolder, makeFolder }))}
           className="flex h-[30px] w-full min-w-0 items-center gap-2 rounded-[8px] px-2 text-left text-small transition-colors duration-150 hover:bg-hover"
           title={`Started by “${parent.title}”`}
         >
