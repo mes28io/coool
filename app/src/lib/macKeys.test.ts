@@ -1,7 +1,7 @@
 // Run: node --test app/src/lib/macKeys.test.ts (Node strips the types itself).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { macKeyCode } from "./macKeys.ts";
+import { keyAction, macKeyCode } from "./macKeys.ts";
 
 test("letters and digits map to kVK codes", () => {
   assert.equal(macKeyCode("KeyA"), 0);
@@ -39,4 +39,32 @@ test("unknown keys are not passed through", () => {
   assert.equal(macKeyCode("KeyAB"), null);
   assert.equal(macKeyCode("MediaPlayPause"), null);
   assert.equal(macKeyCode(""), null);
+});
+
+const ev = (code: string, o: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; repeat: boolean }> = {}) => ({ code, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false, ...o });
+
+test("Cmd+V is the backend's paste, only when plain", () => {
+  assert.deepEqual(keyAction(ev("KeyV", { metaKey: true })), { kind: "paste" });
+  assert.deepEqual(keyAction(ev("KeyV", { metaKey: true, shiftKey: true })), { kind: "combo", code: 9, copyBack: false });
+  assert.deepEqual(keyAction(ev("KeyV", { metaKey: true, repeat: true })), { kind: "ignore" });
+});
+
+test("Cmd+C and Cmd+X copy back to this Mac; other Command combos are pressed and released at once", () => {
+  assert.deepEqual(keyAction(ev("KeyC", { metaKey: true })), { kind: "combo", code: 8, copyBack: true });
+  assert.deepEqual(keyAction(ev("KeyX", { metaKey: true })), { kind: "combo", code: 7, copyBack: true });
+  for (const code of ["KeyA", "KeyZ", "KeyQ", "KeyW", "KeyH", "KeyM", "Comma", "KeyN", "KeyT", "KeyF", "KeyS"]) {
+    const a = keyAction(ev(code, { metaKey: true }));
+    assert.equal(a.kind, "combo", code);
+    assert.equal((a as { copyBack: boolean }).copyBack, false, code);
+  }
+  assert.equal(keyAction(ev("KeyZ", { metaKey: true, shiftKey: true })).kind, "combo");
+});
+
+test("modifiers and plain keys are held; Control+Option releases the keyboard", () => {
+  assert.deepEqual(keyAction(ev("MetaLeft", { metaKey: true })), { kind: "key", code: 55 });
+  assert.deepEqual(keyAction(ev("KeyA")), { kind: "key", code: 0 });
+  assert.deepEqual(keyAction(ev("AltLeft", { ctrlKey: true, altKey: true })), { kind: "release" });
+  assert.deepEqual(keyAction(ev("ControlLeft", { ctrlKey: true, altKey: true })), { kind: "release" });
+  assert.equal(keyAction(ev("AltLeft", { altKey: true })).kind, "key");
+  assert.equal(keyAction(ev("KeyA", { ctrlKey: true, altKey: true })).kind, "key");
 });

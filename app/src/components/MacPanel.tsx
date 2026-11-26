@@ -8,10 +8,10 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, MAC_NETWORK_TRUTH, type MacInput, type MacNetworkMode, type MacStatus } from "../lib/backend";
-import { macKeyCode } from "../lib/macKeys";
+import { keyAction, META, MODIFIERS } from "../lib/macKeys";
 import { simTarget, usePresenceOf } from "../lib/presence";
 import { Spinner, useBox } from "./DevicePanel";
-import { IClose, IFolder, IGlobe, IGlobeLocal, IGlobeOff, IInfo, IMac } from "./icons";
+import { IClose, IFolder, IGlobe, IGlobeLocal, IGlobeOff, IInfo, IKeyboard, IMac } from "./icons";
 import { PanelBeam, PresenceLayer } from "./Presence";
 import { Button, cx, IconButton, Popover, Segmented } from "./primitives";
 import { reducedMotion } from "./StepRail";
@@ -70,6 +70,8 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
   const [busy, setBusy] = useState<null | "install" | "boot" | "shutdown">(null);
   const [err, setErr] = useState<{ text: string; retry: () => void } | null>(null);
   const [confirm, setConfirm] = useState(false);
+  // Keyboard capture: every key goes to the Mac (coool's menu and shortcuts stand aside). On by clicking the screen.
+  const [keys, setKeys] = useState(false);
 
   const refresh = useCallback(
     () =>
@@ -165,7 +167,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
     );
   } else if (running) {
     content = (
-      <MacScreen active={active} box={box} initial={shape} onLost={() => void refresh()} />
+      <MacScreen active={active} box={box} initial={shape} keys={keys} setKeys={setKeys} onLost={() => void refresh()} />
     );
   } else {
     content = (
@@ -221,6 +223,13 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
               Boot
             </Button>
           ))}
+        {running && (
+          <span className="inline-flex" onMouseDown={(e) => e.preventDefault()} data-mac-keys-toggle={keys ? "on" : "off"}>
+            <IconButton title="Send all keys to the sandbox Mac (⌃⌥ to release)" active={keys} onClick={() => setKeys((k) => !k)}>
+              <IKeyboard size={15} />
+            </IconButton>
+          </span>
+        )}
         {status && available && st !== "absent" && <NetworkMark status={status} />}
         {status && available && st !== "absent" && <MacInfo status={status} />}
         <IconButton title="Close" onClick={onClose}>
@@ -420,7 +429,7 @@ function Frame({
       ref={ref}
       className={cx(
         "relative size-full overflow-hidden rounded-[12px] bg-black outline-none ring-1 ring-inset transition-shadow duration-150",
-        focused ? "ring-[1.5px] ring-[color-mix(in_oklab,var(--dim)_70%,transparent)]" : "ring-hairline",
+        focused ? "ring-2 ring-[var(--accent-2)]" : "ring-hairline",
       )}
     >
       {children}
@@ -442,15 +451,12 @@ function Frame({
   );
 }
 
-/** Command keys: on macOS a key pressed while Command is held gets no keyup in WebKit, so they are released with it. */
-const META = new Set([54, 55]);
-const MODIFIERS = new Set([54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
 /** Errors that mean the Mac is gone (not running, its helper stopped). */
 const GONE = /isn.t running|helper stopped/;
 
 /** The live screen of the running Mac: attached while `active`, driven by pointer, wheel and keyboard. `onLost`: the
  * screen or the input found the Mac gone (shut down from inside it, say), so the panel reads its state again. */
-function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w: number; h: number }; initial: { w: number; h: number }; onLost: () => void }) {
+function MacScreen({ active, box, initial, keys, setKeys, onLost }: { active: boolean; box: { w: number; h: number }; initial: { w: number; h: number }; keys: boolean; setKeys: (on: boolean) => void; onLost: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const frameEl = useRef<HTMLDivElement>(null);
   const [d, setD] = useState(initial);
@@ -458,7 +464,7 @@ function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w
   const [attempt, setAttempt] = useState(0);
   const lost = useEffectEvent(onLost);
   const [shown, setShown] = useState(false);
-  const [focused, setFocused] = useState(false);
+  const focused = keys;
 
   useEffect(() => {
     if (!active) return;
@@ -619,34 +625,66 @@ function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w
     // oxlint-disable-next-line react/exhaustive-effect-dependencies, react-hooks/exhaustive-deps
   }, []);
 
-  const pasteWait = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Capture on: the native menu gives up its key equivalents (Cmd+Q, Cmd+C, Cmd+H...) so every key reaches the page.
+  useEffect(() => {
+    if (!keys) return;
+    void api().macCapture(true).catch(() => {});
+    return () => void api().macCapture(false).catch(() => {});
+  }, [keys]);
+  // The screen going away (the Mac stopped, the panel closed) hands the keyboard back.
+  useEffect(
+    () => () => setKeys(false),
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies, react-hooks/exhaustive-deps
+    [],
+  );
+  // The toggle (or anything else setting `keys`) moves the DOM focus with it.
+  useEffect(() => {
+    const el = frameEl.current;
+    if (!el) return;
+    if (keys && document.activeElement !== el) el.focus({ preventScroll: true });
+    if (!keys && document.activeElement === el) el.blur();
+  }, [keys]);
+  const copyBack = () => {
+    // The guest's clipboard changes a moment after the keys: ask twice (idempotent).
+    for (const ms of [250, 900]) setTimeout(() => void api().macInput([{ kind: "copyBack" }]).catch(() => {}), ms);
+  };
   const onKeyDown = (e: React.KeyboardEvent) => {
     // Every key is the Mac's while it has focus (Escape too: the panel doesn't close).
     e.stopPropagation();
-    if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyV") {
-      // Paste this Mac's clipboard as text: Command goes up in the guest first, so it types rather than shortcuts.
-      releaseKeys((c) => META.has(c));
-      clearTimeout(pasteWait.current);
-      // Let the paste event carry the text; if the webview sends none, read the clipboard.
-      pasteWait.current = setTimeout(() => {
-        void navigator.clipboard
-          ?.readText()
-          .then((t) => t && send({ kind: "text", text: t }))
-          .catch(() => {});
-      }, 80);
-      return;
-    }
     e.preventDefault();
-    const code = macKeyCode(e.code);
-    if (code == null || e.repeat) return; // the guest repeats held keys itself
-    held.current.add(code);
-    send({ kind: "keyDown", code });
+    const a = keyAction(e.nativeEvent);
+    if (a.kind === "release") {
+      releaseAll();
+      setKeys(false);
+    } else if (a.kind === "paste") {
+      // Command goes up first, then the backend's Cmd+V is the only one; Command goes back down if still held.
+      const meta = [...held.current].filter((c) => META.has(c));
+      releaseKeys((c) => META.has(c));
+      send({ kind: "paste" });
+      for (const c of meta.length ? meta : [55]) {
+        held.current.add(c);
+        send({ kind: "keyDown", code: c });
+      }
+    } else if (a.kind === "combo") {
+      // WebKit sends no keyup for a key pressed under Command: press and release now, never stuck or repeating.
+      if (!held.current.size || ![...held.current].some((c) => META.has(c))) {
+        held.current.add(55);
+        send({ kind: "keyDown", code: 55 });
+      }
+      send({ kind: "keyDown", code: a.code });
+      send({ kind: "keyUp", code: a.code });
+      if (a.copyBack) copyBack();
+    } else if (a.kind === "key") {
+      held.current.add(a.code);
+      send({ kind: "keyDown", code: a.code });
+    }
   };
   const onKeyUp = (e: React.KeyboardEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    const code = macKeyCode(e.code);
-    if (code == null) return;
+    const a = keyAction({ code: e.code, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false });
+    if (a.kind !== "key") return;
+    const code = a.code;
     if (held.current.delete(code)) send({ kind: "keyUp", code });
     if (META.has(code)) releaseKeys((c) => !MODIFIERS.has(c));
   };
@@ -663,19 +701,15 @@ function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w
       aria-label="Mac screen"
       data-mac-screen
       data-key-capture
-      onFocus={() => setFocused(true)}
+      data-mac-keys={keys ? "on" : "off"}
+      onFocus={() => setKeys(true)}
       onBlur={() => {
-        setFocused(false);
+        setKeys(false);
         releaseAll();
       }}
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
-      onPaste={(e) => {
-        clearTimeout(pasteWait.current);
-        const t = e.clipboardData.getData("text/plain");
-        if (t) send({ kind: "text", text: t });
-        e.preventDefault();
-      }}
+      onPaste={(e) => e.preventDefault()}
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => {
         if (attachErr || (e.button !== 0 && e.button !== 2)) return;
@@ -708,6 +742,11 @@ function MacScreen({ active, box, initial, onLost }: { active: boolean; box: { w
       }}
     >
       <canvas ref={canvas} className="absolute inset-0 size-full touch-none select-none" />
+      {keys && (
+        <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-2.5 py-0.5 text-small text-white/80" data-mac-keys-hint>
+          Keys → Mac · ⌃⌥ to release
+        </div>
+      )}
       {!shown && !attachErr && (
         <div className="absolute inset-0 flex items-center justify-center bg-[#0b0b0d]">
           <Spinner />

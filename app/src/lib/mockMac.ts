@@ -4,7 +4,7 @@
 import { MAC_NETWORK_TRUTH, type Backend, type MacStatus } from "./backend";
 import { emitMockSimActivity } from "./mockSim";
 
-type Mac = Pick<Backend, "macStatus" | "macInstall" | "macBoot" | "macShutdown" | "macAttach" | "macDetach" | "macInput" | "macBind" | "macNetwork" | "onMacState">;
+type Mac = Pick<Backend, "macStatus" | "macInstall" | "macBoot" | "macShutdown" | "macAttach" | "macDetach" | "macInput" | "macBind" | "macCapture" | "macNetwork" | "onMacState">;
 
 const W = 1280;
 const H = 800;
@@ -176,6 +176,7 @@ export function mockMac(): Mac {
       }
     },
     async macBind() {},
+    async macCapture() {},
     async macNetwork(mode) {
       if (mode) {
         // Live when the running Mac has a network device (it always does in the mock).

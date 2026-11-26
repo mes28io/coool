@@ -132,6 +132,12 @@ export const IAlert = mk(
   </>,
 );
 /** About / information: the alert circle turned over (dot on top). */
+export const IKeyboard = mk(
+  <>
+    <rect x="1.75" y="3.75" width="12.5" height="8.5" rx="1.75" />
+    <path d="M4.5 6.5h.01M7 6.5h.01M9.5 6.5h.01M11.5 6.5h.01M5 9.5h6" />
+  </>,
+);
 export const IInfo = mk(
   <>
     <circle cx="8" cy="8" r="6.25" />

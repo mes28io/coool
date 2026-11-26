@@ -297,6 +297,8 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   macInput(inputs: MacInput[]): Promise<void>;
   /** The Mac panel shows for this chat (`on`), or was closed: the chat's agent tools act on the Mac while bound. */
   macBind(chat: number, on: boolean): Promise<void>;
+  /** Every key goes to the Mac (`on`): coool's own menu key equivalents (Cmd+Q, Cmd+C, Cmd+H...) step aside until off. */
+  macCapture(on: boolean): Promise<void>;
   /** The Mac's network switch: reads it, or sets it (`on`, `local`, `off`); applies now when it can, else at next boot. */
   macNetwork(mode?: MacNetworkMode): Promise<MacNetwork>;
   /** A partial status (state, progress, step, error) to merge into the last `macStatus`. */
@@ -366,7 +368,11 @@ export type MacInput =
   | { kind: "scroll"; x: number; y: number; dx: number; dy: number }
   | { kind: "keyDown"; code: number }
   | { kind: "keyUp"; code: number }
-  | { kind: "text"; text: string };
+  | { kind: "text"; text: string }
+  /** Cmd+V with this Mac's clipboard text (the backend puts it on the Mac's pasteboard, then presses Cmd+V there). */
+  | { kind: "paste" }
+  /** The Mac's copied text to this Mac's clipboard (after Cmd+C / Cmd+X in the Mac). */
+  | { kind: "copyBack" };
 
 export interface SimDevice {
   udid: string;
@@ -870,6 +876,7 @@ async function tauriBackend(): Promise<Backend> {
     macDetach: (stream) => soft("mac_detach", { stream }),
     macInput: (inputs) => soft("mac_input", { input: inputs }),
     macBind: (chat, on) => soft("mac_bind", { chat, on }),
+    macCapture: (on) => soft("mac_capture", { on }),
     macNetwork: (mode) => soft("mac_network", { mode: mode ?? null }),
     onMacState: (cb) => sub<Partial<MacStatus>>("mac-state", cb),
     deviceGrants: () => soft("device_grants"),

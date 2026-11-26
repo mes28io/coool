@@ -1945,6 +1945,22 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     MenuBuilder::new(app).items(&[&app_menu, &edit, &window]).build()
 }
 
+/// The menu while the Mac panel takes every key: no key equivalents at all (Cmd+Q, Cmd+H, Cmd+C, Cmd+M, Ctrl+Cmd+F...
+/// would otherwise be the menu's before the page sees them), so each reaches the sandbox Mac. Quit stays a menu click.
+fn build_capture_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let quit = MenuItemBuilder::with_id("quit", "Quit coool").build(app)?;
+    let app_menu = SubmenuBuilder::new(app, "coool").about(None).separator().item(&quit).build()?;
+    MenuBuilder::new(app).items(&[&app_menu]).build()
+}
+
+/// The Mac panel takes every key (`on`) or gives them back: swaps the app menu for one without key equivalents and back.
+#[tauri::command(async)]
+fn mac_capture(app: AppHandle, on: bool) -> Result<(), String> {
+    let menu = if on { build_capture_menu(&app) } else { build_menu(&app) }.map_err(|e| e.to_string())?;
+    app.set_menu(menu).map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Cmd+Q / the Quit menu item: ask first when PTYs or chats are running.
 fn request_quit(app: &AppHandle) {
     let core = app.state::<Arc<Core>>();
@@ -2370,6 +2386,7 @@ pub fn run() {
             device::vm::mac_attach,
             device::vm::mac_detach,
             device::vm::mac_input,
+            mac_capture,
             device::vm::mac_bind,
             device::vm::mac_network,
             device::gate::device_grants,

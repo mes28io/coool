@@ -963,9 +963,35 @@ fn one_input(devices: &Devices, input: &Value) -> Res<()> {
         "keyUp" => json!({ "cmd": "keyUp", "code": input["code"] }),
         "key" => return vm.press_key(devices, input["name"].as_str().unwrap_or(""), &vm_input::modifier_list(&input["modifiers"])),
         "text" => return type_text(devices, input["text"].as_str().unwrap_or("")),
+        // Cmd+V: this Mac's clipboard text to the guest's pasteboard, then a real Cmd+V in the guest.
+        "paste" => {
+            return paste_with(
+                crate::media::native::clipboard_text(),
+                |text| vm.agent(devices, json!({ "cmd": "setPasteboard", "text": text }), t).map(|_| ()),
+                || vm.press_key(devices, "v", &["command"]),
+            );
+        }
+        // Some time after Cmd+C / Cmd+X in the guest: its clipboard text comes to this Mac's clipboard.
+        "copyBack" => {
+            let text = vm.agent(devices, json!({ "cmd": "getPasteboard" }), t)?["text"].as_str().unwrap_or("").to_string();
+            if !text.is_empty() && !crate::media::native::set_clipboard_text(&text) {
+                return Err("couldn't put the Mac's copied text on this Mac's clipboard".into());
+            }
+            return Ok(());
+        }
         k => return Err(format!("unknown input {k:?}")),
     };
     vm.call(devices, req, t).map(|_| ())
+}
+
+/// Cmd+V in the guest with this Mac's clipboard: the text (when there is any) goes to the guest's pasteboard first, then
+/// the guest gets a genuine Cmd+V, so its focused app pastes (secure fields too). No text here: plain Cmd+V, the
+/// guest's own clipboard. A failure of either step is the call's error (and no key goes out after a failed set).
+fn paste_with(clip: Option<String>, set: impl FnOnce(&str) -> Res<()>, press: impl FnOnce() -> Res<()>) -> Res<()> {
+    if let Some(text) = clip.as_deref().filter(|t| !t.is_empty()) {
+        set(text).map_err(|e| format!("couldn't put the clipboard on the Mac's pasteboard: {e}"))?;
+    }
+    press()
 }
 
 /// Types text: key by key when a US keyboard has every character, else through the guest's pasteboard.
@@ -1713,6 +1739,32 @@ fn remove_entry(p: &Path) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn paste_sets_the_guest_pasteboard_before_the_keys() {
+        let log: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        paste_with(Some("hi".into()), |t| { log.borrow_mut().push(format!("set {t}")); Ok(()) }, || { log.borrow_mut().push("cmd+v".into()); Ok(()) }).unwrap();
+        assert_eq!(*log.borrow(), ["set hi", "cmd+v"]);
+    }
+
+    #[test]
+    fn paste_without_clipboard_text_is_a_plain_cmd_v() {
+        for clip in [None, Some(String::new())] {
+            let log: RefCell<Vec<String>> = RefCell::new(Vec::new());
+            paste_with(clip, |_| { log.borrow_mut().push("set".into()); Ok(()) }, || { log.borrow_mut().push("cmd+v".into()); Ok(()) }).unwrap();
+            assert_eq!(*log.borrow(), ["cmd+v"]);
+        }
+    }
+
+    #[test]
+    fn paste_errors_surface_and_stop_the_keys() {
+        let pressed = RefCell::new(false);
+        let e = paste_with(Some("x".into()), |_| Err("agent down".into()), || { *pressed.borrow_mut() = true; Ok(()) }).unwrap_err();
+        assert!(e.contains("agent down"));
+        assert!(!*pressed.borrow());
+        assert_eq!(paste_with(None, |_| Ok(()), || Err("keys failed".into())).unwrap_err(), "keys failed");
+    }
 
     #[test]
     fn share_copies_files_and_folders_and_names_the_guest_path() {

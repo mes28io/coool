@@ -64,6 +64,33 @@ const NAMED: Record<string, number> = {
 /** A key pressed inside an element that takes every key for itself (the Mac screen, `data-key-capture`): app shortcuts stand aside. */
 export const keysCaptured = (e: KeyboardEvent) => !!(e.target instanceof Element && e.target.closest("[data-key-capture]"));
 
+/** Command keys: on macOS a key pressed while Command is held gets no keyup in WebKit, so it is pressed and released at once. */
+export const META = new Set([54, 55]);
+export const MODIFIERS = new Set([54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
+
+export type KeyAction =
+  /** Control and Option together: hand the keyboard back to coool. */
+  | { kind: "release" }
+  /** Cmd+V: the host clipboard to the Mac, then a real Cmd+V there. */
+  | { kind: "paste" }
+  /** A key with Command held: pressed and released at once; `copyBack` after Cmd+C / Cmd+X. */
+  | { kind: "combo"; code: number; copyBack: boolean }
+  | { kind: "key"; code: number }
+  | { kind: "ignore" };
+
+type KeyLike = { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; repeat: boolean };
+
+/** What a key press in the Mac screen (keys captured) does. */
+export function keyAction(e: KeyLike): KeyAction {
+  if (e.ctrlKey && e.altKey && !e.metaKey && /^(Control|Alt)(Left|Right)$/.test(e.code)) return { kind: "release" };
+  if (e.repeat) return { kind: "ignore" };
+  if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyV") return { kind: "paste" };
+  const code = macKeyCode(e.code);
+  if (code == null) return { kind: "ignore" };
+  if (e.metaKey && !MODIFIERS.has(code)) return { kind: "combo", code, copyBack: !e.ctrlKey && !e.altKey && !e.shiftKey && (e.code === "KeyC" || e.code === "KeyX") };
+  return { kind: "key", code };
+}
+
 /** The macOS virtual key code for a `KeyboardEvent.code`, or null for a key the Mac panel doesn't pass through. */
 export function macKeyCode(code: string): number | null {
   if (code.startsWith("Key") && code.length === 4) return LETTERS[code[3]] ?? null;

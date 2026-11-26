@@ -60,6 +60,22 @@ pub fn copy_files(paths: &[PathBuf]) -> bool {
     return { let _ = paths; false };
 }
 
+/// The general pasteboard's plain text (what Cmd+C put there); None when it holds no text.
+pub fn clipboard_text() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    return mac::guard(|| mac::text_of(None)).flatten();
+    #[cfg(not(target_os = "macos"))]
+    return None;
+}
+
+/// Replaces the general pasteboard's contents with this text. True on success.
+pub fn set_clipboard_text(text: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    return mac::guard(|| mac::set_text(None, text)).unwrap_or(false);
+    #[cfg(not(target_os = "macos"))]
+    return { let _ = text; false };
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2::encode::{Encode, Encoding, RefEncode};
@@ -360,9 +376,64 @@ mod mac {
         }
     }
 
+    fn general() -> Option<Retained<AnyObject>> {
+        let cls = AnyClass::get(c"NSPasteboard")?;
+        unsafe { msg_send![cls, generalPasteboard] }
+    }
+
+    const STRING_TYPE: &str = "public.utf8-plain-text";
+
+    pub fn text_of(pb: Option<&AnyObject>) -> Option<String> {
+        let held;
+        let pb = match pb {
+            Some(p) => p,
+            None => {
+                held = general()?;
+                &*held
+            }
+        };
+        let ty = NSString::from_str(STRING_TYPE);
+        let s: Option<Retained<NSString>> = unsafe { msg_send![pb, stringForType: &*ty] };
+        s.map(|s| s.to_string())
+    }
+
+    pub fn set_text(pb: Option<&AnyObject>, text: &str) -> bool {
+        let held;
+        let pb = match pb {
+            Some(p) => p,
+            None => match general() {
+                Some(g) => {
+                    held = g;
+                    &*held
+                }
+                None => return false,
+            },
+        };
+        let ty = NSString::from_str(STRING_TYPE);
+        let s = NSString::from_str(text);
+        unsafe {
+            let _: isize = msg_send![pb, clearContents];
+            msg_send![pb, setString: &*s, forType: &*ty]
+        }
+    }
+
     #[cfg(test)]
     pub mod testing {
         use super::*;
+
+        /// Text through a private pasteboard: what it held, whether set worked, then what it holds.
+        pub fn text_round_trip(text: &str) -> (Option<String>, bool, Option<String>) {
+            super::guard(|| unsafe {
+                let cls = AnyClass::get(c"NSPasteboard").unwrap();
+                let pb: Retained<AnyObject> = msg_send![cls, pasteboardWithUniqueName];
+                let empty = text_of(Some(&pb));
+                let ok = set_text(Some(&pb), text);
+                let got = text_of(Some(&pb));
+                let _: () = msg_send![&pb, releaseGlobally];
+                (empty, ok, got)
+            })
+            .unwrap()
+        }
 
         /// A private pasteboard, its file URLs after `copy_files`, then released.
         pub fn copy_to_private(paths: &[PathBuf]) -> (bool, Vec<String>) {
@@ -388,6 +459,14 @@ mod mac {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_goes_on_and_off_a_pasteboard() {
+        let (before, ok, got) = mac::testing::text_round_trip("héllo\nwörld ✓");
+        assert_eq!(before, None);
+        assert!(ok);
+        assert_eq!(got.as_deref(), Some("héllo\nwörld ✓"));
+    }
     use std::process::Command;
 
     const SWIFT: &str = r#"
