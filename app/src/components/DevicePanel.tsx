@@ -6,6 +6,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, type SimDevice, type SimInput, type SimList } from "../lib/backend";
+import { onContext } from "../lib/contextMenu";
+import { simMenu } from "../lib/menus/panels";
 import { simTarget, usePresenceOf } from "../lib/presence";
 import { useStore } from "../store";
 import { ICaret, ICheck, IClose, IHome, ILock, IPhone } from "./icons";
@@ -212,7 +214,26 @@ export function DevicePanel({ panelKey, chat, active, onClose }: { panelKey: str
           <IClose size={14} />
         </IconButton>
       </div>
-      <div ref={setBody} className="relative min-h-0 flex-1 overflow-hidden">
+      <div
+        ref={setBody}
+        className="relative min-h-0 flex-1 overflow-hidden"
+        onContextMenu={onContext(() =>
+          device
+            ? simMenu({
+                booted,
+                busy: booting || stopping,
+                press,
+                paste: () =>
+                  void navigator.clipboard
+                    .readText()
+                    .then((t) => (t && udid ? api().simInput(udid, { kind: "text", text: t }) : undefined))
+                    .catch(() => {}),
+                boot: () => boot(device.udid),
+                shutdown: () => shutdown(device.udid),
+              })
+            : null,
+        )}
+      >
         {content}
         {device && err && booted && (
           <div className="absolute inset-x-3 top-3 flex items-center gap-2 rounded-[10px] border border-line bg-raised px-3 py-2 text-small shadow-card">

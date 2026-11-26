@@ -8,6 +8,8 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/backend";
+import { copyText, onContext } from "../lib/contextMenu";
+import { changesFileMenu, changesHunkMenu } from "../lib/menus/panels";
 import { type Chat, useChats } from "../lib/chat";
 import { changesKeep, changesUndo, setSplitPref, setTellAgentPref, splitPref, tellAgentPref, type ChangesTarget } from "../lib/changes";
 import { COMMIT_ASK, commitDraft, splitPath, totals, undoNote, unifiedText, type ChangeSet, type FileChange, type HunkView, type Outcome, type Scope } from "../lib/changesRules";
@@ -226,7 +228,8 @@ export function ChangesPanel({
                   })
                 }
                 onCopied={() => setNote({ text: `Copied the diff of ${f.rel}`, bad: false })}
-                onOpen={() => target && void api().changesOpen(target.cwd, f.path, f.line).catch((e) => setNote({ text: String(e), bad: true }))}
+                onOpen={(line) => target && void api().changesOpen(target.cwd, f.path, line).catch((e) => setNote({ text: String(e), bad: true }))}
+                onReveal={() => void api().attachReveal(f.path).catch((e) => setNote({ text: String(e), bad: true }))}
                 chat={chat}
               />
             ))}
@@ -439,6 +442,7 @@ function FileCard({
   onDismissAsk,
   onCopied,
   onOpen,
+  onReveal,
   chat,
 }: {
   f: FileChange;
@@ -460,7 +464,8 @@ function FileCard({
   onUnkeep: () => void;
   onDismissAsk: () => void;
   onCopied: () => void;
-  onOpen: () => void;
+  onOpen: (line: number) => void;
+  onReveal: () => void;
   chat: Chat | null;
 }) {
   const [dir, name] = splitPath(f.rel);
@@ -469,6 +474,10 @@ function FileCard({
   const working = !!busyKey?.startsWith(f.path + "#");
   const agents = useAgentNames(chat, f.agents);
   const showHunks = !folded && !gone && !f.binary && !f.large;
+  const locked = working || readOnly;
+  const fileMenu = onContext(() =>
+    changesFileMenu(f, { copyText: (t) => void copyText(t).then(onCopied), open: onOpen, keep: () => onKeep(null), undo: () => onUndo(null), reveal: onReveal, locked }),
+  );
   const hunkActions = (h: HunkView) =>
     gone ? null : (
       <span className="flex items-center gap-0.5 opacity-70 transition-opacity group-hover/h:opacity-100">
@@ -483,7 +492,7 @@ function FileCard({
       </span>
     );
   return (
-    <section className={cx("border-b border-hairline", f.kept && scope === "chat" && "opacity-[0.92]")} data-file-index={index} data-change-file={f.rel} data-file-kept={f.kept || undefined} data-file-diverged={f.diverged || undefined} data-file-busy={f.busy || undefined}>
+    <section onContextMenu={fileMenu} className={cx("border-b border-hairline", f.kept && scope === "chat" && "opacity-[0.92]")} data-file-index={index} data-change-file={f.rel} data-file-kept={f.kept || undefined} data-file-diverged={f.diverged || undefined} data-file-busy={f.busy || undefined}>
       <div className="sticky top-0 z-[2] flex min-h-[40px] items-center gap-2 bg-panel/95 px-3 py-1.5 backdrop-blur-[6px]">
         <button type="button" onClick={onFold} className="flex size-[18px] shrink-0 items-center justify-center text-faint hover:text-fg" title={folded ? "Show the diff" : "Fold"} aria-expanded={!folded}>
           <IChevron size={11} className={cx("transition-transform duration-150", !folded && "rotate-90")} />
@@ -519,7 +528,7 @@ function FileCard({
             <MiniButton title={undoWhy ?? (f.status === "added" ? "Undo: the new file goes to the Trash" : f.status === "deleted" ? "Undo: put the file back" : "Undo the agent's changes to this file")} onClick={() => onUndo(null)} disabled={working || !!undoWhy} danger data-undo-file>
               <IReturn size={12} /> Undo
             </MiniButton>
-            <FileMenu f={f} onCopied={onCopied} onOpen={onOpen} root={root} />
+            <FileMenu f={f} onCopied={onCopied} onOpen={() => onOpen(f.line)} root={root} />
           </span>
         )}
       </div>
@@ -564,7 +573,11 @@ function FileCard({
       {showHunks && f.hunks.length > 0 && (
         <div className={cx("mx-3 mb-3 overflow-hidden rounded-[10px] border border-hairline bg-bg", f.busy && "border-[color-mix(in_oklab,var(--status-running)_35%,var(--border))]")}>
           <LazyDiff f={f} eager={eager} scroller={scroller}>
-            {() => <DiffBody file={f} split={split} foldKept={scope !== "pending"} slots={{ actions: hunkActions, focused }} />}
+            {() => <DiffBody file={f} split={split} foldKept={scope !== "pending"} slots={{
+                actions: hunkActions,
+                focused,
+                menu: (h, _i, at) => changesHunkMenu(f, h, { copyText: (t) => copyText(t), open: onOpen, keep: () => onKeep(h), undo: () => onUndo(h), locked, ...at }),
+              }} />}
           </LazyDiff>
         </div>
       )}

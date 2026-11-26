@@ -7,6 +7,8 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/backend";
+import { copyText, onContext, type MenuEntry } from "../lib/contextMenu";
+import { contextItemMenu } from "../lib/menus/panels";
 import {
   fileNameFor,
   grouped,
@@ -39,7 +41,8 @@ const MONO = { fontFamily: "var(--font-mono)", fontSize: "var(--text-mono-small)
 
 type View =
   | { kind: "list" }
-  | { kind: "item"; item: CtxItem }
+  /** `trash`: opens with the move-to-Trash question already asked. */
+  | { kind: "item"; item: CtxItem; trash?: boolean }
   | { kind: "edit"; path: string; label: string; group: CtxGroup }
   | { kind: "create-skill" }
   | { kind: "create-memory" };
@@ -165,6 +168,15 @@ export function ContextPanelBody({
                 provider={provider}
                 onChangeModel={onChangeModel}
                 onOpen={(it) => setView({ kind: "item", item: it })}
+                onMenu={(it) =>
+                  contextItemMenu(it.path ?? null, {
+                    copyText,
+                    open: () => setView({ kind: "item", item: it }),
+                    edit: it.editable && it.path ? () => setView({ kind: "edit", path: it.path!, label: it.label, group: it.group }) : undefined,
+                    reveal: () => it.path && void api().chatContextReveal(target, it.path).catch((e) => toast(errText(e))),
+                    trash: canTrash(it) ? () => setView({ kind: "item", item: it, trash: true }) : undefined,
+                  })
+                }
                 onReveal={(p) => void api().chatContextReveal(target, p).catch((e) => toast(errText(e)))}
                 onCreateSkill={() => setView({ kind: "create-skill" })}
                 onCreateMemory={() => setView({ kind: "create-memory" })}
@@ -173,6 +185,7 @@ export function ContextPanelBody({
             ) : view.kind === "item" && shownItem ? (
               <ItemView
                 item={shownItem}
+                trash={view.kind === "item" && !!view.trash}
                 target={target}
                 provider={provider}
                 active={active}
@@ -230,6 +243,7 @@ function Overview({
   provider,
   onChangeModel,
   onOpen,
+  onMenu,
   onReveal,
   onCreateSkill,
   onCreateMemory,
@@ -241,6 +255,7 @@ function Overview({
   provider: Provider;
   onChangeModel?: () => void;
   onOpen: (i: CtxItem) => void;
+  onMenu: (i: CtxItem) => MenuEntry[];
   onReveal: (p: string) => void;
   onCreateSkill: () => void;
   onCreateMemory: () => void;
@@ -334,7 +349,7 @@ function Overview({
             )}
           </div>
           {g.items.map((it) => (
-            <Row key={it.id} item={it} onOpen={() => onOpen(it)} />
+            <Row key={it.id} item={it} onOpen={() => onOpen(it)} onMenu={() => onMenu(it)} />
           ))}
         </Card>
       ))}
@@ -393,13 +408,14 @@ function SizeBar({ groups, total }: { groups: { group: CtxGroup; title: string; 
   );
 }
 
-function Row({ item: it, onOpen }: { item: CtxItem; onOpen: () => void }) {
+function Row({ item: it, onOpen, onMenu }: { item: CtxItem; onOpen: () => void; onMenu: () => MenuEntry[] }) {
   const size = it.tokens || it.full_tokens;
   const label = it.path && it.group === "instructions" ? homeShort(it.path) : it.label;
   return (
     <button
       type="button"
       onClick={onOpen}
+      onContextMenu={onContext(onMenu)}
       title={[it.path ? homeShort(it.path) : it.label, it.description, it.note].filter(Boolean).join("\n")}
       data-context-item={it.path ?? it.id}
       data-context-used={it.used ? "" : undefined}
@@ -453,11 +469,14 @@ function Meta({ item: it, provider }: { item: CtxItem; provider: Provider }) {
   );
 }
 
-function ItemView({ item: it, target, provider, active, onEdit, onDeleted }: { item: CtxItem; target: CtxTarget; provider: Provider; active: boolean; onEdit: () => void; onDeleted: () => void }) {
+/** Items coool can move to the Trash: memory files, skills and instruction files (not the memory index). */
+const canTrash = (it: CtxItem) => !!it.path && it.editable && (it.kind === "memory" || it.kind === "skill" || it.group === "instructions") && it.kind !== "memory_index";
+
+function ItemView({ item: it, trash, target, provider, active, onEdit, onDeleted }: { item: CtxItem; trash: boolean; target: CtxTarget; provider: Provider; active: boolean; onEdit: () => void; onDeleted: () => void }) {
   const [file, setFile] = useState<CtxFile | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [mode, setMode] = useState<"rendered" | "source">("rendered");
-  const [confirm, setConfirm] = useState(false);
+  const [confirm, setConfirm] = useState(trash);
   const [busy, setBusy] = useState(false);
   const path = it.path;
   // The file, then again every few seconds (the agent may be editing it).
@@ -480,7 +499,7 @@ function ItemView({ item: it, target, provider, active, onEdit, onDeleted }: { i
   }, [path, active, target.cwd, target.provider]);
   const text = path ? (file?.text ?? null) : it.text;
   const md = !path || /\.(md|markdown)$/i.test(path);
-  const canDelete = !!path && it.editable && (it.kind === "memory" || it.kind === "skill" || it.group === "instructions") && it.kind !== "memory_index";
+  const canDelete = canTrash(it);
   const del = async () => {
     if (!path) return;
     setBusy(true);
@@ -496,7 +515,20 @@ function ItemView({ item: it, target, provider, active, onEdit, onDeleted }: { i
     }
   };
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-context-view={path ?? it.id}>
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      data-context-view={path ?? it.id}
+      onContextMenu={onContext(() => {
+        // The file's text keeps its Copy / Select All.
+        if (window.getSelection()?.toString()) return null;
+        return contextItemMenu(path ?? null, {
+          copyText,
+          edit: it.editable && file?.editable ? onEdit : undefined,
+          reveal: () => path && void api().chatContextReveal(target, path).catch((err) => useStore.getState().toast(errText(err))),
+          trash: canDelete ? () => setConfirm(true) : undefined,
+        });
+      })}
+    >
       <div className="shrink-0 space-y-2 px-4 pb-2.5">
         {it.description && it.group !== "instructions" && <p className="text-base text-fg">{it.description}</p>}
         <Meta item={it} provider={provider} />

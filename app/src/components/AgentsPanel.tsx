@@ -4,7 +4,9 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { countsText, isLive, orderCards, type AgentCardData } from "../lib/agentCards";
+import { copyText, onContext } from "../lib/contextMenu";
 import { useClock } from "../lib/clock";
+import { jobMenu } from "../lib/menus/panels";
 import { fmtClock, fmtElapsed } from "../lib/format";
 import { MOODS, toolMood } from "../lib/activityMood";
 import { useFold } from "../lib/cardFold";
@@ -157,7 +159,11 @@ function Card({ card, role, onOpen, onStop }: { card: AgentCardData; role?: stri
   const full = `${card.kind}${card.description ? ` · ${card.description}` : ""}`;
 
   return (
-    <div ref={el} className="overflow-hidden rounded-[14px] border border-hairline bg-bg shadow-card" data-agent-panel-card={card.id} data-state={card.quiet ? "quiet" : card.stopped ? "stopped" : card.state} data-open={open}>
+    <div
+      ref={el}
+      onContextMenu={onContext(() => jobMenu({ copyText, open: onOpen, openLabel: card.source === "job" ? "Open" : "Open in timeline", task: card.description, output: card.result ?? card.error, stop: card.stoppable ? onStop : undefined }))}
+      className="overflow-hidden rounded-[14px] border border-hairline bg-bg shadow-card"
+      data-agent-panel-card={card.id} data-state={card.quiet ? "quiet" : card.stopped ? "stopped" : card.state} data-open={open}>
       <div role="button" tabIndex={0} onClick={toggle} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle())} className="flex cursor-default items-start gap-2 px-3 pb-1 pt-2.5">
         <div className="min-w-0 flex-1">
           {/* The task is what tells agents apart, so it is the title; the model and kind sit under it. */}
@@ -422,7 +428,11 @@ function ShellCard({ shell, onStop }: { shell: Shell; onStop?: (pid: number) => 
   const described = !!title;
   const meta = [`pid ${shell.pid}`, `${shell.cpu}% CPU`, shell.background ? null : "foreground"].filter(Boolean).join(" · ");
   return (
-    <div ref={el} className="overflow-hidden rounded-[12px] border border-hairline bg-bg shadow-card" data-shell-card={shell.pid} data-open={expandable && open}>
+    <div
+      ref={el}
+      onContextMenu={onContext(() => jobMenu({ copyText, command: shell.command, output: tail.length ? tail.join("\n") : null, stop: onStop ? () => void onStop(shell.pid).catch((err) => useStore.getState().toast(`Couldn't stop the shell: ${err instanceof Error ? err.message : String(err)}`, "error")) : undefined }))}
+      className="overflow-hidden rounded-[12px] border border-hairline bg-bg shadow-card"
+      data-shell-card={shell.pid} data-open={expandable && open}>
       <div
         role={expandable ? "button" : undefined}
         tabIndex={expandable ? 0 : undefined}
