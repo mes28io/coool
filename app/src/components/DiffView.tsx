@@ -4,6 +4,7 @@
 // Used by the Changes panel (ChangesPanel.tsx) and for a pending edit in a permission request (InlineDiff.tsx).
 
 import { memo, useMemo, useState, type ReactNode } from "react";
+import { onContext, type MenuEntry } from "../lib/contextMenu";
 import { colorize, type Tok } from "../lib/attachRules";
 import { gaps, partners, splitRows, textLines, type DiffLine, type FileChange, type HunkView } from "../lib/changesRules";
 import { wordDiff } from "../lib/mission";
@@ -70,7 +71,9 @@ const UnifiedHunk = memo(function UnifiedHunk({ h, name, wide }: { h: HunkView; 
           <span className={num}>{l.n ?? ""}</span>
           <span className={cx("select-none text-center", SIGN_TX[l.k])}>{l.k === " " ? "" : l.k === "-" ? "−" : "+"}</span>
           <span className="whitespace-pre-wrap break-all pr-3 text-fg/90">
-            <Code line={l} partner={pair[i] >= 0 ? h.lines[pair[i]] : null} toks={toks[i] ?? []} name={name} />
+            <span data-diff-code>
+              <Code line={l} partner={pair[i] >= 0 ? h.lines[pair[i]] : null} toks={toks[i] ?? []} name={name} />
+            </span>
             {l.noeol && <span className="ml-1 select-none text-faint" title="No newline at end of file">⏎̸</span>}
           </span>
         </div>
@@ -89,7 +92,7 @@ const SplitHunk = memo(function SplitHunk({ h, name, wide }: { h: HunkView; name
       <span key="n" className={cx(num, ROW_BG[k])}>
         {side === "-" ? l.o : l.n}
       </span>,
-      <span key="c" className={cx("whitespace-pre-wrap break-all pr-3 text-fg/90", ROW_BG[k])}>
+      <span key="c" className={cx("whitespace-pre-wrap break-all pr-3 text-fg/90", ROW_BG[k])} data-diff-code>
         <Code line={l} partner={l.k !== " " && other && other.k !== " " ? other : null} toks={colorize(l.t, name)[0] ?? []} name={name} />
       </span>,
     ];
@@ -158,6 +161,8 @@ export interface HunkSlots {
   below?: (h: HunkView, i: number) => ReactNode;
   /** The hunk the keyboard is on. */
   focused?: number | null;
+  /** Right-click menu for a hunk: the person's selection in the diff and the code of the line under the pointer come with it. */
+  menu?: (h: HunkView, i: number, at: { selection: string; line: string | null }) => MenuEntry[];
 }
 
 /** A file's hunks. `split`: side by side. Kept hunks fold to one line (`foldKept`). */
@@ -171,7 +176,24 @@ export function DiffBody({ file, split, slots, foldKept }: { file: Pick<FileChan
   const wide = Math.max(4, String(maxN).length + 2);
   const [unfold, setUnfold] = useState<Set<string>>(new Set());
   return (
-    <div className="font-mono text-mono-small leading-[19px]" data-diff-body={file.rel}>
+    <div
+      className="font-mono text-mono-small leading-[19px]"
+      data-diff-body={file.rel}
+      onContextMenu={
+        slots?.menu
+          ? onContext((e) => {
+              const t = e.target as Element;
+              const i = Number(t.closest("[data-hunk-index]")?.getAttribute("data-hunk-index") ?? -1);
+              const h = file.hunks[i];
+              if (!h) return null;
+              const sel = window.getSelection();
+              const selection = sel && e.currentTarget.contains(sel.anchorNode) ? sel.toString() : "";
+              const code = t.closest("[data-diff-code]") ?? t.closest("[data-diff-line]")?.querySelector("[data-diff-code]");
+              return slots.menu!(h, i, { selection, line: code?.textContent ?? null });
+            })
+          : undefined
+      }
+    >
       {file.hunks.map((h, i) => {
         const before = g.before[i];
         // Old = new - offset for the unchanged lines before this hunk.

@@ -7,6 +7,8 @@
 
 import { createElement, useEffect, useRef, useState } from "react";
 import { api } from "../lib/backend";
+import { copyText, onContext } from "../lib/contextMenu";
+import { browserPageMenu, browserTabMenu } from "../lib/menus/panels";
 import { useAgentBrowsing } from "../lib/browserAgent";
 import { browserTarget, usePresenceOf } from "../lib/presence";
 import { addressUrl, closeNative, hide, nativeId, onOverlays, overlayCovers, place, previewArtifact, tabKey, useBrowserState, type RecentPage } from "../lib/browser";
@@ -74,8 +76,25 @@ export function BrowserPanel({
   const driving = presence.driving && !start;
   return (
     <div className="flex h-full flex-col" data-browser-panel={page.kind}>
-      <TabStrip panelKey={panelKey} state={state} agentTab={agentTab} />
-      <div className="flex h-[40px] shrink-0 items-center gap-0.5 border-b border-hairline pl-2 pr-1.5">
+      <TabStrip panelKey={panelKey} state={state} agentTab={agentTab} current={{ url, canBack: native && !!st?.can_back, canForward: native && !!st?.can_forward, go: (a) => (native ? go(a) : a === "reload" && setFrameKey((k) => k + 1)), native: !!native }} />
+      <div
+        className="flex h-[40px] shrink-0 items-center gap-0.5 border-b border-hairline pl-2 pr-1.5"
+        // The address field keeps its text menu (Cut / Copy / Paste).
+        onContextMenu={onContext((e) =>
+          (e.target as Element).closest("input")
+            ? null
+            : browserPageMenu({
+                copyText,
+                url: web ? url : null,
+                current: true,
+                canBack: native && !!st?.can_back,
+                canForward: native && !!st?.can_forward,
+                reloadable: !start,
+                go: (a) => (native ? go(a) : a === "reload" && setFrameKey((k) => k + 1)),
+                openExternal: web ? openExternal : undefined,
+              }),
+        )}
+      >
         <IconButton title="Back" disabled={!native || !st?.can_back} onClick={() => go("back")}>
           <IBack size={15} />
         </IconButton>
@@ -117,13 +136,47 @@ export function BrowserPanel({
 }
 
 /** The panel's tabs: click to switch, x (on hover, or a middle click) to close, + for a new tab. */
-function TabStrip({ panelKey, state, agentTab }: { panelKey: string; state: BrowserTabs; agentTab: number | null }) {
+function TabStrip({
+  panelKey,
+  state,
+  agentTab,
+  current,
+}: {
+  panelKey: string;
+  state: BrowserTabs;
+  agentTab: number | null;
+  /** What the tab on screen can do (the others have no live page state here). */
+  current: { url: string; canBack: boolean; canForward: boolean; go: (a: "back" | "forward" | "reload") => void; native: boolean };
+}) {
   const selectBrowserTab = useStore((s) => s.selectBrowserTab);
   const closeBrowserTab = useStore((s) => s.closeBrowserTab);
   const openBrowser = useStore((s) => s.openBrowser);
   const close = (t: BrowserTab) => {
     closeNative(tabKey(panelKey, t.id));
     closeBrowserTab(panelKey, t.id);
+  };
+  const tabMenu = (t: BrowserTab, on: boolean) => {
+    const page = t.page.kind === "web" ? t.page : null;
+    return browserTabMenu({
+      copyText,
+      url: page ? (on && current.url ? current.url : t.url || page.url) : null,
+      current: on,
+      canBack: current.canBack,
+      canForward: current.canForward,
+      reloadable: !!page,
+      go: current.go,
+      openExternal:
+        page
+          ? () => {
+              const id = nativeId(tabKey(panelKey, t.id));
+              if (current.native && id) void api().browserOpenExternal(id).catch((e) => useStore.getState().toast(`Couldn't open it: ${e}`, "error"));
+              else if (!current.native) window.open(t.url || page.url, "_blank", "noopener");
+            }
+          : undefined,
+      duplicate: page ? () => openBrowser(panelKey, { kind: "web", url: t.url || page.url }, { fresh: true, after: t.id }) : undefined,
+      close: () => close(t),
+      closeOthers: state.tabs.length > 1 ? () => state.tabs.filter((x) => x.id !== t.id).forEach(close) : undefined,
+    });
   };
   return (
     <div className="flex h-[36px] shrink-0 items-center gap-1 border-b border-hairline pl-2 pr-1.5" role="tablist" data-browser-tabs={state.tabs.length}>
@@ -139,6 +192,7 @@ function TabStrip({ panelKey, state, agentTab }: { panelKey: string; state: Brow
               tabIndex={0}
               title={t.page.kind === "web" ? `${title}\n${t.url || t.page.url}` : title}
               onClick={() => selectBrowserTab(panelKey, t.id)}
+              onContextMenu={onContext(() => tabMenu(t, on))}
               onAuxClick={(e) => {
                 if (e.button === 1) close(t);
               }}

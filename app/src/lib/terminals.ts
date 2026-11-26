@@ -216,3 +216,16 @@ export function attachTerminal(id: number, host: HTMLElement): () => void {
 export function focusTerminal(id: number) {
   reg.get(id)?.term.focus();
 }
+
+/** xterm's own selection (it draws to a canvas, so the page's text menu can't see it). */
+export const terminalSelection = (id: number) => reg.get(id)?.term.getSelection() ?? "";
+
+/** Paste like ⌘V: through xterm, so bracketed paste and newline handling match. */
+export function pasteIntoTerminal(id: number, text: string) {
+  if (text) reg.get(id)?.term.paste(text);
+}
+
+export const selectAllInTerminal = (id: number) => reg.get(id)?.term.selectAll();
+
+/** Clears the screen and scrollback; the shell's current line stays. */
+export const clearTerminal = (id: number) => reg.get(id)?.term.clear();

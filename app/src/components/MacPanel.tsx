@@ -8,6 +8,9 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api, MAC_NETWORK_TRUTH, type MacInput, type MacNetworkMode, type MacStatus } from "../lib/backend";
+import { onContext } from "../lib/contextMenu";
+import { macMenu } from "../lib/menus/panels";
+import { useStore } from "../store";
 import { keyAction, META, MODIFIERS } from "../lib/macKeys";
 import { simTarget, usePresenceOf } from "../lib/presence";
 import { Spinner, useBox } from "./DevicePanel";
@@ -167,7 +170,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
     );
   } else if (running) {
     content = (
-      <MacScreen active={active} box={box} initial={shape} keys={keys} setKeys={setKeys} onLost={() => void refresh()} />
+      <MacScreen active={active} box={box} initial={shape} keys={keys} setKeys={setKeys} status={status} onShutdown={shutdown} onLost={() => void refresh()} />
     );
   } else {
     content = (
@@ -456,7 +459,25 @@ const GONE = /isn.t running|helper stopped/;
 
 /** The live screen of the running Mac: attached while `active`, driven by pointer, wheel and keyboard. `onLost`: the
  * screen or the input found the Mac gone (shut down from inside it, say), so the panel reads its state again. */
-function MacScreen({ active, box, initial, keys, setKeys, onLost }: { active: boolean; box: { w: number; h: number }; initial: { w: number; h: number }; keys: boolean; setKeys: (on: boolean) => void; onLost: () => void }) {
+function MacScreen({
+  active,
+  box,
+  initial,
+  keys,
+  setKeys,
+  status,
+  onShutdown,
+  onLost,
+}: {
+  active: boolean;
+  box: { w: number; h: number };
+  initial: { w: number; h: number };
+  keys: boolean;
+  setKeys: (on: boolean) => void;
+  status: MacStatus;
+  onShutdown: () => void;
+  onLost: () => void;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const frameEl = useRef<HTMLDivElement>(null);
   const [d, setD] = useState(initial);
@@ -644,6 +665,18 @@ function MacScreen({ active, box, initial, keys, setKeys, onLost }: { active: bo
     if (keys && document.activeElement !== el) el.focus({ preventScroll: true });
     if (!keys && document.activeElement === el) el.blur();
   }, [keys]);
+  // A right click while keys aren't captured opens the menu instead of going to the Mac (and must not turn capture on).
+  const menuClick = useRef(false);
+  const menu = onContext(() =>
+    macMenu({
+      keysOn: keys,
+      sendKeys: () => setKeys(true),
+      paste: () => send({ kind: "paste" }),
+      copyBack,
+      network: { mode: status.network ?? "on", labels: NETWORK_LABEL, pick: (m) => void api().macNetwork(m).catch((e) => useStore.getState().toast(`Couldn't change the network: ${msg(e)}`, "error")) },
+      shutdown: onShutdown,
+    }),
+  );
   const copyBack = () => {
     // The guest's clipboard changes a moment after the keys: ask twice (idempotent).
     for (const ms of [250, 900]) setTimeout(() => void api().macInput([{ kind: "copyBack" }]).catch(() => {}), ms);
@@ -702,7 +735,7 @@ function MacScreen({ active, box, initial, keys, setKeys, onLost }: { active: bo
       data-mac-screen
       data-key-capture
       data-mac-keys={keys ? "on" : "off"}
-      onFocus={() => setKeys(true)}
+      onFocus={() => !menuClick.current && setKeys(true)}
       onBlur={() => {
         setKeys(false);
         releaseAll();
@@ -710,10 +743,16 @@ function MacScreen({ active, box, initial, keys, setKeys, onLost }: { active: bo
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
       onPaste={(e) => e.preventDefault()}
-      onContextMenu={(e) => e.preventDefault()}
+      onContextMenu={(e) => {
+        if (keys) return void (e.preventDefault(), e.stopPropagation());
+        menu(e);
+        menuClick.current = false;
+      }}
       onPointerDown={(e) => {
         if (attachErr || (e.button !== 0 && e.button !== 2)) return;
         e.preventDefault();
+        menuClick.current = e.button === 2 && !keys;
+        if (menuClick.current) return;
         (e.currentTarget as HTMLElement).focus({ preventScroll: true });
         e.currentTarget.setPointerCapture(e.pointerId);
         cancelAnimationFrame(moveRaf.current);
