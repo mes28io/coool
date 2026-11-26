@@ -36,6 +36,8 @@ import { RailItem, RailList, reducedMotion, Reveal } from "./StepRail";
 import { deriveCheckpoints, type Checkpoints } from "../lib/checkpoints";
 import { openChanges } from "../lib/infoRequest";
 import { openChangesAt } from "../lib/changes";
+import { onContext } from "../lib/contextMenu";
+import { agentMenu, stepMenu, turnFilesMenu } from "../lib/menus/chatWired";
 import { turnFiles } from "../lib/changesRules";
 import { InlineDiff, editPairs } from "./InlineDiff";
 import { parsePlan, planForTurn } from "../lib/plan";
@@ -863,7 +865,7 @@ const ChatSteps = memo(function ChatSteps({ tools, chat, nested, latest }: { too
                     ) : isPilotTool(t.name) ? (
                       <PilotRun t={t} chat={chat.id} fresh={fresh} />
                     ) : (
-                      <ToolStep t={t} cwd={chat.cwd} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
+                      <ToolStep t={t} cwd={chat.cwd} chat={chat.id} waiting={t.endTs === null && pendingTool === t.name} fresh={fresh} />
                     )}
                   </RailItem>
                 );
@@ -949,7 +951,7 @@ function PilotRun({ t, chat, fresh }: { t: Tool; chat: number; fresh?: boolean }
   );
 }
 
-function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Tool; cwd: string; dense?: boolean; waiting?: boolean; fresh?: boolean; stoppedIn?: boolean }) {
+function ToolStep({ t, cwd, chat, dense, waiting, fresh, stoppedIn = false }: { t: Tool; cwd: string; chat?: number; dense?: boolean; waiting?: boolean; fresh?: boolean; stoppedIn?: boolean }) {
   const [open, setOpen] = useKept(`tool:${t.key}`, false);
   const hasOut = !!t.output && t.endTs !== null;
   const r = stepRow(t, cwd);
@@ -972,6 +974,11 @@ function ToolStep({ t, cwd, dense, waiting, fresh, stoppedIn = false }: { t: Too
         since={t.ts}
         onClick={hasOut ? () => setOpen(!open) : undefined}
         open={open}
+        menu={() => {
+          const i = (t.input ?? {}) as Record<string, unknown>;
+          const file = typeof i.file_path === "string" ? i.file_path : typeof i.notebook_path === "string" ? i.notebook_path : null;
+          return stepMenu({ input: t.input, output: t.output, detail: r.detail, cwd, chat, file, fold: hasOut ? { open, toggle: () => setOpen(!open) } : undefined });
+        }}
       />
       {shots.length > 0 && (
         <div className="-mt-0.5 mb-0.5 ml-[18px]">
@@ -1041,6 +1048,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
         ref={card}
         data-agent-card={tool.id}
         data-open={open}
+        onContextMenu={onContext(() => agentMenu({ task: prompt || title, result: running ? undefined : tool.output, fold: { open, toggle } }))}
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
           lit ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))]" : "border-hairline",
@@ -1089,7 +1097,7 @@ function AgentCard({ tool, chat, kids }: { tool: Tool; chat: Chat; kids: ChatIte
                   const fresh = !agentSeen.current.has(s.key);
                   return (
                     <RailItem key={s.key} first={i === 0} last={i === shownSteps.length - 1} fresh={fresh} active={s.endTs === null}>
-                      <ToolStep t={s} cwd={chat.cwd} dense fresh={fresh} stoppedIn={end === "stopped" && i === shownSteps.length - 1} />
+                      <ToolStep t={s} cwd={chat.cwd} chat={chat.id} dense fresh={fresh} stoppedIn={end === "stopped" && i === shownSteps.length - 1} />
                     </RailItem>
                   );
                 })}
@@ -1630,13 +1638,15 @@ function TurnFilesLine({ chat, item }: { chat: Chat; item: Extract<ChatItem, { k
     }
     const p = i >= 0 && items[i].kind === "prompt" ? (items[i] as Extract<ChatItem, { kind: "prompt" }>) : null;
     const ordinal = p ? items.slice(0, i + 1).filter((x) => x.kind === "prompt").length : 0;
-    return { files: turnFiles(tools).length, p, ordinal };
+    return { paths: turnFiles(tools), files: turnFiles(tools).length, p, ordinal };
   }, [items, item]);
   if (!info.files || !chat.sessionId) return null;
+  const show = () => openChangesAt(chat.id, { at: info.p?.ts ?? item.ts, prompt: info.p?.text, ordinal: info.ordinal });
   return (
     <button
       type="button"
-      onClick={() => openChangesAt(chat.id, { at: info.p?.ts ?? item.ts, prompt: info.p?.text, ordinal: info.ordinal })}
+      onClick={show}
+      onContextMenu={onContext(() => turnFilesMenu(info.paths, chat.cwd, chat.id, show))}
       className="-mx-1 mt-0.5 inline-flex items-center gap-1.5 rounded-[6px] px-1 text-small text-faint transition-colors duration-150 hover:bg-hover hover:text-fg"
       title="Review this turn's changes: diffs, keep and undo"
       data-turn-files={info.files}

@@ -30,6 +30,8 @@ import { RailItem, RailList, Reveal, reducedMotion } from "./StepRail";
 import { TimelineSkeleton } from "./Skeletons";
 import { ArtifactCard, artifactVersions } from "./ArtifactCard";
 import { countRender } from "../lib/perfCount";
+import { onContext, type MenuEntry } from "../lib/contextMenu";
+import { agentMenu, messageMenu, stepMenu } from "../lib/menus/chatWired";
 import { sessionKey } from "../lib/types";
 import { bringNear, KeepScope, useKept, Windowed, type WindowApi } from "./Windowed";
 import { useKeepReadingPlace } from "../lib/layoutAnchor";
@@ -498,6 +500,7 @@ export function PromptBubble({ text, stamp, shortened, unsent, attachments, scop
           "selectable max-w-[86%] whitespace-pre-wrap break-words rounded-[18px] rounded-br-[6px] border px-4 py-3 text-prose",
           unsent ? "border-dashed border-line bg-transparent text-dim" : "border-hairline bg-raised text-fg shadow-card",
         )}
+        onContextMenu={onContext((e) => messageMenu(e.currentTarget, text))}
       >
         {text}
         {shortened && <div className="mt-1 text-small text-faint">… shortened</div>}
@@ -789,7 +792,9 @@ const StepGroup = memo(function StepGroup({
 
 function StepRow({ a, active, dense, live, fresh }: { a: Activity; active: boolean; dense?: boolean; live: LiveTime; fresh?: boolean }) {
   const r = toolRowFromText(a.text);
-  return <StepLine name={r.label} tool={r.raw} detail={r.detail} active={active} dense={dense} fresh={fresh} stamp={a.ts} since={live.at} approx={live.approx} />;
+  // A session row carries only the step's text: an absolute path in it gets the file actions.
+  const menu = () => stepMenu({ input: null, output: "", detail: r.detail, cwd: "", file: r.detail.startsWith("/") ? r.detail : null });
+  return <StepLine name={r.label} tool={r.raw} detail={r.detail} active={active} dense={dense} fresh={fresh} stamp={a.ts} since={live.at} approx={live.approx} menu={menu} />;
 }
 
 /** One step: icon (or spinner), tool name, mono detail, timer or timestamp. Shared by Activity and Chat. */
@@ -809,6 +814,7 @@ export function StepLine({
   dense,
   tool,
   soft,
+  menu,
 }: {
   /** What the row says (lib/toolNames.ts): "Opened", "Bash". */
   name: string;
@@ -831,12 +837,15 @@ export function StepLine({
   fresh?: boolean;
   onClick?: () => void;
   open?: boolean;
+  /** The right-click menu (lib/menus/chatWired.ts stepMenu). */
+  menu?: () => MenuEntry[];
 }) {
   const Icon = toolIcon(tool ?? name);
   const failed = failedIn && !soft;
   return (
     <div
       onClick={onClick}
+      onContextMenu={menu ? onContext(menu) : undefined}
       className={cx(
         "group relative flex items-center gap-2.5 rounded-[7px] pr-2",
         "h-[28px]",
@@ -1016,6 +1025,7 @@ function AgentStep({ a, agents, active, live }: { a: Activity; agents: Agent[]; 
         ref={card}
         data-agent-card={agent?.id}
         data-open={open}
+        onContextMenu={onContext(() => agentMenu({ task: title, fold: { open, toggle } }))}
         className={cx(
           "min-w-0 flex-1 overflow-hidden rounded-[10px] border bg-raised shadow-card transition-[border-color] duration-500",
           focused ? "border-[color-mix(in_oklab,var(--status-needs)_45%,var(--border))]" : "border-hairline",

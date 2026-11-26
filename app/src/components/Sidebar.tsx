@@ -3,7 +3,9 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { useShallow } from "zustand/react/shallow";
 import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, homeShort, projectOf, titleWas } from "../lib/format";
-import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
+import { TitleInput, useTitleEdit } from "./TitleEdit";
+import { onContext } from "../lib/contextMenu";
+import { projectMenu } from "../lib/menus/chatWired";
 import { attention, sameAttention, useChatDigest, useUnseen, type Attention, type ChatDigest } from "../lib/live";
 import type { ChatInfo, PtyInfo, Session, Status } from "../lib/types";
 import type { UiStatus } from "./primitives";
@@ -430,7 +432,7 @@ const ProjectGroup = memo(function ProjectGroup({ p, selected, digest, frozen }:
   return (
     <div className="mb-1" data-project={p.cwd}>
       {/* The "+" has its own slot at the right at all times (it only fades in), so the name ellipsizes before it. */}
-      <div className="group/proj relative flex h-[34px] items-center rounded-[9px] pl-2.5 pr-1.5 transition-colors duration-150 hover:bg-hover">
+      <div className="group/proj relative flex h-[34px] items-center rounded-[9px] pl-2.5 pr-1.5 transition-colors duration-150 hover:bg-hover" onContextMenu={onContext(() => projectMenu(p.cwd, collapsed, () => setSheet({ kind: "new", cwd: p.cwd })))}>
         <button
           type="button"
           data-nav
@@ -672,7 +674,7 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
   const edit = useTitleEdit(s);
   const tip = [att.needs ?? att.background, titleWas(s)].filter(Boolean).join(" · ") || null;
   return (
-    <div className="relative" onDoubleClick={edit.start} onContextMenu={edit.openMenu}>
+    <div className="relative" onDoubleClick={edit.start} onContextMenu={edit.onContextMenu}>
     <Row
       selected={selected}
       onClick={() => open({ kind: "session", key: sessionKey(s) })}
@@ -690,7 +692,6 @@ const SessionRow = memo(function SessionRow({ s, att, selected, auto, nested, ne
       data={{ "data-session-row": sessionKey(s), "data-needs": att.needs ? "1" : undefined, "data-origin": s.origin ?? "user", "data-background": att.background ?? undefined, "data-nested": nested ? "1" : undefined, "data-title-source": s.name?.source }}
     />
       {edit.editing && <TitleInput s={s} onDone={edit.stop} className={cx("absolute inset-y-[3px] right-2 text-base", nested ? "left-[50px]" : "left-[34px]")} />}
-      {edit.menu && <TitleMenu s={s} at={edit.menu} onClose={edit.closeMenu} onRename={edit.start} />}
     </div>
   );
 }, sameRow);

@@ -15,6 +15,8 @@ import { SessionView } from "./SessionView";
 import { countRender } from "../lib/perfCount";
 import { useLayoutMode } from "../lib/layout";
 import { splitDir } from "../lib/layoutRules";
+import { onContext } from "../lib/contextMenu";
+import { tabMenu } from "../lib/menus/chatWired";
 
 export function Workspace() {
   countRender("Workspace");
@@ -98,6 +100,7 @@ function TabChip({ tab, active, index }: { tab: Tab; active: boolean; index: num
       className="relative min-w-[96px] max-w-[230px] shrink"
       onPointerDown={() => activate(tab.id)}
       onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
+      onContextMenu={onContext(() => tabMenu(tab.id))}
       data-tab-active={active ? "" : undefined}
     >
       {active && <motion.span layoutId="tab-active" transition={spring} className="absolute inset-0 rounded-[8px] border border-line bg-[var(--tab-active)] shadow-card" />}

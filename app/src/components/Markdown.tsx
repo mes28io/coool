@@ -12,6 +12,8 @@ import { ICheck, IFile } from "./icons";
 import { cx } from "./primitives";
 import { splitSettled, tableColumns } from "../lib/mdSplit";
 import { addTime, countRender } from "../lib/perfCount";
+import { onContext } from "../lib/contextMenu";
+import { codeMenu, linkMenu, messageMenu } from "../lib/menus/chatWired";
 
 const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
@@ -73,7 +75,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   const text = textOf(code?.props.children ?? children).replace(/\n$/, "");
   const [copied, setCopied] = useState(false);
   return (
-    <div className="group/code relative my-2 rounded-[12px] border border-hairline bg-raised">
+    <div className="group/code relative my-2 rounded-[12px] border border-hairline bg-raised" onContextMenu={onContext((e) => codeMenu(e.currentTarget, text, lang))}>
       {lang && <span className="pointer-events-none absolute right-3 top-2 font-mono text-micro text-faint transition-opacity duration-150 group-hover/code:opacity-0">{lang}</span>}
       <button
         type="button"
@@ -112,6 +114,7 @@ function Link({ href, children }: { href?: string; children?: ReactNode }) {
         e.preventDefault();
         if (url) open({ kind: "web", url });
       }}
+      onContextMenu={onContext((e) => (href ? linkMenu(e.currentTarget, href, !!url, () => url && open({ kind: "web", url })) : null))}
       data-chat-link={url ?? undefined}
       className="text-fg underline decoration-faint underline-offset-2 transition-colors hover:decoration-fg"
     >
@@ -179,7 +182,7 @@ export const Markdown = memo(function Markdown({ text, streaming, className }: {
     const parts = splitSettled(text);
     const tail = parts.pop() ?? "";
     return (
-      <div className={cx("md selectable md-live", className)}>
+      <div className={cx("md selectable md-live", className)} onContextMenu={onContext((e) => messageMenu(e.currentTarget, text))}>
         {parts.map((t, i) => (
           <Piece key={i} text={t} />
         ))}
@@ -188,7 +191,7 @@ export const Markdown = memo(function Markdown({ text, streaming, className }: {
     );
   }
   return (
-    <div className={cx("md selectable", className)}>
+    <div className={cx("md selectable", className)} onContextMenu={onContext((e) => messageMenu(e.currentTarget, text))}>
       <Piece text={text} />
     </div>
   );

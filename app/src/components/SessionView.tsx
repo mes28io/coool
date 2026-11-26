@@ -18,7 +18,7 @@ import { api, isTauri } from "../lib/backend";
 import { chatModels, chatTitle, pendingPermission, useChatShell, type Chat } from "../lib/chat";
 import { displayTitle, folderName, homeShort, titleWas } from "../lib/format";
 import type { HistoryFolder } from "../lib/history";
-import { TitleInput, TitleMenu, useTitleEdit } from "./TitleEdit";
+import { TitleInput, useTitleEdit } from "./TitleEdit";
 import type { Provider, Session } from "../lib/types";
 import { sessionKey } from "../lib/types";
 import { BROWSER_CHAT_MIN, BROWSER_MIN, CHANGES_MIN, CONTEXT_MIN, DEVICE_MIN, MAC_MIN, resolveTarget, useStore, type Target, type ViewMode } from "../store";
@@ -491,7 +491,7 @@ export function SessionView({
       <div className={cx("flex shrink-0 items-center gap-3 border-b border-hairline", compact ? "h-[48px] px-3" : "h-[52px] px-4")}>
         {/* No provider logo here: the model can change mid-chat, so the logo sits on the model chip instead. */}
         <div className="min-w-0 flex-1">
-          <div className="relative flex min-w-0 items-center gap-2" onDoubleClick={titleEdit.start} onContextMenu={titleEdit.openMenu}>
+          <div className="relative flex min-w-0 items-center gap-2" onDoubleClick={titleEdit.start} onContextMenu={titleEdit.onContextMenu}>
             {titleEdit.editing && session ? (
               <TitleInput s={session} onDone={titleEdit.stop} className="h-[24px] w-full max-w-[480px] text-base font-semibold" />
             ) : (
@@ -499,7 +499,6 @@ export function SessionView({
                 {title}
               </h2>
             )}
-            {titleEdit.menu && session && <TitleMenu s={session} at={titleEdit.menu} onClose={titleEdit.closeMenu} onRename={titleEdit.start} />}
           </div>
           <div className="-ml-1.5 flex min-w-0 items-center gap-1 text-small text-dim">
             <PathText path={cwd} className="min-w-0 shrink pl-1.5 text-small" />
