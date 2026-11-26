@@ -1,6 +1,6 @@
 [package]
 name = "coool-whisper"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "coool's local speech-to-text: whisper.cpp (vendored, built with the cc crate, Metal on Apple silicon) behind a small safe API"
 license = "MIT"
