@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { api } from "../../lib/backend";
+import { onContext } from "../../lib/contextMenu";
+import { configFileMenu } from "../../lib/menus/misc";
 import { folderName, homeShort, projectOf } from "../../lib/format";
 import type { McpServer, ProviderConn, Worktree, Worktrees } from "../../lib/settingsTypes";
 import type { Provider } from "../../lib/types";
@@ -152,15 +154,15 @@ export function Git() {
 
 function OpenFile({ path, project }: { path: string; project: string | null }) {
   const [err, setErr] = useState<string | null>(null);
+  const open = () =>
+    void api()
+      .openConfigFile(path, project)
+      .catch((e) => setErr(errText(e)));
   return (
-    <span className="flex items-center gap-1" title={err ?? undefined}>
+    <span className="flex items-center gap-1" onContextMenu={onContext(() => configFileMenu(path, { open, reveal: (p) => void api().attachReveal(p).catch((e) => setErr(errText(e))) }))} title={err ?? undefined}>
       <IconButton
         title="Open file"
-        onClick={() =>
-          void api()
-            .openConfigFile(path, project)
-            .catch((e) => setErr(errText(e)))
-        }
+        onClick={open}
       >
         <IExternal size={14} />
       </IconButton>

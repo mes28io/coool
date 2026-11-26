@@ -6,6 +6,8 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { memo } from "react";
+import { onContext } from "../lib/contextMenu";
+import { commitMenu } from "../lib/menus/misc";
 import { useMotion } from "../lib/motion";
 import type { GitTrail, TrailCommit } from "../lib/types";
 import { IBranch } from "./icons";
@@ -107,7 +109,7 @@ const TrailRow = memo(function TrailRow({ r, branch, cut }: { r: Row; branch: st
   const c = r.commit;
   if (r.kind === "side") {
     return (
-      <div className="relative flex h-[36px] items-center gap-2.5 px-3.5" title={`${c.short} · ${c.author}`}>
+      <div className="relative flex h-[36px] items-center gap-2.5 px-3.5" title={`${c.short} · ${c.author}`} onContextMenu={onContext(() => commitMenu(c))}>
         <Gutter kind="side" last={r.last && !cut} />
         <Node />
         <span className="min-w-0 flex-1 truncate pl-[14px] text-small text-dim">{c.subject}</span>
@@ -120,7 +122,7 @@ const TrailRow = memo(function TrailRow({ r, branch, cut }: { r: Row; branch: st
   const refs = c.refs.filter((x) => x !== branch && !x.endsWith(`/${branch}`)).slice(0, 1);
   const subject = merge ? c.subject.replace(/^Merge( branch '[^']*'( into \S+)?|:)\s*/, "") || "Merged" : c.subject;
   return (
-    <div className="relative flex h-[36px] items-center gap-2.5 px-3.5" title={`${c.short} · ${c.author}${merge?.from ? ` · merged ${merge.from}` : ""}`}>
+    <div className="relative flex h-[36px] items-center gap-2.5 px-3.5" onContextMenu={onContext(() => commitMenu(c))} title={`${c.short} · ${c.author}${merge?.from ? ` · merged ${merge.from}` : ""}`}>
       <Gutter kind={r.kind} first={r.first} last={r.last && !cut} />
       <Node />
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">

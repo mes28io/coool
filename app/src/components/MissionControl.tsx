@@ -5,6 +5,9 @@
 import { motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAgentCards } from "../lib/agentCards";
+import { api } from "../lib/backend";
+import { onContext } from "../lib/contextMenu";
+import { missionSessionMenu } from "../lib/menus/misc";
 import { useChats } from "../lib/chat";
 import { useClock } from "../lib/clock";
 import { ago, displayTitle, folderName, fmtElapsed, fmtTokens, headlineIsTitle, homeShort, isThinking, projectOf, shortDetail, tsToMs } from "../lib/format";
@@ -356,6 +359,8 @@ function useTurnStart(s: Session): number | null {
   return chatStart ?? turnTotals(s).startMs;
 }
 
+const sessionMenu = (s: Session, open: () => void) => missionSessionMenu({ id: s.id, folder: projectOf(s), open, reveal: (p) => void api().attachReveal(p).catch(() => {}) });
+
 type RowProps = { s: Session; att: Attention; first: boolean };
 const sameRow = (a: RowProps, b: RowProps) => a.s === b.s && a.first === b.first && sameAttention(a.att, b.att);
 
@@ -390,7 +395,7 @@ const SessionRow = memo(function SessionRow({ s, att, first }: RowProps) {
   const live = busy && !pendingLoad && !since.approx;
 
   return (
-    <div data-mc-session={key} data-first={first || undefined}>
+    <div data-mc-session={key} data-first={first || undefined} onContextMenu={onContext(() => sessionMenu(s, () => open({ kind: "session", key })))}>
       <button type="button" onClick={() => open({ kind: "session", key })} className="group flex h-[36px] w-full items-center gap-2.5 px-3.5 text-left transition-colors duration-150 hover:bg-hover">
         <Node>
           <span className="flex" title={needs ? "Needs you" : att.background ? `Working in background · ${att.background}` : att.status === "busy" ? "Working" : "Waiting for you"}>
@@ -467,7 +472,7 @@ const RecentRow = memo(function RecentRow({ s, first }: { s: Session; first: boo
   const open = useStore((st) => st.open);
   const age = useClock((now) => ago(s.updated, now));
   return (
-    <div className={cx("group flex h-[40px] items-center gap-3 px-1 transition-colors duration-150", !first && "border-t border-hairline")}>
+    <div className={cx("group flex h-[40px] items-center gap-3 px-1 transition-colors duration-150", !first && "border-t border-hairline")} onContextMenu={onContext(() => sessionMenu(s, () => open({ kind: "session", key: sessionKey(s) })))}>
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={() => open({ kind: "session", key: sessionKey(s) })}>
         <ProviderMark provider={s.provider} size={15} />
         <span className={cx("truncate text-base group-hover:text-fg", s.origin === "automation" ? "text-faint" : "text-fg/85")}>{displayTitle(s)}</span>
