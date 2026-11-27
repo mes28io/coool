@@ -3,6 +3,7 @@
 // image lightbox (zoom, fit, previous / next, keyboard) and the file quick look (code with line numbers and colour, a
 // PDF, or Reveal in Finder). Rules: lib/attachRules.ts; state and loading: lib/attach.ts.
 
+import { overlayRef } from "../lib/overlays";
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
@@ -474,6 +475,7 @@ function Lightbox({ items, start, onClose }: { items: ViewImage[]; start: number
   const pct = Math.round(scale * 100);
   return (
     <motion.div
+      ref={overlayRef}
       className="fixed inset-0 z-[90] flex flex-col"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -642,7 +644,7 @@ function QuickLook({ att, onClose }: { att: Attachment; onClose: () => void }) {
   }, [onClose]);
   const lines = useMemo(() => (p?.kind === "text" ? colorize(p.text.replace(/\n$/, ""), att.name) : null), [p, att.name]);
   return (
-    <motion.div className="fixed inset-0 z-[90] flex items-center justify-center p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }} data-quicklook={att.name} role="dialog" aria-label={att.name}>
+    <motion.div ref={overlayRef} className="fixed inset-0 z-[90] flex items-center justify-center p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }} data-quicklook={att.name} role="dialog" aria-label={att.name}>
       <div className="absolute inset-0 bg-[var(--backdrop)] backdrop-blur-[10px]" onClick={onClose} />
       <motion.div
         initial={{ opacity: 0, y: 10, scale: 0.975 }}

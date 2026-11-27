@@ -4,6 +4,7 @@
 // items, Copy and Reveal in Finder). Rules: lib/mediaRules.ts; URLs: lib/media.ts (`coool-media://`, checked by the
 // backend against what the chat references). Thumbnails and players load only once they are near the screen.
 
+import { overlayRef } from "../lib/overlays";
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
@@ -158,7 +159,7 @@ function Viewer({ items, start, onClose }: { items: MediaItem[]; start: number; 
   const token = tokenOf(g);
   const Icon = KIND_ICON[it.kind];
   return (
-    <motion.div className="fixed inset-0 z-[90] flex flex-col" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }} transition={{ duration: 0.18 }} data-media-viewer={i} data-media-kind={it.kind} role="dialog" aria-label={it.name}>
+    <motion.div ref={overlayRef} className="fixed inset-0 z-[90] flex flex-col" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }} transition={{ duration: 0.18 }} data-media-viewer={i} data-media-kind={it.kind} role="dialog" aria-label={it.name}>
       <div className="absolute inset-0 bg-[var(--backdrop)] backdrop-blur-[14px]" onClick={onClose} />
       <div className="relative z-10 flex h-[52px] shrink-0 items-center gap-3 px-4">
         <div className="flex min-w-0 items-center gap-2 rounded-[11px] border border-hairline bg-raised px-3 py-1.5 shadow-pop">

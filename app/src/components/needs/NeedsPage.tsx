@@ -4,6 +4,7 @@
 // (NeedDetail.tsx). ↑ ↓ move, ↵ opens the chat, ⌘↵ / ⇧⌘↵ / ⌘⌫ answer a permission, Esc or the bell goes back.
 // Answers go through the chat's own functions; an answered item leaves the list and the next one is selected.
 
+import { overlayRef } from "../../lib/overlays";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { answerPermission } from "../../lib/actions";
@@ -117,6 +118,7 @@ export function NeedsPage() {
 
   return (
     <motion.div
+      ref={overlayRef}
       data-needs-page={list.length}
       tabIndex={-1}
       className="@container absolute inset-0 z-10 flex bg-bg outline-none"

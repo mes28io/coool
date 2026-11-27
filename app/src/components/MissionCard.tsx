@@ -11,6 +11,7 @@
 // A list card fills the height its grid cell gives it and shows the rows that fit (`useFit`), so the
 // two columns end together; "Show all" lists everything in a dialog over the page (the card never grows).
 
+import { overlayRef } from "../lib/overlays";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -93,7 +94,7 @@ function ListDialog({ open, title, total, onClose, children }: { open: boolean; 
   return createPortal(
     <AnimatePresence>
       {open && (
-        <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }} transition={{ duration: 0.18 }} data-mc-dialog>
+        <motion.div ref={overlayRef} className="fixed inset-0 z-50 flex items-center justify-center p-6" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.14 } }} transition={{ duration: 0.18 }} data-mc-dialog>
           <div className="absolute inset-0 bg-[var(--backdrop)] backdrop-blur-[2px]" onMouseDown={onClose} />
           <motion.div
             ref={panel}

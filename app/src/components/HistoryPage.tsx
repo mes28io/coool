@@ -9,6 +9,7 @@
 //
 // Keys: type to search, ↑ ↓ move, ↵ opens (⌘↵ in a new tab), Esc clears the search, then goes back.
 
+import { overlayRef } from "../lib/overlays";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/backend";
@@ -166,6 +167,7 @@ export function HistoryPage() {
 
   return (
     <motion.div
+      ref={overlayRef}
       data-history-page={page?.total ?? ""}
       tabIndex={-1}
       className="@container absolute inset-0 z-10 flex flex-col bg-bg outline-none"

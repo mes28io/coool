@@ -13,6 +13,10 @@ export function registerOverlay(el: HTMLElement): () => void {
   };
 }
 
+/** A callback ref for a viewer, dialog or page drawn over the app: it counts as an overlay while mounted (React 19
+ * ref cleanup), so the browser panel's page hides under it instead of drawing on top. */
+export const overlayRef = (el: HTMLElement | null) => (el ? registerOverlay(el) : undefined);
+
 export function onOverlays(f: () => void): () => void {
   listeners.add(f);
   return () => void listeners.delete(f);
