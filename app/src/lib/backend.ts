@@ -288,6 +288,10 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   /** Downloads and installs macOS (~16 GB, 20+ min); progress arrives as `mac-state`. Resolves when done. */
   macInstall(): Promise<void>;
   /** Resolves once the Mac is up and ready (the first boot also runs setup; `mac-state.step` says what it is doing). */
+  /** Shuts the Mac down if it runs, then deletes its disk, files and any cached download; the status goes back to "absent". Resolves with the bytes freed. */
+  macDelete(): Promise<{ freed: number }>;
+  /** Cancel on the download prompt an agent's `mac_install` opened (Install is `macInstall`). */
+  macDeclineInstall(): Promise<void>;
   macBoot(): Promise<void>;
   macShutdown(): Promise<void>;
   /** Streams the guest screen as JPEG frames to `onFrame` (on change, plus one every ~2 s) until `macDetach`; `w`/`h` in guest pixels. */
@@ -303,6 +307,8 @@ export interface Backend extends SettingsBackend, FoldersBackend, HistoryBackend
   macNetwork(mode?: MacNetworkMode): Promise<MacNetwork>;
   /** A partial status (state, progress, step, error) to merge into the last `macStatus`. */
   onMacState(cb: (s: Partial<MacStatus>) => void): Unlisten;
+  /** An agent (chat) called `mac_install`: its Mac panel should open on the download prompt. */
+  onMacInstallAsk(cb: (a: { chat: number }) => void): Unlisten;
 
   /** What projects allowed the agents' device tools to do without asking ("Always in this project"; APP_SPEC "Device permissions"). */
   deviceGrants(): Promise<DeviceGrant[]>;
@@ -349,8 +355,12 @@ export interface MacStatus {
   /** Guest display size in pixels (1x). */
   w: number;
   h: number;
-  /** Disk the VM uses on this Mac. */
+  /** Disk the VM's disk image uses on this Mac. */
   diskBytes?: number;
+  /** Everything in the VM's folder takes on this Mac (what deleting the Mac frees). */
+  vmBytes?: number;
+  /** An agent asked for the Mac to be downloaded and waits for the person's answer. */
+  agentAsk?: boolean;
   /** Free space on the volume the VM lives on. */
   free?: number;
   /** Host folder shared into the guest (shows there as "/Volumes/My Shared Files"). */
@@ -867,6 +877,8 @@ async function tauriBackend(): Promise<Backend> {
       }
     },
     macInstall: () => soft("mac_install"),
+    macDelete: () => soft("mac_delete"),
+    macDeclineInstall: () => soft("mac_install_decline"),
     macBoot: () => soft("mac_boot"),
     macShutdown: () => soft("mac_shutdown"),
     macAttach: (onFrame) => {
@@ -879,6 +891,7 @@ async function tauriBackend(): Promise<Backend> {
     macCapture: (on) => soft("mac_capture", { on }),
     macNetwork: (mode) => soft("mac_network", { mode: mode ?? null }),
     onMacState: (cb) => sub<Partial<MacStatus>>("mac-state", cb),
+    onMacInstallAsk: (cb) => sub<{ chat: number }>("mac-install-ask", cb),
     deviceGrants: () => soft("device_grants"),
     deviceGrantsRevoke: (project, device, site) => soft("device_grants_revoke", { project, device: device ?? null, site: site ?? null }),
   };

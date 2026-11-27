@@ -1137,7 +1137,7 @@ mod tests {
         let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(&names[..10], ["pilot_run", "observe", "tap", "type", "swipe", "press", "batch", "wait_for", "app", "device"]);
         assert!(init["result"]["instructions"].as_str().unwrap().contains("pilot_run"));
-        assert!(names[24..36].iter().all(|n| n.starts_with("mac_")) && names.len() == 37 && names[36] == "show", "{names:?}");
+        assert!(names[24..37].iter().all(|n| n.starts_with("mac_")) && names.len() == 38 && names[37] == "show", "{names:?}");
         assert!(init["result"]["instructions"].as_str().unwrap().contains("mac_observe"));
         assert_eq!(
             &names[10..24],

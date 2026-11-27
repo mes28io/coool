@@ -181,6 +181,8 @@ export interface MacMenuDeps {
   /** The network setting; undefined hides the submenu. */
   network?: { mode: NetMode; labels: Record<NetMode, string>; pick: (m: NetMode) => void };
   shutdown?: () => void;
+  /** "Delete the Mac…" (asks first): the last item. */
+  deleteMac?: () => void;
 }
 
 /** The sandbox Mac screen's menu. Null while keys are captured: then a right click is the Mac's own. */
@@ -196,6 +198,8 @@ export function macMenu(d: MacMenuDeps): MenuEntry[] | null {
     n && { label: "Network", items: modes.map((m) => ({ label: n.labels[m], checked: n.mode === m, action: () => n.pick(m) })) },
     !!d.shutdown && "-",
     d.shutdown && { label: "Shut down", action: d.shutdown },
+    !!d.deleteMac && "-",
+    d.deleteMac && { label: "Delete the Mac…", action: d.deleteMac },
   ];
 }
 

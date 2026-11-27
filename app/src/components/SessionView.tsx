@@ -212,6 +212,16 @@ export function SessionView({
     live.current.macFits = macFits;
   }, [showing, deviceFits, macFits]);
   const chatId = r.chat;
+  // The chat's agent asked for the sandbox Mac to be downloaded (`mac_install`): its Mac panel opens on the prompt.
+  useEffect(() => {
+    if (chatId === null || !panelKey) return;
+    return api().onMacInstallAsk((a) => {
+      if (a.chat !== chatId) return;
+      if (live.current.showing === "mac") return;
+      if (!live.current.macFits) return useStore.getState().toast("An agent wants to use the sandbox Mac: make this pane wider to show the Mac and answer", "info");
+      useStore.getState().setRightPanel(panelKey, "mac");
+    });
+  }, [chatId, panelKey]);
   useEffect(() => {
     if (chatId === null || !panelKey) return;
     let t: ReturnType<typeof setTimeout> | undefined;

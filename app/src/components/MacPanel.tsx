@@ -10,6 +10,7 @@ import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useSta
 import { api, MAC_NETWORK_TRUTH, type MacInput, type MacNetworkMode, type MacStatus } from "../lib/backend";
 import { onContext } from "../lib/contextMenu";
 import { macMenu } from "../lib/menus/panels";
+import { deleteConfirmText } from "../lib/macDelete";
 import { useStore } from "../store";
 import { keyAction, META, MODIFIERS } from "../lib/macKeys";
 import { simTarget, usePresenceOf } from "../lib/presence";
@@ -70,9 +71,10 @@ function StatePill({ status }: { status: MacStatus }) {
 export function MacPanel({ chat, active, onClose }: { chat: number | null; active: boolean; onClose: () => void }) {
   const [status, setStatus] = useState<MacStatus | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "install" | "boot" | "shutdown">(null);
+  const [busy, setBusy] = useState<null | "install" | "boot" | "shutdown" | "delete">(null);
   const [err, setErr] = useState<{ text: string; retry: () => void } | null>(null);
   const [confirm, setConfirm] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // Keyboard capture: every key goes to the Mac (coool's menu and shortcuts stand aside). On by clicking the screen.
   const [keys, setKeys] = useState(false);
 
@@ -115,7 +117,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
     if (active && chat !== null) void api().macBind(chat, true).catch(() => {});
   }, [active, chat]);
 
-  const run = (kind: "install" | "boot" | "shutdown", f: () => Promise<void>) => {
+  const run = (kind: "install" | "boot" | "shutdown" | "delete", f: () => Promise<void>) => {
     setBusy(kind);
     setErr(null);
     void f()
@@ -131,6 +133,18 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
   };
   const boot = () => run("boot", () => api().macBoot());
   const shutdown = () => run("shutdown", () => api().macShutdown());
+  const deleteMac = () => {
+    setConfirmDelete(false);
+    run("delete", () => api().macDelete().then(() => {}));
+  };
+  // Cancel on the prompt an agent's `mac_install` opened also tells the waiting agent.
+  const cancelInstall = () => {
+    setConfirm(false);
+    if (status?.agentAsk) {
+      setStatus((s) => (s ? { ...s, agentAsk: false } : s));
+      void api().macDeclineInstall().catch(() => {});
+    }
+  };
 
   const st = status?.state;
   const running = st === "running" && busy !== "shutdown";
@@ -150,11 +164,22 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
     ) : null;
   } else if (!status.available) {
     content = <Empty title="No Mac here" text={status.reason ?? "The sandbox Mac needs a Mac with Apple silicon."} />;
+  } else if (busy === "delete") {
+    content = (
+      <Frame box={box} d={shape}>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#0b0b0d] px-4 text-center text-white/80" data-mac-deleting>
+          <Spinner />
+          <span className="text-small font-medium">Deleting the Mac…</span>
+        </div>
+      </Frame>
+    );
+  } else if (confirmDelete && st !== "absent" && !installing) {
+    content = <DeleteConfirm status={status} onCancel={() => setConfirmDelete(false)} onDelete={deleteMac} />;
   } else if (installing) {
     content = <InstallProgress status={status} />;
   } else if (st === "absent") {
-    content = confirm ? (
-      <InstallConfirm free={status.free} onCancel={() => setConfirm(false)} onInstall={install} />
+    content = confirm || status.agentAsk ? (
+      <InstallConfirm free={status.free} agent={!!status.agentAsk} onCancel={cancelInstall} onInstall={install} />
     ) : (
       <Empty
         title="A Mac beside the chat"
@@ -170,7 +195,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
     );
   } else if (running) {
     content = (
-      <MacScreen active={active} box={box} initial={shape} keys={keys} setKeys={setKeys} status={status} onShutdown={shutdown} onLost={() => void refresh()} />
+      <MacScreen active={active} box={box} initial={shape} keys={keys} setKeys={setKeys} status={status} onShutdown={shutdown} onDelete={() => setConfirmDelete(true)} onLost={() => void refresh()} />
     );
   } else {
     content = (
@@ -214,7 +239,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
         {status &&
           available &&
           (st === "absent" ? (
-            <Button className="h-[28px] px-2 text-small" disabled={installing || confirm} onClick={() => setConfirm(true)} title="Download and install macOS">
+            <Button className="h-[28px] px-2 text-small" disabled={installing || confirm || !!status.agentAsk} onClick={() => setConfirm(true)} title="Download and install macOS">
               Install
             </Button>
           ) : installing ? null : running || stopping ? (
@@ -234,7 +259,7 @@ export function MacPanel({ chat, active, onClose }: { chat: number | null; activ
           </span>
         )}
         {status && available && st !== "absent" && <NetworkMark status={status} />}
-        {status && available && st !== "absent" && <MacInfo status={status} />}
+        {status && available && st !== "absent" && <MacInfo status={status} onDelete={() => setConfirmDelete(true)} busy={busy === "delete" || installing} />}
         <IconButton title="Close" onClick={onClose}>
           <IClose size={14} />
         </IconButton>
@@ -276,7 +301,7 @@ function NetworkMark({ status }: { status: MacStatus }) {
 }
 
 /** The header's details: CPUs, memory, disk, the network, and the folder shared with the guest. */
-function MacInfo({ status }: { status: MacStatus }) {
+function MacInfo({ status, onDelete, busy }: { status: MacStatus; onDelete: () => void; busy: boolean }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
   const [copied, setCopied] = useState(false);
@@ -307,6 +332,20 @@ function MacInfo({ status }: { status: MacStatus }) {
           <div className="font-medium text-fg">{status.os ?? "macOS"}</div>
           {specs.length > 0 && <div className="text-dim">{specs.join(" · ")}</div>}
           <NetworkSwitch status={status} />
+          <div className="border-t border-hairline pt-2">
+            <Button
+              className="h-[26px] px-2 text-small text-err-text"
+              disabled={busy}
+              onClick={() => {
+                close();
+                onDelete();
+              }}
+              title="Delete the Mac's disk and files to free space on this computer"
+              data-mac-delete
+            >
+              Delete the Mac…
+            </Button>
+          </div>
           {status.sharedDir && (
             <div className="flex flex-col gap-1 border-t border-hairline pt-2">
               <div className="flex items-center gap-1.5 text-dim">
@@ -367,12 +406,17 @@ export function NetworkSwitch({ status }: { status: Pick<MacStatus, "state" | "n
   );
 }
 
-function InstallConfirm({ free, onCancel, onInstall }: { free?: number; onCancel: () => void; onInstall: () => void }) {
+function InstallConfirm({ free, agent, onCancel, onInstall }: { free?: number; agent?: boolean; onCancel: () => void; onInstall: () => void }) {
   const short = free != null && free < NEEDS_GB * 1e9;
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center" data-mac-confirm>
       <IMac size={28} className="mb-1 text-faint" />
       <div className="text-base font-semibold text-fg">Download macOS?</div>
+      {agent && (
+        <div className="max-w-[340px] text-small font-medium text-fg" data-mac-agent-ask>
+          An agent wants to use the sandbox Mac.
+        </div>
+      )}
       <div className="max-w-[340px] text-small text-dim">
         It downloads about {DOWNLOAD_GB} GB from Apple and needs about {NEEDS_GB} GB of free disk. It can take 20 minutes or more; you can keep working meanwhile.
       </div>
@@ -383,6 +427,27 @@ function InstallConfirm({ free, onCancel, onInstall }: { free?: number; onCancel
         </Button>
         <Button variant="primary" onClick={onInstall} disabled={short}>
           Download and install
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function DeleteConfirm({ status, onCancel, onDelete }: { status: MacStatus; onCancel: () => void; onDelete: () => void }) {
+  const t = deleteConfirmText(status, DOWNLOAD_GB);
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center" data-mac-delete-confirm>
+      <IMac size={28} className="mb-1 text-faint" />
+      <div className="text-base font-semibold text-fg">{t.title}</div>
+      {t.freed && <div className="text-small font-medium text-fg">{t.freed}</div>}
+      <div className="max-w-[340px] text-small text-dim">{t.body}</div>
+      {status.state === "running" && <div className="max-w-[340px] text-small text-faint">The Mac is shut down first.</div>}
+      <div className="mt-2 flex gap-2">
+        <Button variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={onDelete} data-mac-delete-go>
+          Delete the Mac
         </Button>
       </div>
     </div>
@@ -467,6 +532,7 @@ function MacScreen({
   setKeys,
   status,
   onShutdown,
+  onDelete,
   onLost,
 }: {
   active: boolean;
@@ -476,6 +542,7 @@ function MacScreen({
   setKeys: (on: boolean) => void;
   status: MacStatus;
   onShutdown: () => void;
+  onDelete: () => void;
   onLost: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -675,6 +742,7 @@ function MacScreen({
       copyBack,
       network: { mode: status.network ?? "on", labels: NETWORK_LABEL, pick: (m) => void api().macNetwork(m).catch((e) => useStore.getState().toast(`Couldn't change the network: ${msg(e)}`, "error")) },
       shutdown: onShutdown,
+      deleteMac: onDelete,
     }),
   );
   const copyBack = () => {

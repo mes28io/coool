@@ -107,6 +107,104 @@ pub struct Vm {
     last_input: Mutex<Option<Instant>>,
     /// Per front app (bundle id or name): whether its windows report being key (see [`vm_input::learn`]).
     key_reports: Mutex<HashMap<String, bool>>,
+    /// An agent's request for the person to download the Mac (`mac_install`), waiting for their answer in the panel.
+    ask: Mutex<Ask>,
+}
+
+/// The person's answer to an agent's `mac_install`: pressing Install in the panel (`install`) accepts, Cancel declines.
+#[derive(Default, Debug, Clone, PartialEq)]
+struct Ask {
+    pending: bool,
+    chat: usize,
+    accepted: bool,
+    declined: bool,
+}
+
+/// What an agent waiting on [`Ask`] does next.
+#[derive(Debug, PartialEq)]
+enum AskWait {
+    Declined,
+    Accepted,
+    TimedOut,
+    Waiting,
+}
+
+fn ask_wait(a: &Ask, elapsed: Duration, timeout: Duration) -> AskWait {
+    if a.declined {
+        AskWait::Declined
+    } else if a.accepted {
+        AskWait::Accepted
+    } else if elapsed >= timeout {
+        AskWait::TimedOut
+    } else {
+        AskWait::Waiting
+    }
+}
+
+/// How long `mac_install` waits for the person's answer, and (after they accept) for the install to finish.
+const ASK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const INSTALL_WAIT: Duration = Duration::from_secs(2 * 60);
+
+/// Why a `mac_*` call can't run while the Mac isn't installed: says what to do (or that the download is under way).
+fn not_installed_msg(state: &str, progress: &Value) -> String {
+    match state {
+        "downloading" | "installing" => {
+            let pct = progress["fraction"].as_f64().map(|f| format!(" ({}%)", (f * 100.0).round() as i64)).unwrap_or_default();
+            format!("The sandbox Mac is being {state}{pct}. Wait for it to finish (call mac_install to see the progress, it waits a little), then use the mac_* tools again.")
+        }
+        _ => "The sandbox Mac isn't installed. Call mac_install to ask the person to download it (about 16 GB): it opens the Mac panel and waits for them to press Install. Don't start it yourself.".into(),
+    }
+}
+
+/// The bytes a directory tree takes on disk (allocated blocks, so a sparse disk image counts what it uses, not its
+/// size), not following symlinks.
+pub fn disk_usage(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(m) = std::fs::symlink_metadata(path) else { return 0 };
+    let mut total = m.blocks() * 512;
+    if m.is_dir()
+        && let Ok(rd) = std::fs::read_dir(path)
+    {
+        for e in rd.flatten() {
+            total += disk_usage(&e.path());
+        }
+    }
+    total
+}
+
+/// Whether `dir` may be wiped as the Mac's folder: an absolute, real (not symlinked) folder at least three levels deep
+/// that is neither the home folder (or a direct child of it) nor the app data folder itself. Everything coool deletes
+/// goes through this.
+fn guard_vm_dir(dir: &Path, home: Option<&Path>, data: Option<&Path>) -> Res<()> {
+    let refuse = || format!("refusing to delete {}: not a folder coool owns", dir.display());
+    if !dir.is_absolute() || dir.components().count() < 4 || dir.file_name().is_none() {
+        return Err(refuse());
+    }
+    if home.is_some_and(|h| dir == h || dir.parent() == Some(h)) || data.is_some_and(|d| dir == d) {
+        return Err(refuse());
+    }
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if m.file_type().is_symlink() || !m.is_dir() => Err(format!("refusing to delete {}: not a plain folder", dir.display())),
+        _ => Ok(()),
+    }
+}
+
+/// What is inside `dir` (its direct children), for removal.
+fn vm_dir_entries(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default()
+}
+
+/// Removes everything inside `dir` (a symlink is unlinked, never followed), then `dir` itself. Returns the bytes freed.
+fn wipe_vm_dir(dir: &Path, home: Option<&Path>, data: Option<&Path>) -> Res<u64> {
+    guard_vm_dir(dir, home, data)?;
+    let freed = disk_usage(dir);
+    for p in vm_dir_entries(dir) {
+        let m = std::fs::symlink_metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let r = if m.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        r.map_err(|e| format!("couldn't remove {}: {e}", p.display()))?;
+    }
+    let _ = std::fs::remove_dir(dir);
+    Ok(freed)
 }
 
 fn emit_state(app: &Option<tauri::AppHandle>, status: &Arc<Mutex<Value>>, patch: Value) {
@@ -205,6 +303,8 @@ impl Vm {
         if let Some(o) = s.as_object_mut() {
             o.insert("available".into(), json!(true));
             o.insert("sharedDir".into(), json!(shared_dir().to_string_lossy()));
+            o.insert("vmBytes".into(), json!(disk_usage(&vm_dir())));
+            o.insert("agentAsk".into(), json!(self.ask.lock().unwrap().pending));
             for k in ["progress", "step", "error"] {
                 if let Some(v) = mine.get(k).filter(|v| !v.is_null()) {
                     o.insert(k.into(), v.clone());
@@ -233,8 +333,15 @@ impl Vm {
             eprintln!("coool self-test: sandbox Mac install requested (stubbed, nothing downloaded)");
             return Ok(json!({ "stub": true }));
         }
+        {
+            // The person pressed Install: that answers an agent's `mac_install` request, if one is waiting.
+            let mut a = self.ask.lock().unwrap();
+            if a.pending {
+                a.accepted = true;
+            }
+        }
         let _g = self.op.lock().unwrap();
-        self.set(d, json!({ "error": null, "progress": null }));
+        self.set(d, json!({ "error": null, "progress": null, "agentAsk": false }));
         let r = self.call(
             d,
             json!({ "cmd": "install", "reserveBytes": INSTALL_RESERVE, "cpus": 4, "memoryMB": 6144, "diskGB": 40 }),
@@ -259,7 +366,8 @@ impl Vm {
             (installed, provisioned, state) = self.installed(d)?;
         }
         if !installed {
-            return Err("The sandbox Mac isn't installed yet: open the Mac panel (the Mac button in the chat header) and press Install (it downloads about 16 GB).".into());
+            let mine = self.status.lock().unwrap().clone();
+            return Err(not_installed_msg(mine["state"].as_str().unwrap_or("absent"), &mine["progress"]));
         }
         if state == "running" && self.ready.load(Ordering::SeqCst) {
             return Ok("already running".into());
@@ -332,6 +440,118 @@ impl Vm {
         let r = self.call(d, json!({ "cmd": "network", "mode": mode.as_str() }), Duration::from_secs(10))?;
         self.set(d, json!({ "network": mode.as_str(), "networkNow": r["networkNow"] }));
         Ok(r)
+    }
+
+    /// The person declined an agent's `mac_install` request.
+    pub fn decline_install(&self, d: &Devices) {
+        {
+            let mut a = self.ask.lock().unwrap();
+            if a.pending {
+                a.declined = true;
+            }
+        }
+        self.set(d, json!({ "agentAsk": false }));
+    }
+
+    /// Deletes the sandbox Mac: shuts it down when it runs, stops its helper (which releases the `lock`), removes
+    /// everything in the VM folder (disk, aux storage, secrets, shared folder, and any `restore.ipsw` download), and
+    /// puts the status back to "absent". Returns the bytes freed.
+    pub fn delete(&self, d: &Devices) -> Res<Value> {
+        if INSTALL_STUB.load(Ordering::SeqCst) {
+            eprintln!("coool self-test: sandbox Mac delete requested (stubbed, nothing removed)");
+            return Ok(json!({ "stub": true, "freed": 0 }));
+        }
+        let _g = self.op.try_lock().map_err(|_| "The Mac is busy (installing, starting or shutting down). Try again when that's done.".to_string())?;
+        let dir = vm_dir();
+        let home = dirs::home_dir();
+        let data = dirs::data_local_dir();
+        guard_vm_dir(&dir, home.as_deref(), data.as_deref())?;
+        // Only a helper of ours can be running the VM: stop the guest cleanly, then the helper itself.
+        let helper = self.helper.lock().unwrap().take();
+        if let Some(h) = helper.filter(|h| h.alive()) {
+            self.ready.store(false, Ordering::SeqCst);
+            let state_of = |h: &Helper| h.call(json!({ "cmd": "status" }), Duration::from_secs(5)).ok().and_then(|s| s["state"].as_str().map(String::from));
+            let state = state_of(&h).unwrap_or_default();
+            if matches!(state.as_str(), "downloading" | "installing") {
+                *self.helper.lock().unwrap() = Some(h);
+                return Err("The Mac is being installed. Wait for that to finish first.".into());
+            }
+            if matches!(state.as_str(), "running" | "starting" | "stopping") {
+                self.set(d, json!({ "state": "stopping" }));
+                let _ = h.call(json!({ "cmd": "stop", "timeout": 40 }), Duration::from_secs(60));
+                let until = Instant::now() + Duration::from_secs(60);
+                while Instant::now() < until && h.alive() && state_of(&h).is_some_and(|s| s != "stopped") {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+            }
+            // Closing its input ends the helper (it releases the `lock` file with the process).
+            h.close(Duration::from_secs(35));
+        }
+        self.last.lock().unwrap().clear();
+        let freed = wipe_vm_dir(&dir, home.as_deref(), data.as_deref())?;
+        eprintln!("coool-vm: deleted the sandbox Mac in {} ({freed} bytes freed)", dir.display());
+        *self.status.lock().unwrap() = json!({});
+        self.set(d, json!({ "state": "absent", "vmState": "stopped", "installed": false, "provisioned": false, "progress": null, "step": null, "error": null, "diskBytes": 0, "vmBytes": 0, "agentAsk": false }));
+        Ok(json!({ "freed": freed }))
+    }
+
+    /// `mac_install` for an agent: asks the person (the Mac panel of `chat` opens on the download prompt) and waits for
+    /// their answer. Never starts the download itself.
+    pub fn ask_install(&self, d: &Devices, chat: usize) -> Res<String> {
+        self.chats.lock().unwrap().insert(chat);
+        if self.installed(d)?.0 {
+            self.ensure(d, chat)?;
+            return Ok("The sandbox Mac is already installed and booted; use the mac_* tools.".into());
+        }
+        let mstate = self.status.lock().unwrap()["state"].as_str().unwrap_or("absent").to_string();
+        if !matches!(mstate.as_str(), "downloading" | "installing") {
+            {
+                let mut a = self.ask.lock().unwrap();
+                if !a.pending {
+                    *a = Ask { pending: true, chat, ..Default::default() };
+                }
+            }
+            self.set(d, json!({ "agentAsk": true }));
+            d.emit("mac-install-ask", json!({ "chat": chat }));
+            let t0 = Instant::now();
+            loop {
+                let a = self.ask.lock().unwrap().clone();
+                match ask_wait(&a, t0.elapsed(), ASK_TIMEOUT) {
+                    AskWait::Waiting => std::thread::sleep(Duration::from_millis(400)),
+                    AskWait::Declined => {
+                        *self.ask.lock().unwrap() = Ask::default();
+                        return Ok("The person declined to download the sandbox Mac. Don't ask again unless they bring it up; carry on without it.".into());
+                    }
+                    AskWait::TimedOut => {
+                        *self.ask.lock().unwrap() = Ask::default();
+                        self.set(d, json!({ "agentAsk": false }));
+                        return Ok("The person didn't answer in 10 minutes, so nothing was downloaded. Carry on without the Mac, or ask them in chat and call mac_install again.".into());
+                    }
+                    AskWait::Accepted => {
+                        *self.ask.lock().unwrap() = Ask::default();
+                        break;
+                    }
+                }
+            }
+        }
+        // Accepted (or already downloading): give the install a while to finish.
+        let t1 = Instant::now();
+        loop {
+            if self.installed(d).map(|s| s.0).unwrap_or(false) {
+                self.ensure(d, chat)?;
+                return Ok("The person installed the sandbox Mac and it is booted. You can use the mac_* tools now.".into());
+            }
+            let mine = self.status.lock().unwrap().clone();
+            let state = mine["state"].as_str().unwrap_or("absent").to_string();
+            if let Some(e) = mine["error"].as_str().filter(|_| state == "absent") {
+                return Err(format!("The install failed: {e}"));
+            }
+            if t1.elapsed() >= INSTALL_WAIT {
+                let p = mine["progress"]["fraction"].as_f64().map(|f| format!(" ({}% done)", (f * 100.0).round() as i64)).unwrap_or_default();
+                return Ok(format!("The person accepted; the sandbox Mac is {}{p} and takes 20 minutes or more. Keep working on something else and call mac_install again later (it waits a little and reports the progress), or any mac_* tool once it is done.", if state == "installing" { "installing" } else { "downloading" }));
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+        }
     }
 
     pub fn shutdown(&self, d: &Devices) -> Res<()> {
@@ -913,6 +1133,17 @@ pub fn mac_install(devices: State<'_, Arc<Devices>>) -> Res<Value> {
 }
 
 #[tauri::command(async)]
+pub fn mac_delete(devices: State<'_, Arc<Devices>>) -> Res<Value> {
+    devices.vm.delete(&devices)
+}
+
+/// Cancel on the download prompt an agent's `mac_install` opened.
+#[tauri::command(async)]
+pub fn mac_install_decline(devices: State<'_, Arc<Devices>>) {
+    devices.vm.decline_install(&devices);
+}
+
+#[tauri::command(async)]
 pub fn mac_boot(devices: State<'_, Arc<Devices>>) -> Res<String> {
     devices.vm.boot(&devices)
 }
@@ -1018,7 +1249,8 @@ by id (`mac_click`, `mac_type` replaces a field's text, `mac_press` for keys and
 each returns the screen after it settles. `mac_app` launches apps by name (\"TextEdit\") or bundle id, `mac_batch` runs \
 several steps in one call, `mac_wait_for` replaces sleeps. Hand files or an app build to the Mac with `mac_share` (it \
 lands in /Volumes/My Shared Files in the Mac); `mac_shell` runs a command inside the Mac. The first call boots the Mac \
-(about half a minute).";
+(about half a minute). If the sandbox Mac isn't installed, call `mac_install` to ask the person to download it (about \
+16 GB): it opens their Mac panel and waits for their answer; it never starts the download by itself.";
 
 pub fn tools() -> Vec<Value> {
     let target = json!({ "type": "string", "description": "Element id from mac_observe, e.g. \"k3f\"" });
@@ -1101,6 +1333,11 @@ pub fn tools() -> Vec<Value> {
             "inputSchema": { "type": "object", "required": ["path"], "properties": { "path": { "type": "string", "description": "An absolute path on this computer." } } }
         }),
         json!({
+            "name": "mac_install",
+            "description": "The sandbox Mac isn't installed: call this to ask the person to download it (about 16 GB from Apple). It opens the Mac panel on a download prompt (\"An agent wants to use the sandbox Mac\") and waits up to 10 minutes for them to press Install or Cancel; it never downloads by itself. Returns what they chose: installed and booted, still downloading (with progress), declined, or no answer. Don't call it when the Mac is already installed.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
             "name": "mac_device",
             "description": "The sandbox Mac itself: status, boot, shutdown.",
             "inputSchema": { "type": "object", "properties": { "action": { "type": "string", "enum": ["status", "boot", "shutdown"] } } }
@@ -1167,6 +1404,9 @@ impl MacTools<'_> {
             && let Some(act) = Self::gate_act(name, a, self.d.mcp.cwd(self.chat).as_deref())
         {
             self.d.gate_check(self.chat, act)?;
+        }
+        if name == "mac_install" {
+            return Ok(vec![text(self.d.vm.ask_install(self.d, self.chat)?)]);
         }
         if name == "mac_share" {
             return Ok(vec![text(self.share(a)?)]);
@@ -1843,7 +2083,7 @@ mod tests {
     fn tools_are_named_mac_and_have_schemas() {
         let t = tools();
         let names: Vec<_> = t.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["mac_observe", "mac_click", "mac_type", "mac_press", "mac_scroll", "mac_app", "mac_wait_for", "mac_screenshot", "mac_batch", "mac_shell", "mac_share", "mac_device"]);
+        assert_eq!(names, ["mac_observe", "mac_click", "mac_type", "mac_press", "mac_scroll", "mac_app", "mac_wait_for", "mac_screenshot", "mac_batch", "mac_shell", "mac_share", "mac_install", "mac_device"]);
         assert!(t.iter().all(|t| t["inputSchema"]["type"] == "object"));
     }
 
@@ -1898,5 +2138,94 @@ mod tests {
         assert_eq!(vm_dir(), PathBuf::from("/tmp/coool-vm-test"));
         assert_eq!(shared_dir(), PathBuf::from("/tmp/coool-vm-test/Shared"));
         unsafe { std::env::remove_var("COOOL_VM_DIR") };
+    }
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("coool-vm-del-{name}-{}", std::process::id())).join("vm");
+        let _ = std::fs::remove_dir_all(d.parent().unwrap());
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn delete_wipes_the_vm_folder_including_a_cached_restore_image_and_never_follows_links() {
+        let dir = scratch("wipe");
+        let outside = dir.parent().unwrap().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), "mine").unwrap();
+        std::fs::write(dir.join("disk.img"), vec![1u8; 8192]).unwrap();
+        std::fs::write(dir.join("restore.ipsw"), vec![1u8; 4096]).unwrap();
+        std::fs::write(dir.join("restore.ipsw.partial"), b"x").unwrap();
+        std::fs::write(dir.join("lock"), b"").unwrap();
+        std::fs::create_dir_all(dir.join("ssh")).unwrap();
+        std::fs::write(dir.join("ssh/id"), b"k").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("Shared")).unwrap();
+        let freed = wipe_vm_dir(&dir, None, None).unwrap();
+        assert!(freed >= 12288, "{freed}");
+        assert!(!dir.exists());
+        assert!(outside.join("keep.txt").exists(), "a link out of the folder must be unlinked, not followed");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn delete_refuses_folders_coool_does_not_own() {
+        let home = Path::new("/Users/someone");
+        let data = Path::new("/Users/someone/Library/Application Support");
+        for bad in ["/", "/Users", "/Users/someone", "/Users/someone/Documents", "/Users/someone/Library/Application Support", "relative/vm", ""] {
+            assert!(guard_vm_dir(Path::new(bad), Some(home), Some(data)).is_err(), "{bad}");
+            assert!(wipe_vm_dir(Path::new(bad), Some(home), Some(data)).is_err(), "{bad}");
+        }
+        let dir = scratch("guard");
+        assert!(guard_vm_dir(&dir, Some(home), Some(data)).is_ok());
+        let link = dir.parent().unwrap().join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(guard_vm_dir(&link, None, None).is_err(), "a symlinked folder is refused");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn disk_usage_counts_allocated_blocks_not_the_sparse_size() {
+        let dir = scratch("usage");
+        let f = std::fs::File::create(dir.join("sparse.img")).unwrap();
+        f.set_len(1 << 30).unwrap();
+        let used = disk_usage(&dir);
+        assert!(used < 10 << 20, "a sparse 1 GB file takes {used} bytes");
+        assert_eq!(disk_usage(&dir.join("missing")), 0);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn the_agents_ask_resolves_by_the_persons_answer_or_the_clock() {
+        let t = Duration::from_secs(600);
+        let pending = Ask { pending: true, chat: 1, ..Default::default() };
+        assert_eq!(ask_wait(&pending, Duration::from_secs(5), t), AskWait::Waiting);
+        assert_eq!(ask_wait(&pending, t, t), AskWait::TimedOut);
+        assert_eq!(ask_wait(&Ask { accepted: true, ..pending.clone() }, Duration::ZERO, t), AskWait::Accepted);
+        assert_eq!(ask_wait(&Ask { declined: true, ..pending }, Duration::ZERO, t), AskWait::Declined);
+    }
+
+    #[test]
+    fn not_installed_error_points_at_mac_install_or_the_running_download() {
+        assert!(not_installed_msg("absent", &Value::Null).contains("mac_install"));
+        let m = not_installed_msg("downloading", &json!({ "fraction": 0.42 }));
+        assert!(m.contains("downloading") && m.contains("42%"), "{m}");
+    }
+
+    #[test]
+    fn decline_and_install_answer_only_a_pending_ask() {
+        let vm = Vm::default();
+        let d = Devices::default();
+        vm.decline_install(&d);
+        assert!(!vm.ask.lock().unwrap().declined, "no ask pending: nothing to decline");
+        *vm.ask.lock().unwrap() = Ask { pending: true, chat: 2, ..Default::default() };
+        vm.decline_install(&d);
+        assert!(vm.ask.lock().unwrap().declined);
+    }
+
+    #[test]
+    fn the_install_tool_is_listed_and_described() {
+        let t = tools();
+        let i = t.iter().find(|x| x["name"] == "mac_install").expect("mac_install");
+        assert!(i["description"].as_str().unwrap().contains("never downloads by itself"));
+        assert!(INSTRUCTIONS.contains("mac_install"));
     }
 }

@@ -4,7 +4,7 @@
 import { MAC_NETWORK_TRUTH, type Backend, type MacStatus } from "./backend";
 import { emitMockSimActivity } from "./mockSim";
 
-type Mac = Pick<Backend, "macStatus" | "macInstall" | "macBoot" | "macShutdown" | "macAttach" | "macDetach" | "macInput" | "macBind" | "macCapture" | "macNetwork" | "onMacState">;
+type Mac = Pick<Backend, "macStatus" | "macInstall" | "macDelete" | "macDeclineInstall" | "macBoot" | "macShutdown" | "macAttach" | "macDetach" | "macInput" | "macBind" | "macCapture" | "macNetwork" | "onMacState" | "onMacInstallAsk">;
 
 const W = 1280;
 const H = 800;
@@ -87,6 +87,7 @@ export function mockMac(): Mac {
   if (vm === "installed") Object.assign(st, { state: "stopped", installed: true, provisioned: true, diskBytes: 24e9, free: 141e9 });
   if (vm === "lowdisk") st.free = 22e9;
   const listeners = new Set<(s: Partial<MacStatus>) => void>();
+  const askListeners = new Set<(a: { chat: number }) => void>();
   const emit = (p: Partial<MacStatus>) => {
     Object.assign(st, p);
     for (const cb of listeners) cb(p);
@@ -122,7 +123,20 @@ export function mockMac(): Mac {
       }
       st.installed = true;
       st.diskBytes = 24e9;
+      st.vmBytes = 24e9;
       emit({ state: "stopped", progress: undefined });
+    },
+    async macDelete() {
+      if (st.state === "running") {
+        emit({ state: "stopping" });
+        await wait(700);
+      }
+      const freed = st.diskBytes ?? 0;
+      emit({ state: "absent", installed: false, provisioned: false, progress: undefined, step: undefined, error: undefined, diskBytes: 0, vmBytes: 0, agentAsk: false, networkNow: null });
+      return { freed };
+    },
+    async macDeclineInstall() {
+      emit({ agentAsk: false });
     },
     async macBoot() {
       if (st.state === "running") return;
@@ -184,6 +198,10 @@ export function mockMac(): Mac {
       }
       const n = st.network ?? "on";
       return { network: n, networkNow: st.networkNow ?? null, applies: st.state === "running" ? "now" : "next boot", truth: MAC_NETWORK_TRUTH[n] };
+    },
+    onMacInstallAsk(cb) {
+      askListeners.add(cb);
+      return () => askListeners.delete(cb);
     },
     onMacState(cb) {
       listeners.add(cb);

@@ -56,7 +56,7 @@
     "allow-browser-close", "allow-browser-open-external",
     "allow-sim-devices", "allow-sim-ensure-device", "allow-sim-boot", "allow-sim-shutdown", "allow-sim-attach",
     "allow-sim-detach", "allow-sim-input", "allow-sim-bind",
-    "allow-mac-status", "allow-mac-install", "allow-mac-boot", "allow-mac-shutdown", "allow-mac-attach",
+    "allow-mac-status", "allow-mac-install", "allow-mac-install-decline", "allow-mac-delete", "allow-mac-boot", "allow-mac-shutdown", "allow-mac-attach",
     "allow-mac-detach", "allow-mac-input", "allow-mac-capture", "allow-mac-bind", "allow-mac-network",
     "allow-device-grants", "allow-device-grants-revoke", "allow-browser-agent-sync", "allow-browser-presence-end",
     "allow-presence-motion",

@@ -2381,6 +2381,8 @@ pub fn run() {
             device::sim_bind,
             device::vm::mac_status,
             device::vm::mac_install,
+            device::vm::mac_install_decline,
+            device::vm::mac_delete,
             device::vm::mac_boot,
             device::vm::mac_shutdown,
             device::vm::mac_attach,

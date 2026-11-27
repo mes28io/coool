@@ -89,6 +89,7 @@ test("Mac: no menu while keys are captured (a right click is the Mac's)", () => 
   const d = { keysOn: false, sendKeys: noop, paste: noop, copyBack: noop, network: net, shutdown: noop };
   assert.equal(macMenu({ ...d, keysOn: true }), null);
   assert.deepEqual(labels(macMenu(d)), ["Send keys to Mac", "-", "Paste into Mac", "Copy from Mac", "Network", "-", "Shut down"]);
+  assert.deepEqual(labels(macMenu({ ...d, deleteMac: noop })), ["Send keys to Mac", "-", "Paste into Mac", "Copy from Mac", "Network", "-", "Shut down", "-", "Delete the Mac…"]);
   const sub = (macMenu(d) as { label: string; items?: { label: string; checked: boolean }[] }[]).find((i) => i?.label === "Network")!.items!;
   assert.deepEqual(sub.map((i) => [i.label, i.checked]), [["On", true], ["Local", false], ["Off", false]]);
 });
