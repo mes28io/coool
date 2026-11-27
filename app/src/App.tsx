@@ -289,9 +289,9 @@ export default function App() {
         </div>
         <div className="flex min-h-0 flex-1">
           <Rail />
-          {/* One raised sheet lying on the window: sidebar panel + main area, or the full-screen Settings page over them
+          {/* One raised sheet lying on the window, inset from its right and bottom edges so the glass shows all around: sidebar panel + main area, or the full-screen Settings page over them
               (the app stays mounted underneath, hidden and inert, so going back finds every tab, pane and scroll as it was). */}
-          <div className="relative flex min-w-0 flex-1 overflow-hidden rounded-tl-[18px] border-l border-t border-hairline">
+          <div className="relative mb-2.5 mr-2.5 flex min-w-0 flex-1 overflow-hidden rounded-[16px] border border-hairline">
             <div ref={setSheetBg} className="pointer-events-none absolute inset-0 bg-bg" aria-hidden data-sheet-bg />
             <div className={cx("relative flex min-w-0 flex-1", covered && "invisible")} inert={covered} aria-hidden={covered || undefined}>
               <Sidebar />

@@ -133,20 +133,20 @@
 /* Glass on (or coool's colour backdrop, `data-backdrop="colours"`): the window paints nothing (the NSVisualEffectView,
    or the backdrop layer, behind shows) and the two glass regions take a light tint of their solid colour over it,
    enough to keep text and icons legible over a bright or a dark wallpaper, plus a firmer hairline at their edges (a
-   translucent hairline over glass would show the desktop through it). Chrome / right sidebar tint: dark 20 / 26 %,
-   light 12 / 18 % (were 50 / 56 and 36 / 44 %), over the Titlebar material: more of what is behind shows through. */
+   translucent hairline over glass would show the desktop through it). Chrome / right sidebar tint: dark 12 / 16 %,
+   light 6 / 10 % (were 20 / 26 and 12 / 18 %, before that 50 / 56 and 36 / 44 %), over the Titlebar material: more of what is behind shows through. */
 :root[data-glass="on"][data-theme="dark"],
 :root[data-backdrop="colours"][data-theme="dark"] {
   --window: transparent;
-  --chrome: rgb(23 23 23 / 0.2);
-  --side-glass: rgb(23 23 23 / 0.26);
+  --chrome: rgb(23 23 23 / 0.12);
+  --side-glass: rgb(23 23 23 / 0.16);
   --glass-line: rgb(255 255 255 / 0.1);
 }
 :root[data-glass="on"][data-theme="light"],
 :root[data-backdrop="colours"][data-theme="light"] {
   --window: transparent;
-  --chrome: rgb(249 249 249 / 0.12);
-  --side-glass: rgb(249 249 249 / 0.18);
+  --chrome: rgb(249 249 249 / 0.06);
+  --side-glass: rgb(249 249 249 / 0.1);
   --glass-line: rgb(0 0 0 / 0.09);
 }
 /* coool's backdrop (components/Backdrop.tsx): a quiet wash of the six rainbow colours (green, yellow, orange, red,
