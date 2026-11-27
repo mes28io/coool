@@ -19,7 +19,7 @@ test("sizes read in MB below a gigabyte and one decimal above", () => {
 test("the confirm says what is freed, what is lost, and that it can come back", () => {
   const t = deleteConfirmText({ vmBytes: 29.4e9 }, 16);
   assert.equal(t.freed, "Frees 29.4 GB on this computer.");
-  assert.match(t.body, /files and the apps installed/);
+  assert.match(t.body, /files, the apps installed in it and the files shared with it are lost/);
   assert.match(t.body, /download it again later \(about 16 GB\)/);
   assert.equal(deleteConfirmText({}, 16).freed, null);
 });

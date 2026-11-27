@@ -14,6 +14,6 @@ export function deleteConfirmText(s: { vmBytes?: number; diskBytes?: number }, d
   return {
     title: "Delete the Mac?",
     freed: b == null ? null : `Frees ${fmtBytes(b)} on this computer.`,
-    body: `The Mac's files and the apps installed in it are lost. You can download it again later (about ${downloadGb} GB).`,
+    body: `The Mac's files, the apps installed in it and the files shared with it are lost. You can download it again later (about ${downloadGb} GB).`,
   };
 }
